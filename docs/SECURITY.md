@@ -2210,6 +2210,34 @@ listen).
   with a report-less check instead of the cause). The limit is an eighth of the hard limit the
   service manager otherwise hands out, so the host memory a guest can pin through a daemon stays
   bounded (before, a walk drove the root daemon to about 520,000, HUM-445).
+- **The unit binds a fixed amount of memory and a fixed number of tasks** (HUM-485). The unit
+  carries `MemoryMax`, `MemorySwapMax` and `TasksMax`, so a compromised helper that allocates
+  memory or starts processes and threads without end stops at the limit, inside its own cgroup.
+  `MemoryMax` is the machine's memory, a fixed 512 MiB for the helpers and the size of every
+  tmpfs the unit writes to: the guest's memory is a memfd charged to the unit up to the machine's
+  size, and what the unit writes to a tmpfs (always the layer of a disposable session, which lives
+  in RAM, and the project folder when it lies on one) is memory the kernel cannot write back. The
+  bound is therefore fixed per session but not one number for every host: on a project folder the
+  user put on a tmpfs it grows by that tmpfs's size, and that size stays the bound of those writes.
+  Every tmpfs inside a helper's jail has a fixed size (bubblewrap `--size`): each mask the `/work`
+  daemon lays over the project (`.git/hooks`, `.vscode`, ...) 64 MiB, always counted into
+  `MemoryMax` (the jail can write it even when the project is read-only), so a guest that fills a mask gets `ENOSPC` instead of pushing the
+  session over its limit; the empty tmpfs of the read-only root jail 1 MiB. The
+  helpers themselves measured at most 59 MiB of anonymous and 96 MiB of kernel memory; the page
+  cache of what the file system daemons read also counts, but the kernel reclaims it at the limit
+  instead of killing anything. `MemorySwapMax` is as large as `MemoryMax`: unbounded, a helper
+  could fill the host's whole swap; at zero, the guest's memory could never be swapped out, and on
+  a small host where the machine gets half the memory an idle session would push out everything
+  else. `TasksMax` is the vCPUs plus 128; measured were 28 to 34 tasks besides the vCPUs (each
+  helper behind two bubblewrap processes, a few `sh`, three to four threads per file system
+  daemon, four for the vsock device). Without the cgroup v2 controllers `memory` and `pids` at the
+  user's service manager systemd would drop the limits without a word; the start is refused with
+  `SANDBOX_052` before the unit exists, with the systemd drop-in that delegates them as the fix.
+  That early check sees only which controllers the manager has, not whether they reach the unit
+  (a `DisableControllers=` on a slice in between would take them away silently), so the host
+  check also reads `memory.max`, `memory.swap.max` and `pids.max` of the running unit's cgroup and
+  compares them with the plan; a missing file or another value refuses the session with
+  `SANDBOX_052` before the agent starts.
 - **The guest's file cache is on and bounded** (HUM-476). Both daemons run with `--cache auto`.
   The guest keeps every entry it has looked up until its memory runs short, and with it one
   descriptor in the daemon; unbounded, a plain `ls -lR` over 81,000 entries reached the limit and
@@ -2318,7 +2346,9 @@ listen).
 
 `/dev/kvm` readable and writable, the emulator with `microvm` and `vhost-user-vsock-pci`, the file
 system daemon with `--readonly`, `--fd`, `--cache` and `--allow-mmap`, the vsock device with
-`--uds-path` and `--groups`, bubblewrap with `--bind-fd`, a readable kernel image with virtiofs
+`--uds-path` and `--groups`, bubblewrap with `--bind-fd` and `--size`, a readable kernel image with virtiofs
 built in (`CONFIG_VIRTIO_FS=y` in the configuration beside the image) of version 6.6 or newer
 and the module directory of that kernel. A missing prerequisite refuses the start with `SANDBOX_045`; the start never falls back to
-another backend. `humanitl doctor` shows one line per prerequisite.
+another backend. `humanitl doctor` shows one line per prerequisite. The user's service manager
+needs the cgroup controllers `memory` and `pids` (systemd delegates them by default); without them
+a start is refused with `SANDBOX_052` (HUM-485), which `humanitl doctor --probe` shows as well.

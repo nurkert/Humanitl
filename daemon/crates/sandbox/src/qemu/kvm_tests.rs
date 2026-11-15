@@ -437,6 +437,12 @@ impl Drop for Harness {
 
 impl Harness {
     fn new(test: &str) -> Option<Self> {
+        Self::with_machine(test, 512, 1)
+    }
+
+    /// Wie [`Harness::new`], mit `memory_mib` Speicher und `cpus` vCPU
+    /// (HUM-485: die Messung mit der Vorgabe eines großen Rechners).
+    fn with_machine(test: &str, memory_mib: u64, cpus: u32) -> Option<Self> {
         if built_shim().is_none() {
             unavailable(test, "the shim is not built next to the test binary");
             return None;
@@ -461,8 +467,8 @@ impl Harness {
             qemu: QemuConfig {
                 kernel: std::env::var_os("HUMANITL_TEST_VM_KERNEL").map(PathBuf::from),
                 modules: std::env::var_os("HUMANITL_TEST_VM_MODULES").map(PathBuf::from),
-                memory_mib: Some(512),
-                cpus: Some(1),
+                memory_mib: Some(memory_mib),
+                cpus: Some(cpus),
                 ..QemuConfig::default()
             },
             ..humanitl_config::SandboxRef::default()
@@ -490,6 +496,7 @@ impl Harness {
                 console: Some(console),
                 vsock_relay: None,
                 extra_process: None,
+                unit_properties: Vec::new(),
             });
         }
         Some(Self {
@@ -938,6 +945,7 @@ fn a_connect_while_the_vsock_device_starts_never_silences_it() {
         console,
         vsock_relay: Some(relay),
         extra_process: None,
+        unit_properties: Vec::new(),
     });
     let (plan, output) = harness.plan_with("echo hum471-agent-ran", Vec::new(), None);
     let device = plan
@@ -1207,6 +1215,7 @@ fn an_extra_sleep_in_the_unit_turns_the_host_check_red() {
         console,
         vsock_relay: None,
         extra_process: Some("sleep 600".to_owned()),
+        unit_properties: Vec::new(),
     });
     let (handle, _output) = harness.launch("touch /work/started; sleep 120");
     let results = harness.backend.isolation_check(&handle);
@@ -1234,6 +1243,200 @@ fn an_extra_sleep_in_the_unit_turns_the_host_check_red() {
     assert!(
         !harness.project.join("started").exists(),
         "the agent ran although the host check failed"
+    );
+}
+
+/// HUM-485: Die cgroup der Unit trägt ihre Grenzen (`memory.max`,
+/// `memory.swap.max`, `pids.max`), und ein Prozess in der Unit, der `sleep`
+/// im Hintergrund startet, bis `fork` scheitert (höchstens 1000 Mal), kommt
+/// nicht über `TasksMax`: Nach jedem Start schreibt er die Zahl in den
+/// Projektordner, und `pids.peak` der Unit bleibt bei der Grenze. Dass die
+/// Host-Prüfung den Prozess als fremdes Programm fände (HUM-468), spielt
+/// hier keine Rolle; geprüft wird nur die Grenze.
+///
+/// Mutationsbeweis: ohne `TasksMax` in der Unit startet er alle 1000, die
+/// Vorgabe des Dienstverwalters liegt bei Zehntausenden.
+#[test]
+fn a_process_in_the_unit_cannot_start_more_tasks_than_tasks_max() {
+    let test = "a_process_in_the_unit_cannot_start_more_tasks_than_tasks_max";
+    let Some(harness) = Harness::new(test) else {
+        return;
+    };
+    let forks = harness.project.join("forks");
+    let console = console_wanted().then(|| harness.dir.path().join("console"));
+    // Erst wenn die Maschine läuft, damit die Fäden des Emulators schon da
+    // sind.
+    super::test_machine::set(super::test_machine::TestMachine {
+        console,
+        vsock_relay: None,
+        extra_process: Some(format!(
+            "sleep 3; i=0; while [ $i -lt 1000 ]; do sleep 60 & i=$((i+1)); echo $i > {}; done",
+            forks.display()
+        )),
+        unit_properties: Vec::new(),
+    });
+    let project = std::fs::File::open(&harness.project).unwrap();
+    let expected = super::limits::UnitLimits::of(
+        super::lines::Machine {
+            cpus: 1,
+            memory_mib: 512,
+        },
+        super::limits::in_ram_mib(&[std::os::fd::AsFd::as_fd(&project)]),
+    );
+    let (handle, _output) = harness.launch("sleep 120");
+    let unit = handle.unit().unwrap().unit.service();
+    let group = unit_cgroup(&unit).expect("the unit's cgroup");
+    let read = |name: &str| {
+        std::fs::read_to_string(group.join(name))
+            .map(|text| text.trim().to_owned())
+            .unwrap_or_default()
+    };
+    let set = [
+        read("memory.max"),
+        read("memory.swap.max"),
+        read("pids.max"),
+    ];
+    // Fertig, wenn die Zahl zwei Sekunden lang gleich bleibt.
+    let count = || {
+        std::fs::read_to_string(&forks)
+            .ok()
+            .and_then(|text| text.trim().parse::<u64>().ok())
+    };
+    let deadline = Instant::now() + Duration::from_secs(60);
+    let (mut last, mut since, mut peak) = (None, Instant::now(), 0);
+    while Instant::now() < deadline {
+        // Die cgroup geht mit der Unit; die Spitze wird gelesen, solange es
+        // sie gibt.
+        peak = peak.max(read("pids.peak").parse::<u64>().unwrap_or(0));
+        let now = count();
+        if now != last {
+            (last, since) = (now, Instant::now());
+        } else if now.is_some() && since.elapsed() > Duration::from_secs(2) {
+            break;
+        }
+        std::thread::sleep(Duration::from_millis(100));
+    }
+    let _ = handle.kill();
+    let _ = handle.wait_timeout(Duration::from_secs(15));
+    let started = last.expect("the process in the unit started no sleep");
+    eprintln!(
+        "{test}: started {started} sleeps, pids.peak {peak}, TasksMax {}",
+        expected.tasks_max
+    );
+    assert!(
+        started < expected.tasks_max,
+        "the process started {started} sleeps; TasksMax {} did not bind",
+        expected.tasks_max
+    );
+    // Die Spitze wird alle 100 ms gelesen; endet die Unit, weil einem ihrer
+    // Prozesse ein Faden verweigert wurde, kann die letzte Lesung vor der
+    // Spitze liegen. Über der Grenze liegt sie nie.
+    assert!(
+        started > 0 && peak <= expected.tasks_max,
+        "pids.peak {peak}"
+    );
+    let memory = (expected.memory_max_mib * 1024 * 1024).to_string();
+    assert_eq!(
+        set,
+        [
+            memory.clone(),
+            memory,
+            (1 + super::limits::HELPER_TASKS).to_string()
+        ]
+    );
+}
+
+/// HUM-485: Trägt die cgroup der Unit nicht die geplanten Grenzen (hier
+/// überschreibt eine spätere Eigenschaft `TasksMax=infinity`, wie es ein
+/// Slice mit `DisableControllers=pids` täte), lehnt die Host-Prüfung die
+/// Sitzung mit `SANDBOX_052` ab, und der Agent startet nie. Mutationsbeweis:
+/// Ohne den Vergleich in der Zulassung (`limits_unenforced` nicht gefragt)
+/// besteht die Sitzung, und der Agent legt seine Datei an.
+#[test]
+fn a_unit_without_its_limits_is_refused_with_sandbox_052() {
+    use crate::SandboxBackend as _;
+    let test = "a_unit_without_its_limits_is_refused_with_sandbox_052";
+    let Some(harness) = Harness::new(test) else {
+        return;
+    };
+    let console = console_wanted().then(|| harness.dir.path().join("console"));
+    super::test_machine::set(super::test_machine::TestMachine {
+        console,
+        vsock_relay: None,
+        extra_process: None,
+        unit_properties: vec!["TasksMax=infinity".to_owned()],
+    });
+    let (handle, _output) = harness.launch("touch /work/started; sleep 120");
+    let results = harness.backend.isolation_check(&handle);
+    for result in &results {
+        assert!(!result.passed, "{results:?}");
+        assert_eq!(
+            result.diagnostic.as_ref().map(|d| d.code.as_str()),
+            Some("SANDBOX_052"),
+            "{results:?}"
+        );
+        assert!(
+            result.evidence.contains("pids.max is \"max\""),
+            "{}",
+            result.evidence
+        );
+    }
+    assert!(
+        handle.wait_timeout(Duration::from_secs(15)).is_some(),
+        "the session was stopped"
+    );
+    assert!(
+        !harness.project.join("started").exists(),
+        "the agent ran although the unit had no task limit"
+    );
+}
+
+/// HUM-485: Eine Maske unter `/work` (hier `.git/hooks`) ist im Gefängnis
+/// des Dienstes für `/work` ein tmpfs mit fester Größe
+/// ([`super::lines::WORK_MASK_MIB`]). Der Gast schreibt mehr hinein, als
+/// passt, und bekommt `ENOSPC`; die Datei bleibt bei der Größe, und nichts
+/// davon landet im Projekt. Mutationsbeweis: ohne `--size` wird die Datei
+/// ganz geschrieben.
+#[test]
+fn a_write_beyond_a_mask_s_size_ends_with_enospc() {
+    let test = "a_write_beyond_a_mask_s_size_ends_with_enospc";
+    let Some(harness) = Harness::new(test) else {
+        return;
+    };
+    std::fs::create_dir_all(harness.project.join(".git/hooks")).unwrap();
+    let over = super::lines::WORK_MASK_MIB + 16;
+    let (handle, output) = harness.launch(&format!(
+        "dd if=/dev/zero of=/work/.git/hooks/fill bs=1M count={over} 2>/tmp/dd; \
+         echo \"mask-rc=$? size=$(stat -c %s /work/.git/hooks/fill) $(grep -c 'No space left' /tmp/dd)\"; \
+         echo mask-done"
+    ));
+    assert_admitted(&harness, &handle);
+    let mut seen = Vec::new();
+    let done = wait_output(&output, &mut seen, "mask-done", Duration::from_secs(60));
+    let shown = String::from_utf8_lossy(&seen).into_owned();
+    let _ = handle.wait_timeout(Duration::from_secs(30));
+    assert!(done, "{shown}\n{}", harness.consoles());
+    let line = shown
+        .lines()
+        .find_map(|line| line.strip_prefix("mask-rc="))
+        .unwrap_or_else(|| panic!("no mask line: {shown}"));
+    eprintln!("{test}: {line}");
+    let mut words = line.split_whitespace();
+    let rc = words.next().unwrap_or("");
+    let size = words
+        .next()
+        .and_then(|word| word.strip_prefix("size="))
+        .and_then(|value| value.parse::<u64>().ok())
+        .unwrap_or(u64::MAX);
+    assert_ne!(rc, "0", "the write past the mask's size succeeded: {line}");
+    assert_eq!(words.next(), Some("1"), "no ENOSPC: {line}");
+    assert!(
+        size <= super::lines::WORK_MASK_MIB * 1024 * 1024,
+        "the mask holds {size} bytes: {line}"
+    );
+    assert!(
+        !harness.project.join(".git/hooks/fill").exists(),
+        "the write reached the project"
     );
 }
 
@@ -1475,17 +1678,7 @@ const HOLD: u32 = 40_000;
 /// Der virtiofsd der Wurzel in der Unit `unit`: der Prozess `virtiofsd`, der
 /// seinen Socket als Deskriptor bekommt (`--fd`).
 fn root_file_daemon(unit: &str) -> Option<i32> {
-    let output = std::process::Command::new("systemctl")
-        .args(["--user", "show", "--property=ControlGroup", "--value", unit])
-        .output()
-        .ok()?;
-    let group = String::from_utf8_lossy(&output.stdout).trim().to_owned();
-    let procs = std::fs::read_to_string(
-        std::path::Path::new("/sys/fs/cgroup")
-            .join(group.trim_start_matches('/'))
-            .join("cgroup.procs"),
-    )
-    .ok()?;
+    let procs = std::fs::read_to_string(unit_cgroup(unit)?.join("cgroup.procs")).ok()?;
     procs
         .lines()
         .filter_map(|line| line.trim().parse::<i32>().ok())
@@ -1708,6 +1901,138 @@ fn the_workloads_of_hum_469_measured() {
             .join("\n")
     );
     assert!(shown.contains("measured-476"), "{shown}");
+    let _ = handle.wait_timeout(Duration::from_secs(30));
+}
+
+/// Die cgroup der Unit `unit` unter `/sys/fs/cgroup`, wie systemd sie nennt.
+fn unit_cgroup(unit: &str) -> Option<std::path::PathBuf> {
+    let output = std::process::Command::new("systemctl")
+        .args(["--user", "show", "--property=ControlGroup", "--value", unit])
+        .output()
+        .ok()?;
+    let group = String::from_utf8_lossy(&output.stdout).trim().to_owned();
+    group
+        .starts_with('/')
+        .then(|| std::path::Path::new("/sys/fs/cgroup").join(group.trim_start_matches('/')))
+}
+
+/// Die Lasten der Messung von HUM-485: die aus [`MEASURED_AGENT`], dann acht
+/// Leser parallel über die Wurzel (Fäden der virtiofsd) und zuletzt zwei
+/// tmpfs des Gasts, die zusammen 85 % seines Speichers füllen; danach hat
+/// der Gast jede Seite seines Speichers einmal berührt.
+const LIMITS_AGENT: &str = r#"export LC_ALL=C
+git config --global safe.directory '*' 2>/dev/null
+cd /work
+cp -r /usr/include /work/inc && cd /work/inc && git init -q && git add -A && git status >/dev/null
+grep -r zzqqnomatch . >/dev/null
+ls -lR /usr/share/doc >/dev/null 2>&1
+find / -xdev -size +0 >/dev/null 2>&1
+echo "load:walk rc=$?"
+find /usr/lib /usr/share -xdev -type f -size +64k 2>/dev/null | head -n 20000 | xargs -d '\n' -P 8 -n 64 cat >/dev/null 2>&1
+echo "load:parallel rc=$?"
+total=$(awk '/MemTotal/ {print int($2 / 1024)}' /proc/meminfo)
+dd if=/dev/zero of=/tmp/fill bs=1M count=$(( total * 45 / 100 )) status=none; a=$?
+dd if=/dev/zero of=/var/tmp/fill bs=1M count=$(( total * 40 / 100 )) status=none; b=$?
+echo "load:fill total=$total rc=$a,$b"
+rm -f /tmp/fill /var/tmp/fill
+echo measured-485
+"#;
+
+/// HUM-485, Messung, kein Gate: Speicher und Tasks der Unit unter den Lasten
+/// aus [`LIMITS_AGENT`], gelesen aus ihrer cgroup (`memory.peak`,
+/// `pids.peak`, `memory.stat`, die Fäden je Programm beim höchsten
+/// `pids.current`). Die Maschine kommt aus `HUMANITL_TEST_VM_MEMORY_MIB` und
+/// `HUMANITL_TEST_VM_CPUS` (Vorgabe 4096 und 4, die Obergrenze der
+/// abgeleiteten Maschine). Läuft von Hand:
+/// `cargo test -p humanitl-sandbox --lib qemu::kvm_tests::the_limits_of_hum_485_measured -- --ignored --nocapture`.
+#[test]
+#[ignore = "a measurement (HUM-485), run by hand"]
+fn the_limits_of_hum_485_measured() {
+    use crate::SandboxBackend as _;
+    let test = "the_limits_of_hum_485_measured";
+    let number = |key: &str, default: u64| {
+        std::env::var(key)
+            .ok()
+            .and_then(|value| value.parse::<u64>().ok())
+            .unwrap_or(default)
+    };
+    let memory = number("HUMANITL_TEST_VM_MEMORY_MIB", 4096);
+    let cpus = u32::try_from(number("HUMANITL_TEST_VM_CPUS", 4)).unwrap();
+    let Some(harness) = Harness::with_machine(test, memory, cpus) else {
+        return;
+    };
+    let (handle, output) = harness.launch(LIMITS_AGENT);
+    let results = harness.backend.isolation_check(&handle);
+    assert!(results.iter().all(|r| r.passed), "{results:?}");
+    let unit = handle.unit().unwrap().unit.service();
+    let group = unit_cgroup(&unit).expect("the unit's cgroup");
+    let read = |name: &str| std::fs::read_to_string(group.join(name)).unwrap_or_default();
+    let value = |name: &str| read(name).trim().parse::<u64>().unwrap_or(0);
+    let threads = || {
+        let mut by_program = std::collections::BTreeMap::<String, u32>::new();
+        for tid in read("cgroup.threads").split_whitespace() {
+            let comm = std::fs::read_to_string(format!("/proc/{tid}/comm")).unwrap_or_default();
+            *by_program.entry(comm.trim().to_owned()).or_default() += 1;
+        }
+        by_program
+    };
+    let mut seen = Vec::new();
+    let (mut most_tasks, mut at_most) = (0, std::collections::BTreeMap::new());
+    let (mut most_memory, mut stat_at_most) = (0, String::new());
+    let deadline = Instant::now() + Duration::from_secs(1200);
+    while !String::from_utf8_lossy(&seen).contains("measured-485") && Instant::now() < deadline {
+        let tasks = value("pids.current");
+        if tasks > most_tasks {
+            most_tasks = tasks;
+            at_most = threads();
+        }
+        let current = value("memory.current");
+        if current > most_memory {
+            most_memory = current;
+            stat_at_most = read("memory.stat");
+        }
+        if let Ok(chunk) = output.recv_timeout(Duration::from_millis(50)) {
+            seen.extend_from_slice(&chunk.bytes);
+        }
+    }
+    let shown = String::from_utf8_lossy(&seen).into_owned();
+    let mib = |bytes: u64| bytes / (1024 * 1024);
+    let stat: Vec<String> = stat_at_most
+        .lines()
+        .filter_map(|line| line.split_once(' '))
+        .filter(|(key, _)| {
+            [
+                "anon",
+                "file",
+                "kernel",
+                "shmem",
+                "slab",
+                "pagetables",
+                "sock",
+            ]
+            .contains(key)
+        })
+        .map(|(key, bytes)| format!("{key}={}", mib(bytes.trim().parse().unwrap_or(0))))
+        .collect();
+    eprintln!(
+        "{test}: machine {memory} MiB, {cpus} vCPU; memory.peak {} MiB, memory.current at \
+         most {} MiB ({}), swap {} MiB; pids.peak {}, pids.current at most {most_tasks} \
+         ({at_most:?}); memory.max {}, pids.max {}, memory.swap.max {}\n{}",
+        mib(value("memory.peak")),
+        mib(most_memory),
+        stat.join(" "),
+        mib(value("memory.swap.peak")),
+        value("pids.peak"),
+        read("memory.max").trim(),
+        read("pids.max").trim(),
+        read("memory.swap.max").trim(),
+        shown
+            .lines()
+            .filter(|l| l.starts_with("load:"))
+            .collect::<Vec<_>>()
+            .join("\n")
+    );
+    assert!(shown.contains("measured-485"), "{shown}");
     let _ = handle.wait_timeout(Duration::from_secs(30));
 }
 

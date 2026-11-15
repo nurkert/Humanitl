@@ -854,6 +854,9 @@ pub(crate) struct UnitStop {
     /// (HUM-446): Die Host-Prüfung sucht jeden bei dem Dienst, der ihn unter
     /// [`SharedDir::jail_path`] teilt.
     pub(crate) shares: Vec<SharedDir>,
+    /// Die Grenzen, die die cgroup der Unit tragen muss, als Datei und Wert
+    /// (HUM-485); die Host-Prüfung vergleicht sie, bevor der Agent startet.
+    pub(crate) limits: Vec<(&'static str, u64)>,
 }
 
 /// Ein Ordner, den der Plan geöffnet und geprüft hat und den ein Dienst der

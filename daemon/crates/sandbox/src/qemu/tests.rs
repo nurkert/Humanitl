@@ -201,7 +201,17 @@ fn a_disposable_guest_plan_mounts_an_overlay_over_the_checked_folder() {
     let direct: serde_json::Value = serde_json::from_str(&direct).unwrap();
     assert!(direct.get("disposable").is_none() && direct.get("modules").is_none());
 
-    let properties = unit_properties("/run/user/1000/humanitl-vm-x/s", &["/run/user/1000/l"]);
+    let properties = unit_properties(
+        "/run/user/1000/humanitl-vm-x/s",
+        &["/run/user/1000/l"],
+        UnitLimits::of(
+            Machine {
+                cpus: 1,
+                memory_mib: 512,
+            },
+            0,
+        ),
+    );
     assert!(
         properties
             .iter()
@@ -322,11 +332,20 @@ fn the_session_binds_reach_the_guest_root() {
 }
 
 /// Die Eigenschaften der Unit sind die aus HUM-442 Q7, dazu die
-/// beschreibbaren Pfade und die Grenze der Deskriptoren (HUM-469); ein Pfad
-/// mit Leerraum wird abgelehnt.
+/// beschreibbaren Pfade, die Grenze der Deskriptoren (HUM-469) und die
+/// Grenzen an Speicher und Tasks (HUM-485); ein Pfad mit Leerraum wird
+/// abgelehnt.
 #[test]
 fn the_unit_carries_the_hardening_of_the_spike() {
-    let properties = unit_properties("/run/user/1000/humanitl-vm-x/s", &["/home/u/p"]);
+    let machine = Machine {
+        cpus: 2,
+        memory_mib: 1024,
+    };
+    let properties = unit_properties(
+        "/run/user/1000/humanitl-vm-x/s",
+        &["/home/u/p"],
+        UnitLimits::of(machine, 300),
+    );
     for wanted in [
         "PrivateNetwork=yes",
         "PrivateUsers=yes",
@@ -340,6 +359,9 @@ fn the_unit_carries_the_hardening_of_the_spike() {
         "SystemCallArchitectures=native",
         "ReadWritePaths=/run/user/1000/humanitl-vm-x/s /home/u/p",
         "LimitNOFILE=65536",
+        "MemoryMax=1836M",
+        "MemorySwapMax=1836M",
+        "TasksMax=130",
     ] {
         assert!(
             properties.iter().any(|p| p == wanted),
@@ -669,4 +691,51 @@ fn the_door_note_stands_in_the_evidence_of_the_single_socket_only() {
         };
         assert_eq!(result.evidence, expected, "{:?}", result.check);
     }
+}
+
+/// HUM-485: Trägt die cgroup der Unit die geplanten Grenzen nicht, wird jede
+/// grüne Garantie rot mit `SANDBOX_052`, und der Satz steht im Beleg. Hat
+/// der Gast schon abgelehnt, bleibt seine Diagnose (HUM-470), und der Satz
+/// steht nur im Beleg. Mutationsbeweis zur Prüfung selbst: der KVM-Test
+/// `a_process_in_the_unit_cannot_start_more_tasks_than_tasks_max` und
+/// `the_unit_cgroup_must_carry_the_planned_limits` in `limits.rs`.
+#[test]
+fn unenforced_limits_refuse_every_green_guarantee_with_sandbox_052() {
+    let unenforced =
+        limits::limits_unenforced("the unit's pids.max is \"max\", and the plan set 129");
+    let mut results: Vec<CheckResult> = IsolationCheck::ALL
+        .iter()
+        .map(|&check| CheckResult {
+            check,
+            passed: true,
+            evidence: "seen".to_owned(),
+            diagnostic: None,
+        })
+        .collect();
+    host_check::merge_limits(&mut results, &unenforced);
+    for result in &results {
+        assert!(!result.passed, "{results:?}");
+        assert_eq!(
+            result.diagnostic.as_ref().map(|d| d.code.as_str()),
+            Some("SANDBOX_052")
+        );
+        assert!(
+            result.evidence.contains("host: the unit's pids.max"),
+            "{}",
+            result.evidence
+        );
+    }
+
+    let mut results = results_of_lines(&[
+        "MODULES vsock=loaded modules_disabled=1",
+        "CHECK mounts_match fail extra:/dev/pts:devpts",
+    ]);
+    host_check::merge(&mut results, &unit_gone());
+    host_check::merge_limits(&mut results, &unenforced);
+    assert_eq!(
+        shown_code(&results).as_deref(),
+        Some("SANDBOX_049"),
+        "{results:?}"
+    );
+    assert!(results[0].evidence.contains("pids.max"), "{results:?}");
 }

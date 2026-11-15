@@ -118,6 +118,38 @@ pub(crate) fn merge(results: &mut [CheckResult], findings: &[Finding]) {
     }
 }
 
+/// `SANDBOX_052`, wenn die cgroup der laufenden Unit nicht die geplanten
+/// Grenzen trägt (HUM-485), sonst keine. Was sich nicht lesen lässt, ist ein
+/// Fund und nie ein Bestehen.
+pub(crate) fn limits_unenforced(stop: &UnitStop) -> Option<Diagnostic> {
+    unit_cgroup(stop)
+        .and_then(|dir| super::limits::judge_cgroup(&dir, &stop.limits))
+        .err()
+        .map(|why| super::limits::limits_unenforced(&why))
+}
+
+/// Trägt `SANDBOX_052` (die Grenzen der Unit hielten nicht) in die
+/// Ergebnisse ein. Ist schon eine Garantie rot (der Gast hat abgelehnt,
+/// HUM-470, oder der Host fand etwas), bleibt deren Diagnose die der Sitzung,
+/// und der Satz steht nur im Beleg jeder Garantie: Eine Unit, die nach einer
+/// Ablehnung schon endete, hat keine cgroup mehr, und das ist die Folge, nicht
+/// der Grund. Sonst wird jede Garantie rot mit `SANDBOX_052`, wie bei einer
+/// Zulassung, die den Gast nicht erreicht. Abgewiesen wird in beiden Fällen.
+///
+/// `SANDBOX_052` statt `SANDBOX_047`: Satz und Fix (der Eintrag, der die
+/// Controller delegiert) sind dieselben wie bei der Prüfung vor dem Start;
+/// beide Wege enden an derselben Ursache.
+pub(crate) fn merge_limits(results: &mut [CheckResult], diagnostic: &Diagnostic) {
+    let already_refused = results.iter().any(|result| !result.passed);
+    for result in results.iter_mut() {
+        result.evidence = format!("{}; host: {}", result.evidence, diagnostic.why);
+        if !already_refused {
+            result.passed = false;
+            result.diagnostic = Some(diagnostic.clone());
+        }
+    }
+}
+
 /// Ein Prozess der Unit, wie `/proc` ihn zeigt.
 #[derive(Debug, Clone, Default, PartialEq, Eq)]
 pub(crate) struct Process {
@@ -203,8 +235,9 @@ fn settle(
     Ok(false)
 }
 
-/// Die PIDs der Unit, aus ihrer cgroup und allen darunter.
-fn unit_pids(stop: &UnitStop) -> Result<Vec<u32>, String> {
+/// Die cgroup der Unit unter `/sys/fs/cgroup`, wie der Dienstverwalter sie
+/// nennt.
+fn unit_cgroup(stop: &UnitStop) -> Result<std::path::PathBuf, String> {
     let output = crate::user_unit::run_bounded(
         stop.units.show_command(&stop.unit, "ControlGroup"),
         std::time::Duration::from_secs(10),
@@ -226,7 +259,12 @@ fn unit_pids(stop: &UnitStop) -> Result<Vec<u32>, String> {
             group
         ));
     }
-    let root = Path::new("/sys/fs/cgroup").join(group.trim_start_matches('/'));
+    Ok(Path::new("/sys/fs/cgroup").join(group.trim_start_matches('/')))
+}
+
+/// Die PIDs der Unit, aus ihrer cgroup und allen darunter.
+fn unit_pids(stop: &UnitStop) -> Result<Vec<u32>, String> {
+    let root = unit_cgroup(stop)?;
     let mut pids = Vec::new();
     let mut dirs = vec![root];
     while let Some(dir) = dirs.pop() {

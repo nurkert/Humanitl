@@ -415,15 +415,24 @@ impl UserUnits {
         command
     }
 
-    /// `systemctl --user show --property=Version --value`: Antwortet der
-    /// Dienstverwalter, und in welcher Fassung ([`check_probe`]).
-    pub(crate) fn probe_command(&self) -> Command {
+    /// `systemctl --user show --property=<property> --value`: ein Wert des
+    /// Dienstverwalters selbst, etwa seine `ControlGroup`, unter der die
+    /// Grenzen der Units halten müssen (HUM-485).
+    pub(crate) fn manager_show_command(&self, property: &str) -> Command {
         let mut command = Command::new(&self.ctl);
         command
             .env_clear()
             .envs(self.env.iter().map(|(key, value)| (key, value)))
-            .args(["--user", "show", "--property=Version", "--value"]);
+            .args(["--user", "show"])
+            .arg(format!("--property={property}"))
+            .arg("--value");
         command
+    }
+
+    /// `systemctl --user show --property=Version --value`: Antwortet der
+    /// Dienstverwalter, und in welcher Fassung ([`check_probe`]).
+    pub(crate) fn probe_command(&self) -> Command {
+        self.manager_show_command("Version")
     }
 }
 

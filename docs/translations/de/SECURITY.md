@@ -2027,6 +2027,36 @@ den Garantien ändert das nichts, denn eine solche Verbindung erreicht nichts.
   Achtel der harten Grenze, die der Dienstverwalter sonst vergibt; der Speicher des Hosts, den ein
   Gast über einen Dienst binden kann, bleibt so begrenzt (vorher trieb ein Walk den Wurzeldienst
   auf rund 520 000, HUM-445).
+- **Die Unit bindet eine feste Menge Speicher und eine feste Zahl Tasks** (HUM-485). Die Unit
+  trägt `MemoryMax`, `MemorySwapMax` und `TasksMax`; ein übernommener Hilfsprozess, der ohne Ende
+  Speicher anfordert oder Prozesse und Fäden startet, bleibt an der Grenze stehen, in seiner
+  eigenen cgroup. `MemoryMax` ist der Speicher der Maschine, feste 512 MiB für die Hilfsprozesse
+  und die Größe jedes tmpfs, auf das die Unit schreibt: Der Speicher des Gasts ist ein memfd, der
+  der Unit bis zur Größe der Maschine angerechnet wird, und was die Unit auf ein tmpfs schreibt
+  (immer die Schicht einer Wegwerf-Sitzung, die im Arbeitsspeicher liegt, und den Projektordner,
+  wenn er auf einem liegt), ist Speicher, den der Kernel nicht zurückschreiben kann. Die Grenze
+  ist deshalb je Sitzung fest, aber nicht eine Zahl für jeden Host: Hat der Nutzer den
+  Projektordner auf ein tmpfs gelegt, wächst sie um dessen Größe, und diese Größe bleibt die
+  Grenze dieser Schreibvorgänge. Jedes tmpfs im Gefängnis eines Hilfsprozesses hat eine feste
+  Größe (bubblewrap `--size`): jede Maske, die der Dienst für `/work` über das Projekt legt
+  (`.git/hooks`, `.vscode`, ...), 64 MiB, immer in `MemoryMax` eingerechnet (das Gefängnis
+  kann es beschreiben, auch wenn das Projekt nur lesbar ist), so dass ein Gast, der eine Maske füllt, `ENOSPC` bekommt, statt die Sitzung
+  über ihre Grenze zu tragen; die leeren tmpfs des nur lesbaren Gefängnisses der Wurzel 1 MiB. Die
+  Hilfsprozesse selbst lagen bei höchstens 59 MiB anonymem und 96 MiB Kernel-Speicher; der
+  Seiten-Cache dessen, was die Dateisystemdienste lesen, zählt mit, wird an der Grenze aber
+  freigegeben, statt etwas zu beenden. `MemorySwapMax` ist so groß wie `MemoryMax`: unbegrenzt
+  könnte ein Hilfsprozess den ganzen Swap des Hosts füllen; bei null wäre der Speicher des Gasts
+  nie auslagerbar, und auf einem kleinen Host, auf dem die Maschine den halben Speicher bekommt,
+  verdrängte eine ruhende Sitzung alles andere. `TasksMax` sind die vCPU plus 128; gemessen
+  wurden neben den vCPU 28 bis 34 Tasks (je Hilfsprozess zwei bubblewrap-Prozesse, einige `sh`,
+  drei bis vier Fäden je Dateisystemdienst, vier für das vsock-Gerät). Ohne die cgroup-v2-Controller
+  `memory` und `pids` beim Dienstverwalter des Nutzers ließe systemd die Grenzen ohne ein Wort
+  fallen; der Start lehnt mit `SANDBOX_052` ab, bevor es die Unit gibt, mit dem systemd-Eintrag,
+  der sie delegiert, als Fix. Diese frühe Prüfung sieht nur, welche Controller der Dienstverwalter
+  hat, nicht, ob sie bis zur Unit reichen (ein `DisableControllers=` auf einem Slice dazwischen
+  nähme sie still); deshalb liest die Host-Prüfung auch `memory.max`, `memory.swap.max` und
+  `pids.max` der cgroup der laufenden Unit und vergleicht sie mit dem Plan. Eine fehlende Datei
+  oder ein anderer Wert lehnt die Sitzung mit `SANDBOX_052` ab, bevor der Agent startet.
 - **Der Dateicache des Gasts ist an und begrenzt** (HUM-476). Beide Dienste laufen mit
   `--cache auto`. Der Gast behält jeden Eintrag, den er nachgeschlagen hat, bis sein Speicher
   knapp wird, und mit ihm einen Deskriptor im Dienst; unbegrenzt erreichte schon ein `ls -lR` über
@@ -2146,7 +2176,10 @@ den Garantien ändert das nichts, denn eine solche Verbindung erreicht nichts.
 
 `/dev/kvm` les- und schreibbar, der Emulator mit `microvm` und `vhost-user-vsock-pci`, der
 Dateisystemdienst mit `--readonly`, `--fd`, `--cache` und `--allow-mmap`, das vsock-Gerät mit
-`--uds-path` und `--groups`, bubblewrap mit `--bind-fd`, ein lesbares Kernel-Abbild mit
+`--uds-path` und `--groups`, bubblewrap mit `--bind-fd` und `--size`, ein lesbares Kernel-Abbild mit
 eingebautem virtiofs (`CONFIG_VIRTIO_FS=y` in der Konfiguration neben dem Abbild) in der Fassung
 6.6 oder neuer und das Modulverzeichnis dieses Kernels. Fehlt eine Voraussetzung, lehnt der Start mit `SANDBOX_045` ab; er fällt nie auf ein
-anderes Backend zurück. `humanitl doctor` zeigt je Voraussetzung eine Zeile.
+anderes Backend zurück. `humanitl doctor` zeigt je Voraussetzung eine Zeile. Der Dienstverwalter
+des Nutzers braucht die cgroup-Controller `memory` und `pids` (systemd delegiert sie von sich aus);
+ohne sie lehnt ein Start mit `SANDBOX_052` ab (HUM-485), was auch `humanitl doctor --probe`
+zeigt.

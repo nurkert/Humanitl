@@ -1,4 +1,4 @@
-//! Nur für die KVM-Tests (HUM-471, HUM-468): drei Eingriffe in die Zeile der Maschine
+//! Nur für die KVM-Tests (HUM-471, HUM-468, HUM-485): vier Eingriffe in die Zeile der Maschine
 //! einer Sitzung des Adapters, je Faden gesetzt, damit parallele Tests
 //! einander nichts unterschieben. Die Endform kennt keinen davon.
 //!
@@ -18,6 +18,8 @@
 //!   ersetzt sich dann durch die Zeile der Maschine. Der Befehl läuft in der
 //!   cgroup der Unit, so wie ein Programm, das dort nicht hingehört; die
 //!   Host-Prüfung muss ihn finden.
+//! - **Weitere Eigenschaften der Unit** (HUM-485), etwa eine Grenze, die die
+//!   geplante überschreibt; die Host-Prüfung muss die Abweichung finden.
 
 use std::cell::RefCell;
 use std::ffi::OsString;
@@ -37,6 +39,9 @@ pub(crate) struct TestMachine {
     pub(crate) vsock_relay: Option<PathBuf>,
     /// Ein Befehl der Shell, der neben der Maschine in der Unit läuft.
     pub(crate) extra_process: Option<String>,
+    /// Eigenschaften, die die Unit nach ihren eigenen bekommt (HUM-485); bei
+    /// systemd gilt die letzte, so lässt sich eine Grenze überschreiben.
+    pub(crate) unit_properties: Vec<String>,
 }
 
 thread_local! {
@@ -115,11 +120,15 @@ pub(crate) fn apply(line: &mut Vec<OsString>, layout: &Layout) {
 }
 
 /// Die Eigenschaft, mit der die Unit in das Verzeichnis der Konsole
-/// schreiben darf.
-pub(crate) fn unit_property() -> Option<String> {
-    current()
+/// schreiben darf, und die Eigenschaften, die ein Test dazugibt.
+pub(crate) fn unit_properties() -> Vec<String> {
+    let machine = current();
+    machine
         .console
         .map(|dir| format!("ReadWritePaths={}", dir.display()))
+        .into_iter()
+        .chain(machine.unit_properties)
+        .collect()
 }
 
 /// Die Funde der Host-Prüfung ohne die zur Konsole dieses Fadens.

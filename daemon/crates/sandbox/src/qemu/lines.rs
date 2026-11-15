@@ -100,6 +100,39 @@ pub(crate) const LAYER_FD: i32 = 6;
 /// fest begrenzt.
 pub(crate) const FILE_DAEMON_NOFILE: u32 = 65_536;
 
+/// Die Größe jedes tmpfs, mit dem der Dienst für `/work` eine Maske des
+/// Profils über das Projekt legt (HUM-485), in MiB: `--size` vor jedem
+/// `--tmpfs` seines Gefängnisses.
+///
+/// Der Gast schreibt dorthin über virtiofs (etwa nach `/work/.git/hooks`),
+/// und was dort liegt, ist Speicher der Unit, den der Kernel nicht
+/// zurückschreiben kann. Ohne Größe wüchse ein tmpfs bis zur Hälfte des
+/// Arbeitsspeichers des Hosts und trüge eine direkte Sitzung über
+/// `MemoryMax` (der Speicher des Gasts ist dann schon belegt), bis der
+/// Kernel sie beendet. Mit fester Größe bekommt der Gast `ENOSPC`, und
+/// `MemoryMax` rechnet jede Maske mit dieser Größe ein
+/// (`limits::in_ram_mib` und [`WORK_MASK_MIB`] je Maske). Die Masken sind
+/// Ordner, aus denen Werkzeuge des Hosts Code starten (`.git/hooks`,
+/// `.vscode`, `.idea`, `.direnv`, ...); was der Agent dort ablegt, sieht
+/// niemand nach der Sitzung. 64 MiB fassen Hooks und Einstellungen um ein
+/// Vielfaches und auch den Index einer IDE oder ein kleines Werkzeug unter
+/// `.direnv`; acht Masken der Vorgabe kosten höchstens 512 MiB Grenze.
+pub(crate) const WORK_MASK_MIB: u64 = 64;
+
+/// Die Größe jedes tmpfs im Gefängnis des Dienstes der Wurzel (HUM-485), in
+/// MiB. Diese tmpfs sind nur leere Verzeichnisse der nur lesbaren Wurzel
+/// (der Shim hängt im Gast eigene darüber); der Dienst liefert sie mit
+/// `--readonly` aus, und kein Gast schreibt hinein. Die kleine Größe hält
+/// auch einen übernommenen Dienst dort fest.
+pub(crate) const ROOT_TMPFS_MIB: u64 = 1;
+
+/// `--size <Bytes> --tmpfs <Pfad>`: ein tmpfs mit fester Größe.
+fn push_tmpfs(line: &mut Vec<OsString>, mib: u64, path: &Path) {
+    line.push(OsString::from("--size"));
+    line.push(OsString::from((mib * 1024 * 1024).to_string()));
+    push_path(line, "--tmpfs", path);
+}
+
 /// Die CID des Gasts; jede Sitzung hat ihr eigenes Gerät, also genügt eine.
 pub(crate) const GUEST_CID: u32 = 3;
 
@@ -388,7 +421,9 @@ pub(crate) fn root_line(resolved: &Resolved, entries: &[RootEntry]) -> Vec<OsStr
                 line.push(link.as_os_str().to_owned());
                 line.push(under(GUEST_ROOT, target).into_os_string());
             }
-            RootEntry::Tmpfs(target) => push_path(&mut line, "--tmpfs", &under(GUEST_ROOT, target)),
+            RootEntry::Tmpfs(target) => {
+                push_tmpfs(&mut line, ROOT_TMPFS_MIB, &under(GUEST_ROOT, target));
+            }
             RootEntry::Dir(target) => push_path(&mut line, "--dir", &under(GUEST_ROOT, target)),
         }
     }
@@ -439,7 +474,11 @@ pub(crate) fn work_line(
     for mask in masks {
         match mask {
             WorkMask::Tmpfs(relative) => {
-                push_path(&mut line, "--tmpfs", &Path::new(WORK_SHARE).join(relative));
+                push_tmpfs(
+                    &mut line,
+                    WORK_MASK_MIB,
+                    &Path::new(WORK_SHARE).join(relative),
+                );
             }
             WorkMask::Empty(relative) => {
                 line.push(OsString::from("--ro-bind"));
@@ -890,7 +929,11 @@ mod tests {
         }
         assert!(has(&lines.root, &["--ro-bind", "/usr", "/guest/usr"]));
         assert!(has(&lines.root, &["--symlink", "usr/bin", "/guest/bin"]));
-        assert!(has(&lines.root, &["--tmpfs", "/guest/tmp"]));
+        // Jedes tmpfs eines Gefängnisses hat eine feste Größe (HUM-485).
+        assert!(has(
+            &lines.root,
+            &["--size", "1048576", "--tmpfs", "/guest/tmp"]
+        ));
         assert!(has(&lines.root, &["--dir", "/guest/work"]));
         let dir = layout().dir.to_string_lossy().into_owned();
         assert!(
@@ -899,7 +942,13 @@ mod tests {
         );
         // /work: der Ordner als Deskriptor 4, die Masken darüber.
         assert!(has(&lines.work, &["--bind-fd", "4", WORK_SHARE]));
-        assert!(has(&lines.work, &["--tmpfs", "/share/.git/hooks"]));
+        assert!(has(
+            &lines.work,
+            &["--size", "67108864", "--tmpfs", "/share/.git/hooks"]
+        ));
+        for line in [&lines.root, &lines.work, &lines.device, &lines.machine] {
+            assert_eq!(count(line, "--tmpfs"), count(line, "--size"), "{line:?}");
+        }
         assert!(has(
             &lines.work,
             &["--shared-dir", WORK_SHARE, "--socket-path"]

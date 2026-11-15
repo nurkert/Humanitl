@@ -111,6 +111,11 @@ impl PinnedLayer {
         }
     }
 
+    /// Das geöffnete Verzeichnis, solange der Plan es hält (HUM-485).
+    pub(crate) fn fd(&self) -> std::os::fd::BorrowedFd<'_> {
+        self.dir.fd()
+    }
+
     /// Der Deskriptor, der an die Unit geht.
     pub(crate) fn into_fd(self) -> OwnedFd {
         self.dir.into_fd()

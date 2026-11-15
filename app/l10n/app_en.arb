@@ -4378,5 +4378,9 @@
   "diagSANDBOX051Title": "Writable extension not possible at the kernel level",
   "@diagSANDBOX051Title": {"description": "Title of the diagnostic SANDBOX_051 (docs/DIAGNOSTICS.md): the sandbox profile lists a writable extension (mounts.extra_rw), which the kernel level, the micro VM, cannot make writable (HUM-466)."},
   "diagSANDBOX051Why": "The sandbox profile lists a folder that the agent may change, and at the kernel level only the project folder is writable inside the micro VM. The session did not start instead of showing the folder read-only without saying so.",
-  "@diagSANDBOX051Why": {"description": "Generic cause of SANDBOX_051. Stands in the cause slot only when the diagnostic carries no sentence of the daemon's own (HUM-052)."}
+  "@diagSANDBOX051Why": {"description": "Generic cause of SANDBOX_051. Stands in the cause slot only when the diagnostic carries no sentence of the daemon's own (HUM-052)."},
+  "diagSANDBOX052Title": "Kernel level limits cannot be enforced",
+  "@diagSANDBOX052Title": {"description": "Title of the diagnostic SANDBOX_052 (docs/DIAGNOSTICS.md): the cgroup controllers memory and pids are not delegated to the user's service manager, so the memory and task limits of a kernel-level session would not hold (HUM-485)."},
+  "diagSANDBOX052Why": "A session of the kernel level runs with a limit on memory and on processes, and the cgroup controllers for them are not delegated to your user. Without its limits the session does not start.",
+  "@diagSANDBOX052Why": {"description": "Generic cause of SANDBOX_052. Stands in the cause slot only when the diagnostic carries no sentence of the daemon's own (HUM-052)."}
 }
