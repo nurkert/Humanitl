@@ -7,9 +7,13 @@
 // verfügbar nennt. Läuft eine Sitzung, nennen
 // Reiter und Kopf ihr Backend mit seiner Stufe.
 
+import 'dart:async';
+
 import 'package:flutter/widgets.dart';
 import 'package:flutter_test/flutter_test.dart';
+import 'package:flutter_riverpod/flutter_riverpod.dart';
 import 'package:humanitl/core/domain/domain.dart';
+import 'package:humanitl/core/ipc/sandbox_backends_feed.dart';
 import 'package:humanitl/core/ipc/fake_daemon_client.dart';
 import 'package:humanitl/core/ui/ui.dart';
 import 'package:humanitl/features/sandbox/providers/backend_choice.dart';
@@ -475,4 +479,102 @@ void main() {
       FormKeys.sandboxBackendAuto,
     );
   });
+
+  testWidgets('the section stays while the list for a new choice loads, and '
+      'shows that list once it arrives', (WidgetTester tester) async {
+    // HUM-504: Die Liste für einen Start auf Container ist ein neues
+    // Mitglied der Familie ohne Wert. Bis der Daemon antwortet, bleibt die
+    // zuletzt gezeigte Liste stehen, mit Container schon gewählt, ohne dass
+    // der Abschnitt zusammenfällt oder seine Höhe ändert. Die Lage misst der
+    // Test nicht: `tapChoice` rollt die Wahl erst ins Bild.
+    final _HeldBackendsClient client = _HeldBackendsClient()
+      ..sandboxBackendList = listWith(availableContainer);
+    await openIsolation(tester, client);
+    final Finder section = find.byKey(const Key('sandbox-backend'));
+    final Size before = tester.getSize(section);
+
+    final Completer<SandboxBackendList> held = Completer<SandboxBackendList>();
+    client.held['container'] = held;
+    await tapChoice(tester, 'container');
+    expect(client.sandboxBackendsAsked, contains('container'));
+    expect(held.isCompleted, isFalse);
+
+    expect(section, findsOneWidget);
+    expect(tester.getSize(section), before);
+    expect(tester.widget<HSegmented<String>>(choice).selected, 'container');
+    expect(
+      find.byKey(const Key('sandbox-backend-level-container')),
+      findsOneWidget,
+    );
+    expect(find.byKey(const Key('sandbox-backend-level-extra')), findsNothing);
+    // Die stehende Liste gehört zum vorigen Plan: gedämpft und nicht wählbar.
+    final HTokens tokens = HTheme.of(tester.element(section));
+    Color? lineColor(String key) =>
+        tester.widget<Text>(find.byKey(Key(key))).style?.color;
+    expect(tester.widget<HSegmented<String>>(choice).enabled, isFalse);
+    expect(lineColor('sandbox-backend-level-container'), tokens.colors.fg2);
+    expect(lineColor('sandbox-backend-minimum'), tokens.colors.fg2);
+
+    // Die Antwort kommt: Der Abschnitt zeigt jetzt die neue Liste.
+    held.complete(
+      SandboxBackendList(
+        minIsolation: IsolationLevel.policy,
+        autoBackend: DoctorCheckId.sandboxTool,
+        backends: <SandboxBackendInfo>[
+          ...listWith(availableContainer).backends,
+          const SandboxBackendInfo(
+            name: 'extra',
+            isolation: IsolationLevel.namespaces,
+            available: true,
+          ),
+        ],
+      ),
+    );
+    await settle(tester);
+    expect(section, findsOneWidget);
+    expect(
+      find.byKey(const Key('sandbox-backend-level-extra')),
+      findsOneWidget,
+    );
+    expect(tester.widget<HSegmented<String>>(choice).selected, 'container');
+    expect(tester.widget<HSegmented<String>>(choice).enabled, isTrue);
+    expect(lineColor('sandbox-backend-level-container'), tokens.colors.fg1);
+    expect(lineColor('sandbox-backend-minimum'), tokens.colors.fg1);
+  }, variant: TargetPlatformVariant.only(TargetPlatform.linux));
+
+  testWidgets('a failed refresh hides the section, even though the provider '
+      'still holds the previous list', (WidgetTester tester) async {
+    // HUM-504: Riverpod behält nach einer gescheiterten Auffrischung den
+    // alten Wert neben dem Fehler. Der Fehler gewinnt, wie bei einem Daemon
+    // ohne den Aufruf.
+    final SandboxTestClient client = SandboxTestClient()
+      ..sandboxBackendList = listWith(availableContainer);
+    await openIsolation(tester, client);
+    final Finder section = find.byKey(const Key('sandbox-backend'));
+    expect(section, findsOneWidget);
+
+    client.sandboxBackendsFailure = containerMissing;
+    ProviderScope.containerOf(tester.element(section))
+        .invalidate(sandboxBackendsProvider(null));
+    await settle(tester);
+    expect(section, findsNothing);
+  }, variant: TargetPlatformVariant.only(TargetPlatform.linux));
+}
+
+/// Ein Fake, der die Liste für ein Backend in [held] erst nennt, wenn der
+/// Test den Completer erfüllt; alle anderen Listen kommen sofort.
+class _HeldBackendsClient extends SandboxTestClient {
+  /// Die zurückgehaltenen Antworten je Backend der Sitzung.
+  final Map<String, Completer<SandboxBackendList>> held =
+      <String, Completer<SandboxBackendList>>{};
+
+  @override
+  Future<SandboxBackendList> sandboxBackends({String? backend}) {
+    final Completer<SandboxBackendList>? hold = held[backend];
+    if (hold == null) {
+      return super.sandboxBackends(backend: backend);
+    }
+    sandboxBackendsAsked.add(backend);
+    return hold.future;
+  }
 }

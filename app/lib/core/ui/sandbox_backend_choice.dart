@@ -76,6 +76,7 @@ class SandboxBackendLines extends StatelessWidget {
     required this.list,
     required this.keyPrefix,
     this.showMinimum = false,
+    this.pending = false,
     super.key,
   });
 
@@ -88,11 +89,21 @@ class SandboxBackendLines extends StatelessWidget {
   /// Whether the lower bound stands under the backends.
   final bool showMinimum;
 
+  /// Whether [list] belongs to a plan that is no longer current, while the
+  /// answer for the new one is on its way (HUM-504): every line then stands
+  /// in the muted colour of "still being checked", so the old availability,
+  /// reasons and lower bound do not read as the current ones.
+  final bool pending;
+
   @override
   Widget build(BuildContext context) {
     final HTokens tokens = HTheme.of(context);
     final AppLocalizations l10n = context.l10n;
     final IsolationLevel? minimum = list.minIsolation;
+    final Color lineColor = pending ? tokens.colors.fg2 : tokens.colors.fg1;
+    final Color warningColor = pending
+        ? tokens.colors.fg2
+        : tokens.colors.warningText;
     return Column(
       crossAxisAlignment: CrossAxisAlignment.start,
       mainAxisSize: MainAxisSize.min,
@@ -104,7 +115,7 @@ class SandboxBackendLines extends StatelessWidget {
               isolationLevelText(l10n, backend.isolation),
             ),
             key: ValueKey<String>('$keyPrefix-level-${backend.name}'),
-            style: tokens.typography.ui12.tinted(tokens.colors.fg1),
+            style: tokens.typography.ui12.tinted(lineColor),
           ),
           if (backend.undecided)
             // Die Suche des Daemons lief noch (HUM-502): weder verfügbar
@@ -122,7 +133,12 @@ class SandboxBackendLines extends StatelessWidget {
               ),
             )
           else if (backend.reason case final Diagnostic reason)
-            _Reason(backend: backend.name, reason: reason, keyPrefix: keyPrefix)
+            _Reason(
+              backend: backend.name,
+              reason: reason,
+              keyPrefix: keyPrefix,
+              color: warningColor,
+            )
           else if (!backend.available)
             // Nicht verfügbar, aber ohne Befund: Der Daemon nennt keinen
             // Grund, und die Zeile sagt wenigstens, dass es nicht geht.
@@ -135,7 +151,7 @@ class SandboxBackendLines extends StatelessWidget {
               child: Text(
                 l10n.sandboxBackendUnavailable,
                 key: ValueKey<String>('$keyPrefix-reason-${backend.name}'),
-                style: tokens.typography.ui12.tinted(tokens.colors.warningText),
+                style: tokens.typography.ui12.tinted(warningColor),
               ),
             ),
         ],
@@ -147,7 +163,7 @@ class SandboxBackendLines extends StatelessWidget {
                 isolationLevelText(l10n, minimum),
               ),
               key: ValueKey<String>('$keyPrefix-minimum'),
-              style: tokens.typography.ui12.tinted(tokens.colors.fg1),
+              style: tokens.typography.ui12.tinted(lineColor),
             ),
           ),
       ],
@@ -162,11 +178,15 @@ class _Reason extends StatelessWidget {
     required this.backend,
     required this.reason,
     required this.keyPrefix,
+    required this.color,
   });
 
   final String backend;
   final Diagnostic reason;
   final String keyPrefix;
+
+  /// The colour of the reason: the warning, or muted while pending.
+  final Color color;
 
   @override
   Widget build(BuildContext context) {
@@ -186,7 +206,7 @@ class _Reason extends StatelessWidget {
           Text(
             DiagnosticL10n.resolve(reason, l10n).cause,
             key: ValueKey<String>('$keyPrefix-reason-$backend'),
-            style: tokens.typography.ui12.tinted(tokens.colors.warningText),
+            style: tokens.typography.ui12.tinted(color),
           ),
           if (fix != null)
             Padding(
