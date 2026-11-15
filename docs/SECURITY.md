@@ -2256,12 +2256,20 @@ listen).
   `ENFILE`, at most 37,566 descriptors in the root daemon; every workload within twice the time
   of the unbounded cache (`ls -lR` over `/usr/share/doc` 3.2 to 4.0 s, unbounded 2.2 s up to
   `ENFILE`, with `--cache never` of HUM-469 28 s; `git add` over 13,475 files 11 s, 12 s, 29 s).
-- **Shared mappings** (HUM-469, HUM-476). Under `--cache auto` `mmap(MAP_SHARED)` on `/` and
-  `/work` goes through the guest's page cache (rustc and cargo need it). The daemons still get
-  `--allow-mmap`, which only acts under `never` and `metadata`, and the guest kernel must still be
-  6.6 or newer: a kernel whose configuration names an older version is refused with
-  `SANDBOX_045`, and a configuration without the usual version header starts while
-  `humanitl doctor` says the version is unknown. Caveat on data coherency, not a security
+- **Shared mappings** (HUM-469, HUM-476, HUM-484). Under `--cache auto` `mmap(MAP_SHARED)` on `/`
+  and `/work` goes through the guest's page cache (SQLite in WAL mode, rustc and cargo need it),
+  on any guest kernel. The daemons run without `--allow-mmap` and no guest kernel version is
+  refused: both belonged to `--cache never` of HUM-469, where every file is opened without the
+  page cache and only Linux 6.6 maps such a file shared (an older guest refused every shared
+  mapping with `ENODEV`). Measured (HUM-484, guest kernels 6.12 and 7.3): reading a file of the
+  root, writing a file under `/work` through to the host, SQLite in WAL mode, `git` and a compiler
+  all work without the option, directly and in a disposable session; switched back to `never`
+  without it, every shared mapping fails with `ENODEV`. virtiofsd itself advises `--allow-mmap`
+  only for a directory the daemon has to itself, and the project belongs to the user. A guest
+  kernel too old for what the guest needs otherwise (virtiofs as root, `overlay` with
+  `userxattr` for the disposable session, the filters of PID 1) fails loudly: it does not boot or
+  its check is red, and the session is refused; tested are 6.12 (CI) and 7.x. `humanitl doctor`
+  names the version from the configuration's header, or says it is unknown. Caveat on data coherency, not a security
   boundary: when the user edits a file under the project on the host while the guest has it
   cached or mapped, the guest sees the change only after the one-second validity of `auto`, and a
   shared mapping can show stale pages. The guest sees nothing it was not given either way.
@@ -2345,9 +2353,9 @@ listen).
 ### Prerequisites
 
 `/dev/kvm` readable and writable, the emulator with `microvm` and `vhost-user-vsock-pci`, the file
-system daemon with `--readonly`, `--fd`, `--cache` and `--allow-mmap`, the vsock device with
+system daemon with `--readonly`, `--fd` and `--cache`, the vsock device with
 `--uds-path` and `--groups`, bubblewrap with `--bind-fd` and `--size`, a readable kernel image with virtiofs
-built in (`CONFIG_VIRTIO_FS=y` in the configuration beside the image) of version 6.6 or newer
+built in (`CONFIG_VIRTIO_FS=y` in the configuration beside the image)
 and the module directory of that kernel. A missing prerequisite refuses the start with `SANDBOX_045`; the start never falls back to
 another backend. `humanitl doctor` shows one line per prerequisite. The user's service manager
 needs the cgroup controllers `memory` and `pids` (systemd delegates them by default); without them

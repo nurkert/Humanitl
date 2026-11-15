@@ -746,7 +746,7 @@ User service manager unreachable
 
 Kernel level prerequisite missing
 
-**Auslöser.** The kernel level starts a micro VM with a guest kernel of its own and needs on this host: `/dev/kvm` readable and writable for this user, the machine emulator with the machine type and vsock device it uses, the file system daemon with `--readonly` and `--fd`, the vsock device with `--uds-path` and `--groups`, bubblewrap with `--bind-fd` and `--size`, a readable kernel image with virtiofs built in (`CONFIG_VIRTIO_FS=y` in the configuration beside the image, `config-<release>` beside `vmlinuz-<release>`) and the module directory of that kernel. The sentence names the first one that is missing; nothing starts, and no other backend takes over.
+**Auslöser.** The kernel level starts a micro VM with a guest kernel of its own and needs on this host: `/dev/kvm` readable and writable for this user, the machine emulator with the machine type and vsock device it uses, the file system daemon with `--readonly`, `--fd` and `--cache`, the vsock device with `--uds-path` and `--groups`, bubblewrap with `--bind-fd` and `--size`, a readable kernel image with virtiofs built in (`CONFIG_VIRTIO_FS=y` in the configuration beside the image, `config-<release>` beside `vmlinuz-<release>`) and the module directory of that kernel. The sentence names the first one that is missing; nothing starts, and no other backend takes over.
 
 **Fix.** `CopyCommand` with the package that brings the missing piece (for `/dev/kvm` the command that adds this user to the group `kvm`), or `ChangeSetting` on the setting under `sandbox.qemu` that names the path.
 

@@ -2077,12 +2077,21 @@ den Garantien ändert das nichts, denn eine solche Verbindung erreicht nichts.
   Wurzeldienst; jede Last in höchstens der doppelten Zeit des unbegrenzten Cache (`ls -lR` über
   `/usr/share/doc` 3,2 bis 4,0 s, unbegrenzt 2,2 s bis zum `ENFILE`, mit `--cache never` aus HUM-469
   28 s; `git add` über 13 475 Dateien 11 s, 12 s, 29 s).
-- **Geteilte Abbildungen** (HUM-469, HUM-476). Unter `--cache auto` geht `mmap(MAP_SHARED)` auf
-  `/` und `/work` durch den Seitencache des Gasts (rustc und cargo brauchen es). Die Dienste
-  bekommen weiter `--allow-mmap`, das nur unter `never` und `metadata` wirkt, und der Gastkernel
-  muss weiter 6.6 oder neuer sein: Ein Kernel, dessen Konfiguration eine ältere Fassung nennt, wird
-  mit `SANDBOX_045` abgelehnt, eine Konfiguration ohne den üblichen Kopf mit der Fassung startet,
-  und `humanitl doctor` nennt die Fassung unbekannt. Einschränkung der Datenkohärenz, keine Grenze
+- **Geteilte Abbildungen** (HUM-469, HUM-476, HUM-484). Unter `--cache auto` geht
+  `mmap(MAP_SHARED)` auf `/` und `/work` durch den Seitencache des Gasts (SQLite im WAL-Modus,
+  rustc und cargo brauchen es), auf jedem Gastkernel. Die Dienste laufen ohne `--allow-mmap`, und
+  keine Fassung des Gastkernels wird abgelehnt: Beides gehörte zu `--cache never` aus HUM-469, wo
+  jede Datei ohne Seitencache geöffnet wird und erst Linux 6.6 eine solche Datei geteilt abbildet
+  (ein älterer Gast verweigerte jede geteilte Abbildung mit `ENODEV`). Gemessen (HUM-484,
+  Gastkernel 6.12 und 7.3): Eine Datei der Wurzel lesen, eine Datei unter `/work` bis auf den Host
+  beschreiben, SQLite im WAL-Modus, `git` und ein Compiler gehen ohne die Option, direkt und in
+  einer Wegwerf-Sitzung; zurück auf `never` ohne sie scheitert jede geteilte Abbildung mit
+  `ENODEV`. virtiofsd selbst rät zu `--allow-mmap` nur für einen Ordner, den der Dienst für sich
+  allein hat, und das Projekt gehört dem Nutzer. Ein Gastkernel, der für das, was der Gast sonst
+  braucht (virtiofs als Wurzel, `overlay` mit `userxattr` für die Wegwerf-Sitzung, die Filter von
+  PID 1), zu alt ist, scheitert laut: Er bootet nicht oder seine Prüfung ist rot, und die Sitzung
+  wird abgelehnt; getestet sind 6.12 (CI) und 7.x. `humanitl doctor` nennt die Fassung aus dem Kopf
+  der Konfiguration oder sagt, dass sie unbekannt ist. Einschränkung der Datenkohärenz, keine Grenze
   der Sandbox: Ändert der Nutzer auf dem Host eine Datei im Projekt, während der Gast sie im Cache
   hat oder abgebildet hat, sieht der Gast die Änderung erst nach der Gültigkeit von einer Sekunde
   unter `auto`, und eine geteilte Abbildung kann veraltete Seiten zeigen. Der Gast sieht so oder so
@@ -2175,10 +2184,10 @@ den Garantien ändert das nichts, denn eine solche Verbindung erreicht nichts.
 ### Voraussetzungen
 
 `/dev/kvm` les- und schreibbar, der Emulator mit `microvm` und `vhost-user-vsock-pci`, der
-Dateisystemdienst mit `--readonly`, `--fd`, `--cache` und `--allow-mmap`, das vsock-Gerät mit
+Dateisystemdienst mit `--readonly`, `--fd` und `--cache`, das vsock-Gerät mit
 `--uds-path` und `--groups`, bubblewrap mit `--bind-fd` und `--size`, ein lesbares Kernel-Abbild mit
-eingebautem virtiofs (`CONFIG_VIRTIO_FS=y` in der Konfiguration neben dem Abbild) in der Fassung
-6.6 oder neuer und das Modulverzeichnis dieses Kernels. Fehlt eine Voraussetzung, lehnt der Start mit `SANDBOX_045` ab; er fällt nie auf ein
+eingebautem virtiofs (`CONFIG_VIRTIO_FS=y` in der Konfiguration neben dem Abbild) und das
+Modulverzeichnis dieses Kernels. Fehlt eine Voraussetzung, lehnt der Start mit `SANDBOX_045` ab; er fällt nie auf ein
 anderes Backend zurück. `humanitl doctor` zeigt je Voraussetzung eine Zeile. Der Dienstverwalter
 des Nutzers braucht die cgroup-Controller `memory` und `pids` (systemd delegiert sie von sich aus);
 ohne sie lehnt ein Start mit `SANDBOX_052` ab (HUM-485), was auch `humanitl doctor --probe`
