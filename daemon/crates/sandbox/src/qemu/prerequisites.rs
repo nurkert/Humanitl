@@ -215,8 +215,9 @@ const BUBBLEWRAP: Program = Program {
 /// Die Dateien, von denen die Prüfung abhängt (HUM-502): je Programm der
 /// gesetzte Pfad oder jeder Ort im `PATH` (und unter `libexec`), an dem es
 /// liegen könnte, dazu `/dev/kvm`, das Kernel-Abbild samt seiner
-/// Konfiguration und das Verzeichnis der Module. Ändert sich eine davon,
-/// gilt ein gemerktes Ergebnis nicht mehr.
+/// Konfiguration und das Verzeichnis der Module samt seinen Listen
+/// ([`MODULE_LISTS`]). Ändert sich eine davon, gilt ein gemerktes Ergebnis
+/// nicht mehr, und ebenso ein gespeicherter Probestart (HUM-506).
 pub(crate) fn search_files(env: &Env, config: &QemuConfig) -> Vec<PathBuf> {
     let host = Host::system();
     let mut files = vec![host.kvm.clone()];
@@ -249,9 +250,23 @@ pub(crate) fn search_files(env: &Env, config: &QemuConfig) -> Vec<PathBuf> {
             .as_ref()
             .map(|release| host.modules_root.join(release))
     });
-    files.extend(modules);
+    if let Some(modules) = modules {
+        files.extend(MODULE_LISTS.iter().map(|list| modules.join(list)));
+        files.push(modules);
+    }
     files
 }
+
+/// Die Listen im Verzeichnis der Module, die der Abdruck der Suche und des
+/// Probestarts mitnimmt (HUM-506): `modules.builtin` liest der Shim im Gast
+/// und die Prüfung des Overlays; `modules.dep` und `modules.order` schreibt
+/// `depmod` bei jeder Installation eines Kernel-Pakets neu, auch wenn nur
+/// Moduldateien sich ändern. Die einzelnen Moduldateien stehen nicht im
+/// Abdruck: Sie zu finden hieße, bei jeder Antwort einen Baum von einigen
+/// tausend Einträgen zu durchlaufen. Eine Moduldatei, die jemand von Hand
+/// ersetzt, ohne `depmod` laufen zu lassen, fängt nur `--probe`, das nie
+/// aus dem Zwischenspeicher antwortet.
+pub(crate) const MODULE_LISTS: [&str; 3] = ["modules.builtin", "modules.dep", "modules.order"];
 
 /// Was die Prüfung gefunden hat: je Voraussetzung der Pfad, den ein Start
 /// benutzt.

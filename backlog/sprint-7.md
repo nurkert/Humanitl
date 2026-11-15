@@ -2838,3 +2838,20 @@ Aus dem Ultra-Review. `VmBackend::tool_version()` liefert eine leere Zeichenkett
 
 ### Akzeptanzkriterien
 1. Kein gespeicherter Probestart überlebt eine Änderung seiner Eingaben.
+
+### Stand nach der Umsetzung (2026-11-15)
+
+**Schlüssel.** `ProbeKey` hat einen sechsten Teil, `inputs`: SHA-256 in Hex über die Einstellungen der Backends in der Gruppe `sandbox` (dieselben Teile, die die Suche liest, `backend_search::searched_settings`, darunter Ressourcen, Gastkernel und Modulverzeichnis), die Pfade samt Umgebung des Daemons (Laufzeitordner, Proxy-Verzeichnis, `PATH`), den temporären Ordner des Probestarts und den Abdruck jeder Datei, von der die Suche des Backends abhängt (`backend::search_files`, je Datei Pfad, Gerät, Inode, Größe, `mtime`, `ctime`, über den `Stamp` aus HUM-502, nun als `backend_search::fingerprint`). Unter der Kernel-Stufe sind das Emulator, Dateidienst, vsock-Gerät, bubblewrap, `/dev/kvm`, Kernel-Abbild samt Konfiguration daneben, Modulverzeichnis und darin `modules.builtin`, `modules.dep` und `modules.order` (`prerequisites::MODULE_LISTS`), je gesetzt oder jeder Ort im `PATH`; unter den anderen Stufen bleibt die Fassung im Schlüssel, und der Abdruck des Programms (und unter der Container-Engine der übrigen Dateien ihrer Suche) kommt dazu. Gehasht, damit die Datei keine Pfade oder Einstellungen trägt.
+
+**`--probe`.** Ein Probestart auf Wunsch liest den Zwischenspeicher nie mehr, er startet immer und schreibt nur einen gelungenen. Ohne `--probe` gilt ein gespeicherter Eintrag nur, wenn die gesetzten Ressourcen der Gruppe auf diesen Rechner passen (`backend::beyond_host`, dieselbe Prüfung wie der Plan, HUM-501); sonst steht keine Zeile `probe` da.
+
+**Tests.** probe_cache: ein anderer Abdruck findet den Eintrag nicht. doctor: `--probe` antwortet mit einem neuen, scheiternden Start statt „(cached)", ohne `--probe` steht der gespeicherte da (nur Linux); ein ersetztes oder neu im `PATH` aufgetauchtes Programm ändert den Abdruck. qemu: anderes Kernel-Abbild, neu geschriebenes Abbild, geänderte Konfiguration daneben, anderes Modulverzeichnis, ersetzter Emulator, neuer Dateidienst im `PATH` und andere Ressourcen ändern den Abdruck; Ressourcen über dem Rechner verwerfen einen gespeicherten Probestart mit gleichem Schlüssel. Mutationsbeweise: Nachsehen vor der Frage nach dem Modus, Abdruck ohne Dateien, Abdruck ohne Einstellungen, Schlüssel ohne `inputs` und Zwischenspeicher ohne Prüfung gegen den Rechner machen je den zugehörigen Test rot.
+
+**Review.** Codex: zwei Befunde, beide übernommen. Die Pfade und die Umgebung fehlten im Abdruck (ein anderer Laufzeitordner ließ den Schlüssel gleich); `modules.builtin` und die übrigen Listen wurden nur über das Verzeichnis erfasst, eine Änderung an Ort und Stelle blieb unbemerkt. Tests dazu: anderer Laufzeitordner, an Ort und Stelle neu geschriebenes `modules.builtin`; beide rot ohne die Änderung. Kleinere Befunde des zweiten Reviews übernommen: Der Test von `--probe` sagt, wenn er ohne Kennung des Rechners übersprungen wird, und prüft den Grund des Scheiterns genau (`SANDBOX_012`, die Attrappe des Programms endet, bevor sie den Shim startet).
+
+**Offen.** Einzelne Moduldateien stehen nicht im Abdruck: Sie zu finden hieße, bei jeder Antwort einige tausend Einträge zu durchlaufen. `depmod` schreibt bei jeder Installation eines Kernel-Pakets `modules.dep` und `modules.order` neu; eine von Hand ersetzte Moduldatei ohne `depmod` fängt nur `--probe`. `VmBackend::tool_version` bleibt leer; die Zeile `available` der Kernel-Stufe nennt weiter nur den Emulator ohne Fassung. Der Schlüssel braucht sie nicht mehr, der Abdruck der Dateien ersetzt sie.
+
+Delta-Review (Codex): beide Befunde geschlossen; neu, als minor hingenommen
+und als Kandidat notiert: `doctor-probe.json` speichert den Pfad des
+Programms im Klartext in Schlüssel und Beleg (so schon vor HUM-506; ein Pfad
+ist kein Geheimnis, kann aber einen privaten Ordner aus dem `PATH` nennen).
