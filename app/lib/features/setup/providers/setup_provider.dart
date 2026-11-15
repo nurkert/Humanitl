@@ -38,6 +38,8 @@
 /// would measure it: `Check again`, `Contact it`, or the folder button.
 library;
 
+import 'dart:async';
+
 import 'package:flutter/foundation.dart';
 import 'package:flutter_riverpod/flutter_riverpod.dart';
 import 'package:riverpod_annotation/riverpod_annotation.dart';
@@ -355,19 +357,143 @@ Duration? noSetupRetry(int retryCount, Object error) => null;
 /// programs and reads files. It contacts nothing on the network -- `Doctor`
 /// takes no argument in which a client could ask for a connection, so opening
 /// this screen opens none.
+///
+/// A report in which the daemon was still checking a backend (HUM-502,
+/// [DoctorReport.backendStillChecking]) is asked for again after
+/// [doctorCheckingRetry], quietly: the screen keeps this report until the
+/// next one is there. At most [doctorCheckingAttempts] times; a failed
+/// attempt is retried within that bound, and when the last one fails too,
+/// the screen shows its error. A report that is still checking after the
+/// last attempt stays as it is: its line says it was not measured and names
+/// `humanitl doctor`, which waits for the whole result. An answer that
+/// arrives after [refresh] asked again never overwrites the newer one.
 @Riverpod(keepAlive: true, retry: noSetupRetry)
 class SetupDoctor extends _$SetupDoctor {
+  Timer? _again;
+
+  /// Counts every new question; an answer to an older one is dropped.
+  int _generation = 0;
+
+  /// The quiet attempts since the last question a person or the build asked.
+  int _attempts = 0;
+
+  /// The request of the newest question, the first or a [refresh].
+  Future<DoctorReport>? _latest;
+
   @override
-  Future<DoctorReport> build() => ref.watch(daemonClientProvider).doctor();
+  Future<DoctorReport> build() async {
+    ref.onDispose(() => _again?.cancel());
+    final int generation = _restart();
+    final Future<DoctorReport> request = ref
+        .watch(daemonClientProvider)
+        .doctor();
+    _latest = request;
+    final DoctorReport report;
+    try {
+      report = await request;
+    } on Object {
+      if (generation != _generation) {
+        return _latestResult();
+      }
+      rethrow;
+    }
+    if (generation != _generation) {
+      // Ein „Check again" kam, während diese erste Frage lief: Seine
+      // Antwort gilt, Bericht oder Fehler, nie die ältere. Diese fragt auch
+      // nie wieder.
+      return _latestResult();
+    }
+    _askAgainWhileChecking(report, generation);
+    return report;
+  }
 
   /// Asks again. Used by the retry control and after the daemon came back.
   Future<void> refresh() async {
+    final int generation = _restart();
+    final Future<DoctorReport> request = ref
+        .read(daemonClientProvider)
+        .doctor();
+    _latest = request;
     state = const AsyncLoading<DoctorReport>();
-    state = await AsyncValue.guard(
-      () => ref.read(daemonClientProvider).doctor(),
-    );
+    final AsyncValue<DoctorReport> next = await AsyncValue.guard(() => request);
+    if (!ref.mounted || generation != _generation) {
+      return;
+    }
+    state = next;
+    if (next case AsyncData<DoctorReport>(:final DoctorReport value)) {
+      _askAgainWhileChecking(value, generation);
+    }
+  }
+
+  /// The answer to the newest question, report or error: what a superseded
+  /// first question resolves to. A question asked meanwhile wins again.
+  Future<DoctorReport> _latestResult() async {
+    while (true) {
+      final int generation = _generation;
+      final Future<DoctorReport> latest = _latest!;
+      try {
+        final DoctorReport report = await latest;
+        if (generation == _generation) {
+          return report;
+        }
+      } on Object {
+        if (generation == _generation) {
+          rethrow;
+        }
+      }
+    }
+  }
+
+  /// A new question: no older attempt counts or lands any more.
+  int _restart() {
+    _again?.cancel();
+    _attempts = 0;
+    return ++_generation;
+  }
+
+  void _askAgainWhileChecking(DoctorReport report, int generation) {
+    if (report.backendStillChecking) {
+      _schedule(generation);
+    }
+  }
+
+  void _schedule(int generation) {
+    if (!ref.mounted || _attempts >= doctorCheckingAttempts) {
+      return;
+    }
+    _attempts += 1;
+    _again = Timer(doctorCheckingRetry, () async {
+      final AsyncValue<DoctorReport> next = await AsyncValue.guard(
+        () => ref.read(daemonClientProvider).doctor(),
+      );
+      if (!ref.mounted || generation != _generation) {
+        return;
+      }
+      switch (next) {
+        case AsyncData<DoctorReport>(:final DoctorReport value):
+          state = next;
+          _askAgainWhileChecking(value, generation);
+        case AsyncError<DoctorReport>():
+          if (_attempts >= doctorCheckingAttempts) {
+            state = next;
+          } else {
+            _schedule(generation);
+          }
+        case AsyncLoading<DoctorReport>():
+          break;
+      }
+    });
   }
 }
+
+/// How long the setup screen waits before it asks the doctor again while
+/// the daemon is still checking a backend (HUM-502).
+const Duration doctorCheckingRetry = Duration(seconds: 2);
+
+/// How often the setup screen asks again on its own while the daemon is
+/// still checking a backend: half a minute, the time the daemon keeps a
+/// result (HUM-502).
+const int doctorCheckingAttempts = 15;
 
 /// What the endpoint probe last answered, or nothing.
 ///

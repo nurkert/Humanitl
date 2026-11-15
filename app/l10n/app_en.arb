@@ -4382,5 +4382,7 @@
   "diagSANDBOX052Title": "Kernel level limits cannot be enforced",
   "@diagSANDBOX052Title": {"description": "Title of the diagnostic SANDBOX_052 (docs/DIAGNOSTICS.md): the cgroup controllers memory and pids are not delegated to the user's service manager, so the memory and task limits of a kernel-level session would not hold (HUM-485)."},
   "diagSANDBOX052Why": "A session of the kernel level runs with a limit on memory and on processes, and the cgroup controllers for them are not delegated to your user. Without its limits the session does not start.",
-  "@diagSANDBOX052Why": {"description": "Generic cause of SANDBOX_052. Stands in the cause slot only when the diagnostic carries no sentence of the daemon's own (HUM-052)."}
+  "@diagSANDBOX052Why": {"description": "Generic cause of SANDBOX_052. Stands in the cause slot only when the diagnostic carries no sentence of the daemon's own (HUM-052)."},
+  "sandboxBackendChecking": "Still being checked …",
+  "@sandboxBackendChecking": {"description": "Under a sandbox backend whose search the daemon had not finished when it answered (HUM-502): neither available nor known to be missing yet. The list asks again by itself after a moment."}
 }

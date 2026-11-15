@@ -43,7 +43,10 @@ use crate::launcher::{
     SandboxBackend,
 };
 pub use crate::podman::with_image_root;
-use crate::podman::{PodmanBackend, SHARED_KERNEL_STAGE, static_lines as engine_static_lines};
+use crate::podman::{
+    PodmanBackend, SHARED_KERNEL_STAGE, beyond_host as engine_beyond_host,
+    search_files as engine_search_files, static_lines as engine_static_lines,
+};
 #[cfg(all(target_os = "linux", target_arch = "x86_64"))]
 use crate::qemu::{self as vm, VmBackend};
 
@@ -417,26 +420,43 @@ pub(crate) fn detect_in_build(
     }
 }
 
-/// Was dem Rechner für die Kernel-Stufe fehlt (HUM-464): die erste fehlende
-/// Voraussetzung als `SANDBOX_045`, oder keine. Ohne Linux auf x86-64 gibt es
-/// die Stufe nicht (`SANDBOX_034`).
-#[cfg_attr(
-    not(all(target_os = "linux", target_arch = "x86_64")),
-    expect(
-        clippy::unnecessary_wraps,
-        reason = "Ohne Linux auf x86-64 fehlt immer etwas; die Signatur ist die der Linux-Fassung"
-    )
-)]
-pub(crate) fn kernel_level_missing(paths: &Paths, sandbox: &SandboxRef) -> Option<Diagnostic> {
+/// Die Dateien, von denen die Suche eines Backends abhängt (HUM-502): Ändert
+/// sich eine davon, gilt ein gemerktes Ergebnis nicht mehr
+/// ([`crate::backend_search`]). Welche das sind, weiß der Adapter; für ein
+/// Backend, das dieser Build nicht hat, keine.
+pub(crate) fn search_files(
+    name: &'static str,
+    sandbox: &SandboxRef,
+    paths: &Paths,
+) -> Vec<std::path::PathBuf> {
+    if name == BWRAP_BACKEND {
+        return crate::backend_search::path_candidates(paths.env(), BWRAP_BACKEND);
+    }
+    #[cfg(target_os = "macos")]
+    if name == SEATBELT_BACKEND {
+        return vec![std::path::PathBuf::from(crate::seatbelt::SANDBOX_EXEC)];
+    }
     #[cfg(all(target_os = "linux", target_arch = "x86_64"))]
-    {
-        vm::missing(paths, sandbox)
+    if let Some(files) = vm::search_files(name, paths, sandbox) {
+        return files;
     }
-    #[cfg(not(all(target_os = "linux", target_arch = "x86_64")))]
-    {
-        let _ = (paths, sandbox);
-        Some(not_in_build(VM_BACKEND))
+    engine_search_files(name, paths, sandbox).unwrap_or_default()
+}
+
+/// `CONFIG_003`, wenn die gesetzten Ressourcen der Gruppe dieses Backends
+/// über `host` liegen (HUM-501, HUM-502): dieselbe Ablehnung, mit der der
+/// Plan eines Starts sie ablehnte, für die Liste der Backends. Für ein
+/// Backend ohne solche Werte keine.
+pub(crate) fn beyond_host(
+    name: &'static str,
+    sandbox: &SandboxRef,
+    host: humanitl_config::HostResources,
+) -> Option<Diagnostic> {
+    #[cfg(all(target_os = "linux", target_arch = "x86_64"))]
+    if let Some(beyond) = vm::beyond_host(name, sandbox, host) {
+        return Some(beyond);
     }
+    engine_beyond_host(name, sandbox, host)
 }
 
 /// Die Laufzeit, die ein Backend ohne Angabe hat: unter Podman `crun`.

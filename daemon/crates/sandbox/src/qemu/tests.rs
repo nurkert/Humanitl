@@ -804,3 +804,44 @@ fn the_plan_refuses_resources_over_this_host() {
         assert_eq!(err.fix, Some(FixAction::ChangeSetting { key, value: max }));
     }
 }
+
+/// Werte von `sandbox.qemu` über diesem Rechner machen das VM-Backend in der
+/// Liste der Backends unverfügbar, mit dem Befund, mit dem sein Plan sie
+/// ablehnte (`CONFIG_003`, HUM-501, HUM-502); abgeleitete Werte nie.
+/// Mutationsbeweis: ohne die Prüfung in der Liste fehlt der Befund.
+#[test]
+fn kernel_level_values_beyond_this_host_are_named_in_the_list() {
+    let tiny = HostResources {
+        memory_mib: Some(1024),
+        cpus: Some(1),
+    };
+    let mut sandbox = SandboxRef::default();
+    let list = crate::backend_list::entries(&sandbox, "auto", tiny, |_| None);
+    let kernel = |list: &[crate::BackendEntry]| {
+        list.iter()
+            .find(|entry| entry.name == crate::VM_BACKEND)
+            .cloned()
+            .expect("the kernel level is listed")
+    };
+    assert!(kernel(&list).available(), "{:?}", kernel(&list));
+
+    sandbox.qemu.memory_mib = Some(2048);
+    let list = crate::backend_list::entries(&sandbox, "auto", tiny, |_| None);
+    let entry = kernel(&list);
+    assert_eq!(
+        entry
+            .diagnostics
+            .iter()
+            .map(|d| d.code.as_str())
+            .collect::<Vec<_>>(),
+        ["CONFIG_003"],
+        "{entry:?}"
+    );
+    assert!(
+        entry.diagnostics[0]
+            .why
+            .contains("sandbox.qemu.memory_mib = 2048"),
+        "{:?}",
+        entry.diagnostics[0]
+    );
+}

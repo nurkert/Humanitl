@@ -752,6 +752,134 @@ fn assert_backend_groups(report: &v1::DoctorReport) {
     }
 }
 
+#[cfg(target_os = "linux")]
+/// Ein Ordner, in dem jedes Programm, das wie ein Sandbox-Backend heißt, 10 s
+/// schläft, mit dem Laufzeitverzeichnis darin: Die Suche dieser Backends
+/// braucht 10 s, und nichts landet im Laufzeitverzeichnis des Menschen.
+fn slow_backend_programs(dir: &Path) -> humanitl_config::Paths {
+    use std::os::unix::fs::PermissionsExt as _;
+
+    let bin = dir.join("bin");
+    std::fs::create_dir_all(&bin).unwrap();
+    let sleep = ["/bin/sleep", "/usr/bin/sleep"]
+        .into_iter()
+        .find(|path| Path::new(path).is_file())
+        .expect("sleep is installed");
+    for name in humanitl_sandbox::LISTED_BACKENDS {
+        let program = bin.join(name);
+        std::fs::write(&program, format!("#!/bin/sh\nexec {sleep} 10\n")).unwrap();
+        std::fs::set_permissions(&program, std::fs::Permissions::from_mode(0o755)).unwrap();
+    }
+    humanitl_config::Paths::new(humanitl_config::Env::from_pairs([
+        ("HOME", dir.join("home").display().to_string()),
+        ("XDG_CONFIG_HOME", dir.join("config").display().to_string()),
+        ("XDG_DATA_HOME", dir.join("data").display().to_string()),
+        ("XDG_RUNTIME_DIR", dir.join("run").display().to_string()),
+        ("PATH", bin.display().to_string()),
+    ]))
+}
+
+#[cfg(target_os = "linux")]
+/// Ob die Zeile oder der Befund „wird geprüft" sagt (HUM-502).
+fn still_being_checked(diagnostic: Option<&v1::Diagnostic>) -> bool {
+    diagnostic.is_some_and(|d| d.code == "DOCTOR_012" && d.why.contains("still being checked"))
+}
+
+/// HUM-502: Mit der Frist der App (5 s im Kopf `grpc-timeout`) antworten
+/// `Doctor` und `SandboxBackends` in der Frist, auch wenn Programme der
+/// Backends 10 s brauchen. Ein Backend, dessen Suche noch läuft, steht als
+/// „wird geprüft" da, jedes andere vollständig. Mutationsbeweis: ohne die
+/// Frist aus dem Kopf (Suche ohne Frist) scheitern beide Aufrufe mit
+/// `DeadlineExceeded`.
+#[cfg(target_os = "linux")]
+#[tokio::test]
+async fn a_slow_backend_tips_neither_doctor_nor_the_backend_list() {
+    let dir = tempfile::tempdir().unwrap();
+    let paths = slow_backend_programs(dir.path());
+    let daemon = daemon_over(&paths).await;
+    let mut client = daemon.client().await;
+    let deadline = Duration::from_secs(5);
+
+    let mut request = tonic::Request::new(v1::DoctorRequest { probe: false });
+    request.set_timeout(deadline);
+    let started = Instant::now();
+    let report = client
+        .doctor(request)
+        .await
+        .expect("doctor answers")
+        .into_inner();
+    assert!(started.elapsed() < deadline, "{:?}", started.elapsed());
+    assert_eq!(
+        report.backends.len(),
+        humanitl_sandbox::LISTED_BACKENDS.len()
+    );
+    let mut pending = 0;
+    for group in &report.backends {
+        let available = group
+            .checks
+            .iter()
+            .find(|check| check.id == "available")
+            .unwrap_or_else(|| panic!("{} has no line available: {group:?}", group.name));
+        if still_being_checked(available.diagnostic.as_ref()) {
+            pending += 1;
+            assert_eq!(available.status, v1::CheckStatus::Warn as i32, "{group:?}");
+            assert!(available.evidence.contains("still being checked"));
+        } else {
+            assert!(
+                available
+                    .diagnostic
+                    .as_ref()
+                    .is_none_or(|d| d.code != "DOCTOR_012")
+            );
+        }
+    }
+    assert!(
+        pending > 0,
+        "the slow search is pending: {:?}",
+        report.backends
+    );
+
+    let mut request = tonic::Request::new(v1::SandboxBackendsRequest::default());
+    request.set_timeout(deadline);
+    let started = Instant::now();
+    let list = client
+        .sandbox_backends(request)
+        .await
+        .expect("the list answers")
+        .into_inner();
+    assert!(started.elapsed() < deadline, "{:?}", started.elapsed());
+    assert_eq!(list.backends.len(), humanitl_sandbox::LISTED_BACKENDS.len());
+    let mut pending = 0;
+    for backend in &list.backends {
+        if backend
+            .diagnostics
+            .iter()
+            .any(|d| still_being_checked(Some(d)))
+        {
+            pending += 1;
+            assert!(!backend.available, "{backend:?}");
+        } else {
+            assert!(
+                backend.diagnostics.iter().all(|d| d.code != "DOCTOR_012"),
+                "{backend:?}"
+            );
+        }
+    }
+    assert!(
+        pending > 0,
+        "the slow search is pending: {:?}",
+        list.backends
+    );
+    // Unter Linux auf x86-64 heißt das Programm der Kernel-Stufe anders als
+    // das Backend; ihre Suche ist schnell fertig, und ihr Eintrag vollständig.
+    if humanitl_sandbox::LISTED_BACKENDS.len() > 2 {
+        assert!(pending < list.backends.len(), "{:?}", list.backends);
+    }
+
+    drop(client);
+    daemon.shutdown().await;
+}
+
 #[tokio::test]
 async fn every_other_rpc_says_which_issue_brings_it() {
     let daemon = Daemon::new().await;

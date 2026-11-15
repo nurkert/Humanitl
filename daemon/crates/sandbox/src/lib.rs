@@ -106,6 +106,7 @@ pub mod agent;
 pub mod agent_exit;
 pub mod backend;
 pub mod backend_list;
+pub mod backend_search;
 pub mod bridge_env;
 pub mod bwrap;
 pub mod bwrap_args;
@@ -154,7 +155,9 @@ pub use crate::backend::{
 };
 pub use crate::backend_list::{
     BackendEntry, LISTED_BACKENDS, RuntimeEntry, list_backends, list_backends_with,
+    list_backends_within,
 };
+pub use crate::backend_search::{BackendSearches, SEARCH_TTL};
 pub use crate::bridge_env::{
     CHECK_BRIDGE_LISTENING, CHECK_FAMILIES, CHECK_MOUNTS_MATCH, CHECK_MOUNTS_PINNED, CHECK_NAMES,
     CHECK_NO_INTERFACES, CHECK_PREFIX, CHECK_SECCOMP_APPLIED, CHECK_SINGLE_SOCKET, ENV_BRIDGES,

@@ -175,6 +175,16 @@ abstract class DoctorReport with _$DoctorReport {
     }
     return null;
   }
+
+  /// Whether the daemon was still searching for a backend when it answered
+  /// (HUM-502): that group's line `available` carries no measurement. The
+  /// search goes on in the daemon, and the next report has its result.
+  bool get backendStillChecking => backends.any(
+    (DoctorBackendGroup group) => group.checks.any(
+      (DoctorCheck check) =>
+          check.id == DoctorBackendCheckId.available && !check.isMeasured,
+    ),
+  );
 }
 
 /// The identifiers of the lines in a backend group (HUM-436,

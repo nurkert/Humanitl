@@ -19,15 +19,18 @@
 //! `available` heißt nie, dass ein anderes Backend einspringt: Ein nicht
 //! verfügbares gewähltes Backend lässt den Start scheitern.
 
-use humanitl_config::{Paths, PodmanRuntime, SandboxRef};
+use std::time::Instant;
+
+use humanitl_config::{HostResources, Paths, PodmanRuntime, SandboxRef};
 use humanitl_core::diagnostics::codes::SANDBOX_034;
 use humanitl_core::{Diagnostic, FixAction, Severity};
 
 use crate::backend::{
-    BWRAP_BACKEND, BackendChoice, PODMAN_BACKEND, SEATBELT_BACKEND, VM_BACKEND, admitted,
-    backend_name, below_floor, detect_in_build, isolation_of, kernel_level_missing,
-    profile_requires_another, required_by_profile, resolve,
+    BWRAP_BACKEND, Backend, BackendChoice, PODMAN_BACKEND, SEATBELT_BACKEND, VM_BACKEND, admitted,
+    backend_name, below_floor, beyond_host, isolation_of, profile_requires_another,
+    required_by_profile, resolve,
 };
+use crate::backend_search::{BackendSearches, Ticket, Waited, still_searching};
 use crate::launcher::IsolationLevel;
 
 /// Die Backends, die es auf dieser Art System geben kann, in der Reihenfolge
@@ -103,19 +106,58 @@ impl RuntimeEntry {
 /// Sandbox-Profils aus `sandbox.profile`. Die Befunde je Eintrag, in dieser
 /// Reihenfolge: was dem System fehlt (`SANDBOX_034`, unter bwrap
 /// `SANDBOX_001` bis `SANDBOX_003`), die Anforderung des Profils
-/// (`SANDBOX_036`), die Untergrenze (`SANDBOX_035`) und die Zulassung
-/// (`SANDBOX_048`). Das System eines nicht zugelassenen Backends wird
-/// trotzdem gefragt, damit die Liste sagt, was nach der Zulassung noch
-/// fehlte. Ein Eintrag ohne Befund sagt voraus, dass ein Start ohne
-/// Projekt-Profil mit diesem Backend die Wahl besteht.
+/// (`SANDBOX_036`), Ressourcen über diesem Rechner (`CONFIG_003`, HUM-502),
+/// die Untergrenze (`SANDBOX_035`) und die Zulassung (`SANDBOX_048`). Das
+/// System eines nicht zugelassenen Backends wird trotzdem gefragt, damit die
+/// Liste sagt, was nach der Zulassung noch fehlte. Ein Eintrag ohne Befund
+/// sagt voraus, dass ein Start ohne Projekt-Profil mit diesem Backend die
+/// Wahl besteht.
+///
+/// Wartet auf jede Suche; die Backends suchen nebeneinander
+/// ([`list_backends_within`]).
 #[must_use]
 pub fn list_backends(
     sandbox: &SandboxRef,
     profile_backend: &str,
     paths: &Paths,
 ) -> Vec<BackendEntry> {
+    list_backends_within(
+        sandbox,
+        profile_backend,
+        paths,
+        &BackendSearches::new(),
+        None,
+    )
+}
+
+/// Wie [`list_backends`], mit dem Gedächtnis `searches` und bis `deadline`
+/// (HUM-502).
+///
+/// Jedes Backend sucht in einem eigenen Thread, oder die Antwort nimmt eine
+/// Suche aus `searches`, die läuft oder noch gilt
+/// ([`crate::backend_search`]). Läuft die Suche eines Backends bei
+/// `deadline` noch, steht es mit `DOCTOR_012` als Warnung da („wird
+/// geprüft", nicht verfügbar), und alle anderen Einträge sind vollständig;
+/// ohne `deadline` wartet die Antwort auf jede Suche.
+#[must_use]
+pub fn list_backends_within(
+    sandbox: &SandboxRef,
+    profile_backend: &str,
+    paths: &Paths,
+    searches: &BackendSearches,
+    deadline: Option<Instant>,
+) -> Vec<BackendEntry> {
+    // Erst jede Suche starten, dann warten: So laufen sie nebeneinander, und
+    // die Frist gilt für alle zusammen.
+    let started: Vec<(&'static str, SystemSearch)> = LISTED_BACKENDS
+        .iter()
+        .map(|&name| (name, start_search(name, sandbox, paths, searches)))
+        .collect();
     list_backends_with(sandbox, profile_backend, |name| {
-        system_missing(name, sandbox, paths)
+        started
+            .iter()
+            .find(|(listed, _)| *listed == name)
+            .and_then(|(_, search)| search.missing(name, deadline))
     })
 }
 
@@ -123,11 +165,21 @@ pub fn list_backends(
 /// nennt je Backend, was ihm auf dem System fehlt, oder nichts. Der Fake des
 /// Daemons spielt damit ein System, auf dem alles installiert ist, und
 /// bekommt Untergrenze, Zulassung und Laufzeiten aus derselben Liste wie der
-/// echte Daemon (HUM-432).
+/// echte Daemon (HUM-432). Die Obergrenzen kommen von diesem Rechner.
 #[must_use]
 pub fn list_backends_with(
     sandbox: &SandboxRef,
     profile_backend: &str,
+    missing: impl Fn(&'static str) -> Option<Diagnostic>,
+) -> Vec<BackendEntry> {
+    entries(sandbox, profile_backend, HostResources::probe(), missing)
+}
+
+/// Die Einträge gegen die Obergrenzen `host`.
+pub(crate) fn entries(
+    sandbox: &SandboxRef,
+    profile_backend: &str,
+    host: HostResources,
     missing: impl Fn(&'static str) -> Option<Diagnostic>,
 ) -> Vec<BackendEntry> {
     let chosen = resolve(backend_name(sandbox.backend)).ok();
@@ -140,6 +192,7 @@ pub fn list_backends_with(
             let missing: Vec<Diagnostic> = missing(name)
                 .into_iter()
                 .chain(profile_refusal(&required, name))
+                .chain(beyond_host(name, sandbox, host))
                 .collect();
             if name == PODMAN_BACKEND {
                 podman_entry(sandbox, &missing, floor, selected)
@@ -160,12 +213,40 @@ pub fn list_backends_with(
         .collect()
 }
 
-/// Was dem System für dieses Backend fehlt: der Befund der Suche, die jeder
-/// Start macht ([`detect_in_build`]).
+/// Was die Liste das System über ein Backend fragt: entschieden ohne Suche,
+/// oder die Suche, die jeder Start macht.
+enum SystemSearch {
+    /// Ohne Suche entschieden: das, was fehlt, oder nichts.
+    Settled(Option<Diagnostic>),
+    /// Die Suche läuft oder ist fertig.
+    Searching(Ticket<Result<Backend, Diagnostic>>),
+}
+
+impl SystemSearch {
+    /// Was dem System fehlt, bis `deadline`; eine Suche, die dann noch
+    /// läuft, ist `DOCTOR_012` mit dem Befehl, der ohne Frist wartet.
+    fn missing(&self, name: &'static str, deadline: Option<Instant>) -> Option<Diagnostic> {
+        match self {
+            Self::Settled(missing) => missing.clone(),
+            Self::Searching(ticket) => match ticket.wait(deadline) {
+                Waited::Done(found) => found.err(),
+                Waited::Pending(running) => Some(still_searching(
+                    name,
+                    running,
+                    &["humanitl", "sandbox", "backends"],
+                )),
+            },
+        }
+    }
+}
+
+/// Startet, was die Liste das System über dieses Backend fragt: die Suche,
+/// die jeder Start macht (`crate::backend::detect_in_build`), über das
+/// Gedächtnis `searches`.
 ///
-/// Unter dem VM-Backend der Kernel-Stufe die Prüfung seiner Voraussetzungen
-/// (`SANDBOX_045`), dieselbe, mit der die Suche eines Starts den Adapter
-/// (HUM-444) baut.
+/// Unter dem VM-Backend der Kernel-Stufe ist das die Prüfung seiner
+/// Voraussetzungen (`SANDBOX_045`), mit der die Suche eines Starts den
+/// Adapter (HUM-444) baut.
 ///
 /// Unter der Container-Engine zuerst, ob es das Programm gibt, mit dem Weg
 /// zurück im Text. Danach, wenn ihre gemeinsame Stufe zugelassen ist, die
@@ -174,23 +255,25 @@ pub fn list_backends_with(
 /// gemeinsame Stufe, gleich welche Laufzeit eingestellt ist: Was das System
 /// der Engine schuldig bleibt, fehlt jeder Laufzeit; was einer Stufe fehlt,
 /// sagen Untergrenze und Zulassung je Laufzeit.
-fn system_missing(name: &'static str, sandbox: &SandboxRef, paths: &Paths) -> Option<Diagnostic> {
-    if name == VM_BACKEND {
-        return kernel_level_missing(paths, sandbox);
-    }
+fn start_search(
+    name: &'static str,
+    sandbox: &SandboxRef,
+    paths: &Paths,
+    searches: &BackendSearches,
+) -> SystemSearch {
     if name != PODMAN_BACKEND {
-        return detect_in_build(name, paths.clone(), sandbox).err();
+        return SystemSearch::Searching(searches.detect(name, sandbox, paths));
     }
     if let Some(missing) = podman_missing(sandbox, paths) {
-        return Some(missing);
+        return SystemSearch::Settled(Some(missing));
     }
     let shared = PodmanRuntime::Crun;
     if admitted(name, Some(shared)).is_err() {
-        return None;
+        return SystemSearch::Settled(None);
     }
-    let mut searched = sandbox.clone();
-    searched.podman.runtime = shared;
-    detect_in_build(name, paths.clone(), &searched).err()
+    let mut shared_stage = sandbox.clone();
+    shared_stage.podman.runtime = shared;
+    SystemSearch::Searching(searches.detect(name, &shared_stage, paths))
 }
 
 /// `SANDBOX_036`, wenn das Sandbox-Profil ein anderes Backend verlangt, oder
@@ -530,6 +613,50 @@ mod tests {
         let missing = &kernel.diagnostics[0];
         assert!(missing.fix.is_some(), "{missing:?}");
         assert!(missing.why.contains("--backend bwrap"), "{}", missing.why);
+    }
+
+    /// Die Liste merkt sich eine Suche (HUM-502): Eine zweite Liste mit
+    /// demselben Gedächtnis startet kein Programm, und ändert sich das
+    /// Programm, sucht die nächste neu. Jedes Programm im `PATH` schreibt
+    /// seinen Aufruf in eine Datei. Mutationsbeweis: ohne Gedächtnis (eine
+    /// neue Suche je Liste) wächst die Datei schon bei der zweiten Liste;
+    /// ohne den Abdruck der Dateien bleibt sie bei der dritten gleich.
+    #[test]
+    fn the_list_keeps_a_search_until_its_program_changes() {
+        let dir = tempfile::tempdir().expect("tempdir");
+        let bin = dir.path().join("bin");
+        std::fs::create_dir_all(&bin).expect("bin");
+        let calls = dir.path().join("calls");
+        let counting = |exit: u8| {
+            crate::test_support::write_program(
+                &bin.join(BWRAP_BACKEND),
+                &format!(
+                    "#!/bin/sh\necho \"$0 $@\" >> '{}'\nexit {exit}\n",
+                    calls.display()
+                ),
+            );
+        };
+        counting(1);
+        let paths = paths_with(dir.path(), &bin);
+        let searches = BackendSearches::new();
+        let count = || {
+            std::fs::read_to_string(&calls)
+                .unwrap_or_default()
+                .lines()
+                .count()
+        };
+        let list = || list_backends_within(&SandboxRef::default(), "auto", &paths, &searches, None);
+
+        let first = list();
+        let asked = count();
+        assert!(asked > 0, "the search asked the program");
+        assert_eq!(list(), first);
+        assert_eq!(count(), asked, "the second list started a program");
+
+        counting(2);
+        let third = list();
+        assert!(count() > asked, "a changed program is searched again");
+        assert!(!entry(&third, BWRAP_BACKEND).available());
     }
 
     /// Ein Sandbox-Profil, das Podman verlangt, macht das gewählte Backend

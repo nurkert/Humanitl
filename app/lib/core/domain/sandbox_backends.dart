@@ -97,6 +97,19 @@ final class SandboxBackendInfo {
     (Diagnostic d) => d.code == DiagnosticCodes.backendNotAdmitted,
   );
 
+  /// Whether the daemon's search for this backend was still running when it
+  /// answered (HUM-502): one of its diagnostics is `DOCTOR_012`, a check
+  /// nobody has performed yet. The list is asked again shortly, also when
+  /// another reason stands first (a backend below the lower bound).
+  bool get checking => diagnostics.any(
+    (Diagnostic d) => d.code == DiagnosticCodes.doctorNotPerformed,
+  );
+
+  /// Whether the running search is all that is known against a start
+  /// (HUM-502): the first reason is `DOCTOR_012`, nothing blocking stands
+  /// beside it. Not available for now, and not known to be missing either.
+  bool get undecided => reason?.code == DiagnosticCodes.doctorNotPerformed;
+
   /// What stands in the way of a start first, or null when [available]:
   /// the first diagnostic of blocking severity, otherwise the first one.
   /// Also null for an unavailable backend without any diagnostic; the
@@ -149,6 +162,11 @@ final class SandboxBackendList {
   /// behind `auto` says. True when the daemon named none: an older daemon
   /// says nothing about `auto`, and the start reports its own finding.
   bool get autoAvailable => autoEntry?.available ?? true;
+
+  /// Whether the daemon was still searching for any backend when it answered
+  /// (HUM-502, [SandboxBackendInfo.checking]).
+  bool get checking =>
+      backends.any((SandboxBackendInfo backend) => backend.checking);
 
   /// The backends a person may choose from, in the daemon's order: every one
   /// the daemon admits, available or not (HUM-440).

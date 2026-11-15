@@ -70,7 +70,9 @@ use humanitl_core::{Diagnostic, FixAction, Severity, sanitize_note};
 
 use crate::bwrap::Version;
 
-pub use self::backends::{BackendCheckId, BackendGroup, ProbeMode, backend_groups};
+pub use self::backends::{
+    BackendCheckId, BackendGroup, ProbeMode, backend_groups, backend_groups_within,
+};
 pub use self::probe::{DEFAULT_TIMEOUT, MIN_FREE_BYTES, Probe};
 pub use self::probe_cache::{ProbeCache, ProbeKey, machine_identity};
 pub use self::probe_start::locate_shim;
