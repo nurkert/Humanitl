@@ -1451,3 +1451,135 @@ async fn apply_writes_into_the_folder_that_was_started_even_if_its_path_moved() 
         "not into the new folder"
     );
 }
+
+/// Ein Projekt, das Schreibweisen gleichsetzt, startet nicht als
+/// Wegwerf-Sandbox (HUM-482): Der Scan vergleicht die Masken genau, und
+/// `.ENVRC` wäre dort `.envrc`. Ein harter Verweis unter der anderen
+/// Schreibweise spielt das Falten nach, wie es ein Dateisystem ohne
+/// Casefold-Attribut verrät. Ausdrücklich `disposable` heißt `SANDBOX_030`
+/// und nichts läuft; die Vorgabe `auto` läuft direkt, mit dem Hinweis.
+///
+/// Mutationsbeweis: der Aufruf von `refuse_case_folding` im Start fehlt, und
+/// der erste Lauf startet.
+#[tokio::test(flavor = "multi_thread")]
+async fn a_project_that_folds_case_is_no_disposable_sandbox() {
+    let fixture = Fixture::new();
+    if !usable(&fixture) {
+        return;
+    }
+    std::fs::write(fixture.work.join(".envrc"), "export CANARY=1\n").expect("envrc");
+    std::fs::hard_link(fixture.work.join(".envrc"), fixture.work.join(".ENVRC")).expect("link");
+    let service = fixture.service();
+    let mut start = fixture.start();
+    if let Some(v1::sandbox_request::Op::Start(inner)) = start.op.as_mut() {
+        inner.sandbox_mode = "disposable".to_owned();
+        inner.command = vec![
+            "/bin/sh".to_owned(),
+            "-c".to_owned(),
+            "echo ran > /work/ran.txt; exit 0".to_owned(),
+        ];
+    }
+    let seen = events_to_end(&service, start.clone()).await;
+    let refusal = diagnostics(&seen)
+        .into_iter()
+        .find(|diagnostic| diagnostic.code == "SANDBOX_030")
+        .unwrap_or_else(|| panic!("the start is refused: {seen:?}"));
+    // Ohne Wegwerf-Sandbox auf diesem System lehnt der Start aus einem
+    // anderen Grund ab; unter `CI` ist das ein Fehler.
+    if !refusal.why.contains("names the same entry in another case") {
+        refuse_under_ci(
+            &format!("no disposable sandbox here: {}", refusal.why),
+            "run where the sandbox backend supports a disposable sandbox and the runtime \
+             directory lies on tmpfs",
+        );
+        return;
+    }
+    assert!(disposable_changes(&seen).is_none(), "{seen:?}");
+    assert!(!fixture.work.join("ran.txt").exists(), "nothing ran");
+
+    if let Some(v1::sandbox_request::Op::Start(inner)) = start.op.as_mut() {
+        inner.sandbox_mode = String::new();
+    }
+    let seen = events_to_end(&service, start).await;
+    assert!(
+        carries(&seen, "SANDBOX_033"),
+        "the fallback says so: {seen:?}"
+    );
+    assert!(disposable_changes(&seen).is_none(), "{seen:?}");
+    assert!(
+        fixture.work.join("ran.txt").exists(),
+        "the fallback runs direct"
+    );
+}
+
+/// Faltet das Projekt erst nach dem Start (HUM-482, Review), lehnt die
+/// Übernahme ab: `SANDBOX_031`, nichts geschrieben. Der harte Verweis
+/// `.ENVRC` entsteht hier nach dem Lauf, wie ein Ordner, den der Mensch
+/// inzwischen gefaltet hat.
+///
+/// Mutationsbeweis: `Waiting::refuse_case_folding` liefert immer `Ok`, und
+/// die Übernahme schreibt.
+#[tokio::test(flavor = "multi_thread")]
+async fn folding_that_appears_after_the_start_refuses_the_apply() {
+    let fixture = Fixture::new();
+    if !usable(&fixture) {
+        return;
+    }
+    std::fs::write(fixture.work.join(".envrc"), "export CANARY=1\n").expect("envrc");
+    std::fs::write(fixture.work.join("readme.txt"), "before\n").expect("readme");
+    let service = fixture.service();
+    let mut start = fixture.start();
+    if let Some(v1::sandbox_request::Op::Start(inner)) = start.op.as_mut() {
+        inner.sandbox_mode = "disposable".to_owned();
+        inner.command = vec![
+            "/bin/sh".to_owned(),
+            "-c".to_owned(),
+            "echo after > /work/readme.txt; exit 0".to_owned(),
+        ];
+    }
+    let seen = events_to_end(&service, start).await;
+    let Some(listed) = disposable_changes(&seen) else {
+        refuse_under_ci(
+            &format!("no disposable sandbox here: {seen:?}"),
+            "run where the sandbox backend supports a disposable sandbox and the runtime \
+             directory lies on tmpfs",
+        );
+        return;
+    };
+    let ids: Vec<String> = listed
+        .changes
+        .iter()
+        .filter(|change| change.path == "readme.txt")
+        .map(|change| change.id.clone())
+        .collect();
+    assert_eq!(ids.len(), 1, "{listed:?}");
+    std::fs::hard_link(fixture.work.join(".envrc"), fixture.work.join(".ENVRC")).expect("link");
+    let applied = events_to_end(
+        &service,
+        v1::SandboxRequest {
+            op: Some(v1::sandbox_request::Op::ApplyChanges(
+                v1::sandbox_request::ApplyChanges {
+                    sandbox_id: listed.sandbox_id.clone(),
+                    ids,
+                    overwrite: false,
+                    overwrite_ids: Vec::new(),
+                },
+            )),
+        },
+    )
+    .await;
+    let refusal = diagnostics(&applied)
+        .into_iter()
+        .find(|diagnostic| diagnostic.code == "SANDBOX_031")
+        .unwrap_or_else(|| panic!("the apply is refused: {applied:?}"));
+    assert!(
+        refusal.why.contains("names the same entry in another case"),
+        "{}",
+        refusal.why
+    );
+    assert_eq!(
+        std::fs::read_to_string(fixture.work.join("readme.txt")).expect("readme"),
+        "before\n",
+        "nothing is written"
+    );
+}

@@ -877,7 +877,19 @@ bubblewrap liegen die Masken des Profils über dem Overlay; hier liegen sie in d
 und der Agent darf in seiner eigenen Schicht über einen maskierten Pfad schreiben. Der Scan lehnt
 jede Änderung auf, unter oder über einer Maske ab, so dass weder ein Hook noch ein Geheimnis über
 die Schicht ins Projekt kommt; was eine Maske verbirgt, sieht der Agent nie, auch Root im Gast
-nicht, weil die Maske im Gefängnis des Dienstes des Projekts liegt. *Restrisiko:* Ein Fehler in
+nicht, weil die Maske im Gefängnis des Dienstes des Projekts liegt. Der Vergleich mit den Masken
+ist genau, und der Gast sieht nicht, ob der Host Schreibweisen faltet: Sein virtiofs reicht jeden
+Namen an den Dienst auf dem Host weiter, dessen `openat` in einem Casefold-Ordner faltet, so dass
+`.GIT/hooks` in der Schicht im Projekt `.git/hooks` wäre. Ein Projekt, dessen Wurzel oder ein Ordner
+auf dem Weg zu einer Maske Schreibweisen faltet (das Attribut Casefold, vfat, exFAT, HFS+, SMB, oder
+ein vorhandener Eintrag einer Maske, der sich in der anderen ASCII-Schreibweise auflöst), wird
+deshalb vor dem Start abgelehnt (`SANDBOX_030`, HUM-482), und erneut vor dem Lesen der Schicht und
+unmittelbar vor dem Schreiben einer Übernahme (`SANDBOX_031`); unter bubblewrap verweigert overlayfs
+einen Casefold-Ordner selbst (gesehen unter Linux 7.3), worauf sich Humanitl nicht verlässt. Root im
+Gast kann außerdem `upper` im Verzeichnis der Schicht umbenennen oder ersetzen; der Daemon hält Gerät
+und Inode beim Anlegen der Schicht fest und lehnt ein getauschtes oder fehlendes `upper` mit
+`SANDBOX_031` ab (HUM-482). *Restrisiko:* Ein Dateisystem, das ohne das Attribut und außerhalb der
+Liste faltet (FUSE), fällt durch, wenn der Eintrag der Maske noch nicht existiert; ein Fehler in
 einem Dateisystemdienst erreicht, was er ausliefert, die Schicht samt den Rechten von
 `CAP_DAC_OVERRIDE` in seinem eigenen Namensraum; ein Fehler im Scan zeigte dem Menschen vom
 Angreifer geschriebene Bytes, der jede Übernahme weiter selbst entscheidet.
@@ -986,6 +998,7 @@ Gegen diese Angreifer gibt es keine Abwehr, und Humanitl behauptet das auch nich
 | 2026-11-15 | K-33: Die Unit einer Sitzung der Kernel-Stufe bindet höchstens `MemoryMax` (Speicher der Maschine, 512 MiB für die Hilfsprozesse, die Größe jedes tmpfs, auf das sie schreibt), noch einmal so viel Swap und `TasksMax` (vCPU plus 128); 64 MiB tmpfs je Maske über dem Projekt; ohne die cgroup-Controller `memory` und `pids`, oder wenn der cgroup der laufenden Unit die geplanten Grenzen fehlen, wird die Sitzung abgelehnt (`SANDBOX_052`) | HUM-485 |
 | 2026-11-15 | K-33: Die Dateisystemdienste laufen ohne `--allow-mmap`, und keine Fassung des Gastkernels wird mehr abgelehnt; beides gehörte zu `--cache never` (HUM-469), unter `--cache auto` gehen geteilte Abbildungen auf jedem Kernel durch den Seitencache des Gasts (gemessen mit 6.12 und 7.3, direkt und in einer Wegwerf-Sitzung); ein Kernel, der für das Übrige des Gasts zu alt ist, scheitert an Boot oder Prüfung, und die Sitzung wird abgelehnt | HUM-484 |
 | 2026-11-15 | K-33: PID 1 im Gast leert auch, wenn der Gast mehr als 49 152 Inodes hält und 8 192 mehr als nach dem letzten Leeren, spätestens bei 57 344, so dass Ketten von Verzeichnissen, die ein Leeren in Benutzung antraf und die danach losgelassen wurden, nicht mehr bis zur Grenze bleiben; ein KVM-Test zeigt, dass der Agent keine der drei Dateien des Leerens hält | HUM-483 |
+| 2026-11-15 | K-34, K-24: Eine Wegwerf-Sandbox lehnt ein Projekt ab, dessen Wurzel oder ein Ordner auf dem Weg zu einer Maske Schreibweisen faltet (Attribut Casefold, vfat, exFAT, HFS+, SMB, oder ein Eintrag einer Maske, der sich in der anderen ASCII-Schreibweise auflöst), weil der Scan Masken genau vergleicht und das virtiofs des Gasts das Falten des Hosts verbirgt (`SANDBOX_030`, `auto` läuft direkt); der Daemon hält Gerät und Inode von `upper` beim Anlegen fest und lehnt ein getauschtes oder fehlendes `upper` mit `SANDBOX_031` ab | HUM-482 |
 
 Jede sicherheitsrelevante Änderung am Shim, an der Mount-Erlaubnisliste, am Filter oder an der
 Durchleitung bekommt hier eine Zeile. Schwachstellen werden gemeldet, wie in

@@ -2315,6 +2315,19 @@ listen).
   attribute or symbolic link out of the project is ever applied), and the scan refuses every
   change on, under or above a mask of the profile, because under this level the masks lie in the
   lower layer and a layer written past them must not carry a hook or a secret into the project.
+  The scan compares paths with the masks exactly, so a project folder that treats names differing
+  only in case as one entry is no disposable sandbox (HUM-482): when the project root or a folder
+  on the way to a mask carries the casefold attribute (`chattr +F` on ext4, f2fs or tmpfs), lies
+  on vfat, exFAT, HFS+ or SMB, or names an existing mask entry under the other ASCII case too,
+  the start is refused with `SANDBOX_030` and `auto` runs direct; the same check runs again
+  before the layer is read and right before an apply writes, and refuses with `SANDBOX_031`. The guest cannot see the
+  folding: its virtiofs passes every name to the daemon on the host, and only that daemon's
+  `openat` folds, so `.GIT/hooks` written into the layer would land in `.git/hooks`. Folding the
+  masks instead would need Unicode case folding with normalization (the Kelvin sign folds to
+  `k`), which an ASCII comparison misses. The daemon also records the device and inode of `upper`
+  when it creates the layer and compares them on every read: root in the guest reaches the layer
+  directory and can rename or replace `upper`, and a swapped or missing `upper` is `SANDBOX_031`,
+  never another directory that is read.
   The host check finds the opened layer at its daemon as it does the project.
 - **The end of the daemon ends the session without the guest.** The script waits on the
   lifeline, whose write end only the daemon holds; when the daemon ends, also by `SIGKILL`, the

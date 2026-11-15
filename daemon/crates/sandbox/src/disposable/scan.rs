@@ -157,8 +157,9 @@ pub fn scan(upper: BorrowedFd<'_>, lower: BorrowedFd<'_>, baseline: &TreeSnapsho
 /// jede Änderung auf einer Maske, unter ihr, und jede, die über ihr etwas
 /// anderes als ein Verzeichnis hinterlässt oder ein Verzeichnis über ihr
 /// löscht, angezeigt und nie geschrieben. Verglichen wird genau, ohne die
-/// Schreibweise zu falten: Das Projekt liegt unter Linux auf einem
-/// Dateisystem, das sie unterscheidet.
+/// Schreibweise zu falten: Ein Projekt, in dem eine andere Schreibweise eine
+/// Maske erreichte, startet gar nicht erst als Wegwerf-Sandbox
+/// (`refuse_case_folding`, HUM-482).
 #[must_use]
 pub fn scan_masked(
     upper: BorrowedFd<'_>,

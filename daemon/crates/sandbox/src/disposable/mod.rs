@@ -56,6 +56,8 @@
 //! der Klon das Volume mit dem Rest des Rechners.
 
 mod apply;
+#[cfg(target_os = "linux")]
+mod casefold;
 #[cfg(target_os = "macos")]
 mod clone;
 mod layer;
@@ -73,6 +75,8 @@ use serde::{Deserialize, Serialize};
 use crate::bwrap::Version;
 
 pub use crate::disposable::apply::{ApplyOptions, ApplyReport, apply, select};
+#[cfg(target_os = "linux")]
+pub use crate::disposable::casefold::{refuse_case_folding, refuse_case_folding_before_apply};
 #[cfg(target_os = "macos")]
 pub use crate::disposable::clone::fd_path;
 // Die Kernel-Stufe misst damit die tmpfs, auf die ihre Unit schreibt (HUM-485).
@@ -287,3 +291,6 @@ mod tests;
 
 #[cfg(test)]
 mod clone_tests;
+
+#[cfg(all(test, target_os = "linux"))]
+mod casefold_tests;
