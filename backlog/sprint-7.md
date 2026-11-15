@@ -101,6 +101,16 @@ Diagnose-Codes, hier nur geplant (registriert vom genannten Issue in `codes.rs` 
 | HUM-494 | App: die Einstellungszeile der Backends wird mit vier Stufen zu schmal | S | HUM-447 |
 | HUM-495 | doctor: `virtio_fs` „nicht geprüft", wenn das Kernel-Abbild fehlt | S | HUM-488 |
 | HUM-496 | CLI: eine Wegwerf-Sitzung mit einem Befehl, wie ein Agent nativ, mit Ladeanimation | M | HUM-449 |
+| HUM-497 | Stromkanal: Eingabe an ein Terminal bekommt Gegendruck statt still zu verfallen | M | HUM-443 |
+| HUM-498 | Stromkanal: eine Shell, deren Öffnen scheiterte, wird im Gast geschlossen | S | HUM-443 |
+| HUM-499 | Stromkanal: Größenänderung und Schließen blockieren keinen Worker des Daemons | S | HUM-443 |
+| HUM-500 | Image-Pull nimmt das Backend der Sitzung | S | HUM-440 |
+| HUM-501 | Konfiguration: Obergrenzen aus der Hardware nur für das gewählte Backend | S | HUM-431 |
+| HUM-502 | doctor und Backend-Liste: schnell genug für die Frist der App | S | HUM-436 |
+| HUM-503 | Konfiguration: der Fix für `sandbox.podman.rootfs` ohne Anführungszeichen | S | HUM-439 |
+| HUM-504 | App: der Abschnitt der Backends verschwindet nicht beim Wechsel | S | HUM-440 |
+| HUM-505 | CLI: der Fix von `sandbox image pull` nennt die Referenz | S | HUM-439 |
+| HUM-506 | doctor: der gespeicherte Probestart der Kernel-Stufe veraltet mit ihren Programmen und dem Gastkernel | S | HUM-444 |
 
 ## HUM-428 · Port neutral: `PlanRequest`, `LaunchOptions`, `IsolationLevel`, Enum `Backend` statt `PlatformBackend`
 
@@ -2463,3 +2473,171 @@ Heute geht der Start schon mit `humanitl run --disposable --backend qemu`.
 2. Die Animation läuft mindestens eine Sekunde und hält den Start nicht
    länger auf, als er ohnehin dauert.
 
+---
+
+## HUM-497 · Stromkanal: Eingabe an ein Terminal bekommt Gegendruck statt still zu verfallen
+
+### Kontext
+Aus dem Ultra-Review vom 2026-11-15 (PR #1). Im Stromkanal der Kernel-Stufe verwirft der Shim `D`-Bytes, sobald die Warteschlange eines Terminals `IN_HIGH` (64 KiB) erreicht (`daemon/bin/humanitl-shim/src/stream.rs`), während `SandboxHandle::write_input` und `Shell::write_input` Erfolg melden. Die IPC-Schicht verlässt sich darauf, dass das Schreiben blockiert, wenn der Agent nicht liest (`ipc/src/terminal.rs`). Ein Einfügen von mehr als rund 80 KiB verliert so Bytes aus der Mitte, und der Agent bekommt eine Anweisung mit Lücke.
+
+### Spezifikation
+1. Der Stromkanal hält den Vertrag des Schreibens: Gegendruck je Kanal (Kredit- oder Quittungsrahmen, `send_data` wartet auf Platz) oder ein Ablehnungsrahmen, den `write_input` als `TERM_002` meldet; nie stilles Verwerfen bei gemeldetem Erfolg.
+
+### Tests
+- Integration im Stream-Modus: 300 KiB Eingabe an ein Terminal, dessen Leser langsam liest, kommen vollständig an oder enden mit einem Fehler beim Client. Mutationsbeweis: das alte Verwerfen färbt den Test rot.
+
+### Akzeptanzkriterien
+1. Keine Eingabe geht verloren, während der Client Erfolg sieht.
+
+
+---
+
+## HUM-498 · Stromkanal: eine Shell, deren Öffnen scheiterte, wird im Gast geschlossen
+
+### Kontext
+Aus dem Ultra-Review. Scheitert `ask_stream` nach dem `O`-Rahmen (keine Antwort in `ANSWER_WAIT`, `daemon/crates/sandbox/src/shell.rs`), sendet der Daemon kein `C`; eine Shell, die der Shim danach doch startet, läuft bis zum Ende der Sitzung, belegt einen der `MAX_SHELLS` Plätze, und ein spätes `R` lässt den Platz im Daemon `Orphaned`.
+
+### Spezifikation
+1. Nach jedem Fehler nach dem `O`-Rahmen geht `Kind::Close` für diese Kennung an den Shim (der Shim ignoriert `C` für unbekannte Kanäle).
+
+### Tests
+- Unit mit einem Shim, der nach der Frist antwortet: die Shell wird geschlossen, der Platz ist frei; Mutationsbeweis.
+
+### Akzeptanzkriterien
+1. Keine Shell überlebt ihr gescheitertes Öffnen.
+
+
+---
+
+## HUM-499 · Stromkanal: Größenänderung und Schließen blockieren keinen Worker des Daemons
+
+### Kontext
+Aus dem Ultra-Review. Im Stream-Modus ruft `TerminalHub::resize` aus asynchronem Code (`ipc/src/terminal.rs`, `session()` und `resize_pump`) `StreamDoor::send` auf, das bis zu `STREAM_SEND_WAIT` (10 s) auf den Schreibzug und Platz im Socket wartet; ebenso das `C` in `Shell::drop`. Mehrere solcher Wartezeiten legen die Worker der gRPC-Laufzeit lahm.
+
+### Spezifikation
+1. Jedes Senden auf dem Strom aus asynchronem Code läuft über `spawn_blocking` oder einen Pfad ohne Warten.
+
+### Tests
+- Test: ein blockierter Strom und eine Größenänderung halten andere RPCs nicht auf; Mutationsbeweis.
+
+### Akzeptanzkriterien
+1. Kein Warten auf den Strom auf einem Worker der Laufzeit.
+
+
+---
+
+## HUM-500 · Image-Pull nimmt das Backend der Sitzung
+
+### Kontext
+Aus dem Ultra-Review. `Sandbox(ImagePull)` löst das Backend immer aus dem gespeicherten `sandbox.backend` auf (`ipc/src/sandbox.rs`, `image_pull` mit `Plan::default()`); wer Podman nur für eine Sitzung wählt (`Plan.backend`, `cli_overrides`, `--backend podman`), zieht bei `auto` über bwrap, und der Pull scheitert; der Start bleibt bei `SANDBOX_043`.
+
+### Spezifikation
+1. `ImagePull` trägt das Backend der Sitzung (wie `Plan.backend`) und löst es wie ein Start auf; App und CLI schicken es mit.
+
+### Tests
+- ipc: Konfiguration `auto`, Wahl `podman` für die Sitzung, Pull geht an Podman; Mutationsbeweis.
+
+### Akzeptanzkriterien
+1. Der Knopf „Pull" und `humanitl sandbox image pull` treffen das Backend, das der Start verlangt.
+
+
+---
+
+## HUM-501 · Konfiguration: Obergrenzen aus der Hardware nur für das gewählte Backend
+
+### Kontext
+Aus dem Ultra-Review. `Config::validate` prüft `sandbox.podman.{memory_mib,cpus}` und `sandbox.qemu.{memory_mib,cpus}` bei jedem Laden gegen `MemTotal` und `available_parallelism` dieses Rechners, gleich welches Backend gewählt ist. Eine Konfiguration von einem größeren Rechner oder ein Prozess unter `taskset` macht so jeden Befehl unbenutzbar, auch bwrap; Daemon und CLI können je nach CPU-Affinität verschieden urteilen.
+
+### Spezifikation
+1. Beim Laden nur die festen Untergrenzen; die Obergrenzen aus der Hardware prüft der Start des Backends, das die Gruppe nutzt.
+
+### Tests
+- config: ein Wert über der Hardware lädt; ein Start mit genau diesem Backend lehnt ihn mit Grund ab.
+
+### Akzeptanzkriterien
+1. Kein Wert eines nicht gewählten Backends macht die Konfiguration unladbar.
+
+
+---
+
+## HUM-502 · doctor und Backend-Liste: schnell genug für die Frist der App
+
+### Kontext
+Aus dem Ultra-Review. `Doctor` und `SandboxBackends` suchen bei jedem Aufruf jedes Backend neu (Podman: Unit-Probe, `podman version`, `podman info`, je bis 30 s; qemu: bis zu fünf Hilfe-Abfragen, je bis 5 s), nacheinander und ohne Zwischenspeicher; die App ruft beide mit 5 s Frist.
+
+### Spezifikation
+1. Die Suche läuft parallel je Backend, mit kurzem Zwischenspeicher (etwa bis eine Programmdatei sich ändert); der Server antwortet in der Frist der App, ein langsames Backend erscheint als „wird geprüft" statt die ganze Antwort zu kippen.
+
+### Tests
+- Test mit einem Programm, das 10 s braucht: die Antwort kommt unter 5 s, die anderen Backends sind vollständig.
+
+### Akzeptanzkriterien
+1. Ein langsames Backend kippt weder doctor noch die Backend-Liste der App.
+
+
+---
+
+## HUM-503 · Konfiguration: der Fix für `sandbox.podman.rootfs` ohne Anführungszeichen
+
+### Kontext
+Aus dem Ultra-Review. Der Fix für `rootfs = "image"` ohne `sandbox.podman.image` schlägt den Wert `"host"` mit Anführungszeichen vor (`config/src/validate.rs`); wer ihn befolgt, hat wieder `CONFIG_003`.
+
+### Spezifikation
+1. Der Wert ist `host`, wie bei jedem anderen `ChangeSetting`-Fix.
+
+### Tests
+- Unit: der Fix, angewendet, ergibt eine gültige Konfiguration.
+
+### Akzeptanzkriterien
+1. Jeder Fix-Vorschlag ergibt einen gültigen Wert.
+
+
+---
+
+## HUM-504 · App: der Abschnitt der Backends verschwindet nicht beim Wechsel
+
+### Kontext
+Aus dem Ultra-Review. Beim Wählen eines Backends ist `sandboxBackendsProvider(session)` ein neues Mitglied ohne Wert, und `backend_section.dart` zeigt `SizedBox.shrink()`, bis der Daemon antwortet.
+
+### Spezifikation
+1. Die zuletzt gezeigte Liste bleibt stehen, bis die neue da ist.
+
+### Tests
+- Widget-Test: nach dem Wechsel bleibt der Abschnitt sichtbar.
+
+### Akzeptanzkriterien
+1. Kein Flackern des Abschnitts beim Wechsel.
+
+
+---
+
+## HUM-505 · CLI: der Fix von `sandbox image pull` nennt die Referenz
+
+### Kontext
+Aus dem Ultra-Review. Ohne Terminal oder mit `--json` schlägt `confirm()` in `cmd/image.rs` `humanitl sandbox image pull --yes` ohne die Referenz vor, die der Nutzer nannte; ebenso der Zweig „nicht ja".
+
+### Spezifikation
+1. Beide Befehle des Fixes tragen die genannte Referenz.
+
+### Tests
+- CLI-Test: der Fix enthält die Referenz.
+
+### Akzeptanzkriterien
+1. Der vorgeschlagene Befehl zieht das Image, das gemeint war.
+
+
+---
+
+## HUM-506 · doctor: der gespeicherte Probestart der Kernel-Stufe veraltet mit ihren Programmen und dem Gastkernel
+
+### Kontext
+Aus dem Ultra-Review. `VmBackend::tool_version()` liefert eine leere Zeichenkette; der Schlüssel des gespeicherten Probestarts ändert sich nicht, wenn qemu, virtiofsd oder vhost-device-vsock aktualisiert werden oder `sandbox.qemu.kernel`/`modules` auf etwas anderes zeigen; doctor meldet dann „passed (cached)", während Starts scheitern.
+
+### Spezifikation
+1. Der Schlüssel enthält die Fassungen oder Datei-Identitäten (Gerät, Inode, Größe, Zeit) der drei Programme und von Gastkernel und Modulverzeichnis; `--probe` startet immer neu.
+
+### Tests
+- Unit: ein anderes Kernel-Abbild oder eine geänderte Programmdatei ergibt einen anderen Schlüssel; Mutationsbeweis.
+
+### Akzeptanzkriterien
+1. Kein gespeicherter Probestart überlebt eine Änderung seiner Eingaben.
