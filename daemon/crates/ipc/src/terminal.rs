@@ -363,6 +363,10 @@ impl TerminalHub {
 
     /// Setzt die Geometrie und sagt es allen.
     ///
+    /// Blockiert nicht und gehört deshalb in asynchronen Code: Am
+    /// Pseudoterminal des Daemons ist es ein `ioctl`, im Strom-Modus wird
+    /// die Größe nur abgelegt, und ein eigener Faden schickt sie (HUM-499).
+    ///
     /// Der Befund eines Terminals, das nicht mehr antwortet, geht an die
     /// Clients und nicht in ein Log: Wer gerade das Fenster zieht, soll
     /// erfahren, dass niemand mehr zusieht.

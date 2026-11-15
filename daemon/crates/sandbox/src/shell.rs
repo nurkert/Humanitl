@@ -48,6 +48,14 @@
 //! scheitert es mit `TERM_002`. Was der Aufrufer als geschrieben gemeldet
 //! bekommt, verwirft der Shim nie.
 //!
+//! Größe und Schließen warten nie auf den Strom (HUM-499): Sie kommen aus
+//! asynchronem Code des Daemons (Terminal-Clients, das Fallen einer Shell),
+//! und ein Shim, der nicht liest, hielte sonst einen Worker der Laufzeit bis
+//! zu zehn Sekunden fest. Beide legen ihren Rahmen nur ab, die Größe je Kanal
+//! nur die letzte, und ein eigener Faden schickt ab, was liegt. Jedes andere
+//! Senden schickt das Abgelegte vor seinen eigenen Rahmen, damit eine Größe
+//! nie hinter Eingabe zurückfällt, die nach ihr kam.
+//!
 //! # Unter macOS: eine Start-Tür
 //!
 //! Seatbelt kennt keinen Namensraum, in dem ein PID 1 sitzen könnte, und
@@ -57,7 +65,7 @@
 //! beim Ende dessen ganze Sitzung beendet (HUM-323). Ende und Exit-Code
 //! kommen vom Prozess selbst; endet die Sandbox, bekommt jede Shell `SIGTERM`.
 
-use std::collections::BTreeMap;
+use std::collections::{BTreeMap, BTreeSet};
 use std::ffi::OsString;
 use std::io::IoSlice;
 use std::mem::MaybeUninit;
@@ -169,12 +177,35 @@ struct DoorState {
 
 /// Wie weitere Shells starten: über die Tür des Shims (Linux), als eigener
 /// Prozess unter demselben Profil (macOS, HUM-323) oder über den Steuerkanal
-/// als Strom (HUM-443).
+/// als Strom (HUM-443). Die Strom-Tür liegt auf dem Heap: Mit ihren Sperren
+/// ist sie unter macOS ein Vielfaches der anderen Varianten groß.
 #[derive(Debug)]
 enum Door {
     Socket(OwnedFd),
     Spawn(SpawnSpec),
-    Stream(StreamDoor),
+    Stream(Box<StreamDoor>),
+}
+
+/// Das Ende des Lesers einer Strom-Tür, beim Fallen, auch bei einem Abbruch
+/// des Fadens: Die Shells sehen das Ende ihrer Ausgabe, wer wartet, das der
+/// Tür, und der Faden des Abgelegten endet.
+struct ReaderEnd<'a> {
+    door: &'a ShellDoor,
+    stream: &'a StreamDoor,
+}
+
+impl Drop for ReaderEnd<'_> {
+    fn drop(&mut self) {
+        // Bricht der Leser ab, liest niemand mehr, was der Shim schickt; der
+        // Strom geht dann ganz zu, damit auch der Shim das Ende sieht.
+        if thread::panicking() {
+            let _ = rustix::net::shutdown(&self.stream.socket, rustix::net::Shutdown::Both);
+        }
+        lock(&self.stream.outputs).clear();
+        self.stream.end();
+        lock(&self.door.state).closed = true;
+        self.door.changed.notify_all();
+    }
 }
 
 /// Das Recht, allein auf den Strom zu schreiben; gibt es beim Fallen frei.
@@ -226,6 +257,24 @@ struct Credit {
     ended: bool,
 }
 
+/// Rahmen, auf deren Hinausgehen niemand wartet (HUM-499): je Kanal die
+/// letzte Größe, dazu das `C` jeder gefallenen Shell. Wer etwas ablegt, kehrt
+/// sofort zurück; hinaus geht es mit dem nächsten Senden oder vom Faden
+/// [`StreamDoor::send_posted`]. Begrenzt ist es durch die Zahl der Kanäle.
+#[derive(Debug, Default)]
+struct Posted {
+    sizes: BTreeMap<u32, (u16, u16)>,
+    closes: BTreeSet<u32>,
+    /// Der Strom ist zu Ende; abgelegt wird nichts mehr.
+    ended: bool,
+}
+
+impl Posted {
+    fn is_empty(&self) -> bool {
+        self.sizes.is_empty() && self.closes.is_empty()
+    }
+}
+
 /// Wohin die Bytes des Agenten aus dem Strom gehen.
 pub(crate) type AgentSink = Box<dyn Fn(&[u8]) + Send>;
 
@@ -253,6 +302,10 @@ struct StreamDoor {
     credit: Mutex<Credit>,
     /// Weckt, wer auf Guthaben wartet.
     credited: Condvar,
+    /// Was ohne Warten abgelegt wurde (HUM-499).
+    posted: Mutex<Posted>,
+    /// Weckt den Faden, der das Abgelegte schickt.
+    posting: Condvar,
 }
 
 impl StreamDoor {
@@ -272,6 +325,8 @@ impl StreamDoor {
                 ended: false,
             }),
             credited: Condvar::new(),
+            posted: Mutex::new(Posted::default()),
+            posting: Condvar::new(),
         }
     }
 
@@ -300,6 +355,16 @@ impl StreamDoor {
             let _ = rustix::net::shutdown(&self.socket, rustix::net::Shutdown::Both);
             return Err(std::io::ErrorKind::TimedOut.into());
         };
+        // Was abgelegt liegt, geht vor diesen Rahmen hinaus: Eine Größe, die
+        // vor einer Eingabe kam, erreicht das Terminal auch vor ihr (HUM-499).
+        let posted = self.take_posted();
+        self.write_all(&posted, deadline)?;
+        self.write_all(frames, deadline)
+    }
+
+    /// Schreibt `frames` bis `deadline` ganz hinaus; der Aufrufer hält das
+    /// Recht zu schreiben. Scheitert es, ist der Strom danach zu.
+    fn write_all(&self, frames: &[u8], deadline: Instant) -> std::io::Result<()> {
         let mut rest = frames;
         let flags = crate::platform::SEND_NO_SIGNAL | rustix::net::SendFlags::DONTWAIT;
         while !rest.is_empty() {
@@ -487,16 +552,101 @@ impl StreamDoor {
         lock(&self.credit).window.contains_key(&channel)
     }
 
-    /// Der Strom ist zu Ende; jedes Warten auf Guthaben endet.
+    /// Der Strom ist zu Ende; jedes Warten auf Guthaben endet, und der
+    /// Faden des Abgelegten auch.
     fn end(&self) {
         lock(&self.credit).ended = true;
         self.credited.notify_all();
+        lock(&self.posted).ended = true;
+        self.posting.notify_all();
     }
 
-    fn send_size(&self, channel: u32, cols: u16, rows: u16) -> std::io::Result<()> {
+    /// Legt die Größe von `channel` ab, ohne zu warten (HUM-499); eine
+    /// frühere, noch nicht gesendete Größe desselben Kanals ersetzt sie.
+    ///
+    /// # Errors
+    ///
+    /// `BrokenPipe` nach dem Ende des Stroms.
+    fn post_size(&self, channel: u32, cols: u16, rows: u16) -> std::io::Result<()> {
+        let mut posted = lock(&self.posted);
+        if posted.ended {
+            return Err(std::io::Error::new(
+                std::io::ErrorKind::BrokenPipe,
+                "the sandbox has ended",
+            ));
+        }
+        posted.sizes.insert(channel, (cols, rows));
+        drop(posted);
+        self.posting.notify_one();
+        Ok(())
+    }
+
+    /// Legt das `C` für `channel` ab, ohne zu warten (HUM-499); eine Größe
+    /// desselben Kanals, die noch liegt, braucht dann niemand mehr. Nach dem
+    /// Ende des Stroms ist nichts mehr zu schließen.
+    fn post_close(&self, channel: u32) {
+        let mut posted = lock(&self.posted);
+        if posted.ended {
+            return;
+        }
+        posted.sizes.remove(&channel);
+        posted.closes.insert(channel);
+        drop(posted);
+        self.posting.notify_one();
+    }
+
+    /// Nimmt das Abgelegte als fertige Rahmen; leer, wenn nichts liegt.
+    fn take_posted(&self) -> Vec<u8> {
+        let (sizes, closes) = {
+            let mut posted = lock(&self.posted);
+            (
+                std::mem::take(&mut posted.sizes),
+                std::mem::take(&mut posted.closes),
+            )
+        };
         let mut frames = Vec::new();
-        control_frame::encode_size(channel, cols, rows, &mut frames);
-        self.send(&frames)
+        for (channel, (cols, rows)) in sizes {
+            control_frame::encode_size(channel, cols, rows, &mut frames);
+        }
+        for channel in closes {
+            let _ = control_frame::encode(Kind::Close, channel, &[], &mut frames);
+        }
+        frames
+    }
+
+    /// Der Faden des Abgelegten: wartet, bis etwas liegt, und schickt es, auf
+    /// diesem Faden und nie auf dem des Aufrufers. Hat ein anderes Senden es
+    /// schon mitgenommen, schickt er nichts und schließt nichts. Endet mit
+    /// dem Strom, auch wenn sein Senden ihn schließt.
+    fn send_posted(&self) {
+        loop {
+            {
+                let mut posted = lock(&self.posted);
+                while !posted.ended && posted.is_empty() {
+                    posted = self
+                        .posting
+                        .wait(posted)
+                        .unwrap_or_else(PoisonError::into_inner);
+                }
+                if posted.ended {
+                    return;
+                }
+            }
+            let deadline = Instant::now() + STREAM_SEND_WAIT;
+            let Some(_turn) = self.turn(deadline) else {
+                // Wer den Strom hielt, hat das Abgelegte womöglich mitgenommen;
+                // dann ist nichts überfällig.
+                if lock(&self.posted).is_empty() {
+                    continue;
+                }
+                let _ = rustix::net::shutdown(&self.socket, rustix::net::Shutdown::Both);
+                return;
+            };
+            let posted = self.take_posted();
+            if self.write_all(&posted, deadline).is_err() {
+                return;
+            }
+        }
     }
 
     fn send_empty(&self, kind: Kind, channel: u32) -> std::io::Result<()> {
@@ -610,14 +760,16 @@ impl ShellDoor {
 
     /// Nimmt die Seite des Daemons am Steuerkanal als Strom (HUM-443) und
     /// liest jeden Rahmen auf einem eigenen Faden, bis die Seite des Shims zu
-    /// ist; die Bytes des Agenten gehen an `agent`.
+    /// ist; die Bytes des Agenten gehen an `agent`. Ein zweiter Faden
+    /// schickt, was ohne Warten abgelegt wurde (HUM-499); er endet mit dem
+    /// Strom.
     ///
     /// # Errors
     ///
-    /// Der Faden ließ sich nicht starten.
+    /// Ein Faden ließ sich nicht starten.
     pub(crate) fn start_stream(socket: OwnedFd, agent: AgentSink) -> std::io::Result<Arc<Self>> {
         let door = Arc::new(Self {
-            door: Door::Stream(StreamDoor::new(socket)),
+            door: Door::Stream(Box::new(StreamDoor::new(socket))),
             state: Mutex::new(DoorState {
                 next_id: 1,
                 ..DoorState::default()
@@ -625,10 +777,26 @@ impl ShellDoor {
             changed: Condvar::new(),
             children: Mutex::new(BTreeMap::new()),
         });
-        let reader = Arc::clone(&door);
+        let sender = Arc::clone(&door);
         thread::Builder::new()
+            .name("sandbox-stream-out".to_owned())
+            .spawn(move || {
+                if let Door::Stream(stream) = &sender.door {
+                    stream.send_posted();
+                }
+            })?;
+        let reader = Arc::clone(&door);
+        if let Err(err) = thread::Builder::new()
             .name("sandbox-stream".to_owned())
-            .spawn(move || reader.read_stream(&agent))?;
+            .spawn(move || reader.read_stream(&agent))
+        {
+            // Ohne Leser kommt kein Ende des Stroms; der Faden des
+            // Abgelegten endet hier.
+            if let Door::Stream(stream) = &door.door {
+                stream.end();
+            }
+            return Err(err);
+        }
         Ok(door)
     }
 
@@ -641,6 +809,9 @@ impl ShellDoor {
         let Door::Stream(stream) = &self.door else {
             return;
         };
+        // Das Ende gilt auch, wenn dieser Faden abbricht (etwa in `agent`):
+        // Sonst schliefe der Faden des Abgelegten für immer (HUM-499).
+        let _ended = ReaderEnd { door: self, stream };
         let mut decoder = Decoder::new();
         let mut buffer = vec![0u8; MAX_PAYLOAD];
         loop {
@@ -659,11 +830,6 @@ impl ShellDoor {
                 Err(_) => break,
             }
         }
-        // Die Shells sehen das Ende ihrer Ausgabe, wer wartet, das der Tür.
-        lock(&stream.outputs).clear();
-        stream.end();
-        lock(&self.state).closed = true;
-        self.changed.notify_all();
     }
 
     /// Ein Rahmen des Shims. Was in die andere Richtung gehört, ist hier
@@ -763,9 +929,11 @@ impl ShellDoor {
         self.stream()?.send_data(AGENT, bytes)
     }
 
-    /// Die Größe des Terminals des Agenten (Strom-Modus).
+    /// Die Größe des Terminals des Agenten (Strom-Modus). Wartet nie auf
+    /// den Strom: Die Größe wird abgelegt und geht vom Faden des Stroms
+    /// hinaus, vor jeder Eingabe, die nach ihr kommt (HUM-499).
     pub(crate) fn agent_size(&self, cols: u16, rows: u16) -> std::io::Result<()> {
-        self.stream()?.send_size(AGENT, cols, rows)
+        self.stream()?.post_size(AGENT, cols, rows)
     }
 
     /// `SIGINT` an die Vordergrundgruppe des Agenten, vom Shim aus
@@ -776,7 +944,7 @@ impl ShellDoor {
 
     fn stream(&self) -> std::io::Result<&StreamDoor> {
         match &self.door {
-            Door::Stream(stream) => Ok(stream),
+            Door::Stream(stream) => Ok(&**stream),
             Door::Socket(_) | Door::Spawn(_) => Err(std::io::ErrorKind::Unsupported.into()),
         }
     }
@@ -1274,7 +1442,9 @@ impl Shell {
     }
 
     /// Setzt die Geometrie. Die Shell trägt ihr Terminal als steuerndes, der
-    /// Kernel schickt ihr das `SIGWINCH` selbst.
+    /// Kernel schickt ihr das `SIGWINCH` selbst. Wartet nie: Im Strom-Modus
+    /// wird die Größe abgelegt und geht vom Faden des Stroms hinaus, nur die
+    /// letzte, wenn mehrere warten (HUM-499).
     ///
     /// # Errors
     ///
@@ -1286,7 +1456,7 @@ impl Shell {
                 return self
                     .door
                     .stream()
-                    .and_then(|stream| stream.send_size(self.id, cols, rows))
+                    .and_then(|stream| stream.post_size(self.id, cols, rows))
                     .map_err(|err| gone(&format!("cannot set the shell to {cols}x{rows}: {err}")));
             }
         };
@@ -1369,10 +1539,12 @@ impl Drop for Shell {
         // Im Strom-Modus legt der Shim auf; wie beim Schließen der
         // Herrscherseite endet damit die Shell. Überhört sie das Auflegen,
         // tötet der Shim nach einer Sekunde ihre Prozessgruppe (HUM-498).
+        // Das `C` wird nur abgelegt (HUM-499): Eine Shell fällt auch in
+        // asynchronem Code, und dort darf nichts auf den Strom warten.
         if matches!(self.terminal, Terminal::Stream(_))
             && let Ok(stream) = self.door.stream()
         {
-            let _ = stream.send_empty(Kind::Close, self.id);
+            stream.post_close(self.id);
             lock(&stream.outputs).remove(&self.id);
             stream.close_channel(self.id);
         }
@@ -1949,8 +2121,9 @@ mod tests {
             Err(std::io::ErrorKind::TimedOut)
         );
         assert!(took < Duration::from_secs(3), "the write waited {took:?}");
-        door.send_size(AGENT, 90, 20)
-            .expect("the stream is still open");
+        door.post_size(AGENT, 90, 20)
+            .expect("the stream has not ended");
+        door.send(&[]).expect("the stream is still open");
         let (_shim, (data, messages)) = reading.join().unwrap();
         assert_eq!(data.len(), WINDOW, "only the window went out");
         assert!(
@@ -2177,6 +2350,189 @@ mod tests {
         assert!(door.apply(&answer(MARK_EXITED, 7, 137)));
         assert_eq!(door.live(), 0);
         assert!(!lock(&door.state).shells.contains_key(&7));
+    }
+
+    /// HUM-499: Größe und Schließen warten nicht auf den Strom. Ein anderer
+    /// Schreiber hält den Strom; die Größe des Agenten, die einer Shell und
+    /// das Fallen dieser Shell kehren trotzdem sofort zurück. Sobald der
+    /// Strom frei ist, geht vom Agenten nur die letzte Größe hinaus, von der
+    /// Shell nur ihr `C`.
+    #[cfg(target_os = "linux")]
+    #[test]
+    fn a_resize_and_a_close_wait_for_nothing_while_the_stream_is_held() {
+        let (daemon, shim) =
+            socketpair(AddressFamily::UNIX, SocketType::STREAM, PAIR_FLAGS, None).unwrap();
+        let door = ShellDoor::start_stream(daemon, Box::new(|_| {})).unwrap();
+        let mut decoder = Decoder::new();
+        let opener = {
+            let door = Arc::clone(&door);
+            thread::spawn(move || door.open(&["sh".to_owned()], 80, 24))
+        };
+        let (_, asked) = shim_reads(&shim, &mut decoder, Duration::from_secs(5), |_, seen| {
+            seen.iter().any(|m| matches!(m, Message::Open { .. }))
+        });
+        let Some(&Message::Open { channel: id, .. }) = asked.first() else {
+            panic!("no open came: {asked:?}");
+        };
+        let mut wire = Vec::new();
+        control_frame::encode_value(Kind::Started, id, 4242, &mut wire);
+        push_frames(&shim, &wire);
+        let shell = opener.join().unwrap().unwrap();
+
+        let stream = door.stream().unwrap();
+        let turn = stream
+            .turn(Instant::now() + Duration::from_secs(60))
+            .expect("the stream is free");
+        let started = Instant::now();
+        door.agent_size(100, 30).unwrap();
+        door.agent_size(110, 40).unwrap();
+        shell.resize(90, 20).unwrap();
+        drop(shell);
+        let took = started.elapsed();
+        assert!(
+            took < Duration::from_millis(500),
+            "a resize or a close waited {took:?} for the stream"
+        );
+        let (_, held) = shim_reads(&shim, &mut decoder, Duration::from_millis(300), |_, _| {
+            false
+        });
+        assert!(held.is_empty(), "frames went out past the turn: {held:?}");
+
+        drop(turn);
+        let (_, after) = shim_reads(&shim, &mut decoder, Duration::from_secs(5), |_, seen| {
+            seen.iter()
+                .any(|m| matches!(m, Message::Close { channel } if *channel == id))
+                && seen.iter().any(|m| matches!(m, Message::Size { .. }))
+        });
+        assert_eq!(
+            after,
+            vec![
+                Message::Size {
+                    channel: AGENT,
+                    cols: 110,
+                    rows: 40
+                },
+                Message::Close { channel: id },
+            ],
+            "only the latest size of the agent and the close of the shell"
+        );
+    }
+
+    /// HUM-499: Eine abgelegte Größe geht vor der Eingabe hinaus, die nach
+    /// ihr kommt, auch ohne den Faden des Abgelegten: Jedes Senden nimmt mit,
+    /// was liegt.
+    #[cfg(target_os = "linux")]
+    #[test]
+    fn a_posted_size_goes_out_before_the_input_after_it() {
+        let (daemon, shim) =
+            socketpair(AddressFamily::UNIX, SocketType::STREAM, PAIR_FLAGS, None).unwrap();
+        let door = StreamDoor::new(daemon);
+        door.post_size(AGENT, 132, 43).unwrap();
+        door.send_data(AGENT, b"stty size\n").unwrap();
+        let mut decoder = Decoder::new();
+        let (_, seen) = shim_reads(&shim, &mut decoder, Duration::from_secs(5), |data, _| {
+            !data.is_empty()
+        });
+        assert_eq!(
+            seen.first(),
+            Some(&Message::Size {
+                channel: AGENT,
+                cols: 132,
+                rows: 43
+            }),
+            "the size did not go out before the input: {seen:?}"
+        );
+    }
+
+    /// HUM-499: Nach dem Ende des Stroms nimmt die Größe nichts mehr an und
+    /// sagt es; der Faden des Abgelegten endet.
+    #[cfg(target_os = "linux")]
+    #[test]
+    fn a_resize_after_the_end_of_the_stream_fails() {
+        let (daemon, shim) =
+            socketpair(AddressFamily::UNIX, SocketType::STREAM, PAIR_FLAGS, None).unwrap();
+        let door = ShellDoor::start_stream(daemon, Box::new(|_| {})).unwrap();
+        drop(shim);
+        let deadline = Instant::now() + Duration::from_secs(5);
+        while !lock(&door.state).closed {
+            assert!(Instant::now() < deadline, "the reader never saw the end");
+            thread::sleep(Duration::from_millis(10));
+        }
+        assert_eq!(
+            door.agent_size(80, 24).map_err(|err| err.kind()),
+            Err(std::io::ErrorKind::BrokenPipe)
+        );
+    }
+
+    /// Wartet, bis nur noch der Test die Tür hält: Leser und Faden des
+    /// Abgelegten sind dann beide fort.
+    #[cfg(target_os = "linux")]
+    fn wait_for_the_threads_to_end(door: &Arc<ShellDoor>) {
+        let deadline = Instant::now() + Duration::from_secs(5);
+        while Arc::strong_count(door) > 1 {
+            assert!(
+                Instant::now() < deadline,
+                "{} holders of the door remain after the end of the stream",
+                Arc::strong_count(door) - 1
+            );
+            thread::sleep(Duration::from_millis(10));
+        }
+    }
+
+    /// HUM-499: Der Faden des Abgelegten endet mit dem Strom und lässt die
+    /// Tür los.
+    #[cfg(target_os = "linux")]
+    #[test]
+    fn the_sender_thread_ends_with_the_stream() {
+        let (daemon, shim) =
+            socketpair(AddressFamily::UNIX, SocketType::STREAM, PAIR_FLAGS, None).unwrap();
+        let door = ShellDoor::start_stream(daemon, Box::new(|_| {})).unwrap();
+        door.agent_size(80, 24).unwrap();
+        // Erst wenn die Größe draußen ist, wartet der Faden auf Neues; ein
+        // Senden an den geschlossenen Shim endete ihn sonst ohnehin.
+        let mut decoder = Decoder::new();
+        let (_, seen) = shim_reads(&shim, &mut decoder, Duration::from_secs(5), |_, seen| {
+            !seen.is_empty()
+        });
+        assert_eq!(
+            seen,
+            vec![Message::Size {
+                channel: AGENT,
+                cols: 80,
+                rows: 24
+            }]
+        );
+        drop(shim);
+        wait_for_the_threads_to_end(&door);
+    }
+
+    /// HUM-499, Review: Bricht der Leser ab, weil die Ausgabe des Agenten
+    /// in Panik gerät, endet der Strom trotzdem: Die Größe meldet das Ende,
+    /// und beide Fäden lassen die Tür los.
+    #[cfg(target_os = "linux")]
+    #[test]
+    fn a_reader_that_breaks_off_still_ends_the_stream() {
+        let (daemon, shim) =
+            socketpair(AddressFamily::UNIX, SocketType::STREAM, PAIR_FLAGS, None).unwrap();
+        let door = ShellDoor::start_stream(
+            daemon,
+            Box::new(|_| panic!("the agent sink breaks off on purpose")),
+        )
+        .unwrap();
+        let mut wire = Vec::new();
+        control_frame::encode_data(AGENT, b"boom", &mut wire);
+        push_frames(&shim, &wire);
+        wait_for_the_threads_to_end(&door);
+        assert_eq!(
+            door.agent_size(80, 24).map_err(|err| err.kind()),
+            Err(std::io::ErrorKind::BrokenPipe)
+        );
+        let mut got = [0u8; 8];
+        assert_eq!(
+            rustix::io::read(&shim, &mut got).unwrap(),
+            0,
+            "the shim does not see the end of the stream"
+        );
     }
 
     #[test]

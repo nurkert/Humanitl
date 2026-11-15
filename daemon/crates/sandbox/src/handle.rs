@@ -1509,7 +1509,9 @@ impl SandboxHandle {
     /// liest sie.
     pub fn resize(&self, cols: u16, rows: u16) -> Result<(), Diagnostic> {
         // Im Strom-Modus setzt der Shim die Größe; sein Kernel schickt das
-        // `SIGWINCH` an die Vordergrundgruppe (HUM-443).
+        // `SIGWINCH` an die Vordergrundgruppe (HUM-443). Der Aufruf legt sie
+        // nur ab und wartet nie auf den Strom: Er kommt aus asynchronem Code
+        // des Daemons (HUM-499).
         if let Some(door) = self.shared.stream() {
             return door.agent_size(cols, rows).map_err(|err| {
                 terminal_gone(&format!(

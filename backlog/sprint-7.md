@@ -2590,6 +2590,49 @@ Aus dem Ultra-Review. Im Stream-Modus ruft `TerminalHub::resize` aus asynchronem
 ### Akzeptanzkriterien
 1. Kein Warten auf den Strom auf einem Worker der Laufzeit.
 
+### Stand nach der Umsetzung (2026-11-15)
+Aufrufstellen aus asynchronem Code, die den Strom erreichen: die Größe
+(`TerminalHub::resize` aus `session()` und `resize_pump`, darunter
+`SandboxHandle::resize` und `Shell::resize`) und das Fallen einer Shell
+(`Shell::drop`, das `C`; der letzte `Arc<Shell>` fällt mit dem Terminal in
+Tasks der Laufzeit). Schreiben (`write_input`) und Öffnen (`exec`) liefen
+schon über `spawn_blocking`, `interrupt` ruft nur die CLI aus
+`spawn_blocking`, das `C` im Fehlerpfad von `ask_stream` geht vom Faden des
+Öffnens. Größe und `C` legt der Daemon jetzt nur ab (`Posted` in
+`StreamDoor`: je Kanal die letzte Größe, dazu die Kennungen gefallener
+Shells, begrenzt durch die Zahl der Kanäle) und kehrt sofort zurück; ein
+eigener Faden je Strom (`sandbox-stream-out`) schickt das Abgelegte und
+endet mit dem Strom. Jedes andere Senden schickt das Abgelegte vor seinen
+Rahmen, damit eine Größe nie hinter eine spätere Eingabe fällt (der
+KVM-Test „GOT hello SIZE 30 100" hängt daran). Ein `C` verwirft eine
+abgelegte Größe derselben Shell. Nach dem Ende des Stroms meldet die Größe
+`BrokenPipe` wie bisher einen Fehler. Kein Warteschlangenwachstum, kein
+`spawn_blocking` im ipc: `TerminalHub::resize` blockiert nicht mehr. Der
+Deskriptor-Modus bleibt unverändert (`tcsetwinsize`). `Door::Stream` trägt
+die Strom-Tür jetzt in einer `Box`: Mit den zusätzlichen Sperren war die
+Variante unter macOS zu groß (`clippy::large_enum_variant`). Tests: Während ein
+anderer Schreiber den Strom hält, kehren zwei Größen des Agenten, die
+Größe einer Shell und ihr Fallen in unter 500 ms zurück, danach gehen nur
+die letzte Größe des Agenten und das `C` der Shell hinaus; eine abgelegte
+Größe geht vor der Eingabe danach hinaus, auch ohne den Faden; nach dem
+Ende des Stroms scheitert die Größe. Mutationsbeweise: Größe direkt
+gesendet (rot nach 10 s), `C` im `drop` direkt gesendet (rot), kein
+Mitnehmen des Abgelegten beim Senden (rot). Review: Das Ende des Lesers
+läuft in einem Drop-Wächter (`ReaderEnd`), also auch, wenn der Leser
+abbricht (etwa eine Panik in der Ausgabe des Agenten); dann geht der Strom
+zusätzlich ganz zu, damit der Shim das Ende sieht, und der Faden des
+Abgelegten schläft nicht für immer. Der Faden sendet nur, was er selbst
+nimmt: Hat ein anderes Senden das Abgelegte schon mitgenommen, schreibt er
+nichts, und läuft seine Frist auf den Turn ab, während nichts mehr liegt,
+schließt er den Strom nicht. Tests dazu: Der Faden endet mit dem Strom und
+lässt die Tür los (ohne das Ende in seiner Warteschleife rot); ein Leser,
+dessen Ausgabe in Panik gerät, beendet den Strom trotzdem, die Größe meldet
+`BrokenPipe`, der Shim liest das Ende (ohne das Ende beim Abbruch rot).
+Offen: ein Test über die
+Laufzeit selbst (tokio, Zeitgeber) bräuchte eine Sandbox mit angehaltenem
+Shim; die Zeitschranke im Unit-Test belegt dieselbe Eigenschaft für jeden
+Aufrufer.
+
 
 ---
 
