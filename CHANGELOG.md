@@ -17,6 +17,54 @@ section here and list their commits instead.
 
 ## [Unreleased]
 
+## [0.2.0] - 2026-11-15
+
+Two more sandbox backends on Linux, each chosen by a person and never by
+`auto`, which stays bubblewrap.
+
+### Added
+
+- The kernel level: `sandbox.backend = "qemu"` or `--backend qemu` runs the
+  agent in a QEMU micro VM with a guest kernel of its own, from Debian
+  packages only (`qemu-system-x86`, `virtiofsd`, `vhost-device-vsock`, which
+  the packages suggest). The three guarantees are held on the host and stay
+  intact with root in the guest: one vsock door to the proxy, no network
+  device, the checked project folder pinned by descriptor. A host check
+  inspects every process, descriptor, socket and share of the session's unit
+  before the agent starts; the unit has fixed limits for descriptors, memory
+  and tasks. Disposable sessions work in the guest. It is the only backend
+  that meets `sandbox.min_isolation = "kernel"`. Admitted after the escape
+  suite with root in the guest was green on `main` in ten consecutive CI runs
+  with KVM; see `docs/SECURITY.md`, section 14.
+- Podman as a second backend at the plain level (rootless, `crun`), started
+  through the user's service manager, optionally from an image pinned by
+  digest (`humanitl sandbox image pull`, cancellable, credentials only from a
+  file of the adapter).
+- `sandbox.backend` and `sandbox.min_isolation` (`policy`, `namespaces`,
+  `kernel`): the strictest floor over all layers wins, a chosen backend never
+  falls back to another one.
+- `humanitl sandbox backends` lists each backend with its isolation level and
+  availability; the app chooses the backend in the settings and per start,
+  with its level and the reason when it cannot run.
+- `humanitl doctor` has lines per backend, one line per missing prerequisite,
+  and an opt-in probe start (`--probe`).
+
+### Changed
+
+- The shim compares the mount table and the checked folders with the plan
+  before the agent starts, under every backend.
+- `sandbox argv` and `-v` withhold hidden values unless asked.
+- A disposable sandbox is refused, and `auto` runs direct, when the project
+  folder folds names by case (casefold, vfat, exFAT, HFS, cifs), so a masked
+  path cannot be reached under another spelling.
+- The earlier Podman runtime `krun` is gone; a configuration that names it is
+  refused when it loads (`CONFIG_023`).
+
+### Fixed
+
+- Podman hides the host's `/sys` and ignores the user's `mounts.conf`, like
+  bubblewrap; a container whose client ends without a stop is removed at once.
+
 ## [0.1.0] - 2026-11-11
 
 The first release. Compared with the 0.0.x pre-releases, from the first public one, 0.0.1, to the
