@@ -61,7 +61,11 @@ pub async fn pull(ctx: &Context, reference: Option<&str>, yes: bool) -> Result<u
     let shown = reference.map_or_else(|| "the configured image".to_owned(), str::to_owned);
     eprintln!("{NETWORK_NOTE}");
     if !yes {
-        confirm(ctx, &format!("Pull {shown}?"))?;
+        confirm(
+            ctx,
+            &format!("Pull {shown}?"),
+            &pull_command(reference, backend.as_deref()),
+        )?;
     }
     let mut client = ctx.connect().await?;
     let info = client
@@ -305,8 +309,25 @@ async fn cancel(
     ))
 }
 
-/// Fragt auf dem Terminal nach; ohne Terminal ist `--yes` nötig.
-fn confirm(ctx: &Context, question: &str) -> Result<(), Failure> {
+/// Der Befehl, der dieses Ziehen wiederholt, mit der Referenz und dem
+/// Backend, die der Mensch nannte (HUM-505); ohne sie zöge ein kopierter Fix
+/// das eingestellte Abbild statt des gemeinten.
+fn pull_command(reference: Option<&str>, backend: Option<&str>) -> String {
+    let mut command = "humanitl sandbox image pull".to_owned();
+    if let Some(backend) = backend {
+        command.push_str(" --backend ");
+        command.push_str(&crate::render::shell_word(backend));
+    }
+    if let Some(reference) = reference {
+        command.push(' ');
+        command.push_str(&crate::render::shell_word(reference));
+    }
+    command
+}
+
+/// Fragt auf dem Terminal nach; ohne Terminal ist `--yes` nötig. Der Fix
+/// nennt `command`, ohne Terminal mit `--yes`.
+fn confirm(ctx: &Context, question: &str, command: &str) -> Result<(), Failure> {
     let stdin = std::io::stdin();
     if ctx.render.is_json() || !stdin.is_terminal() {
         return Err(Failure::new(
@@ -315,9 +336,7 @@ fn confirm(ctx: &Context, question: &str) -> Result<(), Failure> {
                     "pulling uses the network directly, not through the proxy, so it asks \
                      first, and there is no terminal to ask on",
                 )
-                .fix(FixAction::CopyCommand(
-                    "humanitl sandbox image pull --yes".to_owned(),
-                ))
+                .fix(FixAction::CopyCommand(with_yes(command)))
                 .build(),
         ));
     }
@@ -332,12 +351,19 @@ fn confirm(ctx: &Context, question: &str) -> Result<(), Failure> {
         Err(Failure::new(
             Diagnostic::builder(codes::CLI_004, Severity::Info)
                 .why("nothing was pulled; the answer was not yes")
-                .fix(FixAction::CopyCommand(
-                    "humanitl sandbox image pull".to_owned(),
-                ))
+                .fix(FixAction::CopyCommand(command.to_owned()))
                 .build(),
         ))
     }
+}
+
+/// `command` mit `--yes` gleich nach `pull`, vor den Argumenten.
+fn with_yes(command: &str) -> String {
+    command.replacen(
+        "humanitl sandbox image pull",
+        "humanitl sandbox image pull --yes",
+        1,
+    )
 }
 
 #[cfg(test)]
@@ -345,6 +371,23 @@ mod tests {
     #![allow(clippy::expect_used)]
 
     use super::*;
+
+    /// Der Fix nennt die Referenz und das Backend, die der Mensch nannte,
+    /// und `--yes` steht vor ihnen (HUM-505). Mutationsbeweis: der feste
+    /// Befehl von früher fällt durch.
+    #[test]
+    fn the_fix_repeats_the_reference_and_the_backend() {
+        let reference = "docker.io/library/debian@sha256:abc";
+        assert_eq!(
+            with_yes(&pull_command(Some(reference), Some("x"))),
+            format!("humanitl sandbox image pull --yes --backend x {reference}")
+        );
+        assert_eq!(pull_command(None, None), "humanitl sandbox image pull");
+        assert_eq!(
+            pull_command(Some("a b"), None),
+            "humanitl sandbox image pull 'a b'"
+        );
+    }
 
     /// Der Satz vor dem Ziehen sagt, dass das Netz nicht durch den Proxy geht
     /// (HUM-439, Spezifikation 2).
