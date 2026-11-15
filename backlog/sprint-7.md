@@ -2815,6 +2815,13 @@ Aus dem Ultra-Review. Ohne Terminal oder mit `--json` schlägt `confirm()` in `c
 ### Akzeptanzkriterien
 1. Der vorgeschlagene Befehl zieht das Image, das gemeint war.
 
+### Stand nach der Umsetzung (2026-11-15)
+`confirm` bekommt den Befehl, der das Ziehen wiederholt (`pull_command`):
+mit `--backend`, wenn eines gewählt ist, und der genannten Referenz, beide
+als Shell-Wort; ohne Terminal steht `--yes` gleich nach `pull`. Test
+`the_fix_repeats_the_reference_and_the_backend`; Mutation mit dem festen
+Befehl: rot.
+
 
 ---
 

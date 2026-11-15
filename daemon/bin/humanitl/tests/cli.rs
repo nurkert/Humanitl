@@ -6546,3 +6546,31 @@ fn a_podman_runtime_without_podman_refuses_instead_of_starting_another_level() {
         stderr(&output)
     );
 }
+
+/// Ohne Terminal fragt `sandbox image pull` nicht und schlägt einen Befehl
+/// vor, der genau dieses Ziehen wiederholt: mit `--yes`, dem Backend und
+/// der Referenz, die der Mensch nannte (HUM-505). Mutationsbeweis: der
+/// feste Befehl von früher nennt die Referenz nicht.
+#[test]
+fn a_pull_without_a_terminal_proposes_the_same_pull_with_yes() {
+    let harness = Harness::new();
+    let reference = format!("docker.io/library/debian@sha256:{}", "a".repeat(64));
+    let output = harness.run([
+        "--json",
+        "sandbox",
+        "image",
+        "pull",
+        "--backend",
+        "auto",
+        reference.as_str(),
+    ]);
+    let text = stdout(&output);
+    let value: serde_json::Value = serde_json::from_str(text.trim()).expect("one JSON value");
+    assert_eq!(value["code"], "CLI_004", "{text}");
+    assert!(
+        text.contains(&format!(
+            "humanitl sandbox image pull --yes --backend auto {reference}"
+        )),
+        "{text}"
+    );
+}
