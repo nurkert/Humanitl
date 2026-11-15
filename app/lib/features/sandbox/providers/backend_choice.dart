@@ -41,16 +41,19 @@ String _setting(ConfigValues config) {
 /// Whether [list] lets a person choose [backend] now: `auto` when the entry
 /// behind it is available ([SandboxBackendList.autoAvailable]), any other
 /// name when the daemon lists it as admitted and available. Without a list
-/// nothing is known, and the choice stands.
+/// nothing is known, and the choice stands; the same holds for a backend the
+/// daemon is still checking (HUM-502), so a choice does not flip to the
+/// setting and back while one search runs.
 bool _choosable(String backend, SandboxBackendList? list) {
   if (list == null) {
     return true;
   }
   if (backend == FormKeys.sandboxBackendAuto) {
-    return list.autoAvailable;
+    return list.autoAvailable || (list.autoEntry?.undecided ?? false);
   }
   return list.offered.any(
-    (SandboxBackendInfo entry) => entry.name == backend && entry.available,
+    (SandboxBackendInfo entry) =>
+        entry.name == backend && (entry.available || entry.undecided),
   );
 }
 

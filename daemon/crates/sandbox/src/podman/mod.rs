@@ -895,6 +895,68 @@ pub(crate) fn static_lines(
     ]
 }
 
+/// `CONFIG_003`, wenn `name` dieses Backend ist und die gesetzten Werte von
+/// `sandbox.podman.memory_mib` und `sandbox.podman.cpus` über `host` liegen
+/// (HUM-502): dieselbe Ablehnung wie im Plan ([`Settings::within_host`]),
+/// schon in der Liste der Backends. Für jedes andere Backend keine.
+pub(crate) fn beyond_host(
+    name: &str,
+    sandbox: &humanitl_config::SandboxRef,
+    host: HostResources,
+) -> Option<Diagnostic> {
+    if name != PODMAN_BACKEND {
+        return None;
+    }
+    humanitl_config::resources_within_host(
+        CONFIG_GROUP,
+        sandbox.podman.memory_mib,
+        sandbox.podman.cpus,
+        host,
+    )
+    .err()
+}
+
+/// Die Dateien, von denen [`PodmanBackend::detect`] abhängt (HUM-502), wenn
+/// `name` dieses Backend ist: das Programm (gesetzt oder jeder Ort im
+/// `PATH`), die Programme des Dienstverwalters, `newuidmap`, `newgidmap` und
+/// die Listen der untergeordneten IDs. Ändert sich eine davon, gilt ein
+/// gemerktes Ergebnis der Suche nicht mehr.
+pub(crate) fn search_files(
+    name: &str,
+    paths: &Paths,
+    sandbox: &humanitl_config::SandboxRef,
+) -> Option<Vec<PathBuf>> {
+    if name != PODMAN_BACKEND {
+        return None;
+    }
+    let candidates = |program: &str| crate::backend_search::path_candidates(paths.env(), program);
+    let mut files = sandbox
+        .podman
+        .program
+        .clone()
+        .map_or_else(|| candidates(PROGRAM), |program| vec![program]);
+    for program in [
+        crate::user_unit::RUN_PROGRAM,
+        crate::user_unit::CTL_PROGRAM,
+        "newuidmap",
+        "newgidmap",
+    ] {
+        files.extend(candidates(program));
+    }
+    // Die Suche findet `newuidmap` und `newgidmap` auch unter `/usr/bin`,
+    // wenn der `PATH` es nicht nennt (`detect::missing_id_tools`).
+    files.extend(
+        [
+            "/usr/bin/newuidmap",
+            "/usr/bin/newgidmap",
+            "/etc/subuid",
+            "/etc/subgid",
+        ]
+        .map(PathBuf::from),
+    );
+    Some(files)
+}
+
 /// `SANDBOX_030`: Unter Podman gibt es keine Wegwerf-Sandbox, weil sich ihre
 /// untere Schicht nicht an den geprüften Ordner binden lässt (HUM-438,
 /// Modulbeschreibung).
@@ -1767,3 +1829,6 @@ mod tests;
 
 #[cfg(all(test, target_os = "linux"))]
 mod doctor_tests;
+
+#[cfg(all(test, target_os = "linux"))]
+mod search_tests;

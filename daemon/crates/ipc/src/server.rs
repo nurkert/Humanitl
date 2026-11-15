@@ -32,7 +32,7 @@ use std::os::unix::fs::PermissionsExt as _;
 use std::path::Path;
 use std::pin::Pin;
 use std::sync::Arc;
-use std::time::Duration;
+use std::time::{Duration, Instant};
 
 use base64::Engine as _;
 use bytes::Bytes;
@@ -157,6 +157,11 @@ pub struct IpcServer {
     audit_log: Option<AuditService>,
     /// Woraus `Doctor` seinen Bericht baut (HUM-075).
     doctor: DoctorSetup,
+    /// Das Gedächtnis der Suche der Sandbox-Backends, geteilt von `Doctor`
+    /// und `SandboxBackends` (HUM-502): Die Backends suchen nebeneinander,
+    /// ein Ergebnis gilt kurz, und eine Suche, die über die Frist des
+    /// Aufrufers hinaus läuft, endet im Hintergrund für die nächste Antwort.
+    searches: humanitl_sandbox::BackendSearches,
     bodies: BodyIndex,
     /// Wo der Zugangsschlüssel des Modells liegt (HUM-140). `None` heißt:
     /// der Speicher der Pfade dieses Dienstes ([`KeyStore::for_paths`]);
@@ -332,6 +337,7 @@ impl IpcServer {
                 llm_endpoint: config.llm.endpoint.as_ref().map(ToString::to_string),
                 load_diagnostics: Vec::new(),
             },
+            searches: humanitl_sandbox::BackendSearches::new(),
             bodies: BodyIndex::new(),
             keys: None,
             intercept: None,
@@ -1991,12 +1997,22 @@ impl v1::humanitl_server::Humanitl for IpcServer {
     /// Die Prüfungen lesen Dateien und starten kurze Programme; das läuft in
     /// [`tokio::task::spawn_blocking`], damit eine hängende Probe die Laufzeit
     /// nicht anhält.
+    ///
+    /// Die Backends suchen nebeneinander, neben den Zeilen der Maschine, und
+    /// über das Gedächtnis des Daemons (HUM-502,
+    /// [`humanitl_sandbox::BackendSearches`]). Nennt der Aufrufer eine Frist
+    /// (`grpc-timeout`, die App immer), antwortet der Daemon in ihr: Eine
+    /// Suche, die dann noch läuft, steht als Zeile `available` ohne Messung
+    /// da, und die übrigen Gruppen sind vollständig (Modul `deadline`).
+    /// Ohne Frist, wie aus der Kommandozeile, wartet er auf jede Suche.
     async fn doctor(
         &self,
         request: Request<v1::DoctorRequest>,
     ) -> Result<Response<v1::DoctorReport>, Status> {
+        let deadline = crate::deadline::search_deadline(request.metadata(), Instant::now());
         let probe = request.into_inner().probe;
         let setup = self.doctor.clone();
+        let searches = self.searches.clone();
         let socket = setup.paths.daemon_socket();
         let daemon = humanitl_sandbox::doctor::DaemonFacts::NotTried {
             socket,
@@ -2006,33 +2022,47 @@ impl v1::humanitl_server::Humanitl for IpcServer {
         };
         let report = tokio::task::spawn_blocking(move || {
             let setup = setup.refreshed();
-            let llm = setup.llm_facts();
-            let machine = DoctorProbe::new(setup.paths.env())
-                .with_agent(setup.adapter.clone(), setup.agent_command.clone());
-            let mut report = convert::doctor_report_to_proto(&humanitl_sandbox::doctor::run(
-                &machine.collect(daemon, llm),
-            ));
-            if let Ok(resolved) = humanitl_config::resolve(
+            let sandbox = humanitl_config::resolve(
                 &humanitl_config::ProfileSelection::default(),
                 None,
                 setup.paths.env(),
                 &[],
-            ) {
-                let mode = if probe {
-                    humanitl_sandbox::doctor::ProbeMode::Start {
-                        shim: humanitl_sandbox::doctor::locate_shim(),
-                    }
-                } else {
-                    humanitl_sandbox::doctor::ProbeMode::Cached
-                };
-                report.backends =
-                    convert::doctor_backends_to_proto(&humanitl_sandbox::doctor::backend_groups(
-                        &resolved.config.sandbox,
-                        &setup.paths,
-                        &mode,
-                    ));
-            }
-            report
+            )
+            .ok()
+            .map(|resolved| resolved.config.sandbox);
+            let mode = if probe {
+                humanitl_sandbox::doctor::ProbeMode::Start {
+                    shim: humanitl_sandbox::doctor::locate_shim(),
+                }
+            } else {
+                humanitl_sandbox::doctor::ProbeMode::Cached
+            };
+            // Die Backends suchen, während die Zeilen der Maschine gelesen
+            // werden (HUM-502): Beides zusammen bleibt so unter der Frist
+            // des Aufrufers, nicht unter der Summe.
+            std::thread::scope(|scope| {
+                let groups = scope.spawn(|| {
+                    sandbox.as_ref().map(|sandbox| {
+                        humanitl_sandbox::doctor::backend_groups_within(
+                            sandbox,
+                            &setup.paths,
+                            &mode,
+                            &searches,
+                            deadline,
+                        )
+                    })
+                });
+                let llm = setup.llm_facts();
+                let machine = DoctorProbe::new(setup.paths.env())
+                    .with_agent(setup.adapter.clone(), setup.agent_command.clone());
+                let mut report = convert::doctor_report_to_proto(&humanitl_sandbox::doctor::run(
+                    &machine.collect(daemon, llm),
+                ));
+                if let Ok(Some(groups)) = groups.join() {
+                    report.backends = convert::doctor_backends_to_proto(&groups);
+                }
+                report
+            })
         })
         .await
         .map_err(|error| Status::internal(format!("the doctor did not finish: {error}")))?;
@@ -2231,12 +2261,19 @@ impl v1::humanitl_server::Humanitl for IpcServer {
     /// [`tokio::task::spawn_blocking`], weil die Suche kurze Programme
     /// startet. Die Antwort braucht keine laufende Sandbox: Welche Backends
     /// es gibt, ist eine Tatsache des Systems.
+    ///
+    /// Die Suche teilt das Gedächtnis mit `Doctor` und hält die Frist des
+    /// Aufrufers wie dort (HUM-502): Ein Backend, dessen Suche noch läuft,
+    /// steht als nicht verfügbar mit `DOCTOR_012` („still being checked")
+    /// da, die übrigen vollständig.
     async fn sandbox_backends(
         &self,
         request: Request<v1::SandboxBackendsRequest>,
     ) -> Result<Response<v1::SandboxBackendList>, Status> {
+        let deadline = crate::deadline::search_deadline(request.metadata(), Instant::now());
         let paths = self.doctor.paths.clone();
         let service = self.sandbox.clone();
+        let searches = self.searches.clone();
         let plan = request.into_inner().plan;
         let list = tokio::task::spawn_blocking(move || {
             let (sandbox, profile_backend) = match (plan, service.as_ref()) {
@@ -2261,7 +2298,13 @@ impl v1::humanitl_server::Humanitl for IpcServer {
                 }
             };
             Ok::<_, Diagnostic>(convert::backend_list_to_proto(
-                &humanitl_sandbox::list_backends(&sandbox, &profile_backend, &paths),
+                &humanitl_sandbox::list_backends_within(
+                    &sandbox,
+                    &profile_backend,
+                    &paths,
+                    &searches,
+                    deadline,
+                ),
                 humanitl_sandbox::IsolationLevel::from(sandbox.min_isolation),
             ))
         })

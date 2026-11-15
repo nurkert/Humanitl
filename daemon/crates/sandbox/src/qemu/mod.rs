@@ -88,7 +88,6 @@ use crate::launcher::{
 use crate::profile::{MountPolicy, SandboxProfile, SessionContext};
 use crate::user_unit::{UnitName, UserUnits};
 
-use prerequisites::missing_prerequisite;
 use prerequisites::{Prerequisite, Resolved};
 
 use limits::UnitLimits;
@@ -189,12 +188,7 @@ impl VmBackend {
     /// `CONFIG_003` mit dem Schlüssel, dem Wert und dem größten Wert, den
     /// dieser Host annimmt.
     fn within_host(&self, host: HostResources) -> Result<(), Diagnostic> {
-        humanitl_config::resources_within_host(
-            CONFIG_GROUP,
-            self.config.memory_mib,
-            self.config.cpus,
-            host,
-        )
+        config_within_host(&self.config, host)
     }
 
     /// vCPU und Speicher aus `sandbox.qemu`, sonst vom Host abgeleitet: die
@@ -1607,9 +1601,34 @@ pub(crate) fn detect(paths: Paths, sandbox: &SandboxRef) -> Result<VmBackend, Di
     VmBackend::detect(paths, &sandbox.qemu)
 }
 
-/// Die erste fehlende Voraussetzung für die Gruppe `sandbox`.
-pub(crate) fn missing(paths: &Paths, sandbox: &SandboxRef) -> Option<Diagnostic> {
-    missing_prerequisite(paths, &sandbox.qemu)
+/// Die gesetzten vCPU und der gesetzte Speicher der Gruppe gegen `host`
+/// (HUM-501), für den Plan und die Liste der Backends.
+fn config_within_host(config: &QemuConfig, host: HostResources) -> Result<(), Diagnostic> {
+    humanitl_config::resources_within_host(CONFIG_GROUP, config.memory_mib, config.cpus, host)
+}
+
+/// `CONFIG_003`, wenn `name` dieses Backend ist und seine gesetzten Werte
+/// über `host` liegen (HUM-502): dieselbe Ablehnung wie im Plan, schon in der
+/// Liste der Backends. Für jedes andere Backend keine.
+pub(crate) fn beyond_host(
+    name: &str,
+    sandbox: &SandboxRef,
+    host: HostResources,
+) -> Option<Diagnostic> {
+    (name == crate::backend::VM_BACKEND)
+        .then(|| config_within_host(&sandbox.qemu, host).err())
+        .flatten()
+}
+
+/// Die Dateien, von denen die Suche dieses Backends abhängt (HUM-502), wenn
+/// `name` dieses Backend ist ([`prerequisites::search_files`]).
+pub(crate) fn search_files(
+    name: &str,
+    paths: &Paths,
+    sandbox: &SandboxRef,
+) -> Option<Vec<PathBuf>> {
+    (name == crate::backend::VM_BACKEND)
+        .then(|| prerequisites::search_files(paths.env(), &sandbox.qemu))
 }
 
 /// Die Zeilen des Doctors für die Kernel-Stufe vor ihrer Zulassung (HUM-444):

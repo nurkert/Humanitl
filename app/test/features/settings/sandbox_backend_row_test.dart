@@ -10,6 +10,7 @@ import 'package:flutter/widgets.dart';
 import 'package:flutter_test/flutter_test.dart';
 import 'package:humanitl/core/domain/domain.dart';
 import 'package:humanitl/core/ipc/fake_daemon_client.dart';
+import 'package:humanitl/core/ipc/sandbox_backends_feed.dart';
 import 'package:humanitl/core/ui/ui.dart';
 import 'package:humanitl/features/settings/registry/setting_entry.dart';
 
@@ -276,5 +277,61 @@ void main() {
       textOf(tester, 'settings-sandbox-backend-failed'),
       contains('does not know SandboxBackends'),
     );
+  }, variant: TargetPlatformVariant.only(TargetPlatform.linux));
+
+  // HUM-502: Eine Suche, die der Daemon in der Frist der App nicht beendet
+  // hat, kommt als `DOCTOR_012`. Die Zeile sagt „wird noch geprüft“ statt
+  // eines Grundes, das Backend ist noch nicht wählbar, und die Liste fragt
+  // nach kurzer Zeit von selbst wieder. Mutationsbeweis: ohne das erneute
+  // Fragen bleibt die Zeile stehen; ohne [SandboxBackendInfo.checking] steht
+  // der allgemeine Satz von `DOCTOR_012` da.
+  testWidgets('a backend the daemon is still checking says so and the list '
+      'asks again by itself', (WidgetTester tester) async {
+    final FakeDaemonClient client = clientWith(
+      container: const SandboxBackendInfo(
+        name: 'container',
+        isolation: IsolationLevel.namespaces,
+        diagnostics: <Diagnostic>[
+          Diagnostic(
+            code: DiagnosticCodes.doctorNotPerformed,
+            severity: Severity.warning,
+            why:
+                'still being checked: the search for the backend container '
+                'has run for 3500 ms, longer than this answer waits',
+            fix: FixAction.copyCommand(command: 'humanitl sandbox backends'),
+          ),
+        ],
+      ),
+    );
+    await openSettings(tester, client);
+
+    expect(
+      textOf(tester, 'settings-sandbox-backend-checking-container'),
+      'Still being checked …',
+    );
+    expect(
+      find.byKey(const Key('settings-sandbox-backend-reason-container')),
+      findsNothing,
+    );
+    expect(segment(tester, 'container').enabled, isFalse);
+
+    final int asked = client.sandboxBackendsCalls;
+    client.sandboxBackendList = SandboxBackendList(
+      minIsolation: IsolationLevel.policy,
+      autoBackend: DoctorCheckId.sandboxTool,
+      backends: <SandboxBackendInfo>[
+        FakeSandboxBackends.defaultSandboxBackends.backends.first,
+        availableContainer,
+      ],
+    );
+    await tester.pump(sandboxBackendsCheckingRetry);
+    await tester.pumpAndSettle();
+
+    expect(client.sandboxBackendsCalls, greaterThan(asked));
+    expect(
+      find.byKey(const Key('settings-sandbox-backend-checking-container')),
+      findsNothing,
+    );
+    expect(segment(tester, 'container').enabled, isTrue);
   }, variant: TargetPlatformVariant.only(TargetPlatform.linux));
 }

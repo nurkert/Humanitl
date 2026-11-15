@@ -27,7 +27,7 @@ use std::process::{Command, Stdio};
 use std::sync::mpsc;
 use std::time::{Duration, Instant};
 
-use humanitl_config::{Env, Paths, QemuConfig};
+use humanitl_config::{Env, QemuConfig};
 use humanitl_core::diagnostics::codes::SANDBOX_045;
 use humanitl_core::{Diagnostic, FixAction, Severity};
 
@@ -212,13 +212,45 @@ const BUBBLEWRAP: Program = Program {
     }],
 };
 
-/// Die erste fehlende Voraussetzung der Kernel-Stufe auf diesem Rechner als
-/// `SANDBOX_045`, oder keine.
-///
-/// `paths` liefert den `PATH` des Daemons, `config` die Gruppe
-/// `sandbox.qemu` mit den Pfaden, die die Suche ersetzen.
-pub(crate) fn missing_prerequisite(paths: &Paths, config: &QemuConfig) -> Option<Diagnostic> {
-    resolve(paths.env(), config).err()
+/// Die Dateien, von denen die Prüfung abhängt (HUM-502): je Programm der
+/// gesetzte Pfad oder jeder Ort im `PATH` (und unter `libexec`), an dem es
+/// liegen könnte, dazu `/dev/kvm`, das Kernel-Abbild samt seiner
+/// Konfiguration und das Verzeichnis der Module. Ändert sich eine davon,
+/// gilt ein gemerktes Ergebnis nicht mehr.
+pub(crate) fn search_files(env: &Env, config: &QemuConfig) -> Vec<PathBuf> {
+    let host = Host::system();
+    let mut files = vec![host.kvm.clone()];
+    for (program, configured) in [
+        (&EMULATOR, config.qemu.as_deref()),
+        (&FILE_DAEMON, config.virtiofsd.as_deref()),
+        (&VSOCK_DEVICE, config.vhost_device_vsock.as_deref()),
+        (&BUBBLEWRAP, None),
+    ] {
+        if let Some(path) = configured {
+            files.push(path.to_path_buf());
+            continue;
+        }
+        files.extend(crate::backend_search::path_candidates(env, program.name));
+        if program.in_libexec {
+            files.push(host.libexec.join(program.name));
+        }
+    }
+    let image = config.kernel.clone().or_else(|| {
+        host.release
+            .as_ref()
+            .map(|release| host.boot.join(format!("vmlinuz-{release}")))
+    });
+    if let Some(image) = image {
+        files.extend(config_beside(&image));
+        files.push(image);
+    }
+    let modules = config.modules.clone().or_else(|| {
+        host.release
+            .as_ref()
+            .map(|release| host.modules_root.join(release))
+    });
+    files.extend(modules);
+    files
 }
 
 /// Was die Prüfung gefunden hat: je Voraussetzung der Pfad, den ein Start

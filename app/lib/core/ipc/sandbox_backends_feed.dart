@@ -7,6 +7,8 @@
 /// of its own (ADR-018).
 library;
 
+import 'dart:async';
+
 import 'package:riverpod_annotation/riverpod_annotation.dart';
 
 import '../domain/domain.dart';
@@ -29,10 +31,27 @@ part 'sandbox_backends_feed.g.dart';
 /// whether one lies below `sandbox.min_isolation` of the project, follow
 /// from there. A daemon before contract 1.34 does not know the call; the
 /// provider then holds its error, and the surfaces offer no choice.
+///
+/// A list in which the daemon was still checking a backend (HUM-502,
+/// [SandboxBackendList.checking]) is asked again after
+/// [sandboxBackendsCheckingRetry]; until then, and while the new answer is
+/// on its way, the surfaces keep showing this one.
 @Riverpod(keepAlive: true, retry: noConfigRetry)
-Future<SandboxBackendList> sandboxBackends(Ref ref, String? backend) {
+Future<SandboxBackendList> sandboxBackends(Ref ref, String? backend) async {
   ref
     ..watch(linkLiveProvider)
     ..watch(configProvider);
-  return ref.watch(daemonClientProvider).sandboxBackends(backend: backend);
+  final SandboxBackendList list = await ref
+      .watch(daemonClientProvider)
+      .sandboxBackends(backend: backend);
+  if (list.checking && ref.mounted) {
+    final Timer again = Timer(sandboxBackendsCheckingRetry, ref.invalidateSelf);
+    ref.onDispose(again.cancel);
+  }
+  return list;
 }
+
+/// How long the list waits before it asks again while the daemon is still
+/// checking a backend (HUM-502). The daemon keeps searching in between and
+/// answers from its memory, so asking again costs no new search.
+const Duration sandboxBackendsCheckingRetry = Duration(seconds: 2);

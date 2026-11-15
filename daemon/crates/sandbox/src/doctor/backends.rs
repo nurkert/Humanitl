@@ -34,6 +34,7 @@
 
 use std::fmt::Write as _;
 use std::path::PathBuf;
+use std::time::Instant;
 
 use humanitl_config::{Paths, SandboxRef};
 use humanitl_core::diagnostics::codes::{DOCTOR_014, DOCTOR_015};
@@ -43,9 +44,11 @@ use super::probe_cache::{ProbeCache, ProbeKey};
 use super::probe_start::{ProbeOutcome, probe_start};
 use super::{CheckOutcome, DIAGNOSTICS_URL};
 use crate::backend::{
-    Backend, admitted, backend_name, resolve, runtime_of, stage as stage_name, static_checks,
+    Backend, admitted, backend_name, resolve, runtime_of, search_files, stage as stage_name,
+    static_checks,
 };
 use crate::backend_list::LISTED_BACKENDS;
+use crate::backend_search::{BackendSearches, Ticket, Waited, pending_reason, search_key};
 
 /// Die Zeilen in der Gruppe eines Backends.
 ///
@@ -154,17 +157,133 @@ pub enum ProbeMode {
 ///
 /// `sandbox` ist die aufgelöste Gruppe `sandbox` ohne Projekt. Blockiert:
 /// Die Suche startet kurze Programme, und [`ProbeMode::Start`] startet je
-/// zugelassenem Backend eine Sandbox.
+/// zugelassenem Backend eine Sandbox. Wartet auf jede Suche; die Backends
+/// suchen nebeneinander ([`backend_groups_within`]).
 #[must_use]
 pub fn backend_groups(sandbox: &SandboxRef, paths: &Paths, mode: &ProbeMode) -> Vec<BackendGroup> {
+    backend_groups_within(sandbox, paths, mode, &BackendSearches::new(), None)
+}
+
+/// Wie [`backend_groups`], mit dem Gedächtnis `searches` und bis `deadline`
+/// (HUM-502).
+///
+/// Jedes Backend sucht in einem eigenen Thread, oder die Antwort nimmt eine
+/// Suche aus `searches`, die läuft oder noch gilt
+/// ([`crate::backend_search`]). Läuft die Suche eines Backends bei
+/// `deadline` noch, besteht seine Gruppe aus `admitted` und einer Zeile
+/// `available` ohne Messung (`warn`, `DOCTOR_012`, „still being checked"),
+/// auch unter dem gewählten Backend; die übrigen Gruppen sind vollständig.
+/// Die Frist gilt der Suche: Einen Probestart auf Wunsch macht die Antwort
+/// danach ganz, wie bisher.
+/// Mit [`ProbeMode::Start`] nimmt sie keine gemerkte Suche, sondern sucht
+/// neu.
+#[must_use]
+pub fn backend_groups_within(
+    sandbox: &SandboxRef,
+    paths: &Paths,
+    mode: &ProbeMode,
+    searches: &BackendSearches,
+    deadline: Option<Instant>,
+) -> Vec<BackendGroup> {
     let cache = ProbeCache::of(paths);
-    LISTED_BACKENDS
+    // Ein Probestart ist ein ausdrücklicher Wunsch: Er nimmt keine gemerkte
+    // Suche, damit eine eben getroffene Abhilfe zählt.
+    if matches!(mode, ProbeMode::Start { .. }) {
+        for &name in LISTED_BACKENDS {
+            searches.invalidate(name, sandbox, paths);
+        }
+    }
+    // Erst jede Suche starten, dann warten: So laufen sie nebeneinander, und
+    // die Frist gilt für alle zusammen.
+    let started: Vec<(&'static str, Ticket<DoctorSearch>)> = LISTED_BACKENDS
         .iter()
-        .map(|&name| group(name, sandbox, paths, mode, &cache))
+        .map(|&name| (name, start_search(name, sandbox, paths, searches)))
+        .collect();
+    started
+        .into_iter()
+        .map(|(name, ticket)| finish_group(name, sandbox, mode, &cache, ticket.wait(deadline)))
         .collect()
 }
 
-/// Die Gruppe eines Backends.
+/// Was die Suche des Doctors über ein Backend ergab; gemerkt in
+/// [`BackendSearches`], ohne den Probestart, den jede Antwort selbst
+/// nachsieht.
+#[derive(Debug, Clone)]
+pub(crate) enum DoctorSearch {
+    /// Die Stufe ist nicht zugelassen: die Ablehnung und die
+    /// Voraussetzungen, die sich ohne Start prüfen lassen.
+    Unadmitted {
+        refused: Diagnostic,
+        statics: Vec<CheckOutcome<BackendCheckId>>,
+    },
+    /// Die Suche vor jedem Start hat dieses Backend gefunden.
+    Found(Backend),
+    /// Die Suche scheiterte; dazu je Voraussetzung eine Zeile (HUM-488).
+    Missing {
+        missing: Diagnostic,
+        statics: Vec<CheckOutcome<BackendCheckId>>,
+    },
+}
+
+/// Startet die Suche des Doctors für dieses Backend über das Gedächtnis,
+/// oder schließt sich der an, die läuft oder gilt. Die Suche vor jedem Start
+/// darin teilt sie mit der Liste der Backends.
+fn start_search(
+    name: &'static str,
+    sandbox: &SandboxRef,
+    paths: &Paths,
+    searches: &BackendSearches,
+) -> Ticket<DoctorSearch> {
+    let (owned_sandbox, owned_paths, detector) = (sandbox.clone(), paths.clone(), searches.clone());
+    searches.doctor.start(
+        search_key(name, sandbox, paths),
+        &search_files(name, sandbox, paths),
+        move || {
+            // Bricht die Suche vor jedem Start ohne Ergebnis ab, endet auch
+            // diese ohne: Die Antwort sagt „wird geprüft", und die nächste
+            // Frage sucht neu, statt 30 s lang einen Befund zu zeigen, den
+            // niemand gemessen hat.
+            let detected = match detector
+                .detect(name, &owned_sandbox, &owned_paths)
+                .wait(None)
+            {
+                Waited::Done(found) => found,
+                Waited::Pending(_) => return None,
+            };
+            Some(search(name, &owned_sandbox, &owned_paths, || detected))
+        },
+    )
+}
+
+/// Die Suche des Doctors: vor der Zulassung nur die Voraussetzungen ohne
+/// Start, danach die Suche vor jedem Start (`detected`), und scheitert sie,
+/// dazu je Voraussetzung eine Zeile.
+fn search(
+    name: &'static str,
+    sandbox: &SandboxRef,
+    paths: &Paths,
+    detected: impl FnOnce() -> Result<Backend, Diagnostic>,
+) -> DoctorSearch {
+    match admitted(name, runtime_of(name, sandbox)) {
+        Err(refused) => DoctorSearch::Unadmitted {
+            refused,
+            statics: static_lines(name, paths, sandbox),
+        },
+        Ok(()) => match detected() {
+            Ok(backend) => DoctorSearch::Found(backend),
+            // Die Suche nennt nur die erste fehlende Voraussetzung; doctor
+            // sagt alles, was fehlt, je Voraussetzung eine Zeile (HUM-488),
+            // wie vor der Zulassung.
+            Err(missing) => DoctorSearch::Missing {
+                missing,
+                statics: static_lines(name, paths, sandbox),
+            },
+        },
+    }
+}
+
+/// Die Gruppe eines Backends, ohne Gedächtnis und ohne Frist.
+#[cfg(test)]
 pub(crate) fn group(
     name: &'static str,
     sandbox: &SandboxRef,
@@ -172,13 +291,34 @@ pub(crate) fn group(
     mode: &ProbeMode,
     cache: &ProbeCache,
 ) -> BackendGroup {
+    let searched = search(name, sandbox, paths, || {
+        crate::backend::detect_in_build(name, paths.clone(), sandbox)
+    });
+    finish_group(name, sandbox, mode, cache, Waited::Done(searched))
+}
+
+/// Die Gruppe eines Backends aus dem, was seine Suche ergab oder dass sie
+/// noch läuft.
+fn finish_group(
+    name: &'static str,
+    sandbox: &SandboxRef,
+    mode: &ProbeMode,
+    cache: &ProbeCache,
+    searched: Waited<DoctorSearch>,
+) -> BackendGroup {
     let runtime = runtime_of(name, sandbox);
     let stage = stage_name(name, runtime).into_owned();
     let selected = resolve(backend_name(sandbox.backend)).ok() == Some(name);
-    let mut checks = admitted(name, runtime).map_or_else(
-        |refused| unadmitted_lines(name, &stage, refused, sandbox, paths, mode),
-        |()| admitted_lines(name, &stage, sandbox, paths, mode, cache),
-    );
+    let mut checks = match searched {
+        Waited::Done(DoctorSearch::Unadmitted { refused, statics }) => {
+            unadmitted_lines(&stage, refused, statics, mode)
+        }
+        Waited::Done(DoctorSearch::Found(backend)) => found_lines(&stage, &backend, mode, cache),
+        Waited::Done(DoctorSearch::Missing { missing, statics }) => {
+            missing_lines(&stage, &missing, statics, mode)
+        }
+        Waited::Pending(running) => pending_lines(name, &stage, admitted(name, runtime), running),
+    };
     if !selected {
         checks = checks.into_iter().map(CheckOutcome::at_most_warn).collect();
     }
@@ -190,15 +330,43 @@ pub(crate) fn group(
     }
 }
 
+/// Die Zeilen eines Backends, dessen Suche bei Ablauf der Frist noch läuft:
+/// die Zulassung, die nichts kostet, und `available` ohne Messung mit dem
+/// Befehl, der ohne Frist auf das Ergebnis wartet. Nie `fail`: Nachgesehen
+/// hat noch niemand.
+fn pending_lines(
+    name: &'static str,
+    stage: &str,
+    admission: Result<(), Diagnostic>,
+    running: std::time::Duration,
+) -> Vec<CheckOutcome<BackendCheckId>> {
+    let admission = admission.map_or_else(
+        |refused| {
+            CheckOutcome::warn(
+                BackendCheckId::Admitted,
+                format!("{stage} is not admitted yet"),
+                refused,
+            )
+        },
+        |()| CheckOutcome::ok(BackendCheckId::Admitted, format!("{stage} is admitted")),
+    );
+    vec![
+        admission,
+        CheckOutcome::unmeasured(
+            BackendCheckId::Available,
+            pending_reason(name, running),
+            &["humanitl", "doctor"],
+        ),
+    ]
+}
+
 /// Die Zeilen einer Stufe, die nicht zugelassen ist: `SANDBOX_048`, die
 /// Voraussetzungen ohne Start, und mit [`ProbeMode::Start`] eine Zeile
 /// `probe`, die sagt, dass nichts startete.
 fn unadmitted_lines(
-    name: &'static str,
     stage: &str,
     refused: Diagnostic,
-    sandbox: &SandboxRef,
-    paths: &Paths,
+    statics: Vec<CheckOutcome<BackendCheckId>>,
     mode: &ProbeMode,
 ) -> Vec<CheckOutcome<BackendCheckId>> {
     let mut checks = vec![CheckOutcome::warn(
@@ -206,7 +374,7 @@ fn unadmitted_lines(
         format!("{stage} is not admitted yet"),
         refused.clone(),
     )];
-    checks.extend(static_lines(name, paths, sandbox));
+    checks.extend(statics);
     if matches!(mode, ProbeMode::Start { .. }) {
         checks.push(CheckOutcome::warn(
             BackendCheckId::Probe,
@@ -232,50 +400,52 @@ fn static_lines(
         .collect()
 }
 
-/// Die Zeilen einer zugelassenen Stufe: die Suche vor jedem Start und der
-/// Probestart, gespeichert oder auf Wunsch neu; scheitert die Suche, dazu je
-/// Voraussetzung eine Zeile.
-fn admitted_lines(
-    name: &'static str,
+/// Die Zeilen einer zugelassenen Stufe, deren Suche bestand: die Suche samt
+/// Programm und Fassung und der Probestart, gespeichert oder auf Wunsch neu.
+fn found_lines(
     stage: &str,
-    sandbox: &SandboxRef,
-    paths: &Paths,
+    backend: &Backend,
     mode: &ProbeMode,
     cache: &ProbeCache,
 ) -> Vec<CheckOutcome<BackendCheckId>> {
-    let mut checks = vec![CheckOutcome::ok(
-        BackendCheckId::Admitted,
-        format!("{stage} is admitted"),
-    )];
-    match Backend::detect(name, paths.clone(), sandbox) {
-        Ok(backend) => {
-            let key = probe_key(stage, &backend);
-            checks.push(CheckOutcome::ok(
-                BackendCheckId::Available,
-                format!("{} {}", backend.program().display(), key.tool_version)
-                    .trim_end()
-                    .to_owned(),
-            ));
-            checks.extend(probe_line(&backend, &key, mode, cache));
-        }
-        Err(missing) => {
-            checks.push(CheckOutcome::fail(
-                BackendCheckId::Available,
-                format!("not usable: {}", missing.code),
-                missing.clone(),
-            ));
-            // Die Suche nennt nur die erste fehlende Voraussetzung; doctor
-            // sagt alles, was fehlt, je Voraussetzung eine Zeile (HUM-488),
-            // wie vor der Zulassung.
-            checks.extend(static_lines(name, paths, sandbox));
-            if matches!(mode, ProbeMode::Start { .. }) {
-                checks.push(CheckOutcome::unmeasured(
-                    BackendCheckId::Probe,
-                    format!("{stage} is not usable here ({})", missing.code),
-                    &["humanitl", "sandbox", "backends"],
-                ));
-            }
-        }
+    let key = probe_key(stage, backend);
+    let mut checks = vec![
+        CheckOutcome::ok(BackendCheckId::Admitted, format!("{stage} is admitted")),
+        CheckOutcome::ok(
+            BackendCheckId::Available,
+            format!("{} {}", backend.program().display(), key.tool_version)
+                .trim_end()
+                .to_owned(),
+        ),
+    ];
+    checks.extend(probe_line(backend, &key, mode, cache));
+    checks
+}
+
+/// Die Zeilen einer zugelassenen Stufe, deren Suche scheiterte: der Befund
+/// der Suche und je Voraussetzung eine Zeile; der Probestart auf Wunsch
+/// startet nichts.
+fn missing_lines(
+    stage: &str,
+    missing: &Diagnostic,
+    statics: Vec<CheckOutcome<BackendCheckId>>,
+    mode: &ProbeMode,
+) -> Vec<CheckOutcome<BackendCheckId>> {
+    let mut checks = vec![
+        CheckOutcome::ok(BackendCheckId::Admitted, format!("{stage} is admitted")),
+        CheckOutcome::fail(
+            BackendCheckId::Available,
+            format!("not usable: {}", missing.code),
+            missing.clone(),
+        ),
+    ];
+    checks.extend(statics);
+    if matches!(mode, ProbeMode::Start { .. }) {
+        checks.push(CheckOutcome::unmeasured(
+            BackendCheckId::Probe,
+            format!("{stage} is not usable here ({})", missing.code),
+            &["humanitl", "sandbox", "backends"],
+        ));
     }
     checks
 }
@@ -491,10 +661,8 @@ mod tests {
 
         let checks = unadmitted_lines(
             crate::VM_BACKEND,
-            crate::VM_BACKEND,
             refused,
-            &sandbox,
-            &paths,
+            super::static_lines(crate::VM_BACKEND, &paths, &sandbox),
             &mode,
         );
 
@@ -532,6 +700,39 @@ mod tests {
         } else {
             assert!(!calls.exists(), "a process was started");
         }
+    }
+
+    /// HUM-502: Der Doctor merkt sich die Suche, aber ein Probestart auf
+    /// Wunsch sucht neu, damit eine eben getroffene Abhilfe zählt. Jedes
+    /// Programm zählt seinen Aufruf. Mutationsbeweis: ohne das Verwerfen
+    /// bleibt die Zahl der Aufrufe beim Probestart gleich. Nur unter Linux:
+    /// Unter macOS sucht keines der gelisteten Backends ein Programm im
+    /// `PATH` des Tests, es gäbe nichts zu zählen.
+    #[cfg(target_os = "linux")]
+    #[test]
+    fn a_requested_probe_searches_again_and_a_plain_doctor_does_not() {
+        let dir = tempfile::tempdir().unwrap();
+        let (paths, calls) = counting_programs(dir.path());
+        let sandbox = humanitl_config::SandboxRef::default();
+        let searches = crate::backend_search::BackendSearches::new();
+        let count = || {
+            std::fs::read_to_string(&calls)
+                .unwrap_or_default()
+                .lines()
+                .count()
+        };
+        let run = |mode: &ProbeMode| {
+            super::backend_groups_within(&sandbox, &paths, mode, &searches, None)
+        };
+        run(&ProbeMode::Cached);
+        let asked = count();
+        assert!(asked > 0);
+        run(&ProbeMode::Cached);
+        assert_eq!(count(), asked, "kept");
+        run(&ProbeMode::Start {
+            shim: dir.path().join("bin").join("humanitl-shim"),
+        });
+        assert!(count() > asked, "the probe searched again");
     }
 
     /// HUM-444: Ein gescheiterter Probestart der Kernel-Stufe ist

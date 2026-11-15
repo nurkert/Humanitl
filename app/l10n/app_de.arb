@@ -1884,5 +1884,6 @@
   "diagSANDBOX051Title": "Beschreibbare Erweiterung auf der Kernel-Stufe nicht möglich",
   "diagSANDBOX051Why": "Das Sandbox-Profil nennt einen Ordner, den der Agent ändern darf, und auf der Kernel-Stufe ist in der micro-VM nur der Projektordner beschreibbar. Die Sitzung ist nicht gestartet, statt den Ordner stillschweigend nur lesbar zu zeigen.",
   "diagSANDBOX052Title": "Grenzen der Kernel-Stufe nicht durchsetzbar",
-  "diagSANDBOX052Why": "Eine Sitzung der Kernel-Stufe läuft mit einer Grenze für Arbeitsspeicher und Prozesse, und die cgroup-Controller dafür sind deinem Nutzer nicht übertragen. Ohne ihre Grenzen startet die Sitzung nicht."
+  "diagSANDBOX052Why": "Eine Sitzung der Kernel-Stufe läuft mit einer Grenze für Arbeitsspeicher und Prozesse, und die cgroup-Controller dafür sind deinem Nutzer nicht übertragen. Ohne ihre Grenzen startet die Sitzung nicht.",
+  "sandboxBackendChecking": "Wird noch geprüft …"
 }

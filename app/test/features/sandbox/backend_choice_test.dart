@@ -12,6 +12,7 @@ import 'package:flutter_test/flutter_test.dart';
 import 'package:humanitl/core/domain/domain.dart';
 import 'package:humanitl/core/ipc/fake_daemon_client.dart';
 import 'package:humanitl/core/ui/ui.dart';
+import 'package:humanitl/features/sandbox/providers/backend_choice.dart';
 
 import 'harness.dart';
 
@@ -414,4 +415,64 @@ void main() {
       'container · namespaces',
     );
   }, variant: TargetPlatformVariant.only(TargetPlatform.linux));
+
+  // HUM-502: Solange der Daemon ein Backend noch prüft (`DOCTOR_012`), ist
+  // nichts über es bekannt, und eine Wahl bleibt stehen, statt auf die
+  // Einstellung und wieder zurück zu springen. Ein Backend, dem etwas fehlt,
+  // fällt dagegen auf die Einstellung zurück. Mutationsbeweis: ohne
+  // `checking` in der Prüfung der Wahl zeigt die erste Erwartung `auto`.
+  test('a choice stands while the daemon is still checking its backend', () {
+    const ConfigValues config = ConfigValues(values: <String, Object?>{});
+    const SandboxBackendInfo checking = SandboxBackendInfo(
+      name: 'container',
+      isolation: IsolationLevel.namespaces,
+      diagnostics: <Diagnostic>[
+        Diagnostic(
+          code: DiagnosticCodes.doctorNotPerformed,
+          severity: Severity.warning,
+          why: 'still being checked',
+        ),
+      ],
+    );
+    expect(checking.checking, isTrue);
+    expect(listWith(checking).checking, isTrue);
+    expect(
+      shownSandboxBackend('container', config, listWith(checking)),
+      'container',
+    );
+    expect(
+      shownSandboxBackend(
+        'container',
+        config,
+        listWith(
+          const SandboxBackendInfo(
+            name: 'container',
+            diagnostics: <Diagnostic>[containerMissing],
+          ),
+        ),
+      ),
+      FormKeys.sandboxBackendAuto,
+    );
+    expect(listWith(availableContainer).checking, isFalse);
+    // Steht vor der Prüfung ein Grund, der einen Start ausschließt, gilt er:
+    // Die Liste fragt weiter, aber die Wahl fällt auf die Einstellung.
+    const SandboxBackendInfo belowAndChecking = SandboxBackendInfo(
+      name: 'container',
+      isolation: IsolationLevel.namespaces,
+      diagnostics: <Diagnostic>[
+        belowMinimum,
+        Diagnostic(
+          code: DiagnosticCodes.doctorNotPerformed,
+          severity: Severity.warning,
+          why: 'still being checked',
+        ),
+      ],
+    );
+    expect(belowAndChecking.checking, isTrue);
+    expect(belowAndChecking.undecided, isFalse);
+    expect(
+      shownSandboxBackend('container', config, listWith(belowAndChecking)),
+      FormKeys.sandboxBackendAuto,
+    );
+  });
 }

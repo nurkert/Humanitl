@@ -66,7 +66,8 @@ List<HSegmentOption<String>> sandboxBackendOptions(
 bool offersBackendChoice(SandboxBackendList list) => list.offered.length > 1;
 
 /// One line per backend the daemon admits: its name and isolation level, and
-/// under it, where it cannot start now, the daemon's reason and fix.
+/// under it, where it cannot start now, the daemon's reason and fix, or that
+/// the daemon is still checking it (HUM-502).
 /// Optionally the lower bound `sandbox.min_isolation` at the end.
 class SandboxBackendLines extends StatelessWidget {
   /// Creates the lines for [list]. [keyPrefix] makes the keys of the lines
@@ -105,7 +106,22 @@ class SandboxBackendLines extends StatelessWidget {
             key: ValueKey<String>('$keyPrefix-level-${backend.name}'),
             style: tokens.typography.ui12.tinted(tokens.colors.fg1),
           ),
-          if (backend.reason case final Diagnostic reason)
+          if (backend.undecided)
+            // Die Suche des Daemons lief noch (HUM-502): weder verfügbar
+            // noch fehlend. Die Liste fragt gleich wieder.
+            Padding(
+              padding: EdgeInsetsDirectional.only(
+                start: tokens.spacing.x3,
+                top: tokens.spacing.x1,
+                bottom: tokens.spacing.x1,
+              ),
+              child: Text(
+                l10n.sandboxBackendChecking,
+                key: ValueKey<String>('$keyPrefix-checking-${backend.name}'),
+                style: tokens.typography.ui12.tinted(tokens.colors.fg2),
+              ),
+            )
+          else if (backend.reason case final Diagnostic reason)
             _Reason(backend: backend.name, reason: reason, keyPrefix: keyPrefix)
           else if (!backend.available)
             // Nicht verfügbar, aber ohne Befund: Der Daemon nennt keinen
