@@ -117,9 +117,19 @@ report on both systems. What macOS gives less than Linux is listed under
 On Linux you can choose rootless Podman with the runtime `crun` as a second sandbox backend
 (`--backend podman` or `sandbox.backend = "podman"`; `auto` stays bubblewrap): the same shim checks
 the same three guarantees, at the same isolation level as bubblewrap, `namespaces` over the shared
-host kernel ([`docs/SECURITY.md` section 13](docs/SECURITY.md#13-linux-podman)). A kernel of its
-own, the backend `qemu` with a micro-VM (ADR-0021), is not available yet and every start with it is
-refused (`SANDBOX_048`); `humanitl sandbox backends` lists each backend with its level and what it lacks.
+host kernel ([`docs/SECURITY.md` section 13](docs/SECURITY.md#13-linux-podman)).
+`humanitl sandbox backends` lists each backend with its level and what it lacks.
+
+### On Linux, by choice: a kernel of its own
+
+On Linux on x86-64 you can choose the kernel level, the backend `qemu` (`--backend qemu` or
+`sandbox.backend = "qemu"`; `auto` stays bubblewrap): the agent runs in a micro-VM with a guest
+kernel of its own, the three guarantees are carried on the host so that they hold even with root in
+the guest, and the escape suite runs against it with root in the guest in the CI job
+`escape-tests-qemu` ([`docs/SECURITY.md` section 14](docs/SECURITY.md#14-linux-qemu-micro-vm-kernel-level)).
+It needs `/dev/kvm`, `qemu-system-x86`, `virtiofsd`, `vhost-device-vsock` and a guest kernel with
+virtiofs built in; a missing prerequisite refuses the start with `SANDBOX_045`, never a fallback to
+another backend, and it is the only backend that meets `sandbox.min_isolation = "kernel"`.
 
 ### Check it yourself
 
@@ -500,9 +510,9 @@ guarantees and five escape tests in CI; the intercept queue with allow, block, e
 OpenCode and pi agents against a model in your network, with terminal and isolation check; history,
 export and a hash-chained audit log; pseudonymisation in the editor; settings, German and English;
 a `.deb` and a tarball. Since then: macOS with a Seatbelt sandbox, a launchd agent and a disk image
-in every release (M12), and on Linux rootless Podman with `crun` as a backend to choose. Not in
-it: holding responses or WebSocket frames, HTTP/2 to the destination, a Docker backend, the micro-VM
-stage (backend `qemu`, not admitted yet), a browser for the agent. What comes after the MVP is
+in every release (M12), and on Linux rootless Podman with `crun` and the kernel level in a micro-VM
+(backend `qemu`) as backends to choose. Not in it: holding responses or WebSocket frames, HTTP/2 to
+the destination, a Docker backend, a browser for the agent. What comes after the MVP is
 listed in [`BACKLOG.md` section 9](BACKLOG.md#9-nach-dem-mvp-priorisiert).
 
 ### Project health

@@ -196,9 +196,40 @@ HUM-446); HUM-449 admits it.
   stable release or in Ubuntu 24.04. Until it is, the level is unavailable
   there, and `humanitl doctor` says which package is missing.
 
+## Addendum 2026-11-15: The kernel level is admitted (HUM-449, HUM-447)
+
+HUM-449 admitted the level. The evidence is the rule written at HUM-471 in
+`backlog/sprint-7.md`: the CI jobs `kvm-tests` (the shim as init of a real
+guest, `daemon/crates/sandbox/src/qemu/kvm_tests.rs`) and `escape-tests-qemu`
+(the escape suite against the level, with root in the guest, HUM-445) green on
+`main` together with the disposable sandbox in the guest (HUM-446), in ten
+consecutive runs in which both jobs ran: 43624997550, 43630993303,
+43638237420, 43641769840, 43646599744, 43648968241, 43656202366,
+43661904978, 43669712307 and 43673927540. The first run of the admitting
+commit (43678367755) had `kvm-tests` red on a test threshold, not on a
+guarantee; the owner decided on 2026-11-15 that it does not reset the count,
+the test was fixed (HUM-487), and both jobs were green in run 43690771860 on
+the commit that admitted the level.
+
+Since then `sandbox.backend = "qemu"` and `--backend qemu` start a session;
+`SANDBOX_048` no longer applies to it. `auto` stays bubblewrap, a project
+profile can only require the level, never choose it, and `qemu` is the only
+backend that meets `sandbox.min_isolation = "kernel"`. A missing prerequisite
+refuses the start with `SANDBOX_045` and never falls back to another backend.
+`humanitl sandbox backends` and the app list `qemu` with the level `kernel`;
+the app lets a person choose it only when the daemon reports it available,
+and otherwise shows the missing prerequisite with its fix.
+What the level guarantees and what it does not stands in
+[`SECURITY.md` section 14](../SECURITY.md#14-linux-qemu-micro-vm-kernel-level);
+the threats of its components are K-30 to K-34 in
+[`THREAT-MODEL.md`](../THREAT-MODEL.md). The `.deb` names `qemu-system-x86`,
+`virtiofsd` and `vhost-device-vsock` only under `Suggests` (ADR-0010
+addendum of HUM-447).
+
 ## Affected issues
 
 `HUM-442` (the spike and this decision), `HUM-443` to `HUM-449`
 (`backlog/sprint-7.md`, replanned for this adapter), `HUM-145` (the coupling
 ratchet), `HUM-263` (the pinned project folder), `HUM-350` (the disposable
-sandbox). ADR-0020 gets an addendum that points here for the kernel level.
+sandbox), `HUM-447` (documentation of the admitted level, addendum). ADR-0020
+gets an addendum that points here for the kernel level.

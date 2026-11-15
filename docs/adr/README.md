@@ -81,7 +81,7 @@ Where one decision refines or corrects another:
 | ADR-0018 | ADR-0003, ADR-0013 | Makes the equality of UI and CLI from ADR-0013 machine-checkable. |
 | ADR-0019 | ADR-0002, ADR-0015 | The second adapter of `SandboxBackend` that ADR-0015 announced; on macOS it takes the place of bwrap from ADR-0002. |
 | ADR-0020 | ADR-0002, ADR-0010, ADR-0015 | Podman instead of Docker as the second Linux backend; amends all three (addenda of HUM-434 and HUM-441). |
-| ADR-0021 | ADR-0020 | Replaces the kernel level of ADR-0020 (Podman with `krun`) by an adapter of its own; the plain level stays as it is. |
+| ADR-0021 | ADR-0020, ADR-0002, ADR-0010, ADR-0015 | Replaces the kernel level of ADR-0020 (Podman with `krun`) by an adapter of its own; the plain level stays as it is. Amends ADR-0002, ADR-0010 and ADR-0015 once the level is admitted (addenda of HUM-447). |
 | ADR-0011 | ADR-0007 | Governs the two storage locations for rules (saved and session). |
 | ADR-0012 | ADR-0010 | `FixAction::InstallService` is the mechanism behind the one-click installation. |
 

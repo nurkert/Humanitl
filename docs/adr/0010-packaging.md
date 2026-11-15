@@ -202,3 +202,25 @@ and Debian does not package libkrun. The unit stays as the addendum above
 sets it (HUM-434): Podman starts as a transient unit of the user's service
 manager, which needs systemd 254 or newer, and the daemon's unit keeps its
 full hardening. The RPM and the AUR package do not name Podman yet.
+
+## Addendum 2026-11-15: The programs of the kernel level are suggested, never required (HUM-447)
+
+The `.deb` lists `qemu-system-x86`, `virtiofsd` and `vhost-device-vsock`
+under `Suggests`, next to `opencode` (`packaging/deb/control.in`), never under
+`Recommends` or `Depends`. The kernel level (backend `qemu`, ADR-0021) is a
+choice and needs more than packages: `/dev/kvm` readable and writable for the
+user and a guest kernel with virtiofs built in, which neither apt nor the
+package can provide. `apt install` does not pull suggested packages, so the
+package installs and runs with bubblewrap alone, as before. A missing program
+is a finding of `humanitl sandbox backends` and `humanitl doctor` and refuses
+a start that chose the level (`SANDBOX_045`, whose fix names the package),
+never a reason to refuse the package or to fall back to another backend.
+`vhost-device-vsock` is packaged in Debian testing and unstable, not yet in a
+stable release or in Ubuntu 24.04; there the suggestion stays unresolved.
+
+The RPM suggests the same programs (`/usr/bin/qemu-system-x86_64`,
+`virtiofsd`, `/usr/bin/vhost-device-vsock`, the emulator and the vsock device
+as files because the package names differ between Fedora and openSUSE), and
+the AUR package lists `qemu-system-x86`, `virtiofsd` and `vhost-device-vsock`
+under `optdepends`. Since HUM-461 both also name Podman, so the last sentence
+of the addendum above no longer holds.

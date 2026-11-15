@@ -878,6 +878,28 @@ Abschluss der Kernel-Stufe, nach der Zulassung (HUM-449).
 ### Fallstricke
 - Das Tor aus dem Kopf dieses Sprints gilt: `qemu` erscheint in der Oberfläche nicht vor HUM-449.
 
+### Stand nach der Umsetzung (2026-11-15)
+README (en, de) mit einem Abschnitt zur Kernel-Stufe; `docs/CONFIG.md` und
+das Schema aus den Doc-Strings in `config/src/model.rs` neu erzeugt;
+`docs/cli.md` (en, de) mit `--backend qemu`, der Untergrenze und den Zeilen
+von doctor je Voraussetzung (HUM-488); Installationsanleitung (en, de) mit
+`/dev/kvm`, den drei Paketen und dem Gastkern, samt dem Hinweis, dass
+`vhost-device-vsock` in Debian 13 und Ubuntu 24.04 fehlt; Nachträge in
+ADR-0021 (zugelassen, mit den zehn Läufen, dem roten Lauf 43678367755 und der
+Entscheidung des Owners), ADR-0002, ADR-0010 und ADR-0015, je en und de;
+`tests/escape/README.md` und zwei Kommentare in `ci.yml`. App: `qemu` mit der
+Stufe `kernel` in der Backend-Wahl, wählbar nur mit `available = true`
+(Widget-Tests in `backend_choice_test.dart` und
+`sandbox_backend_row_test.dart`, Mutationsbeweise), Goldens neu. Pakete:
+`.deb` `Suggests: qemu-system-x86, virtiofsd, vhost-device-vsock`, RPM
+`Suggests`, AUR `optdepends`. Kopplung: zwei Zahlen gesunken.
+
+Offen, als Kandidaten: `humanitl run --sandbox-min-isolation` reicht die
+Untergrenze nicht an den Daemon (sie fällt still weg; `cli.md` sagt es);
+die Einstellungszeile der Backends wird mit vier Segmenten schmal, der Grund
+einer fehlenden Voraussetzung läuft über viele Zeilen; Paketnamen für RPM
+und AUR ungeprüft.
+
 ---
 
 ## HUM-450 · `humanitl sandbox argv` withholds hidden values in the CLI too

@@ -45,7 +45,7 @@
 "app/lib/features/setup/setup_text.dart" = 1
 "app/test/core/ipc/convert_test.dart" = 10
 "app/test/core/ipc/disposable_grpc_test.dart" = 2
-"app/test/core/ipc/fake_daemon_client_test.dart" = 17
+"app/test/core/ipc/fake_daemon_client_test.dart" = 16
 "app/test/goldens/sandbox_backend_golden_test.dart" = 5
 "app/test/l10n/macos_text_test.dart" = 3
 "daemon/bin/humanitl/src/cli.rs" = 6
@@ -73,7 +73,7 @@
 "proto/humanitl/v1/humanitl.proto" = 13
 
 [qemu]
-"app/lib/core/ipc/fake_daemon_client.dart" = 2
+"app/lib/core/ipc/fake_daemon_client.dart" = 1
 "app/test/core/ipc/fake_daemon_client_test.dart" = 1
 "daemon/crates/config/src/lib.rs" = 1
 "daemon/crates/config/src/load.rs" = 3

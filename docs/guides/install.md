@@ -40,12 +40,19 @@ or one click in the app.
 | `libayatana-appindicator3-1` (optional) | the tray icon; without it the app runs and the window title carries the count of held requests | `humanitl doctor`, line `tray` |
 | `libsecret-tools` (recommended) | keeps an access key for the model server in the system keyring; without it the key lives in a file with mode `0600` | `command -v secret-tool` |
 | `podman` 4.9.0 or newer and `uidmap` (recommended) | Podman as a second sandbox backend, only when you choose it (`sandbox.backend = "podman"` or `--backend podman`); rootless, it also needs 65536 subordinate IDs for your account in `/etc/subuid` and `/etc/subgid`. bubblewrap stays the default and works without them | `humanitl sandbox backends` |
+| `/dev/kvm`, `qemu-system-x86`, `virtiofsd`, `vhost-device-vsock` and a guest kernel (suggested) | the kernel level, a micro-VM with a guest kernel of its own (`sandbox.backend = "qemu"` or `--backend qemu`), only when you choose it. `/dev/kvm` must be readable and writable for you (`sudo usermod -aG kvm "$USER"`, then log in again); the guest kernel is by default the host's own, which must be readable and have virtiofs built in (`CONFIG_VIRTIO_FS=y`), otherwise `sandbox.qemu.kernel` names another one. `vhost-device-vsock` is packaged in Debian testing and unstable, not yet in Debian 13 or Ubuntu 24.04 | `humanitl sandbox backends`, `humanitl doctor` |
 
 The `.deb` declares bubblewrap, EGL and GLES 2 as dependencies, so apt installs
 them; the `.rpm` and the AUR package declare the same, for dnf, zypper and pacman. GTK 3 and GLib come in through the libraries of the app. The tray library
 and `libsecret-tools` are optional; the package recommends `libsecret-tools`,
 `podman` and `uidmap`, never depends on them, and installs and runs with
-bubblewrap alone (`apt install --no-install-recommends` leaves them out).
+bubblewrap alone (`apt install --no-install-recommends` leaves them out). The
+programs of the kernel level it only suggests, so apt does not install them;
+`sudo apt install qemu-system-x86 virtiofsd vhost-device-vsock` does where all three are
+packaged (Debian testing and unstable); on Debian 13 or Ubuntu 24.04 `vhost-device-vsock` is
+missing, and the kernel level stays unavailable there (`SANDBOX_045`) until it is. The RPM
+suggests the same programs, and the AUR package lists them as optional
+dependencies.
 On macOS nothing is needed for this: the access key lives in your login Keychain,
 through the system tool `/usr/bin/security`.
 

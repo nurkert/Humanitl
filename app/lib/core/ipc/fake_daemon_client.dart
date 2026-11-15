@@ -5656,9 +5656,10 @@ mixin FakeIntercept {
 /// The fake's half of `SandboxBackends` (HUM-432, HUM-440).
 ///
 /// Plays a Linux system where everything is installed, as the real daemon
-/// sees it since HUM-464: the backend of the system chosen and available,
+/// sees it since HUM-449: the backend of the system chosen and available,
 /// Podman admitted and available with the runtime `crun`, and the VM backend
-/// of the kernel level not admitted yet (`SANDBOX_048`, until HUM-449).
+/// of the kernel level ([kernelBackendName]) admitted and available as well,
+/// as in the daemon's own fake.
 mixin FakeSandboxBackends {
   /// The backend each start asked for in `Start.cli_overrides`, oldest
   /// first; null for a start without the entry (HUM-440).
@@ -5726,24 +5727,52 @@ mixin FakeSandboxBackends {
         ],
       ),
       SandboxBackendInfo(
-        name: 'qemu',
+        name: kernelBackendName,
         isolation: IsolationLevel.kernel,
-        diagnostics: <Diagnostic>[notAdmitted],
+        available: true,
       ),
     ],
   );
 
-  /// The daemon's `SANDBOX_048` for the VM backend of the kernel level,
-  /// which stays closed until HUM-449; for tests that play a backend that is
-  /// not admitted.
+  /// The name `sandbox.backend` writes for the VM backend of the kernel
+  /// level, as the daemon lists it (HUM-447). Tests take it from here so that
+  /// the adapter's name stands in one place of the app (HUM-145).
+  static const String kernelBackendName = 'qemu';
+
+  /// The VM backend of the kernel level on a host where a prerequisite is
+  /// missing: admitted, not available, with the daemon's finding (HUM-447).
+  static const SandboxBackendInfo kernelBackendUnavailable = SandboxBackendInfo(
+    name: kernelBackendName,
+    isolation: IsolationLevel.kernel,
+    diagnostics: <Diagnostic>[kernelPrerequisiteMissing],
+  );
+
+  /// The daemon's `SANDBOX_048` for a backend it does not admit, for tests
+  /// that play one. Since HUM-449 the real daemon admits every backend it
+  /// lists; the code stays for a level that is added before its admission.
   static const Diagnostic notAdmitted = Diagnostic(
     code: DiagnosticCodes.backendNotAdmitted,
     severity: Severity.blocking,
     why:
-        'sandbox.backend = "qemu" is not admitted yet: a backend becomes '
+        'sandbox.backend = "container" is not admitted yet: a backend becomes '
         'selectable only after its mount check and the escape suite against it '
         'are green in CI.',
     fix: FixAction.changeSetting(key: 'sandbox.backend', value: 'auto'),
+  );
+
+  /// The daemon's `SANDBOX_045` for the kernel level on a host where this
+  /// user may not use `/dev/kvm`, worded as the daemon's prerequisite check
+  /// words it, without its closing hint (HUM-447); for tests and goldens
+  /// that play a kernel level that cannot start.
+  static const Diagnostic kernelPrerequisiteMissing = Diagnostic(
+    code: 'SANDBOX_045',
+    severity: Severity.blocking,
+    why:
+        'the kernel level needs /dev/kvm readable and writable for this user, '
+        'and it is not (Permission denied (os error 13)); after joining the '
+        'group kvm, log in again; nothing starts, and no other backend takes '
+        'over.',
+    fix: FixAction.copyCommand(command: 'sudo usermod -aG kvm "\$USER"'),
   );
 
   /// `SandboxBackends`. The plan changes nothing here: the fake has no

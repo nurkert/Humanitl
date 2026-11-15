@@ -52,7 +52,7 @@ agent runs inside it, and `humanitl run` ends with the agent's exit code.
 | `--ask ui\|terminal\|none` | `hold.ask_mode` | Where a held request is decided. See below. |
 | `--llm URL` | `llm.endpoint` | The language model of this session. From it comes the declared passthrough: a rule in rank 1 that is not held and overtakes your own block rules, for the inference paths of this one host. It stands as a rule of its own in the list, under `http://humanitl.internal/` and in the recording. If the address is not in your own network according to its name, the start reports `LLM_006`; the session starts anyway. Nothing is resolved for this. |
 | `--llm NAME` | `llm.server` | One of the saved model servers for this run (HUM-400): a value without `://` is a name, not an address, and is the same as `--llm-server NAME`. It beats the server the project profile, a session profile or `llm.active` chooses, and only this server is the passthrough and gets its stored key. A name that is not saved refuses the start with `CONFIG_021`; there is no fallback to the active server. A daemon before contract 1.28 cannot take the choice and gets `CLI_004` instead of a start with another server. At the start `humanitl run` prints the server of the session and where the choice comes from (`[humanitl] llm server: work (chosen by the project profile …)`). |
-| `--backend auto\|bwrap\|podman\|seatbelt` | `sandbox.backend` | The sandbox backend of this run (HUM-432), the short name of `--sandbox-backend`. `auto` is bubblewrap on Linux and Seatbelt on macOS. A chosen backend never falls back to another one. See "Choosing the sandbox backend". |
+| `--backend auto\|bwrap\|podman\|seatbelt\|qemu` | `sandbox.backend` | The sandbox backend of this run (HUM-432), the short name of `--sandbox-backend`. `auto` is bubblewrap on Linux and Seatbelt on macOS; `qemu` is the kernel level, a micro-VM with a guest kernel of its own, on Linux on x86-64. A chosen backend never falls back to another one. See "Choosing the sandbox backend". |
 | `--podman-runtime crun` | `sandbox.podman.runtime` | The OCI runtime under Podman for this run, the short name of `--sandbox-podman-runtime`. It needs Podman as the backend; with any other backend the start ends with `SANDBOX_034` instead of running at another isolation level than the one asked for. The kernel level is no runtime of Podman any more but the backend `qemu`; the earlier value `krun` is refused when the configuration loads (`CONFIG_023`). |
 | `-- CMD...` | `agent.command` | The command in the sandbox, instead of the agent from the configuration. `-- bash` is the way to look at the sandbox from the inside, and to start the agent by hand there (see "A shell for the agent"). |
 
@@ -317,12 +317,14 @@ their results from `/work`.
 
 ### Choosing the sandbox backend
 
-On Linux there are two sandbox backends, bubblewrap (`bwrap`) and rootless
-Podman (`podman`); on macOS there is Seatbelt (`seatbelt`). Which one starts
-is `sandbox.backend`, by default `auto`: bubblewrap on Linux, Seatbelt on
-macOS. Podman runs only when you choose it, in `config.toml`, in a profile,
-with `HUMANITL_SANDBOX__BACKEND` or for one start with `--backend podman`;
-a project profile cannot choose the backend. `--backend` and
+On Linux there are three sandbox backends, bubblewrap (`bwrap`), rootless
+Podman (`podman`) and, on x86-64, the kernel level in a micro-VM (`qemu`);
+on macOS there is Seatbelt (`seatbelt`). Which one starts is
+`sandbox.backend`, by default `auto`: bubblewrap on Linux, Seatbelt on
+macOS. Podman and `qemu` run only when you choose them, in `config.toml`, in
+a profile, with `HUMANITL_SANDBOX__BACKEND` or for one start with
+`--backend podman` or `--backend qemu`; a project profile cannot choose the
+backend, only require one. `--backend` and
 `--podman-runtime` act on `humanitl run`, which sends them to the daemon with
 the start, and on `humanitl sandbox run`, `sandbox argv` and `sandbox check`,
 which plan in the process of the command. A choice from the environment of
@@ -335,7 +337,7 @@ BACKEND  ISOLATION   AVAILABLE  SELECTED
 bwrap    namespaces  yes        *
 podman   namespaces  yes
   crun   namespaces  yes        *
-qemu     kernel      no
+qemu     kernel      yes
 ```
 
 `humanitl sandbox backends` asks the daemon (`SandboxBackends`) and starts
@@ -346,9 +348,9 @@ Under Podman the indented rows are its runtimes, with `*` at the one
 `sandbox.podman.runtime` chooses. Below the table stands, for every backend
 and runtime that is not available, the finding that stops it with its fix:
 a missing or too old program (`SANDBOX_034`, `SANDBOX_037`), missing
-subordinate IDs (`SANDBOX_039`), a missing prerequisite of the kernel level
-(`SANDBOX_045`), a level that is not admitted (`SANDBOX_048`). The floor `sandbox.min_isolation` goes to `stderr` as a
-note. With `--json` the list is one value with the same fields.
+subordinate IDs (`SANDBOX_039`), the first missing prerequisite of the kernel
+level (`SANDBOX_045`), a level below the floor (`SANDBOX_035`). The floor
+`sandbox.min_isolation` goes to `stderr` as a note. With `--json` the list is one value with the same fields.
 
 The isolation levels:
 
@@ -359,17 +361,46 @@ The isolation levels:
 - `policy`: Seatbelt on macOS, where the kernel holds the process to a
   profile ([`SECURITY.md` section 12](SECURITY.md#12-macos-seatbelt-instead-of-bubblewrap)).
 - `kernel`: the backend `qemu`, a guest kernel of its own in a micro-VM,
-  on Linux on x86-64 (ADR-0021). This level is not admitted yet: every start
-  with it ends with `SANDBOX_048` until its escape suite is green in CI
-  (HUM-449). The list shows it so that the choice is visible, not because it
-  can run, and names the first missing prerequisite (`SANDBOX_045`).
+  on Linux on x86-64 (ADR-0021), admitted since HUM-449. The three
+  guarantees are carried on the host, so they hold with root in the guest;
+  the escape suite runs against it with root in the guest in the CI job
+  `escape-tests-qemu`
+  ([`SECURITY.md` section 14](SECURITY.md#14-linux-qemu-micro-vm-kernel-level)).
+  It needs `/dev/kvm` readable and writable for you, the programs of the
+  packages `qemu-system-x86`, `virtiofsd` and `vhost-device-vsock`,
+  bubblewrap with `--bind-fd` and `--size`, and a readable guest kernel with
+  virtiofs built in together with its module directory (by default the
+  host's own kernel, otherwise `sandbox.qemu.kernel` and
+  `sandbox.qemu.modules`).
 
 A chosen backend is never replaced by another one. If it is missing on this
-system, the start ends with `SANDBOX_034`; if its level lies below
+system, the start ends with `SANDBOX_034`; if a prerequisite of the kernel
+level is missing, with `SANDBOX_045`; if its level lies below
 `sandbox.min_isolation`, with `SANDBOX_035`; if the sandbox profile requires
-another backend, with `SANDBOX_036`; if its level is not admitted, with
-`SANDBOX_048`. `humanitl doctor --probe` starts an empty sandbox under every
-admitted, available backend and checks its five `CHECK` lines.
+another backend, with `SANDBOX_036`. `humanitl doctor --probe` starts an
+empty sandbox under every admitted, available backend and checks its five
+`CHECK` lines.
+
+**The floor.** `sandbox.min_isolation` (`policy`, `namespaces` or `kernel`)
+is the weakest level a session may start with. Across all layers the
+strictest value applies: a project profile may raise it, and nothing lowers
+it below what another layer asks for. `--sandbox-min-isolation kernel` on
+`humanitl sandbox run`, `sandbox argv` or `sandbox check` raises it for that
+one call; `humanitl run` does not send it to the daemon, which accepts only
+the four paths named above, so for a session through the daemon it belongs
+in `config.toml` or the project profile. With the floor at `kernel`, only
+`qemu` starts; any other backend ends with `SANDBOX_035` instead of running
+below it.
+
+**What `humanitl doctor` says about the kernel level.** In the group of the
+kernel level the doctor gives one line per prerequisite: `kvm` (`/dev/kvm`),
+`emulator`, `file_daemon`, `vsock_device`, `bubblewrap` (with `--bind-fd`
+and `--size`),
+`kernel` (the guest kernel's image), `virtio_fs` (virtiofs built in) and
+`modules` (its module directory). Each missing one carries `SANDBOX_045` with
+the fix that names its package or setting, so all that is missing shows at
+once. Its lines turn red only when `sandbox.backend` chooses `qemu`;
+otherwise what it lacks stops no start and is at most a warning.
 
 ### An image as the root of the sandbox
 
@@ -406,9 +437,10 @@ part of the pull and is not ended. A name without a registry is refused
 backend of the configuration file (`sandbox.backend`); the `--backend` of a
 single start does not apply to it. The project folder, the door, the CA, the shim and the files
 of the session still come from the host, never from the image; the mounts of
-the sandbox profile under `mounts.ro` do not apply in an image. Under a
-level that is not admitted yet, the kernel level until HUM-449, the pull is
-refused with `SANDBOX_048`, like every start.
+the sandbox profile under `mounts.ro` do not apply in an image. Under the
+kernel level nothing is pulled: the micro-VM takes no image, and the pull is
+refused with `SANDBOX_034` (with `SANDBOX_045` while a prerequisite of the
+level is missing).
 
 Registry credentials for a pull come from one file only,
 `~/.config/humanitl/podman/auth.json` (under `$XDG_CONFIG_HOME` when it is

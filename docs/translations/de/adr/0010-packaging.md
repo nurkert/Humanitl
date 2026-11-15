@@ -207,3 +207,26 @@ der Nachtrag oben sie festlegt (HUM-434): Podman startet als vorübergehende
 Unit des Dienstverwalters des Nutzers, was systemd 254 oder neuer braucht, und
 die Unit des Daemons behält ihre volle Härtung. Das RPM und das AUR-Paket
 nennen Podman noch nicht.
+
+## Nachtrag 2026-11-15: Die Programme der Kernel-Stufe sind vorgeschlagen, nie verlangt (HUM-447)
+
+Das `.deb` führt `qemu-system-x86`, `virtiofsd` und `vhost-device-vsock` unter
+`Suggests`, neben `opencode` (`packaging/deb/control.in`), nie unter
+`Recommends` oder `Depends`. Die Kernel-Stufe (Backend `qemu`, ADR-0021) ist
+eine Wahl und braucht mehr als Pakete: `/dev/kvm` lesbar und schreibbar für
+den Nutzer und einen Gastkern mit eingebautem virtiofs, was weder apt noch das
+Paket liefern kann. `apt install` zieht vorgeschlagene Pakete nicht mit, also
+installiert und läuft das Paket wie bisher mit bubblewrap allein. Ein
+fehlendes Programm ist ein Befund von `humanitl sandbox backends` und
+`humanitl doctor` und lehnt einen Start, der die Stufe gewählt hat, ab
+(`SANDBOX_045`, dessen Fix das Paket nennt), nie ein Grund, das Paket
+abzulehnen oder auf ein anderes Backend auszuweichen. `vhost-device-vsock` ist
+in Debian testing und unstable paketiert, noch nicht in einer stabilen
+Veröffentlichung und nicht in Ubuntu 24.04; dort bleibt der Vorschlag offen.
+
+Das RPM schlägt dieselben Programme vor (`/usr/bin/qemu-system-x86_64`,
+`virtiofsd`, `/usr/bin/vhost-device-vsock`, Emulator und vsock-Gerät als
+Datei, weil die Paketnamen zwischen Fedora und openSUSE abweichen), und das
+AUR-Paket führt `qemu-system-x86`, `virtiofsd` und `vhost-device-vsock` unter
+`optdepends`. Seit HUM-461 nennen beide auch Podman; der letzte Satz des
+Nachtrags oben gilt damit nicht mehr.

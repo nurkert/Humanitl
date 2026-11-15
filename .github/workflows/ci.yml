@@ -866,8 +866,8 @@ jobs:
     runs-on: ubuntu-24.04
     # The same suites as escape-tests, against Podman (HUM-435). A backend is
     # admissible only when tests/escape/ is green against it (BACKLOG.md 9.1);
-    # Podman stays refused with SANDBOX_048 for every user until HUM-448, and
-    # run.sh starts it through escape-launch, the one binary built with the
+    # Podman is admitted since HUM-448, on the evidence of this job; run.sh
+    # still starts it through escape-launch, the one binary built with the
     # feature unadmitted-backends. The same steps and the same verdict as
     # escape-tests, plus the proof of the engine (P16), a hostile engine
     # configuration planted before the run, and the live tests of the adapter.
@@ -1134,9 +1134,10 @@ jobs:
     timeout-minutes: 60
     # The same suites as escape-tests, against the kernel level (HUM-445,
     # ADR-0021), built on kvm-tests: the same KVM, service manager and
-    # pinned Debian packages. The level is not admitted (SANDBOX_048 until
-    # HUM-449); run.sh starts it through escape-launch, the one binary built
-    # with the feature unadmitted-backends. On top of the common suites:
+    # pinned Debian packages. The level is admitted since HUM-449, on the
+    # evidence of this job and kvm-tests; run.sh still starts it through
+    # escape-launch, the one binary built with the feature
+    # unadmitted-backends. On top of the common suites:
     # probes as root without a seccomp filter in the guest, against a second
     # listening guest of another session, and the network namespaces of the
     # session's unit seen from the host (tests/escape/kernel-proof.sh). No

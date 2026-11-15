@@ -5,7 +5,7 @@ Maintainer: Niko Burkert <humanitl@nurkert.de>
 Installed-Size: @INSTALLED_SIZE@
 Depends: @DEPENDS@
 Recommends: libsecret-tools, podman, uidmap
-Suggests: opencode
+Suggests: opencode, qemu-system-x86, virtiofsd, vhost-device-vsock
 Section: net
 Priority: optional
 Homepage: https://github.com/nurkert/Humanitl

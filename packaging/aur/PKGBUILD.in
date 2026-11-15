@@ -47,6 +47,9 @@ optdepends=(
   'libayatana-appindicator: tray icon'
   'opencode: the coding agent that runs in the sandbox'
   'podman: rootless Podman with crun as a selectable sandbox backend'
+  'qemu-system-x86: the kernel level (backend qemu), a micro-VM with a guest kernel of its own'
+  'virtiofsd: the shared file systems of the kernel level'
+  'vhost-device-vsock: the one door of the kernel level'
 )
 provides=("humanitl=$pkgver")
 conflicts=('humanitl')

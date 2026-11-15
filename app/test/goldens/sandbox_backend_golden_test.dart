@@ -1,7 +1,9 @@
 // Goldens der Backend-Wahl (HUM-440), in den vier Varianten aus
 // `support/golden_variants.dart`: die Zeile `sandbox.backend` der
 // Einstellungen und der Abschnitt oben im Reiter Isolation, beide mit einem
-// Podman, das hier nicht starten kann, samt Grund und Befehl des Daemons.
+// Podman, das hier nicht starten kann, samt Grund und Befehl des Daemons, und
+// mit dem VM-Backend der Kernel-Stufe, dem eine Voraussetzung fehlt
+// (HUM-447).
 // Erneuern mit `make goldens-update`.
 
 import 'package:flutter/widgets.dart';
@@ -15,7 +17,8 @@ import 'package:humanitl/features/settings/widgets/sandbox_backend_row.dart';
 
 import 'support/golden_variants.dart';
 
-/// Ein Fake mit dem Backend des Systems und einem Podman ohne Programm.
+/// Ein Fake mit dem Backend des Systems, einem Podman ohne Programm und dem
+/// VM-Backend der Kernel-Stufe ohne Zugriff auf das KVM-Gerät.
 FakeDaemonClient backendsClient() =>
     FakeDaemonClient(script: const <ScriptedEvent>[])
       ..sandboxBackendList = SandboxBackendList(
@@ -34,6 +37,7 @@ FakeDaemonClient backendsClient() =>
               ),
             ],
           ),
+          FakeSandboxBackends.kernelBackendUnavailable,
         ],
       );
 
@@ -42,7 +46,7 @@ void main() {
   // liest die Namen aus dem Quelltext.
   goldenVariants(
     'settings_sandbox_backend',
-    constraints: const BoxConstraints.tightFor(width: 720, height: 240),
+    constraints: const BoxConstraints.tightFor(width: 720, height: 640),
     builder: (GoldenVariant variant) => goldenFrame(
       variant: variant,
       padding: const EdgeInsets.all(12),
@@ -58,7 +62,7 @@ void main() {
 
   goldenVariants(
     'sandbox_backend_choice',
-    constraints: const BoxConstraints.tightFor(width: 560, height: 380),
+    constraints: const BoxConstraints.tightFor(width: 560, height: 500),
     builder: (GoldenVariant variant) => goldenFrame(
       variant: variant,
       padding: const EdgeInsets.all(12),

@@ -44,7 +44,7 @@ implementation:
 
 | Port | Defined in | MVP adapter | Later adapters |
 |---|---|---|---|
-| `SandboxBackend` | sandbox | bwrap | seatbelt (macOS, ADR-0019), podman (Linux, runtimes `crun` and `krun`, ADR-0020) |
+| `SandboxBackend` | sandbox | bwrap | seatbelt (macOS, ADR-0019), podman (Linux, runtime `crun`, ADR-0020), qemu (Linux, kernel level, ADR-0021) |
 | `AgentAdapter` | core | opencode | aider, codex, claude-code |
 | `Detector` | findings | regex/checksum | presidio-grpc, wasm |
 | `FlowStore` | recorder | sqlite | postgres (team) |
@@ -176,11 +176,25 @@ adapter in place of the former compile-time alias (HUM-428), chosen at run time 
 `sandbox.backend`. The names of the Podman adapter stand only in
 `daemon/crates/sandbox/src/podman/`, guarded by `tools/coupling-baseline.toml`
 (HUM-145). Of the three, bwrap and Seatbelt are admitted and Podman with
-`crun` since HUM-448; Podman with `krun` is not admitted yet (HUM-449).
+`crun` since HUM-448; Podman with `krun` is not admitted yet (HUM-449). (This was the
+state at HUM-441; the addendum below replaces `krun` with the backend `qemu`.)
+
+## Addendum 2026-11-15: `qemu` as the fourth adapter of `SandboxBackend` (HUM-447)
+
+The kernel level is not a runtime of Podman any more but an adapter of its
+own, `qemu` (ADR-0021), in `daemon/crates/sandbox/src/qemu/`; Podman keeps
+only `crun`. The port table names it; the enum `Backend` got its variant, and
+`sandbox.backend` names it. Outside the adapter the names `qemu`,
+`virtiofsd`, `vhost-device-vsock` and `microvm` are counted per file in the
+section `[qemu]` of `tools/coupling-baseline.toml`, and a count may fall,
+never rise (HUM-145); the adapter added no port. Since
+HUM-449 all four adapters are admitted: bwrap and Seatbelt, Podman with
+`crun` since HUM-448 and `qemu` since HUM-449.
 
 ## Affected issues
 
 `HUM-074` (dependency lint `tools/check-deps.sh`), `HUM-001` (monorepo layout
 with the crate split), `HUM-004` (core-types as the IO-free core),
 `HUM-002` (CI job `deps-lint`), `HUM-062` (config in the core, precedence as a
-pure function), `HUM-441` (the adapters of `SandboxBackend`, addendum).
+pure function), `HUM-441` (the adapters of `SandboxBackend`, addendum), `HUM-447` (`qemu`
+as the fourth adapter, addendum).
