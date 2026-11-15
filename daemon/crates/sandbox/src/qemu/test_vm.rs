@@ -424,7 +424,8 @@ pub(crate) fn run_with(spec: &Spec, scenario: impl FnOnce(&Session)) -> Result<O
     })
 }
 
-/// Die Optionen der virtiofsd wie in der Endform (HUM-469, `lines.rs`). Die
+/// Die Optionen der virtiofsd wie in der Endform (HUM-469, HUM-476, HUM-484,
+/// `lines.rs`: der Cache des Gasts an, kein `--allow-mmap`). Die
 /// Grenze der Deskriptoren setzt dort die Unit; das Gerüst startet ohne Unit
 /// und setzt sie mit `--rlimit-nofile`, höchstens bis zur eigenen harten
 /// Grenze, über der virtiofsd nicht starten würde.
@@ -433,7 +434,7 @@ fn file_daemon_limits() -> Vec<String> {
         .maximum
         .unwrap_or(u64::MAX);
     let limit = hard.min(u64::from(super::lines::FILE_DAEMON_NOFILE));
-    ["--cache", "never", "--allow-mmap", "--rlimit-nofile"]
+    ["--cache", "auto", "--rlimit-nofile"]
         .iter()
         .map(|word| (*word).to_owned())
         .chain([limit.to_string()])

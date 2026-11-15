@@ -1583,7 +1583,7 @@ die Probe als Root hält 30 074 Dateien und wird an der Grenze abgewiesen
 (höchstens 64 947). Mutationsbeweis: Schwelle `u64::MAX`, der Walk endet
 nach 62 524 Einträgen mit 60 `ENFILE`, der Test wird rot.
 
-Offen, als Kandidat für ein eigenes Issue: `--allow-mmap` und die
+Offen, als Kandidat für ein eigenes Issue (erledigt in HUM-484): `--allow-mmap` und die
 Untergrenze 6.6 des Gastkernels (`prerequisites.rs`) stammen aus der Zeit von
 `--cache never` und wirken unter `auto` nicht mehr; beide zusammen prüfen und
 entfernen. Ebenso: auch die Zahl der gehaltenen Inodes (`inode-state`
@@ -1765,6 +1765,69 @@ unter `auto` womöglich nicht mehr.
 
 ### Akzeptanzkriterien
 1. Jede der beiden Einstellungen ist begründet oder entfernt.
+
+### Stand nach der Umsetzung (2026-11-15)
+Beide entfernt. Die virtiofsd laufen mit `--cache auto` ohne `--allow-mmap`
+(`lines.rs`, `file_daemon_tail`), die Prüfung der Voraussetzungen fragt
+virtiofsd nur noch nach `--readonly`, `--fd` und `--cache`, und keine
+Fassung des Gastkernels wird mehr abgelehnt; der Beleg des Doctors nennt die
+Fassung aus dem Kopf der Konfiguration weiter, oder dass sie unbekannt ist
+(`prerequisites.rs`). Das Gerüst der KVM-Tests (`test_vm.rs`) lief noch mit
+`--cache never --allow-mmap` und folgt jetzt der Endform.
+
+Warum beide zu `never` gehörten: Unter `never` (und `metadata`) öffnet
+virtiofsd jede Datei mit `FOPEN_DIRECT_IO`, also ohne Seitencache des Gasts.
+Eine solche Datei bildet der Gastkernel nur geteilt ab, wenn der Dienst
+`FUSE_DIRECT_IO_ALLOW_MMAP` anbietet (`--allow-mmap`) und der Kernel es
+kennt (ab 6.6); sonst `ENODEV`. Unter `auto` öffnet virtiofsd keine Datei so
+(`--allow-direct-io` setzen wir nicht), und `MAP_SHARED` geht durch den
+Seitencache, wie FUSE es seit jeher kann. Die Hilfe von virtiofsd 1.14 rät
+zudem, `--allow-mmap` nur zu setzen, wenn der Dienst den Ordner für sich
+allein hat; der Projektordner gehört dem Nutzer.
+
+Gemessen mit dem neuen KVM-Test `shared_mappings_work_without_allow_mmap`
+(512 MiB, 1 CPU, QEMU 11.1.3, virtiofsd 1.14.0): in Python `mmap(MAP_SHARED)`
+lesend auf `/usr/bin/bash`, schreibend auf eine Datei unter `/work` mit
+`msync` (der Host liest danach `hum484` in der Datei), SQLite im WAL-Modus
+(1000 Zeilen, zweite Verbindung, `-shm` geteilt abgebildet), dazu
+`git init/add/commit` und `gcc` samt Start des Programms (Status 42); je
+direkt und in einer Wegwerf-Sitzung (dort dient der Dienst der Schicht
+`/work`, die Datei landet in der Schicht, das Projekt bleibt unberührt).
+
+| virtiofsd | Gastkernel | Ergebnis |
+|---|---|---|
+| `--cache auto --allow-mmap` (vorher) | 6.12.115 (CI) | grün |
+| `--cache auto` | 6.12.115 (CI) | grün |
+| `--cache auto` | 7.3.4 (lokal) | grün |
+| `--cache never` | 6.12.115 (CI) | rot: `root-read` und `work-write` `OSError: [Errno 19] No such device`, SQLite `disk I/O error`; `git` und `gcc` gehen (sie bilden nicht geteilt ab) |
+| `--cache never --allow-mmap` (HUM-469) | 6.12.115 (CI) | grün |
+
+Die Zeile `never` ohne Option ist zugleich der Mutationsbeweis des Tests.
+
+Gastkernel unter 6.6: Auf dem Rechner liegt keiner (lokal 7.2 und 7.3, CI
+6.12.115), gebaut wurde keiner. Die Begründung deshalb aus dem Mechanismus
+und den Fassungen: Der einzige Grund der Untergrenze war
+`FUSE_DIRECT_IO_ALLOW_MMAP`, und der Gastkernel fragt dieses Merkmal nur bei
+einer Datei mit `FOPEN_DIRECT_IO` ab, die es unter `auto` nicht gibt; die
+Tabelle zeigt den Unterschied genau an dieser Stelle. Was der Gast sonst
+braucht, hat ältere Untergrenzen laut den Kernel-Fassungen (virtiofs 5.4,
+`overlay` mit `userxattr` 5.11, `close_range(CLOSE_RANGE_CLOEXEC)` 5.11 (Start der Probe als Root),
+`open_tree` 5.2), ungetestet; ein Kernel, dem eines davon fehlt, scheitert
+laut: Er bootet die virtiofs-Wurzel nicht, oder der Shim meldet die
+Prüfung rot (`guest.rs`: ein `overlay`, das nicht einhängt, färbt
+`MountsMatch`, ein Filter, der nicht greift, `SeccompApplied`), und die
+Sitzung wird abgelehnt. Die Ablehnung der Untergrenze sollte eine Sitzung
+verhindern, die kaputt ist, ohne es zu sagen; die gibt es unter `auto` nicht
+mehr. Getestet sind weiter 6.12 und 7.x.
+
+Tests: `the_guest_kernel_version_is_shown_and_never_refused`
+(prerequisites.rs; 6.1, 6.12 und 7.3 bestehen und stehen im Beleg),
+Mutationsbeweis: die Untergrenze 6.6 zurück, 6.1 wird abgelehnt, der Test
+wird rot. `a_capability_missing_from_the_help_is_named` fragt statt
+`--allow-mmap` nach `--cache`. Die Zeilen in `lines.rs` verlangen
+`--cache auto` ohne `--allow-mmap`; Mutationsbeweis: die Option zurück,
+drei Tests werden rot. Dokumente: SECURITY en/de („Shared mappings",
+Voraussetzungen), THREAT-MODEL en/de (Verlauf K-33).
 
 ---
 

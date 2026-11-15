@@ -1844,6 +1844,158 @@ fn a_guest_cannot_drive_the_root_file_daemon_over_its_descriptor_limit() {
     assert_eq!(status.code(), Some(0), "the agent's exit code: {shown}");
 }
 
+/// Die geteilten Abbildungen des Tests unten (HUM-484), in Python, damit
+/// jeder Schritt genau `mmap(MAP_SHARED)` ist: eine Datei der Wurzel lesen,
+/// eine Datei unter `/work` beschreiben, und `SQLite` im WAL-Modus, das seinen
+/// Index (`-shm`) geteilt abbildet. Jeder Schritt meldet `ok` oder den
+/// Fehler.
+const SHARED_MAP_SCRIPT: &str = r#"import mmap, os, sqlite3
+
+def root_read():
+    with open("/usr/bin/bash", "rb") as f:
+        m = mmap.mmap(f.fileno(), 0, mmap.MAP_SHARED, mmap.PROT_READ)
+        return "ok" if m[:4] == b"\x7fELF" else "bad"
+
+def work_write():
+    path = "/work/shared-484.bin"
+    with open(path, "w+b") as f:
+        f.truncate(4096)
+        m = mmap.mmap(f.fileno(), 4096, mmap.MAP_SHARED, mmap.PROT_READ | mmap.PROT_WRITE)
+        m[:6] = b"hum484"
+        m.flush()
+        m.close()
+    with open(path, "rb") as f:
+        return "ok" if f.read(6) == b"hum484" else "bad"
+
+def sqlite_wal():
+    path = "/work/wal-484.sqlite"
+    db = sqlite3.connect(path)
+    mode = db.execute("pragma journal_mode=wal").fetchone()[0]
+    db.execute("create table t(x)")
+    db.executemany("insert into t values (?)", [(i,) for i in range(1000)])
+    db.commit()
+    count = sqlite3.connect(path).execute("select count(*) from t").fetchone()[0]
+    shm = os.path.exists(path + "-shm")
+    return "ok" if (mode, count, shm) == ("wal", 1000, True) else f"bad {mode} {count} {shm}"
+
+for name, step in [("root-read", root_read), ("work-write", work_write), ("sqlite-wal", sqlite_wal)]:
+    try:
+        print(f"{name}:{step()}", flush=True)
+    except Exception as err:
+        print(f"{name}:error {type(err).__name__}: {err}", flush=True)
+"#;
+
+/// Der Agent des Tests unten: die Abbildungen aus [`SHARED_MAP_SCRIPT`],
+/// dann was ein Agent sonst unter `/work` tut, `git` und ein Compiler samt
+/// Start des Ergebnisses.
+const SHARED_MAP_AGENT: &str = r#"cd /work
+python3 /work/shared-484.py 2>&1
+git config --global safe.directory '*' 2>/dev/null
+mkdir repo-484 && cd repo-484 && git init -q && echo x > f && git add f \
+  && git -c user.name=h -c user.email=h@h commit -qm m && echo "git:$(git rev-list --count HEAD)"
+cd /work
+printf 'int main(void) { return 42; }\n' > c-484.c && gcc -o c-484 c-484.c && ./c-484; echo "cc:$?"
+echo shared-done-484
+"#;
+
+/// Startet [`SHARED_MAP_AGENT`], direkt oder über `layer` als Wegwerf-Sitzung,
+/// und gibt seine Ausgabe nach dem Ende der Sitzung zurück.
+fn run_shared_map_agent(harness: &Harness, layer: Option<&crate::Layer>) -> String {
+    use crate::SandboxBackend as _;
+    let meta = std::fs::metadata(&harness.project).unwrap();
+    let (plan, output) = harness.plan_options(SHARED_MAP_AGENT, Vec::new(), None, |options| {
+        if let Some(layer) = layer {
+            options.disposable = Some(crate::launcher::DisposableLayer::Overlay(layer.dirs()));
+            options.expected_work_inode = Some((
+                std::os::unix::fs::MetadataExt::dev(&meta),
+                std::os::unix::fs::MetadataExt::ino(&meta),
+            ));
+        }
+    });
+    let handle = harness
+        .backend
+        .launch(&plan)
+        .unwrap_or_else(|d| panic!("launch: {}: {}", d.code, d.why));
+    assert_admitted(harness, &handle);
+    let mut seen = Vec::new();
+    let done = wait_output(
+        &output,
+        &mut seen,
+        "shared-done-484",
+        Duration::from_secs(120),
+    );
+    let shown = String::from_utf8_lossy(&seen).into_owned();
+    assert!(done, "{shown}\n{}", harness.consoles());
+    let status = handle
+        .wait_timeout(Duration::from_secs(30))
+        .expect("the session ends")
+        .expect("a status");
+    assert_eq!(status.code(), Some(0), "{shown}");
+    shown
+}
+
+/// HUM-484: Unter `--cache auto` gehen geteilte Abbildungen auf `/` und
+/// `/work` ohne `--allow-mmap` durch, direkt und in einer Wegwerf-Sitzung
+/// (dort dient der Dienst der Schicht `/work`): lesen, schreiben bis in die
+/// Datei auf dem Host, `SQLite` im WAL-Modus, dazu `git` und ein Compiler.
+/// `--allow-mmap` und `FUSE_DIRECT_IO_ALLOW_MMAP` (Linux 6.6) betreffen nur
+/// Dateien, die virtiofsd mit `FOPEN_DIRECT_IO` öffnet, unter `auto` also
+/// keine.
+///
+/// Mutationsbeweis: `--cache never` ohne `--allow-mmap` in
+/// `file_daemon_tail`; jede geteilte Abbildung scheitert mit `ENODEV`, und
+/// der Test wird rot.
+#[test]
+fn shared_mappings_work_without_allow_mmap() {
+    let test = "shared_mappings_work_without_allow_mmap";
+    let Some(harness) = Harness::new(test) else {
+        return;
+    };
+    let project = &harness.project;
+    std::fs::write(project.join("shared-484.py"), SHARED_MAP_SCRIPT).unwrap();
+    let expect = |shown: &str, place: &str| {
+        for line in [
+            "root-read:ok",
+            "work-write:ok",
+            "sqlite-wal:ok",
+            "git:1",
+            "cc:42",
+        ] {
+            assert!(shown.contains(line), "{place}: no {line}: {shown}");
+        }
+    };
+    let shown = run_shared_map_agent(&harness, None);
+    expect(&shown, "direct");
+    let written = std::fs::read(project.join("shared-484.bin")).unwrap();
+    assert!(written.starts_with(b"hum484"), "the host file: {written:?}");
+    // Was die direkte Sitzung schrieb, geht, damit die Wegwerf-Sitzung
+    // dasselbe neu anlegt.
+    for entry in std::fs::read_dir(project).unwrap().flatten() {
+        let name = entry.file_name().to_string_lossy().into_owned();
+        if name.contains("-484") && name != "shared-484.py" {
+            let path = entry.path();
+            if path.is_dir() {
+                std::fs::remove_dir_all(&path).unwrap();
+            } else {
+                std::fs::remove_file(&path).unwrap();
+            }
+        }
+    }
+
+    let layer = masked_layer(&harness);
+    let before = crate::disposable::baseline(project).unwrap();
+    let shown = run_shared_map_agent(&harness, Some(&layer));
+    expect(&shown, "disposable");
+    let written = std::fs::read(layer.upper().join("shared-484.bin")).unwrap();
+    assert!(
+        written.starts_with(b"hum484"),
+        "the layer's file: {written:?}"
+    );
+    let now = crate::disposable::baseline(project).unwrap();
+    assert_eq!(now.entries(), before.entries(), "the project is untouched");
+    layer.discard().map_err(|(_, err)| err).unwrap();
+}
+
 /// Die Lasten der Messung unten (HUM-469, HUM-476), je mit Dauer, Status und
 /// der Zahl der `ENFILE`-Meldungen: kopieren, `git add`, `grep -r`, zweimal
 /// `git status`, `ls -lR` und zuletzt ein Walk über die ganze Wurzel.

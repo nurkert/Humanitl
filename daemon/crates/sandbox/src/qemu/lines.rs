@@ -379,14 +379,24 @@ fn bind_program(line: &mut Vec<OsString>, program: &Path) {
 /// `backlog/sprint-7.md`): höchstens das Doppelte der Zeit mit ungebremstem
 /// Cache, wo `--cache never` (HUM-469) bis zum Dreizehnfachen brauchte.
 ///
-/// `--allow-mmap` wirkt nur unter `never` und `metadata` und bleibt, solange
-/// `prerequisites` die Option verlangt. Unter `auto` gehen geteilte
-/// Abbildungen (`MAP_SHARED`, rustc und andere) durch den Seitencache. Die
-/// Grenze davon: Ändert der Nutzer auf dem Host eine Datei unter `/work`,
-/// während der Gast sie im Cache oder abgebildet hat, sieht der Gast die
-/// Änderung erst nach der Gültigkeit von einer Sekunde, eine Abbildung
-/// womöglich veraltete Seiten. Das betrifft die Kohärenz der Daten, keine
-/// Grenze der Sandbox: Der Gast sieht nur, was ihm ohnehin freigegeben ist.
+/// Kein `--allow-mmap` (HUM-484): Unter `auto` öffnet virtiofsd keine Datei
+/// mit `FOPEN_DIRECT_IO`, und geteilte Abbildungen (`MAP_SHARED`, `SQLite` im
+/// WAL-Modus, rustc und andere) gehen durch den Seitencache des Gasts, auf
+/// jedem Gastkernel. Die Option wirkt nur unter `never` und `metadata`, wo sie
+/// die Abbildung einer Datei ohne Seitencache erlaubt (Linux 6.6,
+/// `FUSE_DIRECT_IO_ALLOW_MMAP`), und virtiofsd rät sie ohnehin nur an, wenn
+/// der Dienst den Ordner für sich allein hat; der Ordner unter `/work`
+/// gehört dem Nutzer. Gemessen mit
+/// `kvm_tests::shared_mappings_work_without_allow_mmap`: ohne die Option
+/// direkt und in einer Wegwerf-Sitzung grün; unter `never` ohne sie scheitert
+/// jede geteilte Abbildung mit `ENODEV`.
+///
+/// Die Grenze geteilter Abbildungen unter `auto`: Ändert der Nutzer auf dem
+/// Host eine Datei unter `/work`, während der Gast sie im Cache oder
+/// abgebildet hat, sieht der Gast die Änderung erst nach der Gültigkeit von
+/// einer Sekunde, eine Abbildung womöglich veraltete Seiten. Das betrifft die
+/// Kohärenz der Daten, keine Grenze der Sandbox: Der Gast sieht nur, was ihm
+/// ohnehin freigegeben ist.
 fn file_daemon_tail(line: &mut Vec<OsString>, resolved: &Resolved) {
     push(
         line,
@@ -397,7 +407,6 @@ fn file_daemon_tail(line: &mut Vec<OsString>, resolved: &Resolved) {
             "error",
             "--cache",
             "auto",
-            "--allow-mmap",
         ],
     );
     if resolved.no_announce_submounts {
@@ -920,7 +929,10 @@ mod tests {
         // nie als `--rlimit-nofile`, das über einer kleineren geerbten Grenze
         // den Start scheitern ließe (HUM-469).
         for line in [&lines.root, &lines.work] {
-            assert!(has(line, &["--cache", "auto", "--allow-mmap"]), "{line:?}");
+            assert!(has(line, &["--cache", "auto"]), "{line:?}");
+            // HUM-484: unter `auto` ohne Wirkung, und nur für einen Ordner,
+            // den der Dienst für sich allein hat.
+            assert!(!has(line, &["--allow-mmap"]), "{line:?}");
             assert_eq!(count(line, "--cache"), 1, "{line:?}");
             assert!(
                 !words(line).iter().any(|w| w.starts_with("--rlimit-nofile")),
@@ -1081,7 +1093,7 @@ mod tests {
         let first_jail = script.find("bwrap").unwrap();
         assert!(lifeline < first_jail, "{script}");
         assert!(script.contains(
-            "--fd 3 --readonly --sandbox none --log-level error --cache auto --allow-mmap \
+            "--fd 3 --readonly --sandbox none --log-level error --cache auto \
              --no-announce-submounts 4<&- 5<&- 6<&-"
         ));
         assert!(script.contains("3<&- 5<&- 6<&-; kill -TERM $$"));
@@ -1122,7 +1134,8 @@ mod tests {
         assert!(has(layer, &["--shared-dir", LAYER_SHARE, "--socket-path"]));
         assert!(has(layer, &["--xattr"]));
         assert!(has(layer, &["--sandbox", "none"]));
-        assert!(has(layer, &["--cache", "auto", "--allow-mmap"]));
+        assert!(has(layer, &["--cache", "auto"]));
+        assert!(!has(layer, &["--allow-mmap"]));
         assert!(has(layer, &["--no-announce-submounts"]));
         assert!(!has(layer, &["--readonly"]));
         assert!(
