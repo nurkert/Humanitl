@@ -121,8 +121,12 @@ abstract final class ProtoVersion {
   /// `SandboxBackends` with the same plan, and reads
   /// `SandboxBackendList.auto_backend` for the segment "Automatic"
   /// (HUM-440).
+  /// Raised to 40 with the backend of the session for a pull: the
+  /// SANDBOX_043 card sends the plan of the snapshots, with the chosen
+  /// backend, as `ImagePull.plan` (HUM-500). The number covers 39 as well,
+  /// which was not raised here on its own.
   /// Raising the number without a reader would claim otherwise.
-  static const int minor = 38;
+  static const int minor = 40;
 
   /// `major.minor` as text.
   static const String text = '$major.$minor';

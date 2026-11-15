@@ -1012,8 +1012,9 @@ message SandboxRequest {
     // ohne Registry, `SANDBOX_043`, wenn das Ziehen scheitert oder danach
     // nicht genau dieser Digest vorliegt, `SANDBOX_048`, solange das Backend
     // mit Abbildern nicht zugelassen ist, `SANDBOX_034` fuer ein Backend ohne
-    // Abbilder. Ein Daemon vor Minor 36 antwortet mit einer Momentaufnahme
-    // wie auf `status`.
+    // Abbilder. Mit `ImagePull.plan` zieht das Backend, das ein Start mit
+    // diesem Plan bekaeme (HUM-500). Ein Daemon vor Minor 36 antwortet mit
+    // einer Momentaufnahme wie auf `status`.
     ImagePull image_pull = 11;
     // Bricht ein laufendes Ziehen ab (HUM-457): das mit dieser
     // `ImagePull.pull_id`. Der Daemon beendet die Prozessgruppe des Ziehens
@@ -1039,6 +1040,17 @@ message SandboxRequest {
     // wie vor Minor 37. Eine unlesbare Kennung, oder eine, unter der gerade
     // ein anderes Ziehen laeuft, ist `IPC_005`, und nichts wird gezogen.
     string pull_id = 2;
+    // Der Plan des Starts, fuer den gezogen wird, wie
+    // `SandboxBackendsRequest.plan` (HUM-500). Das Backend des Ziehens ist
+    // dann das, das ein Start mit diesem Plan bekaeme: `Plan.backend` als
+    // Wahl der Sitzung, Projekt-Profil, Untergrenze, Zulassung und das
+    // Backend, das das Sandbox-Profil verlangt; waehrend eine Sitzung
+    // laeuft, deren Konfiguration. Ein Name, den das Schema nicht kennt, ist
+    // `CONFIG_003` wie beim Start, und nichts wird gezogen. Fehlt der Plan,
+    // gilt `sandbox.backend` der gespeicherten Konfiguration, wie vor
+    // Minor 40. Ein Daemon vor Minor 40 kennt das Feld nicht und zieht mit
+    // der Einstellung.
+    Plan plan = 3;
   }
 
   // Welches Ziehen abgebrochen wird (HUM-457).

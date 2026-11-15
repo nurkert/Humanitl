@@ -1019,6 +1019,20 @@ fn merge_overrides(
         .collect()
 }
 
+/// Das Backend, das dieser Aufruf als `sandbox.backend` in
+/// `Start.cli_overrides` schicken würde: `--backend` vor
+/// `HUMANITL_SANDBOX__BACKEND`, `None` ohne beides (HUM-500). So wählt
+/// `humanitl sandbox image pull` dasselbe Backend wie `humanitl run`.
+pub(crate) fn session_backend(
+    cli_pairs: Vec<(String, String)>,
+    resolved: &Resolved,
+) -> Option<String> {
+    merge_overrides(cli_pairs, resolved)
+        .into_iter()
+        .find(|pair| pair.path == "sandbox.backend")
+        .map(|pair| pair.value)
+}
+
 /// `sandbox.backend` und `sandbox.podman.runtime`, wo sie in der Auflösung
 /// dieses Aufrufs aus der Umgebung kommen (`HUMANITL_SANDBOX__BACKEND`,
 /// `HUMANITL_SANDBOX__PODMAN__RUNTIME`, HUM-432).

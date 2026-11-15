@@ -385,6 +385,7 @@ class TestDaemonClient implements DaemonClient {
   Future<PulledImage> pullImage({
     String reference = '',
     String pullId = '',
+    String? backend,
   }) async => throw const DaemonException(
     Diagnostic(
       code: 'SANDBOX_034',

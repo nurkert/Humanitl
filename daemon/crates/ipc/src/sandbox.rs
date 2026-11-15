@@ -864,8 +864,7 @@ impl SandboxService {
     /// `CONFIG_001` oder `CONFIG_003`, wenn es das Profil nicht gibt oder
     /// sich nicht lesen lässt.
     pub fn profile_backend(&self, name: &str) -> Result<String, Diagnostic> {
-        let (path, _) = self.inner.profile_path(name)?;
-        Ok(SandboxProfile::load(&path)?.sandbox.backend)
+        self.inner.profile_backend(name)
     }
 
     /// Die Gruppe `sandbox` und die Anforderung des Sandbox-Profils, die ein
@@ -888,23 +887,7 @@ impl SandboxService {
         &self,
         plan: &v1::sandbox_request::Plan,
     ) -> Result<(humanitl_config::SandboxRef, String), Diagnostic> {
-        self.inner.consistent(
-            plan,
-            |config, refused| {
-                if let Some(found) = refused {
-                    return Err(found.clone());
-                }
-                let wish = self.inner.plan_choice(config, plan)?;
-                let name = self
-                    .inner
-                    .profile_name(config, &self.inner.staged(&wish), plan);
-                let profile_backend = self
-                    .profile_backend(&name)
-                    .unwrap_or_else(|_| humanitl_sandbox::AUTO_BACKEND.to_owned());
-                Ok((config.sandbox.clone(), profile_backend))
-            },
-            drop,
-        )
+        self.inner.plan_sandbox(plan)
     }
 
     /// Das Terminal, das ein `Open` meint: mit `shell_id` das einer weiteren
@@ -1235,6 +1218,95 @@ impl Inner {
             |poisoned| Arc::clone(&poisoned.into_inner()),
             |slot| Arc::clone(&slot),
         )
+    }
+
+    /// Das Backend, das das Sandbox-Profil mit diesem Namen verlangt
+    /// ([`SandboxService::profile_backend`]).
+    fn profile_backend(&self, name: &str) -> Result<String, Diagnostic> {
+        let (path, _) = self.profile_path(name)?;
+        Ok(SandboxProfile::load(&path)?.sandbox.backend)
+    }
+
+    /// Die Gruppe `sandbox` und die Anforderung des Sandbox-Profils eines
+    /// Starts mit diesem Plan ([`SandboxService::plan_sandbox`]). Ein
+    /// Sandbox-Profil, das sich nicht lesen lässt, verlangt hier kein
+    /// Backend: Die Liste bleibt stehen, und den Befund nennt der Plan.
+    fn plan_sandbox(
+        &self,
+        plan: &v1::sandbox_request::Plan,
+    ) -> Result<(humanitl_config::SandboxRef, String), Diagnostic> {
+        self.plan_sandbox_with(plan, ProfileRead::Tolerant)
+    }
+
+    /// [`Inner::plan_sandbox`] mit der Wahl, was ein Sandbox-Profil heißt,
+    /// das sich nicht lesen lässt: [`ProfileRead::Tolerant`] verlangt dann
+    /// kein Backend, [`ProfileRead::Strict`] gibt seinen Befund zurück, wie
+    /// der Start ihn gäbe (HUM-500, für das Ziehen).
+    fn plan_sandbox_with(
+        &self,
+        plan: &v1::sandbox_request::Plan,
+        read: ProfileRead,
+    ) -> Result<(humanitl_config::SandboxRef, String), Diagnostic> {
+        self.consistent(
+            plan,
+            |config, refused| {
+                if let Some(found) = refused {
+                    return Err(found.clone());
+                }
+                let wish = self.plan_choice(config, plan)?;
+                let name = self.profile_name(config, &self.staged(&wish), plan);
+                let profile_backend = match (self.profile_backend(&name), read) {
+                    (Ok(backend), _) => backend,
+                    (Err(found), ProfileRead::Strict) => return Err(found),
+                    (Err(_), ProfileRead::Tolerant) => humanitl_sandbox::AUTO_BACKEND.to_owned(),
+                };
+                Ok((config.sandbox.clone(), profile_backend))
+            },
+            drop,
+        )
+    }
+
+    /// Das Backend eines Ziehens (HUM-439, HUM-500).
+    ///
+    /// Das gesetzte ([`SandboxPorts::backend`], nur die Escape-Suite und
+    /// Tests), sonst das, das ein Start bekäme: mit `plan` dieselbe Auflösung
+    /// wie [`Inner::plan_sandbox`] samt `Plan.backend`, Untergrenze,
+    /// Zulassung und der Anforderung des Sandbox-Profils; ohne Plan
+    /// `sandbox.backend` der Konfiguration auf der Platte, wie vor HUM-500.
+    /// Gesucht wird wie beim Start über [`Backend::detect`], ohne Rückfall:
+    /// Was die Suche ablehnt, zieht nicht.
+    ///
+    /// # Errors
+    ///
+    /// Die Befunde des Plans (`CONFIG_003` für ein Backend, das das Schema
+    /// nicht kennt), des Sandbox-Profils (`CONFIG_001`, `CONFIG_003`), der Wahl (`SANDBOX_035`, `SANDBOX_036`, `SANDBOX_048`)
+    /// und der Suche.
+    fn pull_backend(
+        &self,
+        plan: Option<&v1::sandbox_request::Plan>,
+    ) -> Result<Backend, Diagnostic> {
+        if let Some(given) = &self.backend {
+            return Ok(given.clone());
+        }
+        let (sandbox, profile_backend) = match plan {
+            // Ein Sandbox-Profil, das sich nicht lesen lässt, hält das
+            // Ziehen auf wie den Start: Seine Anforderung an das Backend ist
+            // unbekannt, und ein Ziehen mit einem anderen Backend träfe den
+            // Start nicht.
+            Some(plan) => self.plan_sandbox_with(plan, ProfileRead::Strict)?,
+            // Wie eine Vorschau: die Konfiguration, wie sie jetzt auf der
+            // Platte steht, damit ein eben gesetztes Abbild ohne Neustart
+            // gilt.
+            None => (
+                self.plan_config(&v1::sandbox_request::Plan::default())
+                    .0
+                    .sandbox
+                    .clone(),
+                humanitl_sandbox::AUTO_BACKEND.to_owned(),
+            ),
+        };
+        let choice = humanitl_sandbox::choose_backend(&sandbox, &profile_backend)?;
+        Backend::detect(choice.name, self.paths.clone(), &sandbox)
     }
 
     /// The configuration a `Plan` or `Argv` answers from, taken once
@@ -2997,10 +3069,10 @@ impl Inner {
 
     /// `Op::ImagePull`: zieht ein Abbild auf ausdrücklichen Wunsch (HUM-439).
     ///
-    /// Das Backend ist das gesetzte ([`SandboxPorts::backend`], nur die
-    /// Escape-Suite und Tests), sonst das, das `sandbox.backend` wählt, über
-    /// [`Backend::detect`]: Vor der Zulassung der Container-Engine lehnt das
-    /// mit `SANDBOX_048` ab, und es wird nichts gezogen. Ein Start zieht nie;
+    /// Das Backend ist das eines Starts mit `ImagePull.plan`
+    /// ([`Inner::pull_backend`], HUM-500): Vor der Zulassung der
+    /// Container-Engine lehnt das mit `SANDBOX_048` ab, und es wird nichts
+    /// gezogen. Ein Start zieht nie;
     /// nur diese Operation tut es, und das Netz nutzt dabei die Engine
     /// selbst, nicht der Proxy.
     ///
@@ -3013,18 +3085,7 @@ impl Inner {
         slot: crate::image_pulls::PullSlot,
         tx: &mpsc::Sender<v1::SandboxEvent>,
     ) {
-        // Wie eine Vorschau: die Konfiguration, wie sie jetzt auf der Platte
-        // steht, damit ein eben gesetztes Abbild ohne Neustart gilt.
-        let (config, _) = self.plan_config(&v1::sandbox_request::Plan::default());
-        let backend = match &self.backend {
-            Some(given) => Ok(given.clone()),
-            None => {
-                humanitl_sandbox::choose_backend(&config.sandbox, humanitl_sandbox::AUTO_BACKEND)
-                    .and_then(|choice| {
-                        Backend::detect(choice.name, self.paths.clone(), &config.sandbox)
-                    })
-            }
-        };
+        let backend = self.pull_backend(request.plan.as_ref());
         let pulled =
             backend.and_then(|backend| backend.pull_image(&request.reference, slot.cancel()));
         // Erst jetzt ist das Ziehen zu Ende; ein wartender Abbruch erfährt es
@@ -4285,7 +4346,16 @@ struct AgentContribution {
     warnings: Vec<Diagnostic>,
 }
 
-/// `LLM_009` as a warning: the caller's command starts without the key.
+/// Was ein Sandbox-Profil, das sich nicht lesen lässt, beim Auflösen eines
+/// Plans heißt ([`Inner::plan_sandbox_with`], HUM-500).
+#[derive(Clone, Copy, Debug)]
+enum ProfileRead {
+    /// Es verlangt kein Backend: die Liste der Backends.
+    Tolerant,
+    /// Sein Befund gilt, wie beim Start: das Ziehen eines Abbilds.
+    Strict,
+}
+
 /// Prüft ein gesetztes Backend gegen die Wahl aus `sandbox.backend`
 /// (HUM-435, [`SandboxPorts::backend`]).
 ///
@@ -8449,6 +8519,7 @@ mod image_pull_tests {
             v1::sandbox_request::Op::ImagePull(v1::sandbox_request::ImagePull {
                 reference: String::new(),
                 pull_id,
+                plan: None,
             })
         };
         let events = answer(&service, pull("not-a-uuid".to_owned())).await;

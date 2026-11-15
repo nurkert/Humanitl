@@ -5812,6 +5812,10 @@ mixin FakeImagePull {
   /// The `pull_id` of every `Sandbox(ImagePull)`, in order, for tests.
   final List<String> imagePullIds = <String>[];
 
+  /// The backend of the session every `Sandbox(ImagePull)` carried in its
+  /// plan, in order, for tests (HUM-500); null for none.
+  final List<String?> imagePullBackends = <String?>[];
+
   /// The ids `Sandbox(CancelImagePull)` was asked for, in order, for tests.
   final List<String> imagePullCancels = <String>[];
 
@@ -5836,9 +5840,11 @@ mixin FakeImagePull {
   Future<PulledImage> pullImage({
     String reference = '',
     String pullId = '',
+    String? backend,
   }) async {
     imagePulls.add(reference);
     imagePullIds.add(pullId);
+    imagePullBackends.add(backend);
     if (pullId.isNotEmpty) {
       _checkPullId(pullId);
     }
