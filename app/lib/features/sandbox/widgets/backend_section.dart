@@ -27,7 +27,14 @@ import '../providers/backend_choice.dart';
 /// The section; nothing at all while nothing runs and the daemon lists no
 /// backend (an older daemon, no answer yet). With one backend only (macOS)
 /// it shows the line and the lower bound without the segments.
-class SandboxBackendSection extends ConsumerWidget {
+///
+/// A new choice asks for the list of a start on that backend, and that list
+/// has no answer yet the first time. Until it arrives the section keeps the
+/// list it showed last, with the new choice already selected, so it neither
+/// collapses nor shifts what lies under it (HUM-504). That list belongs to
+/// the previous plan: its lines are muted and the segments disabled until
+/// the answer for the new choice is there.
+class SandboxBackendSection extends ConsumerStatefulWidget {
   /// Creates the section for [status].
   const SandboxBackendSection({required this.status, super.key});
 
@@ -35,10 +42,23 @@ class SandboxBackendSection extends ConsumerWidget {
   final SandboxStatus status;
 
   @override
-  Widget build(BuildContext context, WidgetRef ref) {
+  ConsumerState<SandboxBackendSection> createState() =>
+      _SandboxBackendSectionState();
+}
+
+class _SandboxBackendSectionState extends ConsumerState<SandboxBackendSection> {
+  /// The list the section showed last; it stands in while the list for a
+  /// newly chosen backend is still loading.
+  SandboxBackendList? _lastShown;
+
+  @override
+  Widget build(BuildContext context) {
+    final SandboxStatus status = widget.status;
     final HTokens tokens = HTheme.of(context);
     final AppLocalizations l10n = context.l10n;
     if (status.isUp || status.isBusy) {
+      // Eine Liste von vor der Sitzung steht danach für keine Wahl mehr ein.
+      _lastShown = null;
       if (status.backend.isEmpty) {
         return const SizedBox.shrink();
       }
@@ -59,9 +79,20 @@ class SandboxBackendSection extends ConsumerWidget {
     // Dieselbe Liste wie für den Plan des Schnappschusses, mit dem Backend
     // der Sitzung (HUM-440).
     final String? session = ref.watch(sessionSandboxBackendProvider);
-    final SandboxBackendList? list = ref
-        .watch(sandboxBackendsProvider(session))
-        .value;
+    final AsyncValue<SandboxBackendList> answer = ref.watch(
+      sandboxBackendsProvider(session),
+    );
+    // Nur solange die Antwort unterwegs ist, steht die alte Liste ein. Ein
+    // Fehler (ein Daemon ohne den Aufruf) zeigt nichts, auch wenn Riverpod
+    // nach einer gescheiterten Auffrischung den alten Wert noch hält.
+    final SandboxBackendList? list = answer.hasError
+        ? null
+        : answer.value ?? _lastShown;
+    _lastShown = list;
+    // Die alte Liste gehört zum Plan des vorigen Backends: Sie hält den
+    // Platz, sieht aber nicht aktuell aus und lässt nichts wählen, bis die
+    // Antwort für das neue da ist.
+    final bool pending = list != null && !answer.hasValue;
     if (list == null || list.offered.isEmpty) {
       return const SizedBox.shrink();
     }
@@ -82,6 +113,7 @@ class SandboxBackendSection extends ConsumerWidget {
             options: sandboxBackendOptions(l10n, list),
             selected: shown,
             onSelect: ref.read(sandboxBackendChoiceProvider.notifier).choose,
+            enabled: !pending,
           ),
           SizedBox(height: tokens.spacing.x2),
         ],
@@ -89,6 +121,7 @@ class SandboxBackendSection extends ConsumerWidget {
           list: list,
           keyPrefix: 'sandbox-backend',
           showMinimum: true,
+          pending: pending,
         ),
         if (choosing) ...<Widget>[
           SizedBox(height: tokens.spacing.x1),

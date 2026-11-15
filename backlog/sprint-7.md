@@ -2799,6 +2799,23 @@ Aus dem Ultra-Review. Beim Wählen eines Backends ist `sandboxBackendsProvider(s
 1. Kein Flackern des Abschnitts beim Wechsel.
 
 
+
+### Status
+Erledigt. `SandboxBackendSection` merkt sich die zuletzt gezeigte Liste und
+zeigt sie, solange die Antwort für ein neu gewähltes Backend unterwegs ist:
+gedämpft, mit gesperrten Segmenten und dem neuen Segment schon gewählt; Höhe
+und Lage bleiben gleich. Ein Fehler blendet den Abschnitt aus, auch wenn
+Riverpod nach einer gescheiterten Auffrischung den alten Wert noch hält; eine
+laufende Sitzung verwirft die gemerkte Liste. Widget-Tests für das Laden und
+die gescheiterte Auffrischung; vier Mutationen rot.
+
+Review: Codex zwei minor (alte Liste wirkte aktuell und bedienbar; Fehler
+nach dem Wert geprüft), beide übernommen. Sonnet als Ersatz für Antigravity
+kein blocking oder major; übernommen: die gemerkte Liste endet mit einer
+Sitzung. Offen als Kandidat: eine Auffrischung desselben Mitglieds (anderes
+Projekt, Konfiguration) behält ihren Wert und zeigt ihn nicht als
+ausstehend; die Farbe der Gründe während des Ladens ist nicht eigens
+getestet.
 ---
 
 ## HUM-505 · CLI: der Fix von `sandbox image pull` nennt die Referenz
