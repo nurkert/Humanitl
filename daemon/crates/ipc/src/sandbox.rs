@@ -2717,11 +2717,22 @@ impl Inner {
         // Die Masken des Profils: Der Scan schreibt auf, unter und über ihnen
         // nichts. Liegen sie über dem Overlay, erreicht die obere Schicht sie
         // nie; unter der Kernel-Stufe liegen sie in der unteren Schicht, und
-        // Root im Gast könnte an ihnen vorbei schreiben (HUM-446).
+        // Root im Gast könnte an ihnen vorbei schreiben (HUM-446). Der Scan
+        // vergleicht sie genau; ein Projekt, das Schreibweisen gleichsetzt,
+        // startet deshalb nicht als Wegwerf-Sandbox (HUM-482).
         #[cfg(not(target_os = "macos"))]
-        let layer = humanitl_sandbox::Layer::create(&self.paths.runtime_dir().path)
-            .map_err(Before)?
-            .with_masks(humanitl_sandbox::clone_masks(&prepared.profile, &resolved));
+        let layer = {
+            let masks = humanitl_sandbox::clone_masks(&prepared.profile, &resolved);
+            #[cfg(target_os = "linux")]
+            humanitl_sandbox::disposable::refuse_case_folding(
+                std::os::fd::AsFd::as_fd(&lower),
+                &masks,
+            )
+            .map_err(Before)?;
+            humanitl_sandbox::Layer::create(&self.paths.runtime_dir().path)
+                .map_err(Before)?
+                .with_masks(masks)
+        };
         let meta = lower
             .try_clone()
             .map(std::fs::File::from)

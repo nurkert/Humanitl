@@ -18,7 +18,13 @@
 //! Unit fort ist ([`crate::disposable::ensure_ended`]), mit dem Scan, der
 //! auch unter bwrap gilt, und der lehnt dazu jede Änderung auf, unter oder
 //! über einer Maske ab: Im Gast liegen die Masken in der unteren Schicht,
-//! und Root im Gast könnte die Schicht an ihnen vorbei beschreiben.
+//! und Root im Gast könnte die Schicht an ihnen vorbei beschreiben. Benennt
+//! Root im Gast `upper` um oder ersetzt es, erkennt das
+//! [`crate::Layer::open_upper`] an Gerät und Inode vom Anlegen
+//! (`SANDBOX_031`, HUM-482). Dass der Host Schreibweisen faltet, sieht der
+//! Gast nicht, sein virtiofs reicht Namen nur durch; ein solches Projekt
+//! startet deshalb nicht als Wegwerf-Sandbox
+//! (`crate::disposable::refuse_case_folding`).
 
 use std::os::fd::OwnedFd;
 use std::os::unix::fs::MetadataExt as _;

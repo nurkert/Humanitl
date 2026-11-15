@@ -877,7 +877,18 @@ symbolic link out of the project. Under bubblewrap the profile's masks lie on to
 here they lie in the lower layer, and the agent may write over a masked path inside its own layer.
 The scan refuses every change on, under or above a mask, so neither a hook nor a secret reaches the
 project through the layer; the agent never sees what a mask hides, root in the guest included,
-because the mask lies in the jail of the project's daemon. *Residual risk:* a flaw in a file
+because the mask lies in the jail of the project's daemon. The comparison with the masks is
+exact, and the guest cannot see whether the host folds case: its virtiofs passes each name to the
+daemon on the host, whose `openat` folds in a casefolded folder, so `.GIT/hooks` in the layer would
+be `.git/hooks` in the project. A project whose root or a folder on the way to a mask folds case
+(the casefold attribute, vfat, exFAT, HFS+, SMB, or an existing mask entry that resolves under the
+other ASCII case) is therefore refused before the start (`SANDBOX_030`, HUM-482), and again before
+the layer is read and right before an apply writes (`SANDBOX_031`); under bubblewrap
+overlayfs refuses a casefolded folder itself (observed on Linux 7.3), which Humanitl does not rely
+on. Root in the guest can also rename or replace `upper` inside the layer directory; the daemon
+records its device and inode when it creates the layer and refuses a swapped or missing `upper`
+with `SANDBOX_031` (HUM-482). *Residual risk:* a file system that folds case without the attribute
+and outside the list (FUSE) passes when the mask entry does not exist yet; a flaw in a file
 system daemon reaches what it serves, the layer with the rights of `CAP_DAC_OVERRIDE` in its own
 namespace included; a scan flaw would show attacker-written bytes to the human, who still decides
 each apply.
@@ -994,6 +1005,7 @@ These attackers are not defended against, and Humanitl does not claim to:
 | 2026-11-15 | K-33: the unit of a kernel-level session binds at most `MemoryMax` (machine memory, 512 MiB for the helpers, the size of every tmpfs it writes to), as much swap and `TasksMax` (vCPUs plus 128); 64 MiB tmpfs per mask over the project; without the cgroup controllers `memory` and `pids`, or when the running unit's cgroup lacks the planned limits, the session is refused (`SANDBOX_052`) | HUM-485 |
 | 2026-11-15 | K-33: the file system daemons run without `--allow-mmap`, and no guest kernel version is refused any longer; both belonged to `--cache never` (HUM-469), under `--cache auto` shared mappings go through the guest's page cache on any kernel (measured on 6.12 and 7.3, directly and in a disposable session); a kernel too old for the guest's other needs fails its boot or check and the session is refused | HUM-484 |
 | 2026-11-15 | K-33: PID 1 in the guest also trims when the guest holds more than 49,152 inodes and 8,192 more than after the last trim, at 57,344 at the latest, so directory chains that a trim met in use and that were let go afterwards no longer stay until the limit; a KVM test shows that the agent holds none of the three files of the trim | HUM-483 |
+| 2026-11-15 | K-34, K-24: a disposable sandbox refuses a project whose root or a folder on the way to a mask folds case (casefold attribute, vfat, exFAT, HFS+, SMB, or a mask entry that resolves under the other ASCII case), because the scan compares masks exactly and the guest's virtiofs hides the host's folding (`SANDBOX_030`, `auto` runs direct); the daemon records the device and inode of `upper` at creation and refuses a swapped or missing `upper` with `SANDBOX_031` | HUM-482 |
 
 Every security-relevant change to the shim, the mount allowlist, the filter or the passthrough gets
 a line here. Vulnerabilities are reported as described in

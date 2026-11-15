@@ -602,6 +602,14 @@ impl Throwaway {
                     .build(),
             )
         })?;
+        // Ein Projekt, das Schreibweisen gleichsetzt, machte eine Maske über
+        // eine andere Schreibweise erreichbar (HUM-482).
+        #[cfg(target_os = "linux")]
+        humanitl_sandbox::disposable::refuse_case_folding(
+            std::os::fd::AsFd::as_fd(lower),
+            &humanitl_sandbox::clone_masks(&setup.profile, &resolved),
+        )
+        .map_err(Failure::new)?;
         let layer =
             humanitl_sandbox::Layer::create(&ctx.paths.runtime_dir().path).map_err(Failure::new)?;
         setup.options.approved_work_dir = Some(resolved);

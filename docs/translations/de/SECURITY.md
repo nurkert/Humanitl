@@ -2143,7 +2143,23 @@ den Garantien ändert das nichts, denn eine solche Verbindung erreicht nichts.
   Verweis aus dem Projekt hinaus wird je übernommen), und der Scan lehnt jede Änderung auf, unter
   oder über einer Maske des Profils ab, weil die Masken unter dieser Stufe in der unteren Schicht
   liegen und eine an ihnen vorbei geschriebene Schicht keinen Hook und kein Geheimnis ins Projekt
-  tragen darf. Die Host-Prüfung findet die geöffnete Schicht bei ihrem Dienst wie das Projekt.
+  tragen darf. Der Scan vergleicht Pfade genau mit den Masken; ein Projektordner, der Namen, die
+  sich nur in der Schreibweise unterscheiden, als einen Eintrag führt, ist deshalb keine
+  Wegwerf-Sandbox (HUM-482): Trägt die Wurzel des Projekts oder ein Ordner auf dem Weg zu einer
+  Maske das Attribut Casefold (`chattr +F` auf ext4, f2fs oder tmpfs), liegt er auf vfat, exFAT,
+  HFS+ oder SMB, oder nennt ein vorhandener Eintrag einer Maske in der anderen ASCII-Schreibweise
+  denselben Eintrag, wird der Start mit `SANDBOX_030` abgelehnt, und `auto` läuft direkt; dieselbe
+  Prüfung läuft erneut vor dem Lesen der Schicht und unmittelbar vor dem Schreiben einer Übernahme
+  und lehnt dann mit `SANDBOX_031` ab. Der Gast
+  sieht das Falten nicht: Sein virtiofs reicht jeden Namen an den Dienst auf dem Host weiter, und
+  erst dessen `openat` faltet, so dass ein in die Schicht geschriebenes `.GIT/hooks` in
+  `.git/hooks` landete. Die Masken stattdessen zu falten verlangte Unicode-Faltung mit
+  Normalisierung (das Kelvin-Zeichen faltet zu `k`), die ein Vergleich in ASCII verfehlt. Der
+  Daemon hält außerdem Gerät und Inode von `upper` beim Anlegen der Schicht fest und vergleicht
+  sie bei jedem Lesen: Root im Gast erreicht das Verzeichnis der Schicht und kann `upper`
+  umbenennen oder ersetzen, und ein getauschtes oder fehlendes `upper` ist `SANDBOX_031`, nie ein
+  anderes Verzeichnis, das gelesen wird.
+  Die Host-Prüfung findet die geöffnete Schicht bei ihrem Dienst wie das Projekt.
 - **Das Ende des Daemons beendet die Sitzung ohne den Gast.** Das Skript wartet auf die
   Lebensleine, deren Schreibende nur der Daemon hält; endet der Daemon, auch durch `SIGKILL`,
   endet das Skript, und der Dienstverwalter beendet jeden Prozess der Unit

@@ -1721,3 +1721,55 @@ fn nothing_on_under_or_above_a_mask_of_the_overlay_is_ever_applied() {
     let plain = scan_masked(upper.as_fd(), lower.as_fd(), &base, &[]);
     assert_eq!(plain, scan(upper.as_fd(), lower.as_fd(), &base));
 }
+
+/// Die obere Schicht ist beim Anlegen festgehalten (HUM-482): Unter der
+/// Kernel-Stufe erreicht Root im Gast das Verzeichnis der Schicht, und ein
+/// umbenanntes, ersetztes oder fehlendes `upper` ist `SANDBOX_031`, nie ein
+/// anderes Verzeichnis, das gelesen wird.
+///
+/// Mutationsbeweis: `upper_id` in `Layer::create_with` nicht setzen, und
+/// das ersetzte `upper` öffnet sich ohne Befund.
+#[test]
+fn a_swapped_upper_layer_is_refused() {
+    let dir = tempfile::tempdir().unwrap();
+    let runtime = dir.path().join("runtime");
+    let layer = Layer::create_with(&runtime, TmpfsCheck::Skip).unwrap();
+    fs::write(layer.upper().join("mine"), b"agent\n").unwrap();
+    layer.open_upper().expect("the layer as created");
+
+    // `work` an die Stelle von `upper`, wie es Root im Gast kann.
+    fs::rename(layer.upper(), layer.dir().join("old")).unwrap();
+    fs::rename(layer.work(), layer.upper()).unwrap();
+    let err = layer.open_upper().expect_err("work in place of upper");
+    assert_eq!(err.code.as_str(), "SANDBOX_031");
+    assert!(
+        err.why.contains("not the tree the daemon created"),
+        "{}",
+        err.why
+    );
+
+    // Ein frisches Verzeichnis unter dem Namen.
+    fs::remove_dir(layer.upper()).unwrap();
+    fs::create_dir(layer.upper()).unwrap();
+    let err = layer.open_upper().expect_err("a new upper");
+    assert!(
+        err.why.contains("not the tree the daemon created"),
+        "{}",
+        err.why
+    );
+
+    // Gar keins.
+    fs::remove_dir(layer.upper()).unwrap();
+    let err = layer.open_upper().expect_err("no upper");
+    assert_eq!(err.code.as_str(), "SANDBOX_031");
+    assert!(
+        err.why.contains("not the tree the daemon created"),
+        "{}",
+        err.why
+    );
+
+    // Das alte zurück, und es ist wieder die Schicht.
+    fs::rename(layer.dir().join("old"), layer.upper()).unwrap();
+    layer.open_upper().expect("the original upper again");
+    layer.discard().map_err(|(_, err)| err).unwrap();
+}

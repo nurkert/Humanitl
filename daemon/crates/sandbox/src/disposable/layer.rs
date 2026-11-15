@@ -53,9 +53,12 @@ pub struct Layer {
     /// Ob [`Layer::seal`] den Klon schon aus der Reichweite der Sandbox
     /// genommen hat.
     sealed: bool,
-    /// Gerät und Inode des Klons, gleich nach dem Klonen gemessen: Daran
-    /// erkennt jedes spätere Öffnen, dass es noch dieser Baum ist (HUM-374).
-    clone_id: Option<(rustix::fs::Dev, u64)>,
+    /// Gerät und Inode der oberen Schicht, gleich nach dem Anlegen gemessen
+    /// (unter macOS nach dem Klonen, HUM-374; unter Linux nach dem Anlegen
+    /// von `upper`, HUM-482): Daran erkennt jedes spätere Öffnen, dass es
+    /// noch dieser Baum ist. Unter der Kernel-Stufe erreicht Root im Gast das
+    /// Verzeichnis der Schicht und kann `upper` umbenennen oder ersetzen.
+    upper_id: Option<(rustix::fs::Dev, u64)>,
 }
 
 impl Layer {
@@ -109,13 +112,13 @@ impl Layer {
             ))
         })?;
         let dir = base.join(uuid::Uuid::now_v7().simple().to_string());
-        let layer = Self {
+        let mut layer = Self {
             dir,
             budget,
             start: usage,
             masks: Vec::new(),
             sealed: false,
-            clone_id: None,
+            upper_id: None,
         };
         // Unter macOS entsteht `upper` erst mit dem Klon, und ein Overlay,
         // das `work` bräuchte, gibt es nicht.
@@ -131,6 +134,13 @@ impl Layer {
                 .map_err(|err| {
                     not_possible(&format!("{} cannot be created ({err})", path.display()))
                 })?;
+        }
+        if !cfg!(target_os = "macos") {
+            let upper = layer.upper();
+            let stat = rustix::fs::lstat(&upper).map_err(|err| {
+                not_possible(&format!("{} has no identity ({err})", upper.display()))
+            })?;
+            layer.upper_id = Some((stat.st_dev, stat.st_ino));
         }
         Ok(layer)
     }
@@ -150,7 +160,7 @@ impl Layer {
             start,
             masks: Vec::new(),
             sealed: false,
-            clone_id: None,
+            upper_id: None,
         })
     }
 
@@ -200,7 +210,7 @@ impl Layer {
             Ok((dir, id)) => {
                 layer.dir = dir;
                 layer.masks = masks;
-                layer.clone_id = Some(id);
+                layer.upper_id = Some(id);
                 Ok(layer)
             }
             Err(diagnostic) => {
@@ -247,13 +257,13 @@ impl Layer {
     }
 
     /// Öffnet die obere Schicht, ohne einem Symlink zu folgen, und prüft, dass
-    /// es noch der Baum vom Klonen ist. Jedes Lesen der Schicht geht hierüber
-    /// (HUM-374).
+    /// es noch der Baum vom Anlegen ist. Jedes Lesen der Schicht geht hierüber
+    /// (HUM-374, unter Linux HUM-482).
     ///
     /// # Errors
     ///
-    /// `SANDBOX_031`, wenn sie sich nicht öffnen lässt oder ein anderer Baum
-    /// an ihrer Stelle liegt.
+    /// `SANDBOX_031`, wenn sie sich nicht öffnen lässt, fehlt oder ein anderer
+    /// Baum an ihrer Stelle liegt.
     pub fn open_upper(&self) -> Result<OwnedFd, Diagnostic> {
         let name = if self.sealed { SEALED } else { UPPER };
         let opened = self.anchor().and_then(|anchor| {
@@ -266,6 +276,7 @@ impl Layer {
         });
         let fd = opened.map_err(|err| match err {
             Errno::LOOP | Errno::NOTDIR => self.swapped(),
+            Errno::NOENT if self.upper_id.is_some() => self.swapped(),
             other => discard_failed(&self.dir, &format!("it cannot be opened ({other})")),
         })?;
         let stat = rustix::fs::fstat(&fd)
@@ -284,7 +295,7 @@ impl Layer {
     }
 
     fn check_identity(&self, stat: &rustix::fs::Stat) -> Result<(), Diagnostic> {
-        match self.clone_id {
+        match self.upper_id {
             Some(id) if id != (stat.st_dev, stat.st_ino) => Err(self.swapped()),
             _ => Ok(()),
         }

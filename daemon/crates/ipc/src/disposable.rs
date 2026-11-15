@@ -195,6 +195,24 @@ pub(crate) fn check_id(waiting: &Waiting, asked: &str) -> Result<(), Diagnostic>
 }
 
 impl Waiting {
+    /// Prüft das geöffnete Projekt erneut auf gefaltete Schreibweise auf dem
+    /// Weg zu einer Maske (HUM-482, Review): Der Start prüfte schon, aber der
+    /// Mensch kann seitdem einen leeren Ordner gefaltet oder einen Namen in
+    /// anderer Schreibweise angelegt haben. Gerufen vor dem Lesen der
+    /// Schicht und unmittelbar vor dem Schreiben; `SANDBOX_031` passt, weil
+    /// es der Befund des Übernahmewegs ist und dann nichts geschrieben ist.
+    #[cfg(target_os = "linux")]
+    fn refuse_case_folding(&self) -> Result<(), Diagnostic> {
+        disposable::refuse_case_folding_before_apply(self.lower.as_fd(), self.layer.masks())
+    }
+
+    /// Unter macOS vergleicht der Klon-Scan die Masken gefaltet (HUM-374).
+    #[cfg(not(target_os = "linux"))]
+    #[allow(clippy::unused_self, clippy::unnecessary_wraps)]
+    fn refuse_case_folding(&self) -> Result<(), Diagnostic> {
+        Ok(())
+    }
+
     /// Liest die obere Schicht und vergleicht sie mit dem Projekt.
     ///
     /// # Errors
@@ -227,6 +245,7 @@ impl Waiting {
                 self.layer.masks(),
             ));
         }
+        self.refuse_case_folding()?;
         Ok(disposable::scan_masked(
             upper.as_fd(),
             self.lower.as_fd(),
@@ -279,6 +298,9 @@ impl Waiting {
         let set = self.scan()?;
         let chosen = disposable::select(&set, &request.ids)?;
         let upper = self.layer.open_upper()?;
+        if !cfg!(target_os = "macos") {
+            self.refuse_case_folding()?;
+        }
         let report = disposable::apply(
             upper.as_fd(),
             self.lower.as_fd(),

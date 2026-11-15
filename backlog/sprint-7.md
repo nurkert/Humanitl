@@ -1729,6 +1729,69 @@ als Lesefehler statt als `SANDBOX_031`.
 1. Keine Maske lässt sich über die Schreibweise umgehen; ein getauschtes
    `upper` heißt `SANDBOX_031`.
 
+### Stand nach der Umsetzung (2026-11-15)
+**Verweigern statt falten.** Falten taugt nicht: ext4 und tmpfs falten nach
+Unicode mit Normalisierung, gemessen auf einem tmpfs mit `casefold` in einem
+Nutzer-Namensraum (Linux 7.3): `.git/hoo\u{212a}s` (Kelvin-Zeichen) ist
+`.git/hooks`, `.\u{17f}sh` (langes s) ist `.ssh`. Das ASCII-`folded` der
+Klon-Masken unter macOS verfehlt das. `disposable::refuse_case_folding`
+(`daemon/crates/sandbox/src/disposable/casefold.rs`) geht deshalb vor dem
+Anlegen der Schicht jeden Weg zu einer Maske im geöffneten Projekt Name für
+Name ab, ohne einem Symlink zu folgen, und lehnt mit `SANDBOX_030` (Rückweg
+`direct`, unter `auto` also `SANDBOX_033` und ein direkter Lauf) ab, wenn die
+Wurzel oder ein vorhandener Ordner auf dem Weg das Attribut Casefold trägt
+(`FS_IOC_GETFLAGS`), auf vfat, exFAT, HFS+ oder SMB liegt (`statfs`), oder ein
+vorhandener Name der Maske in der anderen ASCII-Schreibweise denselben Eintrag
+nennt (fängt ein faltendes FUSE, solange der Eintrag existiert). Gerufen im
+Start des Daemons für beide Backends und im Wegwerf-Lauf der CLI. Kein neuer
+Code.
+
+**Gastseite.** Das virtiofs im Gast kennt kein Casefold, es reicht jeden Namen
+an den virtiofsd weiter, und erst dessen `openat` auf dem Host faltet; Overlay
+im Gast und obere Schicht auf tmpfs unterscheiden die Schreibweise. Root im
+Gast hätte also `.GIT/hooks/pre-commit` in die Schicht legen können, und die
+Übernahme hätte nach `.git/hooks/pre-commit` geschrieben. Unter bwrap
+verweigert overlayfs einen Casefold-Ordner selbst: Mount-Fehler „case-sensitive
+directory on … is inconsistent", `EREMOTE` beim Nachschlagen in einem
+gefalteten Unterordner (gesehen unter Linux 7.3). Im Modus `direct` halten
+die Masken: Sie hängen auf dem Host über genau den Einträgen, und das gefaltete
+Nachschlagen trifft sie (`.ENV` und `.GIT/HOOKS` leer, gemessen).
+
+**Obere Schicht festgehalten.** `Layer::create_with` misst unter Linux Gerät
+und Inode von `upper` gleich nach dem Anlegen (`upper_id`, vorher `clone_id`
+nur unter macOS); `open_upper` vergleicht und meldet ein umbenanntes,
+ersetztes oder fehlendes `upper` als `SANDBOX_031` („not the tree the daemon
+created"). `work` wird nicht festgehalten: Der Daemon liest es nie, und das
+Verwerfen folgt keinem Symlink.
+
+**Tests.** `casefold_tests.rs`: fünf Tests mit vorgegebenem Leser des Attributs
+und harten Verweisen für das Nachschlagen, dazu
+`a_real_casefold_folder_is_refused`, der sich selbst unter `unshare -Urm` auf
+einem tmpfs mit `casefold` aufruft (ohne Rechte, kein `mkfs`, keine
+Loop-Einhängung) und überspringt, wo das nicht geht.
+`a_swapped_upper_layer_is_refused` in `disposable/tests.rs`;
+`a_project_that_folds_case_is_no_disposable_sandbox` in
+`daemon/crates/ipc/tests/sandbox_start.rs`. Mutationsbeweise: Attribut nie
+gelesen, Ordner nur an der Wurzel geprüft, Nachschlagen übergangen,
+`upper_id` nicht gesetzt, Aufruf im Start entfernt; jeder färbt einen Test rot.
+
+**Review.** Sonnet ohne blocking/major; Codex zwei Befunde, beide übernommen
+(als major, billig und fail-closed). (1) Falten, das nach dem Start entsteht
+(der Mensch faltet einen leeren Ordner auf dem Weg zu einer Maske oder legt
+einen Namen in anderer Schreibweise an), prüfte niemand mehr:
+`Waiting::refuse_case_folding` in `daemon/crates/ipc/src/disposable.rs` ruft
+`refuse_case_folding_before_apply` vor dem Lesen der Schicht und unmittelbar
+vor dem Schreiben einer Übernahme; der Befund ist `SANDBOX_031` (der Befund
+des Übernahmewegs, nichts geschrieben, Rückweg `humanitl sandbox discard`).
+Der Wegwerf-Lauf der CLI übernimmt nie und liest ohne Masken, dort keine
+zweite Prüfung. Test `folding_that_appears_after_the_start_refuses_the_apply`.
+(2) `same_entry` zählte jeden Fehler von `statat` als abwesend; jetzt nur
+`ENOENT` und `ENOTDIR`, jeder andere Fehler verweigert. Test
+`a_failed_lookup_of_the_other_case_refuses` mit eingespeistem Nachschlagen.
+Mutationsbeweise: Prüfung vor der Übernahme liefert immer `Ok`, jeder Fehler
+als abwesend; beide rot. Aus den Minors: klassisches HFS (`0x4244`) in der
+Liste.
+
 ---
 
 ## HUM-483 · Kernel level: bound held inodes too, guard PID 1's `/proc` descriptors
