@@ -874,6 +874,17 @@ impl ShellDoor {
         cols: u16,
         rows: u16,
     ) -> Result<Shell, Diagnostic> {
+        self.open_within(command, cols, rows, ANSWER_WAIT)
+    }
+
+    /// [`ShellDoor::open`] mit `wait` als Frist für die Antwort des Shims.
+    fn open_within(
+        self: &Arc<Self>,
+        command: &[String],
+        cols: u16,
+        rows: u16,
+        wait: Duration,
+    ) -> Result<Shell, Diagnostic> {
         let body = encode_command(command)?;
         let id = {
             let mut state = lock(&self.state);
@@ -895,12 +906,12 @@ impl ShellDoor {
         };
         let asked = match &self.door {
             Door::Socket(socket) => self
-                .ask(socket, id, &body, cols, rows)
+                .ask(socket, id, &body, cols, rows, wait)
                 .map(Terminal::Master),
             Door::Spawn(spec) => self
                 .spawn(spec, id, command, cols, rows)
                 .map(Terminal::Master),
-            Door::Stream(stream) => self.ask_stream(stream, id, command, cols, rows),
+            Door::Stream(stream) => self.ask_stream(stream, id, command, cols, rows, wait),
         };
         match asked {
             Ok(terminal) => Ok(Shell {
@@ -909,14 +920,12 @@ impl ShellDoor {
                 door: Arc::clone(self),
             }),
             Err(diagnostic) => {
-                let mut state = lock(&self.state);
                 // Hat der Shim doch noch gestartet, zählt der Prozess weiter,
-                // bis sein Ende gemeldet ist.
-                if state.shells.get(&id) == Some(&Phase::Started) {
-                    state.shells.insert(id, Phase::Orphaned);
-                } else {
-                    state.shells.remove(&id);
-                }
+                // bis sein Ende gemeldet ist. Im Strom-Modus ist diesem Start
+                // schon das `C` nachgeschickt (HUM-498), das Ende kommt also;
+                // ein `R`, das erst nach diesem Austragen eintrifft, findet
+                // die Kennung nicht mehr und ändert nichts.
+                self.release(id);
                 Err(diagnostic)
             }
         }
@@ -981,6 +990,18 @@ impl ShellDoor {
     /// Bittet den Shim über den Strom um eine Shell (HUM-443). Der Kanal
     /// ihrer Ausgabe steht, bevor die Anfrage hinausgeht: Was die Shell
     /// sofort schreibt, geht nicht verloren.
+    ///
+    /// Scheitert das Öffnen, nachdem das `O` hinausging (keine Antwort
+    /// binnen `wait`, ein Fehler beim Senden), geht ein `C` für diese
+    /// Kennung hinterher (HUM-498). Der Strom hält die Reihenfolge, und der
+    /// Shim handelt jeden Rahmen der Reihe nach ab: Eine Shell, die er für
+    /// das `O` doch noch startet, legt er beim `C` gleich wieder auf; endet
+    /// sie darauf nicht binnen einer Sekunde, tötet er ihre Prozessgruppe.
+    /// Ihr `E` folgt in jedem Fall. Hat er das `O` nie gestartet, verwirft er das `C`. Das `C`
+    /// geht vom Faden des Aufrufers hinaus, nicht vom Leser des Stroms als
+    /// Antwort auf ein spätes `R`: Der Leser darf nie auf Platz im Strom
+    /// warten, sonst hielte ein Shim, der gerade selbst schreibt, beide
+    /// Seiten fest.
     fn ask_stream(
         &self,
         stream: &StreamDoor,
@@ -988,6 +1009,7 @@ impl ShellDoor {
         command: &[String],
         cols: u16,
         rows: u16,
+        wait: Duration,
     ) -> Result<Terminal, Diagnostic> {
         let (output, receiver) = mpsc::sync_channel(SHELL_QUEUE);
         lock(&stream.outputs).insert(id, output);
@@ -997,11 +1019,20 @@ impl ShellDoor {
         let asked = control_frame::encode_open(id, cols, rows, &argv, &mut frames)
             .map_err(|control_frame::Malformed(why)| refused(why))
             .and_then(|()| {
-                stream.send(&frames).map_err(|err| {
-                    refused(&format!("the sandbox does not take the request: {err}"))
-                })
-            })
-            .and_then(|()| self.wait_answer(id));
+                let asked = stream
+                    .send(&frames)
+                    .map_err(|err| {
+                        refused(&format!("the sandbox does not take the request: {err}"))
+                    })
+                    .and_then(|()| self.wait_answer(id, wait));
+                // Ab hier kann der Shim das `O` haben, auch ein halbes nach
+                // einem gescheiterten Senden; dann ist der Strom schon zu,
+                // und dieses Senden scheitert sofort.
+                if asked.is_err() {
+                    let _ = stream.send_empty(Kind::Close, id);
+                }
+                asked
+            });
         match asked {
             Ok(()) => Ok(Terminal::Stream(Mutex::new(receiver))),
             Err(diagnostic) => {
@@ -1012,9 +1043,9 @@ impl ShellDoor {
         }
     }
 
-    /// Wartet höchstens [`ANSWER_WAIT`] auf `R` oder `F` für `id`.
-    fn wait_answer(&self, id: u32) -> Result<(), Diagnostic> {
-        let deadline = Instant::now() + ANSWER_WAIT;
+    /// Wartet höchstens `wait` auf `R` oder `F` für `id`.
+    fn wait_answer(&self, id: u32, wait: Duration) -> Result<(), Diagnostic> {
+        let deadline = Instant::now() + wait;
         let mut state = lock(&self.state);
         loop {
             match state.shells.get(&id).copied() {
@@ -1026,7 +1057,7 @@ impl ShellDoor {
             let now = Instant::now();
             if now >= deadline {
                 return Err(refused(&format!(
-                    "the sandbox did not answer within {ANSWER_WAIT:?}"
+                    "the sandbox did not answer within {wait:?}"
                 )));
             }
             state = self
@@ -1044,6 +1075,7 @@ impl ShellDoor {
         body: &[u8],
         cols: u16,
         rows: u16,
+        wait: Duration,
     ) -> Result<OwnedFd, Diagnostic> {
         let pty = crate::bwrap::open_pty(cols, rows)?;
         let mut message = Vec::with_capacity(5 + body.len());
@@ -1070,7 +1102,9 @@ impl ShellDoor {
         // Herrscherseite nie das Ende der Shell.
         drop(pty.slave);
         drop(pty.reader);
-        self.wait_answer(id).map(|()| pty.master)
+        // Scheitert das Warten, fällt hier die Herrscherseite: Eine Shell,
+        // die der Shim später doch startet, sieht sofort das Auflegen.
+        self.wait_answer(id, wait).map(|()| pty.master)
     }
 
     /// Ob diese Shell beendet ist oder die Sandbox.
@@ -1100,7 +1134,7 @@ impl ShellDoor {
         }
     }
 
-    /// Der [`Shell`] ist fort.
+    /// Der [`Shell`] ist fort, oder sein Öffnen scheiterte.
     fn release(&self, id: u32) {
         let mut state = lock(&self.state);
         match state.shells.get(&id) {
@@ -1333,7 +1367,8 @@ impl Shell {
 impl Drop for Shell {
     fn drop(&mut self) {
         // Im Strom-Modus legt der Shim auf; wie beim Schließen der
-        // Herrscherseite endet damit die Shell.
+        // Herrscherseite endet damit die Shell. Überhört sie das Auflegen,
+        // tötet der Shim nach einer Sekunde ihre Prozessgruppe (HUM-498).
         if matches!(self.terminal, Terminal::Stream(_))
             && let Ok(stream) = self.door.stream()
         {
@@ -2045,6 +2080,103 @@ mod tests {
             writer.join().unwrap().map_err(|err| err.kind()),
             Err(std::io::ErrorKind::NotConnected)
         );
+    }
+
+    /// HUM-498: Antwortet der Shim erst nach der Frist, scheitert das Öffnen,
+    /// und hinter dem `O` geht ein `C` für dieselbe Kennung hinaus: Die
+    /// Shell, die der Shim spät startet, wird aufgelegt. Das späte `R` lässt
+    /// keinen Platz im Daemon belegt, und die nächste Shell öffnet.
+    #[cfg(target_os = "linux")]
+    #[test]
+    fn a_shell_that_starts_after_the_deadline_is_closed_and_frees_its_slot() {
+        let (daemon, shim) =
+            socketpair(AddressFamily::UNIX, SocketType::STREAM, PAIR_FLAGS, None).unwrap();
+        let door = ShellDoor::start_stream(daemon, Box::new(|_| {})).unwrap();
+        let mut decoder = Decoder::new();
+        let opener = {
+            let door = Arc::clone(&door);
+            thread::spawn(move || {
+                door.open_within(&["sh".to_owned()], 80, 24, Duration::from_millis(200))
+                    .map(|shell| shell.id())
+            })
+        };
+        let (_, asked) = shim_reads(&shim, &mut decoder, Duration::from_secs(5), |_, seen| {
+            seen.iter().any(|m| matches!(m, Message::Open { .. }))
+        });
+        let Some(&Message::Open { channel: id, .. }) = asked.first() else {
+            panic!("no open came: {asked:?}");
+        };
+        // Der Shim startet erst, nachdem der Daemon aufgegeben hat.
+        let err = opener
+            .join()
+            .unwrap()
+            .expect_err("an open without answer fails");
+        assert_eq!(err.code, TERM_002);
+        assert_eq!(door.live(), 0, "the given-up shell still counts");
+        let mut wire = Vec::new();
+        control_frame::encode_value(Kind::Started, id, 4242, &mut wire);
+        control_frame::encode(Kind::Heartbeat, AGENT, &[], &mut wire).unwrap();
+        push_frames(&shim, &wire);
+        let (_, after) = shim_reads(&shim, &mut decoder, Duration::from_secs(3), |_, seen| {
+            seen.iter()
+                .any(|m| matches!(m, Message::Close { channel } if *channel == id))
+        });
+        assert!(
+            after
+                .iter()
+                .any(|m| matches!(m, Message::Close { channel } if *channel == id)),
+            "the daemon never closed the shell it gave up: {asked:?} {after:?}"
+        );
+        // Das Lebenszeichen hinter dem `R` zeigt, dass der Leser das `R`
+        // verarbeitet hat; es belegt keinen Platz.
+        let deadline = Instant::now() + Duration::from_secs(5);
+        while door.last_heartbeat().is_none() {
+            assert!(Instant::now() < deadline, "the reader took no frame");
+            thread::sleep(Duration::from_millis(10));
+        }
+        assert_eq!(door.live(), 0, "a late start left the slot taken");
+        // Die nächste Shell bekommt eine neue Kennung und öffnet.
+        let next = {
+            let door = Arc::clone(&door);
+            thread::spawn(move || {
+                door.open(&["sh".to_owned()], 80, 24)
+                    .map(|shell| shell.id())
+            })
+        };
+        let (_, again) = shim_reads(&shim, &mut decoder, Duration::from_secs(5), |_, seen| {
+            seen.iter().any(|m| matches!(m, Message::Open { .. }))
+        });
+        let Some(&Message::Open {
+            channel: second, ..
+        }) = again.iter().find(|m| matches!(m, Message::Open { .. }))
+        else {
+            panic!("no second open came: {again:?}");
+        };
+        assert_ne!(second, id);
+        let mut wire = Vec::new();
+        control_frame::encode_value(Kind::Started, second, 4243, &mut wire);
+        push_frames(&shim, &wire);
+        assert_eq!(next.join().unwrap().unwrap(), second);
+    }
+
+    /// HUM-498, Review: Kommt das `R` knapp vor dem Aufgeben, bleibt die
+    /// Kennung `Orphaned` und zählt, bis das `E` nach dem `C` sie freigibt.
+    #[test]
+    fn a_start_just_before_the_give_up_counts_until_its_end() {
+        let door = ShellDoor::spawning(SpawnSpec {
+            program: PathBuf::from("/nonexistent"),
+            args: Vec::new(),
+            env: Vec::new(),
+        });
+        lock(&door.state).shells.insert(7, Phase::Asked);
+        assert!(door.apply(&answer(MARK_STARTED, 7, 1)));
+        // Der Pfad des gescheiterten Öffnens in `open_within`.
+        door.release(7);
+        assert_eq!(lock(&door.state).shells.get(&7), Some(&Phase::Orphaned));
+        assert_eq!(door.live(), 1);
+        assert!(door.apply(&answer(MARK_EXITED, 7, 137)));
+        assert_eq!(door.live(), 0);
+        assert!(!lock(&door.state).shells.contains_key(&7));
     }
 
     #[test]

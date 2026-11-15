@@ -81,6 +81,14 @@ pub const IN_HIGH: usize = frame::WINDOW;
 /// How long the last frames may take to leave once the agent has ended.
 const FINAL_FLUSH: Duration = Duration::from_secs(2);
 
+/// How long a further shell may outlive the hang-up of its terminal (`C`)
+/// before its process group gets `SIGKILL` (HUM-498). A shell that honours
+/// `SIGHUP` ends at once and never sees the kill; one second still lets it
+/// save its history or tell its jobs. A shell that ignores `SIGHUP` would
+/// otherwise keep one of the [`MAX_SHELLS`] places, and the daemon's
+/// account of it, until the sandbox ends.
+const HANGUP_GRACE: Duration = Duration::from_secs(1);
+
 /// `F` code: [`MAX_SHELLS`] shells are already running (as in `exec.rs`).
 const REFUSED_LIMIT: i32 = -1;
 /// `F` code: the request was not one the shim understands.
@@ -237,6 +245,9 @@ struct Terminal {
     owed: usize,
     /// The master reads end of file or `EIO`: nobody holds the follower.
     drained: bool,
+    /// When the process group of a further shell gets `SIGKILL`, because
+    /// the daemon hung up its terminal and it has not ended yet (HUM-498).
+    kill_at: Option<Instant>,
 }
 
 impl Terminal {
@@ -315,6 +326,7 @@ impl Session {
                 input: Vec::new(),
                 owed: 0,
                 drained: false,
+                kill_at: None,
             }],
             program: None,
             env,
@@ -407,14 +419,19 @@ impl Session {
         !self.open
     }
 
-    /// Milliseconds until the next heartbeat, for `poll`.
+    /// Milliseconds until the next heartbeat or the next kill of a shell
+    /// that outlived its hang-up, for `poll`; `-1` when neither is due.
     pub fn timeout_ms(&self) -> i32 {
-        if !self.open {
+        let next = self
+            .terminals
+            .iter()
+            .filter_map(|terminal| terminal.kill_at)
+            .chain(self.open.then_some(self.next_heartbeat))
+            .min();
+        let Some(next) = next else {
             return -1;
-        }
-        let left = self
-            .next_heartbeat
-            .saturating_duration_since(Instant::now());
+        };
+        let left = next.saturating_duration_since(Instant::now());
         i32::try_from(left.as_millis().saturating_add(1)).unwrap_or(i32::MAX)
     }
 
@@ -478,6 +495,7 @@ impl Session {
                 self.read_control();
             }
         }
+        self.escalate();
         if self.open && Instant::now() >= self.next_heartbeat {
             if self.out.is_empty() {
                 let _ = frame::encode(Kind::Heartbeat, AGENT, &[], &mut self.out);
@@ -492,6 +510,33 @@ impl Session {
         if self.terminals.iter().any(|t| t.owed > 0) {
             self.grant();
             self.flush();
+        }
+    }
+
+    /// Kills the process group of every further shell that outlived the
+    /// hang-up of its terminal by [`HANGUP_GRACE`] (HUM-498). Its reap then
+    /// sends its `E` as for any other end ([`Session::reaped`]); a shell
+    /// that ends before the grace takes its group along in its reap.
+    ///
+    /// The shell called `setsid` (`exec::child`), so its pid is its process
+    /// group. Both stay taken until this process reaps it, and the terminal
+    /// leaves the list in that same reap, so the signal never reaches a
+    /// recycled pid. The pid itself gets the signal too, for a child killed
+    /// before its `setsid`.
+    fn escalate(&mut self) {
+        let now = Instant::now();
+        for terminal in &mut self.terminals {
+            if terminal.channel == AGENT || terminal.pid <= 0 {
+                continue;
+            }
+            if terminal.kill_at.is_some_and(|at| now >= at) {
+                terminal.kill_at = None;
+                // SAFETY: kill takes two integers.
+                unsafe {
+                    libc::kill(-terminal.pid, libc::SIGKILL);
+                    libc::kill(terminal.pid, libc::SIGKILL);
+                }
+            }
         }
     }
 
@@ -530,6 +575,20 @@ impl Session {
         let channel = self.terminals[index].channel;
         self.drain_terminal(channel);
         let terminal = self.terminals.remove(index);
+        // A shell the daemon hung up (`C`) takes its process group with it
+        // (HUM-498): a child in its group that ignores `SIGHUP` would
+        // otherwise outlive a shell that ended on the hang-up before
+        // [`HANGUP_GRACE`]. Safe after the reap: Linux frees a pid number
+        // only once no task uses it as pid, process group or session
+        // (`__change_pid`), so `-pid` still names this group while it has
+        // members and can never reach a group created since; with no
+        // member left the call fails with `ESRCH`.
+        if terminal.master.is_none() {
+            // SAFETY: kill takes two integers.
+            unsafe {
+                libc::kill(-pid, libc::SIGKILL);
+            }
+        }
         drop(terminal);
         if self.open {
             frame::encode_value(Kind::Exit, channel, exit_code(status), &mut self.out);
@@ -673,10 +732,16 @@ impl Session {
             } => self.open_shell(channel, cols, rows, &argv),
             Message::Close { channel } => {
                 // The hang-up of the terminal ends the shell; its `E` comes
-                // when it is reaped.
+                // when it is reaped. A further shell that ignores the
+                // hang-up gets `SIGKILL` after [`HANGUP_GRACE`] (HUM-498).
+                // The agent's terminal is never killed this way: the agent
+                // ends with the lifeline, and the daemon never closes it.
                 if let Some(terminal) = self.terminal(channel) {
-                    terminal.master = None;
+                    let hung_up = terminal.master.take().is_some();
                     terminal.input.clear();
+                    if hung_up && channel != AGENT && terminal.pid > 0 {
+                        terminal.kill_at = Some(Instant::now() + HANGUP_GRACE);
+                    }
                 }
             }
             Message::Interrupt { channel } => {
@@ -767,6 +832,7 @@ impl Session {
             input: Vec::new(),
             owed: 0,
             drained: false,
+            kill_at: None,
         });
         frame::encode_value(Kind::Started, channel, pid, &mut self.out);
     }
@@ -1394,5 +1460,239 @@ mod tests {
         let mut fds = Vec::new();
         let slots = session.register(&mut fds);
         assert!(slots.control.is_none(), "a closed stream is not polled");
+    }
+
+    /// Every frame the daemon's side can read now, without waiting.
+    fn received(daemon: &OwnedFd, decoder: &mut Decoder) -> Vec<Message> {
+        let mut buffer = [0u8; 4096];
+        let mut found = Vec::new();
+        loop {
+            // SAFETY: the buffer is valid for its length and outlives the call.
+            let n =
+                unsafe { libc::read(daemon.as_raw_fd(), buffer.as_mut_ptr().cast(), buffer.len()) };
+            let Ok(n) = usize::try_from(n) else {
+                return found;
+            };
+            if n == 0 {
+                return found;
+            }
+            decoder.push(&buffer[..n], |event| {
+                if let Event::Frame(frame) = event
+                    && let Ok(message) = Message::parse(&frame)
+                {
+                    found.push(message);
+                }
+            });
+        }
+    }
+
+    /// Runs the loop and reaps without blocking, as `supervise.rs` does,
+    /// until `pid` is reaped or `wait` is over; its status if reaped.
+    ///
+    /// Each round polls for `timeout(session)` milliseconds. After it, the
+    /// child is looked for during up to 200 ms: the stand-in for the
+    /// `SIGCHLD` that wakes PID 1 when a child ends.
+    fn serve_until_reaped(
+        session: &mut Session,
+        pid: libc::pid_t,
+        wait: Duration,
+        timeout: impl Fn(&Session) -> i32,
+    ) -> Option<libc::c_int> {
+        let deadline = Instant::now() + wait;
+        while Instant::now() < deadline {
+            let mut fds = Vec::new();
+            let slots = session.register(&mut fds);
+            let count = libc::nfds_t::try_from(fds.len()).unwrap();
+            // SAFETY: `fds` holds `count` entries.
+            unsafe { libc::poll(fds.as_mut_ptr(), count, timeout(session)) };
+            session.serve(&fds, &slots);
+            for _ in 0..20 {
+                let mut status = 0;
+                // SAFETY: waitpid on our own child with a valid pointer.
+                if unsafe { libc::waitpid(pid, &raw mut status, libc::WNOHANG) } == pid {
+                    assert!(session.reaped(pid, status));
+                    return Some(status);
+                }
+                std::thread::sleep(Duration::from_millis(10));
+            }
+        }
+        None
+    }
+
+    /// Whether `pid`, a process this test did not fork, is gone or a zombie
+    /// within `wait`.
+    fn gone_within(pid: libc::pid_t, wait: Duration) -> bool {
+        let deadline = Instant::now() + wait;
+        loop {
+            let stat = std::fs::read_to_string(format!("/proc/{pid}/stat")).unwrap_or_default();
+            // The state follows the name in parentheses.
+            let state = stat.rsplit_once(") ").map(|(_, rest)| rest.chars().next());
+            if matches!(state, None | Some(Some('Z' | 'X'))) {
+                return true;
+            }
+            if Instant::now() >= deadline {
+                return false;
+            }
+            std::thread::sleep(Duration::from_millis(20));
+        }
+    }
+
+    /// HUM-498: a further shell that ignores the hang-up of its terminal
+    /// does not outlive its `C`. It survives the hang-up, its process group
+    /// gets `SIGKILL` after [`HANGUP_GRACE`], its `E` reaches the daemon,
+    /// and its place is free again: [`MAX_SHELLS`] shells open after it.
+    #[test]
+    fn a_shell_that_ignores_the_hang_up_is_killed_after_the_grace() {
+        let (mut session, daemon, _follower) = session();
+        nonblocking(daemon.as_raw_fd()).unwrap();
+        let program = crate::linux::seccomp::Policy::from_env(None, None, None)
+            .unwrap()
+            .program(crate::linux::seccomp::Gate::Silent)
+            .unwrap();
+        session.start(0, program);
+        let open = |channel, script: &str| Message::Open {
+            channel,
+            cols: 80,
+            rows: 24,
+            argv: vec![b"sh".to_vec(), b"-c".to_vec(), script.as_bytes().to_vec()],
+        };
+        session.act(open(1, "trap '' HUP; echo ready; exec sleep 60"));
+        let pid = session.terminals.last().unwrap().pid;
+        assert!(pid > 0, "{:?}", messages(&session.out));
+        // The shell has set its trap once it says so.
+        let mut decoder = Decoder::new();
+        let mut output = Vec::new();
+        let deadline = Instant::now() + Duration::from_secs(10);
+        while !String::from_utf8_lossy(&output).contains("ready") {
+            assert!(Instant::now() < deadline, "the shell never started");
+            round(&mut session);
+            for message in received(&daemon, &mut decoder) {
+                match message {
+                    Message::Data { channel: 1, bytes } => output.extend_from_slice(&bytes),
+                    Message::Exit { channel: 1, code } => panic!("the shell ended with {code}"),
+                    _ => {}
+                }
+            }
+        }
+        let hung_up = Instant::now();
+        session.act(Message::Close { channel: 1 });
+        // Polled as PID 1 polls: only the deadline of the kill wakes it
+        // before the next heartbeat (5 s).
+        let status = serve_until_reaped(
+            &mut session,
+            pid,
+            HANGUP_GRACE + Duration::from_secs(6),
+            Session::timeout_ms,
+        )
+        .expect("the shell outlived its hang-up");
+        let took = hung_up.elapsed();
+        assert!(
+            took >= HANGUP_GRACE.saturating_sub(Duration::from_millis(100)),
+            "the shell did not ignore the hang-up ({took:?}); the test proves nothing"
+        );
+        assert!(
+            took < HANGUP_GRACE + Duration::from_millis(1500),
+            "the kill came {took:?} after the hang-up: the poll did not wake for it"
+        );
+        assert!(
+            libc::WIFSIGNALED(status) && libc::WTERMSIG(status) == libc::SIGKILL,
+            "status {status:#x}"
+        );
+        let ends: Vec<Message> = received(&daemon, &mut decoder)
+            .into_iter()
+            .filter(|m| matches!(m, Message::Exit { channel: 1, .. }))
+            .collect();
+        assert_eq!(ends.len(), 1, "no `E` for the killed shell: {ends:?}");
+        // Every place is free again.
+        for channel in 2..=u32::try_from(MAX_SHELLS).unwrap() + 1 {
+            session.act(open(channel, "exec sleep 60"));
+        }
+        round(&mut session);
+        let started = received(&daemon, &mut decoder)
+            .into_iter()
+            .filter(|m| matches!(m, Message::Started { .. }))
+            .count();
+        assert_eq!(started, MAX_SHELLS);
+        let pids: Vec<libc::pid_t> = session
+            .terminals
+            .iter()
+            .filter(|t| t.channel != AGENT)
+            .map(|t| t.pid)
+            .collect();
+        session.kill_shells();
+        for pid in pids {
+            let mut status = 0;
+            // SAFETY: waitpid on our own child with a valid pointer.
+            assert_eq!(unsafe { libc::waitpid(pid, &raw mut status, 0) }, pid);
+        }
+    }
+
+    /// HUM-498, review: a shell that ends on the hang-up before the grace
+    /// takes its process group along. Its child in the same group, which
+    /// ignores `SIGHUP`, is gone right after the shell's reap and does not
+    /// live on as an orphan.
+    #[test]
+    fn a_child_that_ignores_the_hang_up_goes_with_its_shell() {
+        let (mut session, daemon, _follower) = session();
+        nonblocking(daemon.as_raw_fd()).unwrap();
+        let program = crate::linux::seccomp::Policy::from_env(None, None, None)
+            .unwrap()
+            .program(crate::linux::seccomp::Gate::Silent)
+            .unwrap();
+        session.start(0, program);
+        // No job control in `sh -c`: the child stays in the shell's group.
+        let script = "(trap '' HUP; exec sleep 60) & echo ready $! .; wait";
+        session.act(Message::Open {
+            channel: 1,
+            cols: 80,
+            rows: 24,
+            argv: vec![b"sh".to_vec(), b"-c".to_vec(), script.as_bytes().to_vec()],
+        });
+        let pid = session.terminals.last().unwrap().pid;
+        assert!(pid > 0, "{:?}", messages(&session.out));
+        let mut decoder = Decoder::new();
+        let mut output = Vec::new();
+        let deadline = Instant::now() + Duration::from_secs(10);
+        let child: libc::pid_t = loop {
+            assert!(Instant::now() < deadline, "the shell never started");
+            round(&mut session);
+            for message in received(&daemon, &mut decoder) {
+                if let Message::Data { channel: 1, bytes } = message {
+                    output.extend_from_slice(&bytes);
+                }
+            }
+            let text = String::from_utf8_lossy(&output).into_owned();
+            if let Some(rest) = text.split("ready ").nth(1)
+                && let Some((number, _)) = rest.split_once(" .")
+            {
+                break number.trim().parse().unwrap();
+            }
+        };
+        // SAFETY: getpgid takes an integer.
+        assert_eq!(
+            unsafe { libc::getpgid(child) },
+            pid,
+            "the child left the group"
+        );
+        let hung_up = Instant::now();
+        session.act(Message::Close { channel: 1 });
+        let status = serve_until_reaped(&mut session, pid, HANGUP_GRACE, |_| 50)
+            .expect("the shell did not end on its hang-up");
+        assert!(
+            libc::WIFSIGNALED(status) && libc::WTERMSIG(status) == libc::SIGHUP,
+            "status {status:#x}"
+        );
+        assert!(
+            hung_up.elapsed() < HANGUP_GRACE,
+            "the shell was reaped only after the grace; the test proves nothing"
+        );
+        let gone = gone_within(child, HANGUP_GRACE + Duration::from_secs(1));
+        if !gone {
+            // SAFETY: kill takes two integers; the child is still there.
+            unsafe {
+                libc::kill(child, libc::SIGKILL);
+            }
+        }
+        assert!(gone, "the child outlived its shell's hang-up");
     }
 }
