@@ -838,8 +838,8 @@ fn the_retired_runtime_is_refused_from_every_layer_with_the_way_to_the_kernel_le
 }
 
 /// Die Kernel-Stufe erfüllt die Untergrenze `kernel`: Die Konfiguration
-/// lädt; dass ein Start sie bis zur Zulassung mit `SANDBOX_048` ablehnt,
-/// sagt die Wahl des Backends, nicht das Laden (HUM-464).
+/// lädt; ob ein Start sie nimmt, sagt die Wahl des Backends, nicht das Laden
+/// (HUM-464; zugelassen seit HUM-449).
 #[test]
 fn the_kernel_level_with_the_kernel_floor_loads() {
     let scratch = Scratch::new();

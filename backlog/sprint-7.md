@@ -791,6 +791,72 @@ Gegenstück zu HUM-448 für die Kernel-Stufe.
 ### Fallstricke
 - Ohne die Pakete auf dem Rechner bleibt `qemu` mit `SANDBOX_045` nicht verfügbar; das ist kein Fehler der Zulassung.
 
+### Stand nach der Umsetzung (2026-11-15)
+
+**Nachweis (Punkt 1).** Zehn Läufe hintereinander auf `main`, in denen
+`kvm-tests` und `escape-tests-qemu` beide liefen und grün waren, nach der
+Regel bei HUM-471: 43624997550 (HUM-471), 43630993303 (HUM-476), 43638237420
+(HUM-446), 43641769840 (HUM-467), 43646599744 (HUM-468), 43648968241
+(HUM-478), 43656202366 (HUM-485), 43661904978 (HUM-484), 43669712307
+(HUM-483), 43673927540 (HUM-482). HUM-446 und die Proben mit Root im Gast aus
+HUM-445 sind darin enthalten.
+
+**Zulassung (Punkt 2).** `ADMITTED_BACKENDS` führt `VM_BACKEND` zwischen der
+gemeinsamen Stufe der Engine und Seatbelt. `auto` löst weiter nie darauf auf;
+das VM-Backend ist das einzige, das `sandbox.min_isolation = "kernel"`
+erfüllt. Fehlt eine Voraussetzung, scheitert jeder Weg mit `SANDBOX_045`,
+auch die Vorschau: `Backend::fallback` sucht das VM-Backend wie
+`Backend::detect`, weil schon seine Vorschau die gefundenen Module braucht;
+ohne das stünde in Vorschau und Schnappschuss ein `SANDBOX_034`, das dem Build
+die Stufe abspräche. Damit ist keine Stufe dieses Builds mehr unzugelassen;
+`SANDBOX_048` und die Umgehung bleiben für das nächste Backend.
+
+**Tests.** Der Zulassungstest erwartet `qemu` in der Liste und wählt es mit
+jeder Untergrenze bis `kernel`, auch wenn das Profil es verlangt (`SANDBOX_036`
+hat jetzt den Knopf zu ihm); `auto` bleibt das Backend des Systems. Ohne
+Programme im `PATH` scheitern `detect` und `fallback` mit `SANDBOX_045`. Die
+KVM-Tests bauen ihr Backend jetzt über `choose_backend` mit
+`sandbox.min_isolation = "kernel"` und `Backend::detect`, ohne Umgehung; alle
+22 laufen lokal so grün (Kernel der CI), die Escape-Suite gegen `qemu` 168 von
+168. Mutationsbeweise: `VM_BACKEND` aus der Liste genommen färbt sieben Tests
+der Sandbox-Crate und zwei der CLI rot, der Zweig des VM-Backends in
+`Backend::fallback` entfernt einen der Sandbox-Crate und einen der CLI. Mitgezogen, weil sie die
+Sperre behaupteten: die Liste der Backends (verfügbar ohne Befund, sonst nur
+`SANDBOX_045`), die Gruppe im Doctor (zugelassen, `available` aus der Suche,
+kein Probestart ohne Voraussetzung; die Zeilen einer nicht zugelassenen Stufe
+prüft ein Test jetzt direkt), CLI (`sandbox argv` mit `qemu` aus Umgebung,
+Flag und `config.toml` endet an der Attrappe des Emulators mit `SANDBOX_045`;
+`sandbox backends` zeigt `qemu` verfügbar) und IPC (Start, Vorschau und
+Ziehen eines Abbilds mit `qemu` aus `config.toml` und als Wunsch beim Start
+enden mit `SANDBOX_045`, nie mit `SANDBOX_048`).
+
+**Abnahme (Kriterium 1).** Mit einem Wegwerf-Daemon aus dem ausgelieferten
+Bau (ohne Feature der Umgehung, eigene XDG-Verzeichnisse und eigener Socket,
+nicht der Daemon des Nutzers) listet `humanitl sandbox backends` `qemu`
+verfügbar, und `humanitl run --backend qemu --sandbox-min-isolation kernel
+--direct -- sh -c '…'` startet eine Sitzung mit eigenem Kernel: drei grüne
+Garantien mit `host: checked; admitted`, im Gast `uname -r` =
+`6.12.115+deb13.1-cloud-amd64` (Kernel der CI, Host 7.3.4), die Datei des
+Projekts lesbar, eine Datei aus dem Gast im Projekt, Exit-Code 7 durchgereicht.
+Mit dem Kernel des Hosts ebenso.
+
+**Dokumente (Punkt 3).** `docs/SECURITY.md` Abschnitt 14 „Admitted since
+HUM-449" mit den Lauf-IDs, Abschnitt 13 und das Ziehen unter der Kernel-Stufe
+(`SANDBOX_034`, kein Abbild) angepasst, Abschnitt 9 nennt
+`escape-tests-qemu` und `kvm-tests`, Zeile im Änderungsprotokoll.
+`docs/THREAT-MODEL.md`: K-30 bis K-34 `mitigated` mit den beiden CI-Jobs, K-27
+und die Prosa angepasst, Zeile in der Änderungshistorie. Beides auch deutsch.
+
+**Offen.** Der Doctor zeigt für die zugelassene Kernel-Stufe nur noch die erste
+fehlende Voraussetzung in `available`, nicht mehr eine Zeile je Voraussetzung
+(wie Podman seit HUM-448); `docs/SECURITY.md` sagt das jetzt so. Kandidat: die
+Zeilen je Voraussetzung auch nach der Zulassung zeigen, wenn die Suche
+scheitert. Für HUM-447 stehen noch auf „nicht zugelassen": die Beschreibung
+von `sandbox.backend` und `sandbox.qemu` in `model.rs` mit Schema und
+`docs/CONFIG.md`, `docs/cli.md` (en, de), die ADRs 0002, 0010, 0015, 0021,
+`tests/escape/README.md`, der Kommentar in `.github/workflows/ci.yml` und der
+Fake der App.
+
 ## HUM-447 · Doku der Kernel-Stufe, Oberfläche schaltet `qemu` frei
 
 ### Kontext

@@ -163,9 +163,9 @@ pub fn list_backends_with(
 /// Was dem System für dieses Backend fehlt: der Befund der Suche, die jeder
 /// Start macht ([`detect_in_build`]).
 ///
-/// Unter dem VM-Backend der Kernel-Stufe nur die Prüfung seiner
-/// Voraussetzungen (`SANDBOX_045`), ohne den Adapter (HUM-444) zu bauen: Dass
-/// die Stufe nicht zugelassen ist, sagt `SANDBOX_048` daneben.
+/// Unter dem VM-Backend der Kernel-Stufe die Prüfung seiner Voraussetzungen
+/// (`SANDBOX_045`), dieselbe, mit der die Suche eines Starts den Adapter
+/// (HUM-444) baut.
 ///
 /// Unter der Container-Engine zuerst, ob es das Programm gibt, mit dem Weg
 /// zurück im Text. Danach, wenn ihre gemeinsame Stufe zugelassen ist, die
@@ -495,30 +495,30 @@ mod tests {
         assert_eq!(codes(&podman.diagnostics), ["SANDBOX_035"]);
         if cfg!(target_arch = "x86_64") {
             let kernel = entry(&list, VM_BACKEND);
-            assert_eq!(
-                codes(&kernel.diagnostics),
-                ["SANDBOX_048"],
-                "the VM backend is not below kernel"
+            assert!(
+                kernel.available(),
+                "the VM backend is not below kernel and admitted: {kernel:?}"
             );
         }
     }
 
     /// Das VM-Backend der Kernel-Stufe steht in der Liste (HUM-464): Stufe
-    /// `kernel`, nicht verfügbar, mit `SANDBOX_048` bis HUM-449, ohne
-    /// Laufzeiten. Fehlt dem Rechner etwas, steht `SANDBOX_045` mit dem
-    /// ersten Fehlenden davor; hier fehlt jedes Programm im leeren `PATH`.
+    /// `kernel`, ohne Laufzeiten, und seit HUM-449 verfügbar, wenn dem Rechner
+    /// nichts fehlt, auch unter der Untergrenze `kernel`. Fehlt etwas, steht
+    /// allein `SANDBOX_045` mit dem ersten Fehlenden da, kein `SANDBOX_048`;
+    /// hier fehlt jedes Programm im leeren `PATH`.
     #[cfg(all(target_os = "linux", target_arch = "x86_64"))]
     #[test]
-    fn the_kernel_level_is_listed_unavailable_until_its_admission() {
+    fn the_kernel_level_is_listed_available_when_nothing_is_missing() {
         let sandbox = SandboxRef {
             backend: SandboxBackendName::Qemu,
+            min_isolation: MinIsolation::Kernel,
             ..SandboxRef::default()
         };
         let installed = list_backends_with(&sandbox, "auto", |_| None);
         let kernel = entry(&installed, VM_BACKEND);
-        assert!(kernel.selected && !kernel.available(), "{kernel:?}");
+        assert!(kernel.selected && kernel.available(), "{kernel:?}");
         assert_eq!(kernel.isolation, IsolationLevel::Kernel);
-        assert_eq!(codes(&kernel.diagnostics), ["SANDBOX_048"]);
         assert!(kernel.runtimes.is_empty());
 
         let dir = tempfile::tempdir().expect("tempdir");
@@ -526,11 +526,7 @@ mod tests {
         std::fs::create_dir_all(&bin).expect("bin");
         let list = list_backends(&sandbox, "auto", &paths_with(dir.path(), &bin));
         let kernel = entry(&list, VM_BACKEND);
-        assert_eq!(
-            codes(&kernel.diagnostics),
-            ["SANDBOX_045", "SANDBOX_048"],
-            "{kernel:?}"
-        );
+        assert_eq!(codes(&kernel.diagnostics), ["SANDBOX_045"], "{kernel:?}");
         let missing = &kernel.diagnostics[0];
         assert!(missing.fix.is_some(), "{missing:?}");
         assert!(missing.why.contains("--backend bwrap"), "{}", missing.why);

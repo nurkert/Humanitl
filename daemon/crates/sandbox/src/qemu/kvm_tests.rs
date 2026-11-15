@@ -396,8 +396,10 @@ fn the_guest_powers_off_when_the_host_hangs_up_the_stream() {
 // ---- the adapter (HUM-444) --------------------------------------------------
 
 /// Eine Sitzung über den Adapter: Pfade in einem Ordner, ein Proxy, der auf
-/// jede Anfrage `door-ok` antwortet, CA, Projekt und das Backend aus
-/// `detect_unadmitted`.
+/// jede Anfrage `door-ok` antwortet, CA, Projekt und das Backend, das ein
+/// Start seit der Zulassung (HUM-449) bekommt: `sandbox.backend = "qemu"` mit
+/// `sandbox.min_isolation = "kernel"`, gewählt von `choose_backend` und
+/// gesucht von `Backend::detect`, ohne Umgehung.
 struct Harness {
     dir: tempfile::TempDir,
     backend: crate::Backend,
@@ -464,6 +466,7 @@ impl Harness {
         ]));
         let sandbox = humanitl_config::SandboxRef {
             backend: humanitl_config::SandboxBackendName::Qemu,
+            min_isolation: humanitl_config::MinIsolation::Kernel,
             qemu: QemuConfig {
                 kernel: std::env::var_os("HUMANITL_TEST_VM_KERNEL").map(PathBuf::from),
                 modules: std::env::var_os("HUMANITL_TEST_VM_MODULES").map(PathBuf::from),
@@ -473,14 +476,19 @@ impl Harness {
             },
             ..humanitl_config::SandboxRef::default()
         };
-        let backend =
-            match crate::Backend::detect_unadmitted(crate::VM_BACKEND, paths.clone(), &sandbox) {
-                Ok(backend) => backend,
-                Err(d) => {
-                    unavailable(test, &format!("{}: {}", d.code, d.why));
-                    return None;
-                }
-            };
+        // Die Wahl selbst scheitert nie: Die Stufe ist zugelassen und erfüllt
+        // die Untergrenze. Nur eine fehlende Voraussetzung lässt den Test aus.
+        let choice = crate::choose_backend(&sandbox, crate::AUTO_BACKEND)
+            .unwrap_or_else(|d| panic!("the choice refused: {}: {}", d.code, d.why));
+        assert_eq!(choice.name, crate::VM_BACKEND);
+        let backend = match crate::Backend::detect(choice.name, paths.clone(), &sandbox) {
+            Ok(backend) => backend,
+            Err(d) => {
+                assert_eq!(d.code.as_str(), "SANDBOX_045", "{}", d.why);
+                unavailable(test, &format!("{}: {}", d.code, d.why));
+                return None;
+            }
+        };
         let proxy = paths.proxy_socket();
         std::fs::create_dir_all(proxy.parent().unwrap()).unwrap();
         answer_proxy(&proxy);
@@ -738,7 +746,8 @@ cat <&3
 echo
 "#;
 
-/// HUM-444, Integration: Eine Sitzung startet über `detect_unadmitted`, die
+/// HUM-444, Integration: Eine Sitzung startet über die Wahl eines Starts
+/// (`sandbox.min_isolation = "kernel"`, `backend = "qemu"`, HUM-449), die
 /// Prüfung (Gast und Host) ist grün, das Terminal geht über den Strom, die
 /// Tür erreicht den Proxy, und die Maske über `.env` hält.
 #[test]

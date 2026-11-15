@@ -39,10 +39,10 @@
 //! bestehen. Ein roter Befund lässt den Agenten also nie laufen. Ein Gast, der ohne Bericht endet, ist eine
 //! gescheiterte Prüfung ([`session::NO_REPORT`]).
 //!
-//! **Nicht zugelassen.** Die Stufe steht nicht in
-//! [`crate::ADMITTED_BACKENDS`]; jeder Start lehnt sie mit `SANDBOX_048` ab,
-//! bis HUM-449 landet. Erreichbar ist der Adapter nur über
-//! `Backend::detect_unadmitted` (Escape-Suite, Tests).
+//! **Zugelassen seit HUM-449.** Die Stufe steht in
+//! [`crate::ADMITTED_BACKENDS`], nachdem `escape-tests-qemu` und die
+//! KVM-Tests auf `main` grün waren. Ein Start nimmt sie nur, wenn ein Mensch
+//! sie wählt (`sandbox.backend`, `--backend`); `auto` löst nie auf sie auf.
 //!
 //! Die Namen `qemu`, `virtiofsd`, `vhost-device-vsock` und `microvm` stehen
 //! nur in diesem Verzeichnis (`[qemu]` in `tools/coupling-baseline.toml`).
