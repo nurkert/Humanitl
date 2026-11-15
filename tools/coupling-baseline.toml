@@ -56,7 +56,7 @@
 "daemon/crates/config/src/lib.rs" = 3
 "daemon/crates/config/src/load.rs" = 6
 "daemon/crates/config/src/model.rs" = 32
-"daemon/crates/config/src/validate.rs" = 69
+"daemon/crates/config/src/validate.rs" = 52
 "daemon/crates/config/tests/config_readers.rs" = 12
 "daemon/crates/config/tests/profiles.rs" = 4
 "daemon/crates/config/tests/project_scope.rs" = 10

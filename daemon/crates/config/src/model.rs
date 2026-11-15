@@ -623,10 +623,10 @@ pub struct PodmanConfig {
     /// Das Abbild für `rootfs = "image"`, immer mit Digest (`name@sha256:` und 64 Hex-Ziffern); bei `rootfs = "image"` Pflicht. Vor jedem Start prüft der Daemon, dass genau dieser Digest im lokalen Speicher liegt (sonst `SANDBOX_043`); ein Start zieht nie, das tut nur `humanitl sandbox image pull`, und das Ziehen nutzt das Netz direkt, nicht durch den Proxy.
     #[schemars(extend("x-tier" = "advanced", "x-project-scope" = "denied"))]
     pub image: Option<String>,
-    /// Arbeitsspeicher der Sandbox in MiB, mindestens 256 und höchstens der Arbeitsspeicher des Hosts. Leer heißt: der Start leitet ihn vom Host ab (die Hälfte seines Arbeitsspeichers, höchstens 4096), damit die Vorgabe auf jedem Rechner gilt.
+    /// Arbeitsspeicher der Sandbox in MiB, mindestens 256 und höchstens der Arbeitsspeicher des Hosts. Die Obergrenze prüft der Start dieses Backends (`CONFIG_003`), nicht das Laden: Ein Wert über diesem Rechner hält kein anderes Backend auf. Leer heißt: der Start leitet ihn vom Host ab (die Hälfte seines Arbeitsspeichers, höchstens 4096), damit die Vorgabe auf jedem Rechner gilt.
     #[schemars(extend("x-tier" = "advanced", "x-project-scope" = "denied"))]
     pub memory_mib: Option<u64>,
-    /// Zahl der CPUs der Sandbox, mindestens 1 und höchstens die Zahl der CPUs, die der Daemon nutzen darf. Leer heißt: der Start leitet sie vom Host ab (die Hälfte seiner CPUs, mindestens 1, höchstens 4).
+    /// Zahl der CPUs der Sandbox, mindestens 1 und höchstens die Zahl der CPUs, die der Daemon nutzen darf. Die Obergrenze prüft der Start dieses Backends (`CONFIG_003`), nicht das Laden. Leer heißt: der Start leitet sie vom Host ab (die Hälfte seiner CPUs, mindestens 1, höchstens 4).
     #[schemars(extend("x-tier" = "advanced", "x-project-scope" = "denied"))]
     pub cpus: Option<u32>,
     /// Größte Zahl von Prozessen und Threads in der Sandbox, mindestens 64.
@@ -691,13 +691,13 @@ pub(crate) const RETIRED_KERNEL_RUNTIME: &str = "krun";
 #[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize, JsonSchema)]
 #[serde(default, deny_unknown_fields)]
 pub struct QemuConfig {
-    /// Zahl der virtuellen CPUs der Micro-VM, mindestens 1 und höchstens die Zahl der CPUs, die der Daemon nutzen darf. Leer heißt: der Start leitet sie vom Host ab (die Hälfte seiner CPUs, mindestens 1, höchstens 4).
+    /// Zahl der virtuellen CPUs der Micro-VM, mindestens 1 und höchstens die Zahl der CPUs, die der Daemon nutzen darf. Die Obergrenze prüft der Start dieses Backends (`CONFIG_003`), nicht das Laden. Leer heißt: der Start leitet sie vom Host ab (die Hälfte seiner CPUs, mindestens 1, höchstens 4).
     #[schemars(extend(
         "x-tier" = "advanced",
         "x-project-scope" = "denied"
     ))]
     pub cpus: Option<u32>,
-    /// Arbeitsspeicher der Micro-VM in MiB, mindestens 256 und höchstens der Arbeitsspeicher des Hosts. Leer heißt: der Start leitet ihn vom Host ab (die Hälfte seines Arbeitsspeichers, höchstens 4096).
+    /// Arbeitsspeicher der Micro-VM in MiB, mindestens 256 und höchstens der Arbeitsspeicher des Hosts. Die Obergrenze prüft der Start dieses Backends (`CONFIG_003`), nicht das Laden: Ein Wert über diesem Rechner hält kein anderes Backend auf. Leer heißt: der Start leitet ihn vom Host ab (die Hälfte seines Arbeitsspeichers, höchstens 4096).
     #[schemars(extend(
         "x-tier" = "advanced",
         "x-project-scope" = "denied"

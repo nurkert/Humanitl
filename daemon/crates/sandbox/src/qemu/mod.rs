@@ -71,7 +71,7 @@ use std::path::{Path, PathBuf};
 use std::sync::Mutex;
 use std::time::{Duration, Instant};
 
-use humanitl_config::{Paths, QemuConfig, SandboxRef, WorkMode};
+use humanitl_config::{HostResources, Paths, QemuConfig, SandboxRef, WorkMode};
 use humanitl_core::diagnostics::codes::{
     SANDBOX_006, SANDBOX_011, SANDBOX_012, SANDBOX_013, SANDBOX_041, SANDBOX_046, SANDBOX_051,
 };
@@ -130,6 +130,9 @@ thread_local! {
         const { std::cell::RefCell::new(Vec::new()) };
 }
 
+/// Die Gruppe des Adapters in der Konfiguration.
+const CONFIG_GROUP: &str = "sandbox.qemu";
+
 /// Das VM-Backend der Kernel-Stufe.
 #[derive(Debug, Clone)]
 pub struct VmBackend {
@@ -173,6 +176,25 @@ impl VmBackend {
     #[must_use]
     pub const fn paths(&self) -> &Paths {
         &self.paths
+    }
+
+    /// Ob die gesetzten vCPU und der gesetzte Speicher auf `host` passen
+    /// (HUM-501). Das Laden prüft nur die festen Untergrenzen, damit ein Wert
+    /// über diesem Rechner kein anderes Backend aufhält; der Plan dieses
+    /// Backends lehnt ihn ab, mit demselben Befund, den früher das Laden gab.
+    /// Abgeleitete Werte liegen nie darüber und werden nicht geprüft.
+    ///
+    /// # Errors
+    ///
+    /// `CONFIG_003` mit dem Schlüssel, dem Wert und dem größten Wert, den
+    /// dieser Host annimmt.
+    fn within_host(&self, host: HostResources) -> Result<(), Diagnostic> {
+        humanitl_config::resources_within_host(
+            CONFIG_GROUP,
+            self.config.memory_mib,
+            self.config.cpus,
+            host,
+        )
     }
 
     /// vCPU und Speicher aus `sandbox.qemu`, sonst vom Host abgeleitet: die
@@ -1006,13 +1028,15 @@ impl SandboxBackend for VmBackend {
     /// Was bwrap für dieselbe Anfrage ablehnte (`SANDBOX_005`,
     /// `SANDBOX_006`, `SANDBOX_011`), `SANDBOX_030`, wenn eine
     /// Wegwerf-Sandbox hier nicht geht, `SANDBOX_050` ohne Dienstverwalter,
-    /// `SANDBOX_046`, wenn die Tür nicht entsteht.
+    /// `SANDBOX_046`, wenn die Tür nicht entsteht, `CONFIG_003` für vCPU oder
+    /// Speicher über diesem Host (HUM-501).
     fn plan(&self, request: &PlanRequest<'_>) -> Result<LaunchPlan, Diagnostic> {
         let PlanRequest {
             profile,
             session,
             options,
         } = *request;
+        self.within_host(HostResources::probe())?;
         let layer = match &options.disposable {
             None => None,
             Some(crate::launcher::DisposableLayer::Overlay(dirs)) => {

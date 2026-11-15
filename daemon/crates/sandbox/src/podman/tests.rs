@@ -46,6 +46,32 @@ fn concurrent_writes_of_one_file_all_succeed() {
     assert_eq!(left.len(), 1, "staged files left behind: {left:?}");
 }
 
+/// Gegen den Host prüft der Start nur, was gesetzt ist (HUM-501): Ein
+/// abgeleiteter Wert liegt nie über dem Host, auch nicht die Untergrenze
+/// von 256 MiB auf einem Host, der weniger nennt.
+#[test]
+fn only_set_limits_meet_the_host() {
+    let tiny = HostResources {
+        memory_mib: Some(128),
+        cpus: Some(1),
+    };
+    let derived = Settings::with_host(&PodmanConfig::default(), tiny.memory_mib, tiny.cpus);
+    assert_eq!(derived.memory_mib, 256);
+    derived
+        .within_host(tiny)
+        .expect("derived values are not checked");
+    let set = Settings::with_host(
+        &PodmanConfig {
+            cpus: Some(2),
+            ..PodmanConfig::default()
+        },
+        tiny.memory_mib,
+        tiny.cpus,
+    );
+    let err = set.within_host(tiny).expect_err("two CPUs on one");
+    assert!(err.why.contains("sandbox.podman.cpus = 2"), "{}", err.why);
+}
+
 #[test]
 fn empty_limits_are_derived_from_the_host_within_their_bounds() {
     let config = PodmanConfig::default();
@@ -413,6 +439,53 @@ mod planned {
         argv.iter()
             .map(|arg| arg.to_string_lossy().into_owned())
             .collect()
+    }
+
+    /// Arbeitsspeicher und CPUs über diesem Host lädt die Konfiguration
+    /// (HUM-501); der Start dieses Backends lehnt sie ab, bevor er etwas
+    /// plant, mit dem Schlüssel, dem Grund und dem größten Wert, den der
+    /// Host annimmt. Mutationsbeweis: ohne die Prüfung im Plan plant der
+    /// Start mit `--memory` über dem Host.
+    #[test]
+    fn the_start_refuses_resources_over_this_host() {
+        let fx = Fixture::new(None);
+        let host = HostResources::probe();
+        let (Some(memory), Some(cpus)) = (host.memory_mib, host.cpus) else {
+            panic!("this host names neither memory nor CPUs: {host:?}");
+        };
+        let profile = profile();
+        let session = fx.context(&["sh", "-c", "true"]);
+        let options = LaunchOptions::default();
+        for (config, key, what, max) in [
+            (
+                PodmanConfig {
+                    memory_mib: Some(memory + 1),
+                    ..PodmanConfig::default()
+                },
+                "memory_mib",
+                "the memory of this host",
+                memory.to_string(),
+            ),
+            (
+                PodmanConfig {
+                    cpus: Some(cpus + 1),
+                    ..PodmanConfig::default()
+                },
+                "cpus",
+                "the CPUs this daemon may use",
+                cpus.to_string(),
+            ),
+        ] {
+            let backend = PodmanBackend::fallback(fx.paths.clone(), &config);
+            let err = backend
+                .plan(&PlanRequest::new(&profile, &session, &options))
+                .expect_err("over the host");
+            let key = format!("{CONFIG_GROUP}.{key}");
+            assert_eq!(err.code.as_str(), "CONFIG_003", "{}", err.why);
+            assert!(err.why.contains(&key), "{}", err.why);
+            assert!(err.why.contains(what), "{}", err.why);
+            assert_eq!(err.fix, Some(FixAction::ChangeSetting { key, value: max }));
+        }
     }
 
     /// Der Plan nennt die Deskriptoren fortlaufend ab 3 (Bericht,

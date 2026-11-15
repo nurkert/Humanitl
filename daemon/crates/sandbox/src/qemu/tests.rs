@@ -739,3 +739,68 @@ fn unenforced_limits_refuse_every_green_guarantee_with_sandbox_052() {
     );
     assert!(results[0].evidence.contains("pids.max"), "{results:?}");
 }
+
+/// HUM-501: vCPU und Speicher über diesem Host lädt die Konfiguration; der
+/// Plan der Kernel-Stufe lehnt sie ab, bevor er etwas prüft, anlegt oder
+/// startet, mit dem Schlüssel, dem Grund und dem größten Wert, den der Host
+/// annimmt. Die Voraussetzungen sind hier Attrappen: Der Plan kommt nie bis
+/// zu ihnen. Mutationsbeweis: ohne die Prüfung im Plan scheitert er erst an
+/// den Attrappen, mit einem anderen Code.
+#[test]
+fn the_plan_refuses_resources_over_this_host() {
+    let host = HostResources::probe();
+    let (Some(memory), Some(cpus)) = (host.memory_mib, host.cpus) else {
+        panic!("this host names neither memory nor CPUs: {host:?}");
+    };
+    let work = tempfile::tempdir().unwrap();
+    let runtime = tempfile::tempdir().unwrap();
+    let profile = profile();
+    let session = session(work.path());
+    let options = crate::launcher::LaunchOptions::default();
+    let resolved = Resolved {
+        emulator: PathBuf::from("/nonexistent-hum501/emulator"),
+        file_daemon: PathBuf::from("/nonexistent-hum501/files"),
+        vsock_device: PathBuf::from("/nonexistent-hum501/vsock"),
+        bubblewrap: PathBuf::from("/nonexistent-hum501/bubblewrap"),
+        kernel: PathBuf::from("/nonexistent-hum501/kernel"),
+        modules: PathBuf::from("/nonexistent-hum501/modules"),
+        no_announce_submounts: true,
+    };
+    for (config, key, what, max) in [
+        (
+            QemuConfig {
+                cpus: Some(cpus + 1),
+                ..QemuConfig::default()
+            },
+            "cpus",
+            "the CPUs this daemon may use",
+            cpus.to_string(),
+        ),
+        (
+            QemuConfig {
+                memory_mib: Some(memory + 1),
+                ..QemuConfig::default()
+            },
+            "memory_mib",
+            "the memory of this host",
+            memory.to_string(),
+        ),
+    ] {
+        let backend = VmBackend {
+            paths: humanitl_config::Paths::new(humanitl_config::Env::from_pairs([(
+                "XDG_RUNTIME_DIR",
+                runtime.path().to_str().unwrap(),
+            )])),
+            config,
+            resolved: resolved.clone(),
+        };
+        let err = backend
+            .plan(&PlanRequest::new(&profile, &session, &options))
+            .expect_err("over the host");
+        let key = format!("{CONFIG_GROUP}.{key}");
+        assert_eq!(err.code.as_str(), "CONFIG_003", "{}: {}", err.code, err.why);
+        assert!(err.why.contains(&key), "{}", err.why);
+        assert!(err.why.contains(what), "{}", err.why);
+        assert_eq!(err.fix, Some(FixAction::ChangeSetting { key, value: max }));
+    }
+}

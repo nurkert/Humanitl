@@ -1122,9 +1122,10 @@ async fn the_shared_stage_and_the_kernel_level_pass_admission_on_every_path() {
 /// Konfiguration, die ein Wunsch über den Start mit `config.toml`
 /// zusammenführt, nicht nur für die, die der Daemon beim Laden las
 /// (HUM-448). Der Dienst hat ohne `config.toml` geladen; sie entsteht erst
-/// danach, mit Werten über jedem Host, und der Start mit dem Wunsch
-/// `sandbox.backend` lehnt sie mit `CONFIG_003` ab, bevor er etwas
-/// plant. Ohne die Prüfung käme er bis zu seinem Plan mit der Engine.
+/// danach, mit Werten über jedem Host. Seit HUM-501 lädt sie trotzdem, und
+/// der Plan der Engine, die der Wunsch `sandbox.backend` wählt, lehnt sie mit
+/// `CONFIG_003` ab, bevor er etwas anlegt oder startet; die Sitzung läuft
+/// nie.
 #[cfg(target_os = "linux")]
 #[tokio::test(flavor = "multi_thread")]
 async fn a_wished_backend_meets_the_host_limits_of_the_merged_configuration() {
@@ -1152,12 +1153,54 @@ async fn a_wished_backend_meets_the_host_limits_of_the_merged_configuration() {
             !seen.iter().any(|event| matches!(
                 &event.event,
                 Some(v1::sandbox_event::Event::Status(status))
-                    if status.state == v1::SandboxState::Starting as i32
+                    if status.state == v1::SandboxState::Running as i32
             )),
-            "{key}: the start never got as far as its plan: {seen:?}"
+            "{key}: the session never ran: {seen:?}"
         );
         assert!(failed(&seen), "{seen:?}");
     }
+}
+
+/// Arbeitsspeicher und CPUs über jedem Host in den Gruppen der
+/// Container-Engine und der Kernel-Stufe halten ein anderes Backend nicht
+/// auf (HUM-501): Die Konfiguration lädt, und der Start mit dem Backend des
+/// Systems plant ohne `CONFIG_003`, bis er an der fehlenden Tür dieses Tests
+/// scheitert. Mutationsbeweis: prüft das Laden die Obergrenzen aus dem Host
+/// wieder, kommt der Start nicht bis zu seinem Plan.
+#[cfg(target_os = "linux")]
+#[tokio::test(flavor = "multi_thread")]
+async fn resources_over_this_host_hold_up_no_other_backend() {
+    let fixture = Fixture::live();
+    let vm = humanitl_sandbox::VM_BACKEND;
+    let over = "memory_mib = 1099511627776\ncpus = 4294967295\n";
+    fixture.user_config(&format!("[sandbox.{ENGINE}]\n{over}[sandbox.{vm}]\n{over}"));
+    let seen = fixture
+        .run(with_override(
+            "sandbox.backend",
+            humanitl_sandbox::PLATFORM_BACKEND_NAME,
+        ))
+        .await;
+    assert!(
+        !codes(&seen).contains(&"CONFIG_003".to_owned()),
+        "{:?}",
+        codes(&seen)
+    );
+    let starting = seen
+        .iter()
+        .find_map(|event| match &event.event {
+            Some(v1::sandbox_event::Event::Status(status))
+                if status.state == v1::SandboxState::Starting as i32 =>
+            {
+                Some(status)
+            }
+            _ => None,
+        })
+        .expect("the start gets as far as its plan");
+    assert_eq!(
+        starting.backend,
+        humanitl_sandbox::PLATFORM_BACKEND_NAME,
+        "{starting:?}"
+    );
 }
 
 /// Ein Projekt hebt die Untergrenze auf `kernel`, und weder der Wunsch über
