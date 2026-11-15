@@ -393,6 +393,76 @@ fn the_guest_powers_off_when_the_host_hangs_up_the_stream() {
     );
 }
 
+/// Der Agent des Einfüge-Tests (HUM-497): rohes Terminal, drei Sekunden
+/// Pause, dann Prüfsumme und Länge der ersten 300 KiB, die er liest.
+const PASTE_AGENT: &str = r#"
+stty raw -echo
+printf 'READY\r\n'
+sleep 3
+printf 'SUM %s\r\n' "$(head -c 307200 | cksum)"
+exit 0
+"#;
+
+/// HUM-497, Integration: 300 KiB Eingabe an den Agenten im Gast, der erst
+/// nach einer Pause liest, gehen in einem Schreiben hinaus, das Erfolg
+/// meldet, und kommen ganz an. Vor HUM-497 verwarf der Shim alles über
+/// 64 KiB in seiner Schlange, während das Schreiben Erfolg meldete.
+#[test]
+fn a_large_paste_reaches_the_guests_slow_agent_whole() {
+    let test = "a_large_paste_reaches_the_guests_slow_agent_whole";
+    let Some((spec, _project)) = spec(test, PASTE_AGENT) else {
+        return;
+    };
+    let total = 300 * 1024;
+    let payload: Vec<u8> = (0..total)
+        .map(|i| b'a' + u8::try_from(i % 26).expect("below 26"))
+        .collect();
+    let expected = host_cksum(&payload);
+    let wait = Duration::from_secs(30);
+    let mut steps: Vec<String> = Vec::new();
+    let outcome = test_vm::run_with(&spec, |session| {
+        if !session.wait_for("READY", wait) {
+            steps.push(format!("no READY: {:?}", session.text()));
+            return;
+        }
+        let started = Instant::now();
+        if let Err(err) = session.door.agent_input(&payload) {
+            steps.push(format!(
+                "the paste failed after {:?}: {err}",
+                started.elapsed()
+            ));
+            return;
+        }
+        if !session.wait_for(&format!("SUM {expected}"), wait) {
+            steps.push(format!(
+                "the agent did not read all {total} bytes: {:?}",
+                session.text()
+            ));
+        }
+    })
+    .unwrap_or_else(|why| panic!("the guest did not run: {why}"));
+    let shown = shown(&outcome);
+    assert!(steps.is_empty(), "{}\n{shown}", steps.join("\n"));
+}
+
+/// Was `cksum` auf dem Host zu `bytes` sagt, wie der Agent es druckt.
+fn host_cksum(bytes: &[u8]) -> String {
+    use std::io::Write as _;
+    let mut child = std::process::Command::new("cksum")
+        .stdin(std::process::Stdio::piped())
+        .stdout(std::process::Stdio::piped())
+        .spawn()
+        .expect("cksum runs on the host");
+    child
+        .stdin
+        .take()
+        .expect("a pipe")
+        .write_all(bytes)
+        .expect("cksum takes the bytes");
+    let output = child.wait_with_output().expect("cksum ends");
+    String::from_utf8_lossy(&output.stdout).trim().to_owned()
+}
+
 // ---- the adapter (HUM-444) --------------------------------------------------
 
 /// Eine Sitzung über den Adapter: Pfade in einem Ordner, ein Proxy, der auf

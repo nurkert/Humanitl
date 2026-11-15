@@ -23,7 +23,25 @@
 //! argument), `C` close a shell, `I` interrupt the foreground of a channel,
 //! `H` heartbeat. Shim to daemon: `D` terminal bytes, `R` started (pid),
 //! `F` refused (a code as in `exec.rs`), `E` exit (code or 128 + signal),
-//! `H` heartbeat. Every value is an `i32` or `u16`, little endian.
+//! `H` heartbeat, `G` credit (a `u32`, see below). Every value is an `i32`,
+//! `u32` or `u16`, little endian.
+//!
+//! # Credit for terminal input (HUM-497)
+//!
+//! Input for a terminal travels under a window of [`WINDOW`] bytes per
+//! channel. The daemon starts every channel with that much credit (the
+//! agent's with the stream, a further shell's with its `O`), takes the length
+//! of every `D` it sends from it, and waits for more before it sends beyond
+//! it. The shim answers every byte its terminal took with a `G` of that many
+//! bytes, so its queue for a terminal never holds more than the window, and
+//! a write of the daemon blocks while the agent does not read, as a write to
+//! the master does in the descriptor mode. A `D` beyond the window is a
+//! daemon that breaks the rule; the shim drops it and counts it.
+//!
+//! There is no handshake. Both ends ship together (the shim is built with the
+//! daemon); a daemon before the credit skips `G` as an unknown kind, a shim
+//! before it never grants, and the daemon's writes then fail after the
+//! window instead of losing bytes.
 //!
 //! # What a reader does with what it does not expect
 //!
@@ -51,6 +69,10 @@ pub const MAX_ARGS: usize = 256;
 /// The channel of the agent's terminal.
 pub const AGENT: u32 = 0;
 
+/// The most input bytes for one terminal that the shim has not written to
+/// it yet: the credit every channel starts with (HUM-497).
+pub const WINDOW: usize = 64 * 1024;
+
 /// The kinds of frames.
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
 pub enum Kind {
@@ -72,6 +94,9 @@ pub enum Kind {
     Refused,
     /// The process of a channel ended, shim to daemon.
     Exit,
+    /// The terminal of a channel took input bytes, shim to daemon: credit
+    /// for as many more (HUM-497).
+    Credit,
 }
 
 impl Kind {
@@ -88,6 +113,7 @@ impl Kind {
             Self::Started => b'R',
             Self::Refused => b'F',
             Self::Exit => b'E',
+            Self::Credit => b'G',
         }
     }
 
@@ -104,6 +130,7 @@ impl Kind {
             b'R' => Self::Started,
             b'F' => Self::Refused,
             b'E' => Self::Exit,
+            b'G' => Self::Credit,
             _ => return None,
         })
     }
@@ -369,6 +396,13 @@ pub enum Message {
         /// Exit code, or 128 + signal.
         code: i32,
     },
+    /// The terminal of a channel took this many input bytes.
+    Credit {
+        /// The channel.
+        channel: u32,
+        /// The bytes, never 0 and never more than [`WINDOW`].
+        bytes: u32,
+    },
 }
 
 /// Why a frame of a known kind is not a [`Message`].
@@ -477,6 +511,17 @@ impl Message {
                 channel,
                 code: int(payload)?,
             },
+            Kind::Credit => {
+                let bytes = int(payload)?.cast_unsigned();
+                if bytes == 0
+                    || usize::try_from(bytes)
+                        .ok()
+                        .is_none_or(|bytes| bytes > WINDOW)
+                {
+                    return Err(Malformed("a credit is between 1 and the window"));
+                }
+                Self::Credit { channel, bytes }
+            }
         })
     }
 }
@@ -516,6 +561,11 @@ pub fn encode_data(channel: u32, bytes: &[u8], out: &mut Vec<u8>) {
 /// Appends a frame that carries one `i32`.
 pub fn encode_value(kind: Kind, channel: u32, value: i32, out: &mut Vec<u8>) {
     let _ = encode(kind, channel, &value.to_le_bytes(), out);
+}
+
+/// Appends a `G` frame: the terminal of `channel` took `bytes` input bytes.
+pub fn encode_credit(channel: u32, bytes: u32, out: &mut Vec<u8>) {
+    let _ = encode(Kind::Credit, channel, &bytes.to_le_bytes(), out);
 }
 
 /// Appends a `W` frame.
@@ -598,6 +648,7 @@ mod tests {
         encode_value(Kind::Started, 3, 42, &mut wire);
         encode_value(Kind::Refused, 4, -1, &mut wire);
         encode_value(Kind::Exit, AGENT, 130, &mut wire);
+        encode_credit(3, 4096, &mut wire);
         let expected = vec![
             Message::Data {
                 channel: 0,
@@ -628,6 +679,10 @@ mod tests {
             Message::Exit {
                 channel: 0,
                 code: 130,
+            },
+            Message::Credit {
+                channel: 3,
+                bytes: 4096,
             },
         ];
         for cut in [1, 2, 7, 9, 10, 64, wire.len()] {
@@ -718,6 +773,14 @@ mod tests {
             frame(Kind::Heartbeat, 0, b"x"),
             frame(Kind::Started, 1, b"abc"),
             frame(Kind::Exit, 1, b"abcde"),
+            frame(Kind::Credit, 1, b"abc"),
+            frame(Kind::Credit, 1, &0u32.to_le_bytes()),
+            frame(
+                Kind::Credit,
+                1,
+                &u32::try_from(WINDOW + 1).unwrap().to_le_bytes(),
+            ),
+            frame(Kind::Credit, 1, &u32::MAX.to_le_bytes()),
         ];
         for frame in &bad {
             assert!(Message::parse(frame).is_err(), "{frame:?}");

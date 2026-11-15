@@ -717,10 +717,16 @@ keeps nothing. In a guest this is defence in depth; the host stops the VM itself
 *Residual risk:* root in a guest can end or stall the stream. A guest that stops reading makes
 the daemon's next frame miss its deadline of ten seconds, and the daemon then shuts the stream:
 the session ends, no daemon thread waits longer. A daemon that stops reading stops the shim's
-reading of the terminals, not of the control frames. Input for a terminal whose process does not
-read is dropped once its queue holds 64 KiB, and output of a further shell whose reader stalls is
-dropped beyond 256 pieces on the daemon's side; both are counted, neither holds up another
-channel.
+reading of the terminals, not of the control frames. Input for a terminal travels under credit
+of 64 KiB (HUM-497): a write to a terminal whose process does not read waits and fails with
+`TERM_002` after ten seconds without credit, the stream stays open, and no byte is dropped while
+the writer is told it arrived, except in the moment in which the terminal's process ends; root in a guest that withholds credit only stalls input to its
+own sandbox, and a credit beyond the bytes sent and not yet granted back adds nothing. This
+protects against an agent that does not read, not against a hostile guest: delivery to the agent
+depends on the guest's PID 1, and root in a guest owns the terminal and can lose or alter its
+input anyway, which harms only its own sandbox. Output of a further
+shell whose reader stalls is dropped beyond 256 pieces on the daemon's side, counted; neither
+holds up another channel.
 
 ### K-30 The virtual machine monitor of the kernel level
 
