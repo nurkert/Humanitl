@@ -91,6 +91,7 @@ Diagnose-Codes, hier nur geplant (registriert vom genannten Issue in `codes.rs` 
 | HUM-484 | Kernel-Stufe: `--allow-mmap` und die Untergrenze 6.6 des Gastkernels unter `--cache auto` prüfen | S | HUM-476 |
 | HUM-485 | Kernel-Stufe: Speicher- und Prozessgrenzen der Unit (`MemoryMax=`, `TasksMax=`) | S | HUM-444 |
 | HUM-486 | vhost-device-vsock: Fehler beim Start melden, ein stummes Gerät erkennen | S | HUM-471 |
+| HUM-487 | KVM-Test der Deskriptorgrenze: Schwelle der Abweisungen hängt nicht an der Länge von `/usr` | S | HUM-469 |
 
 ## HUM-428 · Port neutral: `PlanRequest`, `LaunchOptions`, `IsolationLevel`, Enum `Backend` statt `PlatformBackend`
 
@@ -2144,3 +2145,42 @@ Gasts verbindet.
 ### Akzeptanzkriterien
 1. Bericht upstream verlinkt im Spec; ein stummes Gerät hat eine eigene
    Aussage in der Diagnose oder eine begründete Entscheidung dagegen.
+
+---
+
+## HUM-487 · KVM test of the descriptor limit: the refusal count does not depend on the length of `/usr`
+
+### Kontext
+Im CI-Lauf 43678367755 (HUM-449) wurde `kvm-tests` rot:
+`a_guest_cannot_drive_the_root_file_daemon_over_its_descriptor_limit`
+verlangte mindestens 500 Abweisungen der Probe, die Probe zählte 487. Die
+Grenze hielt (höchstens 64 944 Deskriptoren, 0 `ENFILE` im Walk); die Probe
+gibt nach 500 Abweisungen hintereinander auf, und hier endete die Liste der
+Dateien unter `/usr` vorher. Mit dem Leeren des Caches (HUM-476, HUM-483)
+gelingen zwischendurch wieder einzelne Öffnungen, was die Folge unterbricht.
+Entscheidung des Owners vom 2026-11-15: Der rote Lauf setzt die Zählung der
+zehn grünen Läufe nicht zurück; der Test wird behoben und HUM-449 neu durch
+die CI geschickt.
+
+### Spezifikation
+1. Der Test verlangt mindestens eine Abweisung neben einem Viertel der
+   Grenze an gehaltenen Dateien, statt 500, und dass der Dienst dabei an
+   seiner Grenze stand (Höchststand mindestens neun Zehntel), die
+   Abweisung „Too many open files" lautete und die Grenze des Dienstes in
+   `/proc` 65 536 ist.
+
+### Akzeptanzkriterien
+1. Der Test hängt nicht mehr an der Zahl der Dateien unter `/usr`, belegt
+   aber weiter, dass die Grenze und nicht ein Fehler der Probe sie aufhielt.
+
+### Stand nach der Umsetzung (2026-11-15)
+Die Bedingung ist `held * 4 >= 65 536 && refused >= 1 && most * 10 >=
+limit * 9`; der Satz am Test nennt den Grund. Review (Sonnet, minor,
+übernommen): eine einzelne Abweisung allein könnte auch ein fremder Fehler
+sein, deshalb trägt der Höchststand des Dienstes den Beleg (im roten Lauf
+64 944 von 65 536). Delta-Review (Codex, blocking): auch das genügt nicht,
+wenn der Dienst ohne Grenze zufällig hoch steht; jetzt zählt die Probe nur
+Abweisungen mit „Too many open files" (`limited=`), und der Test liest die
+weiche Grenze des Dienstes aus `/proc/<pid>/limits`. Mutationsbeweis unverändert über `held < HOLD` (ohne Grenze
+hält die Probe alle 40 000).
+
