@@ -93,6 +93,14 @@ Diagnose-Codes, hier nur geplant (registriert vom genannten Issue in `codes.rs` 
 | HUM-486 | vhost-device-vsock: Fehler beim Start melden, ein stummes Gerät erkennen | S | HUM-471 |
 | HUM-487 | KVM-Test der Deskriptorgrenze: Schwelle der Abweisungen hängt nicht an der Länge von `/usr` | S | HUM-469 |
 | HUM-488 | doctor: eine Zeile je Voraussetzung auch für eine zugelassene Stufe, der etwas fehlt | S | HUM-449 |
+| HUM-489 | CLI: `humanitl run --sandbox-min-isolation` hebt die Untergrenze der Sitzung, statt still wegzufallen | S | HUM-449 |
+| HUM-490 | e2e-m4: „the history holds the request as edited" wackelt (30 s) | S | — |
+| HUM-491 | macOS: Masken des Klons falten nach Unicode wie APFS | S | HUM-482 |
+| HUM-492 | Kernel-Stufe: `humanitl-vm-<instanz>` unter `$XDG_RUNTIME_DIR` bleibt nach dem Daemon liegen | S | HUM-444 |
+| HUM-493 | Der Pfad für nicht zugelassene Stufen (`SANDBOX_048`, `detect_unadmitted`) ohne Stufe dahinter | S | HUM-449 |
+| HUM-494 | App: die Einstellungszeile der Backends wird mit vier Stufen zu schmal | S | HUM-447 |
+| HUM-495 | doctor: `virtio_fs` „nicht geprüft", wenn das Kernel-Abbild fehlt | S | HUM-488 |
+| HUM-496 | CLI: eine Wegwerf-Sitzung mit einem Befehl, wie ein Agent nativ, mit Ladeanimation | M | HUM-449 |
 
 ## HUM-428 · Port neutral: `PlanRequest`, `LaunchOptions`, `IsolationLevel`, Enum `Backend` statt `PlatformBackend`
 
@@ -2306,4 +2314,152 @@ für Podman, dessen Gruppe dieselben Zeilen der Engine bekommt. Test
 `the_admitted_kernel_level_is_searched_like_a_start_and_probes_nothing_it_lacks`
 erweitert; Mutation (Zeilen weg) rot. SECURITY en+de nennen es; `docs/cli.md`
 zieht HUM-447 nach.
+
+---
+
+## HUM-489 · CLI: `humanitl run --sandbox-min-isolation` raises the floor of the session
+
+### Kontext
+Aus HUM-447. `humanitl run` filtert `--sandbox-min-isolation` aus den
+`cli_overrides` (`merge_overrides` in `run.rs`, `SESSION_OVERRIDE_KEYS` in
+`ipc/session.rs`); der Daemon sieht die Untergrenze nicht, ohne Hinweis.
+`docs/cli.md` sagt es ehrlich, aber ein Flag, das still nichts tut, ist eine
+Falle.
+
+### Spezifikation
+1. `sandbox.min_isolation` wird ein Schlüssel der Sitzung; der Daemon nimmt
+   den strengsten Wert aus Konfiguration, Profil und Kommandozeile, nie einen
+   schwächeren.
+
+### Tests
+- `humanitl run --sandbox-min-isolation kernel` mit `auto` endet mit
+  `SANDBOX_035`; ein schwächerer Wert der Kommandozeile senkt eine höhere
+  Untergrenze der Konfiguration nicht.
+
+### Akzeptanzkriterien
+1. Kein Flag der Untergrenze fällt still weg.
+
+---
+
+## HUM-490 · e2e-m4: the edited request in the history flakes
+
+### Kontext
+CI-Lauf 43659952440 (HUM-484): `e2e-m4` rot mit „the history holds the
+request as edited did not happen within 30s"; derselbe Inhalt war im
+nächsten Lauf grün.
+
+### Spezifikation
+1. Ursache finden (Warten auf ein Ereignis statt einer Frist, oder die Frist
+   begründen), kein Wiederholen.
+
+### Akzeptanzkriterien
+1. Ursache benannt und behoben.
+
+---
+
+## HUM-491 · macOS: clone masks fold by Unicode like APFS
+
+### Kontext
+Aus HUM-482. Unter macOS vergleichen die Masken des Klons über `folded`, das
+nur ASCII faltet; APFS faltet nach Unicode (U+017F, U+212A), so dass
+`.git/hoo\u{212a}s` dieselbe Maske wäre.
+
+### Spezifikation
+1. Den Vergleich der Masken unter macOS nach der Faltung von APFS ausrichten,
+   oder wie unter Linux verweigern, wo ein Name einer Maske gefaltet wird.
+
+### Akzeptanzkriterien
+1. Keine Maske lässt sich unter macOS über die Schreibweise umgehen.
+
+---
+
+## HUM-492 · Kernel level: `humanitl-vm-<instance>` stays behind after the daemon
+
+### Kontext
+Aus HUM-449: Nach dem Ende eines Daemons bleiben leere Verzeichnisse
+`humanitl-vm-<instanz>` unter `$XDG_RUNTIME_DIR`, etwa sieben je Lauf der
+Escape-Suite; am 2026-11-15 lagen 117 da, drei davon nicht leer.
+
+### Spezifikation
+1. Der Daemon entfernt sein Verzeichnis beim Ende; ein Start räumt verwaiste
+   Verzeichnisse beendeter Instanzen auf (wie `SANDBOX_041`).
+
+### Akzeptanzkriterien
+1. Nach einem Lauf der Escape-Suite bleibt kein Verzeichnis zurück.
+
+---
+
+## HUM-493 · The path for unadmitted levels without a level behind it
+
+### Kontext
+Aus dem Review von HUM-449: Seit der Zulassung von `qemu` ist keine Stufe
+mehr unzugelassen; `SANDBOX_048`, `Backend::detect_unadmitted`, der
+Sonderfall in `given_backend` und das Feature `unadmitted-backends` stehen
+ohne Stufe da.
+
+### Spezifikation
+1. Entscheiden: behalten als Gerüst für das nächste Backend (mit Test, dass
+   es greift) oder entfernen, samt Feature und Prüfung in `check-deps.sh`.
+
+### Akzeptanzkriterien
+1. Kein ungetesteter toter Pfad.
+
+---
+
+## HUM-494 · App: the settings row of the backends is too narrow with four levels
+
+### Kontext
+Aus HUM-447: Mit vier Segmenten bleibt der linken Spalte etwa 250 px; der
+Grund einer fehlenden Voraussetzung läuft über rund 13 Zeilen, der
+kopierbare Befehl neben dem Knopf schrumpft auf einen Streifen.
+
+### Spezifikation
+1. Die Zeile so umbauen, dass Grund und Befehl lesbar bleiben (etwa die Wahl
+   über der Erklärung statt daneben); Screenshot vor und nach dem Umbau.
+
+### Akzeptanzkriterien
+1. Grund und Befehl einer fehlenden Voraussetzung in voller Breite lesbar.
+
+---
+
+## HUM-495 · doctor: `virtio_fs` unmeasured when the kernel image is missing
+
+### Kontext
+Aus dem Review von HUM-488: Fehlt das Kernel-Abbild, wiederholt die Zeile
+`virtio_fs` dessen Befund, obwohl virtiofs gar nicht prüfbar war.
+
+### Spezifikation
+1. Die Zeile heißt dann „nicht gemessen", mit Verweis auf die Zeile
+   `kernel`.
+
+### Akzeptanzkriterien
+1. Keine Zeile meldet einen Fehler, den sie nicht geprüft hat.
+
+---
+
+## HUM-496 · CLI: a disposable session in one command, like an agent started natively, with a boot animation
+
+### Kontext
+Vision des Owners vom 2026-11-15: Ein Befehl startet eine Wegwerf-Sitzung
+(etwa in der Micro-VM), und man landet im Terminal des Agenten, als hätte man
+`claude` oder `pi` nativ gestartet. Während die VM startet, dreht sich als
+3D-ASCII die Faust des Logos in Gelb, mindestens eine Sekunde, auch wenn der
+Start schneller ist. Vorbild des Owners: github.com/heiervang-technologies/a3d.rs.
+Heute geht der Start schon mit `humanitl run --disposable --backend qemu`.
+
+### Spezifikation
+1. Ein kurzer Einstieg (Name im Design zu klären), der die Wegwerf-Sitzung mit
+   den Vorgaben des Nutzers startet und das Terminal des Agenten direkt
+   übergibt; am Ende die Frage, was übernommen wird.
+2. Die Ladeanimation ohne neue schwere Abhängigkeit: a3d.rs bringt wgpu mit,
+   hat kein Release und keine Nutzer; stattdessen ein kleiner eigener
+   CPU-Renderer oder beim Bau eingebettete Bilder, aus der in die Tiefe
+   gezogenen Silhouette des Logos.
+3. Nur in einem Terminal; nicht bei `--json` oder ohne TTY, ohne Farbe bei
+   `NO_COLOR`; eine Einstellung schaltet sie ab.
+
+### Akzeptanzkriterien
+1. Ein Befehl bis zum Prompt des Agenten in der Wegwerf-Sitzung.
+2. Die Animation läuft mindestens eine Sekunde und hält den Start nicht
+   länger auf, als er ohnehin dauert.
 
