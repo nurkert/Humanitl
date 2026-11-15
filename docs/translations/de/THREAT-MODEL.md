@@ -711,9 +711,16 @@ selbst (K-33, HUM-444). *Restrisiko:* Root im Gast kann den Strom beenden oder a
 nicht mehr liest, lässt den nächsten Rahmen des Daemons seine Frist von zehn Sekunden verfehlen,
 und der Daemon schließt dann den Strom: Die Session endet, kein Faden des Daemons wartet länger.
 Ein Daemon, der nicht mehr liest, stoppt das Lesen der Terminals im Shim, nicht das der
-Steuerrahmen. Eingaben für ein Terminal, dessen Prozess nicht liest, werden verworfen, sobald seine
-Schlange 64 KiB hält, und Ausgaben einer weiteren Shell, deren Leser stockt, verwirft der Daemon
-über 256 Stücke hinaus; beides wird gezählt, keins hält einen anderen Kanal auf.
+Steuerrahmen. Eingaben für ein Terminal reisen unter Guthaben von 64 KiB (HUM-497): Ein Schreiben
+an ein Terminal, dessen Prozess nicht liest, wartet und scheitert nach zehn Sekunden ohne Guthaben
+mit `TERM_002`, der Strom bleibt offen, und kein Byte wird verworfen, während der Schreiber hört,
+es sei angekommen, außer in dem Moment, in dem der Prozess des Terminals endet; Root im Gast, der Guthaben zurückhält, hält nur die Eingaben an seine eigene
+Sandbox auf, und Guthaben über die geschickten, noch nicht bestätigten Bytes hinaus zählt nicht.
+Das schützt vor einem Agenten, der nicht liest, nicht vor einem feindlichen Gast: Ob Eingaben den
+Agenten erreichen, hängt am PID 1 des Gasts, und Root im Gast besitzt das Terminal und kann seine
+Eingaben ohnehin verlieren oder verändern, was nur seiner eigenen Sandbox schadet. Ausgaben einer
+weiteren Shell, deren Leser stockt, verwirft der Daemon über 256 Stücke hinaus, gezählt; keins
+hält einen anderen Kanal auf.
 
 ### K-30 Der Monitor der virtuellen Maschine der Kernel-Stufe
 

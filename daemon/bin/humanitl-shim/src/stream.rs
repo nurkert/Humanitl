@@ -32,9 +32,14 @@
 //! ([`OUT_HIGH`]), bytes for a terminal in a bounded queue ([`IN_HIGH`]).
 //! A daemon that stops reading stops the reading of the masters, as a daemon
 //! that stops reading a master would in the descriptor mode; the control
-//! frames, the lifeline and the children are still served. A terminal whose
-//! queue is full loses further input for it (counted, warned about once)
-//! instead of holding up the frames of every other channel. An open that
+//! frames, the lifeline and the children are still served. Input for a
+//! terminal travels under credit (HUM-497, `frame.rs`): the daemon sends at
+//! most [`IN_HIGH`] bytes the shim has not written to that terminal yet, and
+//! every byte the terminal takes goes back as a `G`. A terminal whose
+//! process does not read therefore holds up the daemon's writes to it, as a
+//! full master would, and never the frames of any other channel; nothing it
+//! was sent is lost. A `D` beyond the window comes from a daemon that breaks
+//! the rule and is dropped (counted, warned about once). An open that
 //! arrives while the outbox is full is dropped unanswered, so a flood of
 //! them cannot grow the outbox.
 //!
@@ -68,9 +73,10 @@ pub const HEARTBEAT: Duration = Duration::from_secs(5);
 /// longer read.
 pub const OUT_HIGH: usize = 256 * 1024;
 
-/// The most bytes that may wait for one terminal before the socket is no
-/// longer read.
-pub const IN_HIGH: usize = 64 * 1024;
+/// The most bytes that may wait for one terminal: the credit window of
+/// `frame.rs` (HUM-497). The daemon never sends more before the terminal
+/// took some; what comes beyond it is dropped.
+pub const IN_HIGH: usize = frame::WINDOW;
 
 /// How long the last frames may take to leave once the agent has ended.
 const FINAL_FLUSH: Duration = Duration::from_secs(2);
@@ -223,8 +229,12 @@ struct Terminal {
     pid: libc::pid_t,
     /// `None` once the daemon closed it (`C`).
     master: Option<OwnedFd>,
-    /// Bytes for the terminal that it did not take yet.
+    /// Bytes for the terminal that it did not take yet; never more than
+    /// [`IN_HIGH`].
     input: Vec<u8>,
+    /// Bytes the terminal took that the daemon has no credit for yet; they
+    /// leave as one `G` ([`Session::grant`]).
+    owed: usize,
     /// The master reads end of file or `EIO`: nobody holds the follower.
     drained: bool,
 }
@@ -265,7 +275,7 @@ pub struct Session {
     /// The follower of the agent's terminal until the agent's child took
     /// it ([`Session::release_follower`]).
     follower: Option<OwnedFd>,
-    /// Bytes of input dropped because a terminal's queue was full.
+    /// Bytes of input dropped because they came beyond a terminal's credit.
     dropped_input: u64,
     /// Opens dropped unanswered because the outbox was full.
     dropped_opens: u64,
@@ -303,6 +313,7 @@ impl Session {
                 pid: 0,
                 master: Some(agent_master),
                 input: Vec::new(),
+                owed: 0,
                 drained: false,
             }],
             program: None,
@@ -419,8 +430,9 @@ impl Session {
             fds.len() - 1
         };
         if self.open {
-            // Always read: a terminal with a full queue loses its own input
-            // ([`Session::act`]), never the frames of the other channels.
+            // Always read: a terminal with a full queue holds up the
+            // daemon's writes to it through its credit ([`Session::grant`]),
+            // never the frames of the other channels.
             let mut events = libc::POLLIN;
             if !self.out.is_empty() {
                 events |= libc::POLLOUT;
@@ -472,7 +484,37 @@ impl Session {
             }
             self.next_heartbeat = Instant::now() + HEARTBEAT;
         }
+        self.grant();
         self.flush();
+        // Credit a full outbox held back leaves now that the flush may have
+        // made room, not at the next wake-up (up to a heartbeat later). If
+        // the outbox is still full, `POLLOUT` wakes the next round.
+        if self.terminals.iter().any(|t| t.owed > 0) {
+            self.grant();
+            self.flush();
+        }
+    }
+
+    /// Gives the daemon credit for what each terminal took since the last
+    /// `G`, one frame per terminal. Only while the outbox has room, as for
+    /// the bytes of the masters: what is owed waits and leaves in a later
+    /// round, so the outbox never grows by more than one frame per terminal.
+    fn grant(&mut self) {
+        if !self.open {
+            return;
+        }
+        for terminal in &mut self.terminals {
+            if self.out.len() >= OUT_HIGH {
+                return;
+            }
+            if terminal.owed == 0 {
+                continue;
+            }
+            // Never more than the window: a terminal holds at most that much.
+            let bytes = u32::try_from(terminal.owed.min(IN_HIGH)).unwrap_or(u32::MAX);
+            frame::encode_credit(terminal.channel, bytes, &mut self.out);
+            terminal.owed -= usize::try_from(bytes).unwrap_or(terminal.owed);
+        }
     }
 
     /// A child ended; when it was a further shell, its last bytes and its
@@ -595,7 +637,7 @@ impl Session {
                 if let Some(terminal) = self.terminal(channel)
                     && terminal.master.is_some()
                 {
-                    if terminal.input.len() >= IN_HIGH {
+                    if terminal.input.len() + bytes.len() > IN_HIGH {
                         full = true;
                     } else {
                         terminal.input.extend_from_slice(&bytes);
@@ -605,7 +647,7 @@ impl Session {
                     if self.dropped_input == 0 {
                         warn(
                             "input for a terminal was dropped: ",
-                            "its process does not read",
+                            "the daemon sent beyond its credit",
                         );
                     }
                     self.dropped_input += u64::try_from(bytes.len()).unwrap_or(u64::MAX);
@@ -645,7 +687,8 @@ impl Session {
             Message::Heartbeat
             | Message::Started { .. }
             | Message::Refused { .. }
-            | Message::Exit { .. } => {}
+            | Message::Exit { .. }
+            | Message::Credit { .. } => {}
         }
     }
 
@@ -722,6 +765,7 @@ impl Session {
             pid,
             master: Some(pty.master),
             input: Vec::new(),
+            owed: 0,
             drained: false,
         });
         frame::encode_value(Kind::Started, channel, pid, &mut self.out);
@@ -743,7 +787,9 @@ impl Session {
             match usize::try_from(n) {
                 Ok(0) => break,
                 Ok(written) => {
-                    terminal.input.drain(..written.min(terminal.input.len()));
+                    let written = written.min(terminal.input.len());
+                    terminal.input.drain(..written);
+                    terminal.owed += written;
                 }
                 Err(_) => {
                     if errno() != libc::EINTR {
@@ -1053,11 +1099,13 @@ mod tests {
         found
     }
 
-    /// Review finding 2: a terminal whose process does not read loses its
-    /// own input once its queue is full; an interrupt and a size for the
-    /// same terminal still arrive, because the stream is still read.
+    /// Review finding 2, since HUM-497 for a daemon that breaks its credit:
+    /// input beyond the window of a terminal whose process does not read is
+    /// dropped and the queue stays within the window; an interrupt and a
+    /// size for the same terminal still arrive, because the stream is still
+    /// read.
     #[test]
-    fn a_full_input_queue_loses_its_own_input_and_never_the_control_frames() {
+    fn input_beyond_the_credit_is_dropped_and_never_the_control_frames() {
         let (mut session, daemon, follower) = session();
         raw(&follower);
         nonblocking(daemon.as_raw_fd()).unwrap();
@@ -1075,7 +1123,7 @@ mod tests {
         }
         round(&mut session);
         assert!(session.dropped_input > 0, "nothing was dropped");
-        assert!(session.terminals[0].input.len() <= IN_HIGH + MAX_PAYLOAD);
+        assert!(session.terminals[0].input.len() <= IN_HIGH);
         let mut control = Vec::new();
         frame::encode_size(AGENT, 111, 33, &mut control);
         frame::encode(Kind::Interrupt, AGENT, &[], &mut control).unwrap();
@@ -1110,6 +1158,130 @@ mod tests {
             std::os::unix::process::ExitStatusExt::signal(&status),
             Some(libc::SIGINT)
         );
+    }
+
+    /// The sum of every credit the daemon's end can read now; each one
+    /// for the agent's channel.
+    fn credits(daemon: &OwnedFd, decoder: &mut Decoder) -> usize {
+        let mut buffer = [0u8; 4096];
+        let mut granted = 0;
+        loop {
+            // SAFETY: the buffer is valid for its length and outlives the call.
+            let n =
+                unsafe { libc::read(daemon.as_raw_fd(), buffer.as_mut_ptr().cast(), buffer.len()) };
+            let Ok(n) = usize::try_from(n) else {
+                return granted;
+            };
+            if n == 0 {
+                return granted;
+            }
+            decoder.push(&buffer[..n], |event| {
+                if let Event::Frame(frame) = event
+                    && let Ok(Message::Credit { channel, bytes }) = Message::parse(&frame)
+                {
+                    assert_eq!(channel, AGENT);
+                    granted += usize::try_from(bytes).unwrap();
+                }
+            });
+        }
+    }
+
+    /// HUM-497: a daemon that keeps to its credit loses nothing. 300 KiB
+    /// for a terminal whose reader starts late and then takes 4 KiB at a
+    /// time arrive whole and in order. The daemon runs out of credit while
+    /// the reader sleeps, the queue never holds more than the window, and
+    /// in the end the shim has granted back every byte the terminal took.
+    #[test]
+    fn input_under_credit_reaches_a_slow_reader_whole() {
+        let (mut session, daemon, follower) = session();
+        raw(&follower);
+        nonblocking(daemon.as_raw_fd()).unwrap();
+        let total = 300 * 1024;
+        let payload: Vec<u8> = (0..total).map(|i| u8::try_from(i % 251).unwrap()).collect();
+        let reader = std::thread::spawn(move || {
+            std::thread::sleep(Duration::from_millis(500));
+            let mut got = Vec::new();
+            let mut buffer = [0u8; 4096];
+            while got.len() < total {
+                let mut poll = libc::pollfd {
+                    fd: follower.as_raw_fd(),
+                    events: libc::POLLIN,
+                    revents: 0,
+                };
+                // SAFETY: one pollfd; the buffer outlives the read.
+                let n = unsafe {
+                    if libc::poll(&raw mut poll, 1, 5000) <= 0 {
+                        break;
+                    }
+                    libc::read(
+                        follower.as_raw_fd(),
+                        buffer.as_mut_ptr().cast(),
+                        buffer.len(),
+                    )
+                };
+                let Ok(n) = usize::try_from(n) else { break };
+                got.extend_from_slice(&buffer[..n]);
+                std::thread::sleep(Duration::from_millis(2));
+            }
+            got
+        });
+        let mut credit = frame::WINDOW;
+        let mut sent = 0;
+        let mut starved = false;
+        let mut decoder = Decoder::new();
+        let deadline = Instant::now() + Duration::from_secs(30);
+        while !reader.is_finished() && Instant::now() < deadline {
+            if sent < total && credit > 0 {
+                let take = credit.min(MAX_PAYLOAD).min(total - sent);
+                let mut wire = Vec::new();
+                frame::encode_data(AGENT, &payload[sent..sent + take], &mut wire);
+                send(&daemon, &wire);
+                sent += take;
+                credit -= take;
+            }
+            starved |= sent < total && credit == 0;
+            round(&mut session);
+            assert!(session.terminals[0].input.len() <= IN_HIGH);
+            credit += credits(&daemon, &mut decoder);
+        }
+        let got = reader.join().unwrap();
+        assert_eq!(got.len(), total, "bytes were lost");
+        assert!(got == payload, "the bytes arrived out of order");
+        assert!(starved, "the daemon never had to wait for credit");
+        assert_eq!(session.dropped_input, 0);
+        for _ in 0..10 {
+            round(&mut session);
+            credit += credits(&daemon, &mut decoder);
+        }
+        assert_eq!(
+            credit,
+            frame::WINDOW,
+            "every byte taken came back as credit"
+        );
+    }
+
+    /// HUM-497, review: credit that a full outbox held back leaves in the
+    /// same round once the flush made room, not at the next wake-up.
+    #[test]
+    fn credit_held_back_by_a_full_outbox_leaves_after_the_flush() {
+        let (mut session, daemon, _follower) = session();
+        nonblocking(daemon.as_raw_fd()).unwrap();
+        while session.out.len() < OUT_HIGH {
+            frame::encode(Kind::Heartbeat, AGENT, &[], &mut session.out).unwrap();
+        }
+        session.terminals[0].owed = 100;
+        session.serve(&[], &Slots::default());
+        assert_eq!(session.terminals[0].owed, 0, "the credit waited");
+        let mut decoder = Decoder::new();
+        let mut granted = 0;
+        for _ in 0..200 {
+            granted += credits(&daemon, &mut decoder);
+            session.flush();
+            if granted > 0 {
+                break;
+            }
+        }
+        assert_eq!(granted, 100);
     }
 
     /// Review finding 3: while the outbox is full, a flood of opens grows

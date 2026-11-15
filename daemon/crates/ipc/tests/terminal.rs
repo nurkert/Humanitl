@@ -2154,3 +2154,87 @@ async fn esc_1_refuses_the_agent_vsock_and_unix_sockets() {
     })
     .await;
 }
+
+/// Ein Agent, der eine große Eingabe erst nach einer Pause liest (HUM-497):
+/// Er stellt sein Terminal roh, damit keine Zeilendisziplin Bytes schluckt
+/// oder zurückwirft, wartet drei Sekunden und meldet dann Prüfsumme und
+/// Länge der ersten 300 KiB, die er liest. GNU `head -c` liest nie mehr als
+/// verlangt.
+const AGENT_PASTE: &str = "stty raw -echo; printf 'READY\\r\\n'; sleep 3; \
+                           printf 'SUM %s\\r\\n' \"$(head -c 307200 | cksum)\"; \
+                           while :; do sleep 1; done";
+
+/// HUM-497: Eine Eingabe von 300 KiB an einen Agenten, der langsam liest,
+/// kommt ganz an, im Strom-Modus wie mit dem Deskriptor. Der Client sieht
+/// für jedes Stück Erfolg; dann darf kein Byte fehlen. Vor HUM-497 verwarf
+/// der Shim im Strom-Modus alles über 64 KiB in seiner Schlange, während das
+/// Schreiben Erfolg meldete, und die Prüfsumme kam nie.
+// Braucht das Linux-Sandbox-Backend; unter CI wäre sein Fehlen ein Fehler (HUM-312).
+#[cfg(target_os = "linux")]
+#[tokio::test(flavor = "multi_thread")]
+async fn a_large_paste_reaches_a_slow_agent_whole() {
+    let fixture = Fixture::new();
+    if !usable(&fixture) {
+        return;
+    }
+    let total = 300 * 1024;
+    // Druckbar und ohne Zeilenende: Was ankommt, lässt sich lesen, falls der
+    // Test rot wird, und die Prüfsumme des Hosts ist dieselbe Rechnung.
+    let payload: Vec<u8> = (0..total)
+        .map(|i| b'a' + u8::try_from(i % 26).expect("below 26"))
+        .collect();
+    let expected = host_cksum(&payload);
+    let service = fixture.service();
+    let Some(hub) = running_with(&service, fixture.start_with(AGENT_PASTE)).await else {
+        return;
+    };
+    with_session(service, async move {
+        assert_eq!(
+            hub.streamed(),
+            transport() == humanitl_sandbox::TerminalTransport::Stream,
+            "the terminal travels the way {} chose",
+            module_path!()
+        );
+        let mut writer = Client::attach(&hub, 100, 30, false);
+        let mut seen = String::new();
+        assert!(
+            writer.wait_for(&mut seen, "READY").await,
+            "the agent starts: {seen:?}"
+        );
+        for chunk in payload.chunks(4096) {
+            writer
+                .send(v1::terminal_input::Input::Data(chunk.to_vec()))
+                .await;
+        }
+        assert!(
+            writer.wait_for(&mut seen, &format!("SUM {expected}")).await,
+            "the agent read all {total} bytes in {}: {:?}",
+            module_path!(),
+            seen.lines().last()
+        );
+        assert!(
+            writer.notices.is_empty(),
+            "the write reported a problem: {:?}",
+            writer.notices
+        );
+    })
+    .await;
+}
+
+/// Was `cksum` auf dem Host zu `bytes` sagt, wie der Agent es druckt.
+fn host_cksum(bytes: &[u8]) -> String {
+    use std::io::Write as _;
+    let mut child = std::process::Command::new("cksum")
+        .stdin(std::process::Stdio::piped())
+        .stdout(std::process::Stdio::piped())
+        .spawn()
+        .expect("cksum runs on the host");
+    child
+        .stdin
+        .take()
+        .expect("a pipe")
+        .write_all(bytes)
+        .expect("cksum takes the bytes");
+    let output = child.wait_with_output().expect("cksum ends");
+    String::from_utf8_lossy(&output.stdout).trim().to_owned()
+}

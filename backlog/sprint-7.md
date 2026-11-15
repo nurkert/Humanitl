@@ -2489,6 +2489,25 @@ Aus dem Ultra-Review vom 2026-11-15 (PR #1). Im Stromkanal der Kernel-Stufe verw
 ### Akzeptanzkriterien
 1. Keine Eingabe geht verloren, während der Client Erfolg sieht.
 
+### Stand nach der Umsetzung (2026-11-15)
+Guthaben je Kanal: neuer Rahmen `G` (Shim an Daemon, `u32` 1 bis 64 KiB,
+`frame::WINDOW`); der Daemon schickt je Terminal höchstens das Guthaben
+(`Window { left, unacked }`, ein `G` gibt höchstens die gesendeten,
+unbestätigten Bytes zurück) und wartet sonst bis zu `STREAM_SEND_WAIT` (10 s)
+je Stück, danach `TERM_002`, der Strom bleibt offen; Ende des Kanals oder
+des Stroms weckt den Wartenden sofort, und ein Schreiben, über das ein `E`
+lief, scheitert mit `NotConnected`. Der Shim zählt geschriebene Bytes und gibt
+Guthaben nur, solange sein Ausgang unter `OUT_HIGH` liegt, auch gleich nach
+dem Leeren. Tests: 300 KiB an einen langsamen Leser kommen ganz an (Shim,
+ipc unter bwrap in beiden Modi, KVM), Mutationen rot (altes Verwerfen,
+Guthaben ignoriert, kein Grant, Grant über das Gesendete, Prüfung auf `E`).
+Grenze, dokumentiert: Das Guthaben schützt vor einem Agenten, der nicht
+liest, nicht vor einem feindlichen Gast, der sein Terminal besitzt; endet
+der Prozess eines Terminals genau zwischen einem Stück und der Meldung seines
+Endes, geht dieses Stück verloren wie beim Schreiben auf ein sterbendes pty.
+Kandidat: eine Gesamtfrist je Schreiben statt je Stück (ein Gast, der
+tröpfelnd Guthaben gibt, hält einen Faden dieses Terminals).
+
 
 ---
 

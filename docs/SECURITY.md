@@ -457,8 +457,17 @@ unchanged, and these are added:
   does not take within ten seconds makes the daemon shut the stream. Interrupts come from the
   shim (`SIGINT` to the foreground group of the terminal), because no signal of the host reaches
   a guest.
-- No channel holds up another: input for a terminal whose queue is full (64 KiB) is dropped,
-  output of a further shell whose reader stalls is dropped beyond 256 pieces, both counted.
+- No channel holds up another, and no input is lost while the writer is told it arrived, except
+  when the terminal's process ends in the moment between a sent piece and its end reaching the
+  daemon (as with a write to a pty just before its process exits). Input
+  for a terminal travels under credit (HUM-497): the daemon sends at most 64 KiB per terminal
+  that the shim has not written to it yet, and the shim grants more as the terminal takes bytes.
+  A write to a terminal whose process does not read waits, as a write to a full master does,
+  and fails with `TERM_002` when no credit comes within ten seconds; the stream stays open. A
+  frame beyond the credit is dropped and counted by the shim. The credit protects input against
+  an agent that does not read, not against a hostile guest: delivery to the agent depends on the
+  guest's PID 1, and root in a guest owns the terminal and can lose or alter its input anyway.
+  Output of a further shell whose reader stalls is dropped beyond 256 pieces, counted.
 
 ### The lifeline and the environment through descriptors (HUM-430)
 

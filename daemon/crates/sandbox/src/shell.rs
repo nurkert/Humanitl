@@ -39,6 +39,15 @@
 //! Sandbox, die einer Shell an ihren [`Shell`]. Über diesen Kanal geht nie
 //! ein Byte an den Proxy oder von ihm.
 //!
+//! Eingabe an ein Terminal reist dort unter Guthaben (HUM-497): Je Kanal
+//! schickt der Daemon höchstens [`control_frame::WINDOW`] Bytes, die der Shim
+//! noch nicht an das Terminal geschrieben hat, und wartet auf ein `G`, bevor
+//! er mehr schickt. Ein Schreiben blockiert damit, solange der Prozess am
+//! Terminal nicht liest, wie das Schreiben auf die Herrscherseite im
+//! Deskriptor-Modus, und kommt binnen zehn Sekunden kein Guthaben,
+//! scheitert es mit `TERM_002`. Was der Aufrufer als geschrieben gemeldet
+//! bekommt, verwirft der Shim nie.
+//!
 //! # Unter macOS: eine Start-Tür
 //!
 //! Seatbelt kennt keinen Namensraum, in dem ein PID 1 sitzen könnte, und
@@ -69,7 +78,7 @@ use rustix::net::{
 };
 use rustix::termios::{Winsize, tcsetwinsize};
 
-use crate::control_frame::{self, AGENT, Decoder, Event, Kind, MAX_PAYLOAD, Message};
+use crate::control_frame::{self, AGENT, Decoder, Event, Kind, MAX_PAYLOAD, Message, WINDOW};
 
 /// Wie viele weitere Shells gleichzeitig leben dürfen. Der Shim zählt
 /// dieselbe Zahl noch einmal (`exec.rs`, `MAX_SHELLS`).
@@ -184,8 +193,38 @@ impl Drop for Turn<'_> {
 /// hängen, und ein Gast darf den Speicher des Daemons nicht füllen.
 const SHELL_QUEUE: usize = 256;
 
-/// Wie lange ein Rahmen an den Shim höchstens auf Platz im Strom wartet.
+/// Wie lange ein Rahmen an den Shim höchstens auf Platz im Strom wartet, und
+/// wie lange ein Schreiben an ein Terminal höchstens auf neues Guthaben
+/// wartet (HUM-497).
 const STREAM_SEND_WAIT: Duration = Duration::from_secs(10);
+
+/// Das Fenster eines offenen Kanals (HUM-497). `left + unacked` ist nie
+/// mehr als [`WINDOW`].
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+struct Window {
+    /// Wie viele Bytes der Daemon noch schicken darf.
+    left: usize,
+    /// Wie viele geschickte Bytes der Shim noch nicht mit `G` bestätigt hat.
+    /// Ein `G` gibt höchstens so viel zurück; was darüber hinausgeht, ist
+    /// nie geschickt worden und zählt nicht.
+    unacked: usize,
+}
+
+impl Window {
+    const FULL: Self = Self {
+        left: WINDOW,
+        unacked: 0,
+    };
+}
+
+/// Das Guthaben für Eingabe an die Terminals (HUM-497).
+#[derive(Debug, Default)]
+struct Credit {
+    /// Das Fenster je offenem Kanal.
+    window: BTreeMap<u32, Window>,
+    /// Der Strom ist zu Ende: Es kommt kein Guthaben mehr.
+    ended: bool,
+}
 
 /// Wohin die Bytes des Agenten aus dem Strom gehen.
 pub(crate) type AgentSink = Box<dyn Fn(&[u8]) + Send>;
@@ -210,9 +249,32 @@ struct StreamDoor {
     heartbeat: Mutex<Option<Instant>>,
     /// Der Exit-Code des Agenten, wie der Shim ihn meldet.
     agent_exit: Mutex<Option<i32>>,
+    /// Das Guthaben je Kanal für Eingabe (HUM-497).
+    credit: Mutex<Credit>,
+    /// Weckt, wer auf Guthaben wartet.
+    credited: Condvar,
 }
 
 impl StreamDoor {
+    /// Die Tür am Strom `socket`; der Kanal des Agenten hat sein Guthaben
+    /// von Anfang an, wie der Shim es erwartet.
+    fn new(socket: OwnedFd) -> Self {
+        Self {
+            socket,
+            write: Mutex::new(false),
+            writable: Condvar::new(),
+            outputs: Mutex::new(BTreeMap::new()),
+            dropped: std::sync::atomic::AtomicU64::new(0),
+            heartbeat: Mutex::new(None),
+            agent_exit: Mutex::new(None),
+            credit: Mutex::new(Credit {
+                window: BTreeMap::from([(AGENT, Window::FULL)]),
+                ended: false,
+            }),
+            credited: Condvar::new(),
+        }
+    }
+
     /// Schreibt fertige Rahmen am Stück.
     ///
     /// Nimmt der Shim sie nicht binnen [`STREAM_SEND_WAIT`], oder scheitert
@@ -301,10 +363,134 @@ impl StreamDoor {
         Some(Turn(self))
     }
 
+    /// Schreibt Eingabe an das Terminal von `channel`, nie über das
+    /// Guthaben hinaus (HUM-497): Ist es aufgebraucht, wartet der Aufruf
+    /// darauf, dass das Terminal Bytes nimmt, je Stück höchstens
+    /// [`STREAM_SEND_WAIT`]. Ein Terminal, das langsam, aber stetig liest,
+    /// bekommt so alles; eines, das gar nicht liest, lässt das Schreiben mit
+    /// einem Fehler enden, und der Strom bleibt offen, weil kein halber
+    /// Rahmen hinausging.
+    ///
+    /// # Errors
+    ///
+    /// `TimedOut`, wenn das Terminal so lange nichts nahm; `NotConnected`
+    /// für einen Kanal, der nicht (mehr) offen ist; `BrokenPipe` nach dem
+    /// Ende des Stroms; der Fehler von [`StreamDoor::send`]. Was davor
+    /// hinausging, hat das Terminal oder bekommt es noch.
+    ///
+    /// Ein Restfenster bleibt: Endet der Prozess am Terminal, entfernt der
+    /// Shim das Terminal, bevor sein `E` hinausgeht, und verwirft ein `D`,
+    /// das danach ankommt. Trifft dieses `E` erst nach dem Ende des Aufrufs
+    /// ein, meldete der Aufruf Erfolg für Bytes, die kein Prozess mehr las,
+    /// wie ein Schreiben auf ein Pseudoterminal kurz vor dem Ende seines
+    /// Prozesses. Trifft es vorher ein, scheitert der Aufruf mit
+    /// `NotConnected`.
     fn send_data(&self, channel: u32, bytes: &[u8]) -> std::io::Result<()> {
-        let mut frames = Vec::with_capacity(bytes.len() + control_frame::HEADER);
-        control_frame::encode_data(channel, bytes, &mut frames);
-        self.send(&frames)
+        self.send_data_within(channel, bytes, STREAM_SEND_WAIT)
+    }
+
+    /// [`StreamDoor::send_data`] mit `wait` als Frist je Warten auf Guthaben.
+    fn send_data_within(&self, channel: u32, bytes: &[u8], wait: Duration) -> std::io::Result<()> {
+        let mut rest = bytes;
+        while !rest.is_empty() {
+            let take = self.reserve(channel, rest.len().min(MAX_PAYLOAD), wait)?;
+            let (now, later) = rest.split_at(take.min(rest.len()));
+            let mut frames = Vec::with_capacity(now.len() + control_frame::HEADER);
+            control_frame::encode_data(channel, now, &mut frames);
+            self.send(&frames)?;
+            // Endete der Prozess, während das Stück unterwegs war, nimmt der
+            // Shim es nicht mehr an (sein `E` kam schon). Sichtbar ist das
+            // hier nur, wenn das `E` vor dem Ende dieses Aufrufs eintraf.
+            if !self.is_open(channel) {
+                return Err(std::io::Error::new(
+                    std::io::ErrorKind::NotConnected,
+                    "the terminal closed while the input went out",
+                ));
+            }
+            rest = later;
+        }
+        Ok(())
+    }
+
+    /// Nimmt bis zu `most` Bytes Guthaben von `channel`, mindestens eines;
+    /// wartet darauf höchstens `wait`. Gewartet wird ohne das Recht zu
+    /// schreiben ([`StreamDoor::turn`]): Ein Terminal, das nicht liest, hält
+    /// die Rahmen keines anderen Kanals auf.
+    fn reserve(&self, channel: u32, most: usize, wait: Duration) -> std::io::Result<usize> {
+        let deadline = Instant::now() + wait;
+        let mut credit = lock(&self.credit);
+        loop {
+            if credit.ended {
+                return Err(std::io::Error::new(
+                    std::io::ErrorKind::BrokenPipe,
+                    "the sandbox has ended",
+                ));
+            }
+            match credit.window.get_mut(&channel) {
+                None => {
+                    return Err(std::io::Error::new(
+                        std::io::ErrorKind::NotConnected,
+                        "the terminal is closed",
+                    ));
+                }
+                Some(window) if window.left > 0 => {
+                    let take = most.min(window.left);
+                    window.left -= take;
+                    window.unacked += take;
+                    return Ok(take);
+                }
+                Some(_) => {}
+            }
+            let now = Instant::now();
+            if now >= deadline {
+                return Err(std::io::Error::new(
+                    std::io::ErrorKind::TimedOut,
+                    format!("the terminal took no input for {wait:?}; its process does not read"),
+                ));
+            }
+            credit = self
+                .credited
+                .wait_timeout(credit, deadline - now)
+                .unwrap_or_else(PoisonError::into_inner)
+                .0;
+        }
+    }
+
+    /// Ein neuer Kanal beginnt mit dem ganzen Fenster, wie im Shim.
+    fn open_channel(&self, channel: u32) {
+        lock(&self.credit).window.insert(channel, Window::FULL);
+    }
+
+    /// Ein Kanal nimmt keine Eingabe mehr; wer auf sein Guthaben wartet,
+    /// bekommt den Fehler sofort.
+    fn close_channel(&self, channel: u32) {
+        lock(&self.credit).window.remove(&channel);
+        self.credited.notify_all();
+    }
+
+    /// Ein `G` des Shims. Es gibt höchstens zurück, was geschickt und noch
+    /// nicht bestätigt ist; ein Shim, der mehr meldet, bekommt dafür nichts,
+    /// und ein Kanal, der nicht offen ist, bekommt nichts.
+    fn grant(&self, channel: u32, bytes: u32) {
+        let mut credit = lock(&self.credit);
+        if let Some(window) = credit.window.get_mut(&channel) {
+            let bytes = usize::try_from(bytes).unwrap_or(WINDOW).min(window.unacked);
+            window.unacked -= bytes;
+            window.left += bytes;
+            drop(credit);
+            self.credited.notify_all();
+        }
+    }
+
+    /// Ob `channel` noch Eingabe nimmt.
+    fn is_open(&self, channel: u32) -> bool {
+        lock(&self.credit).window.contains_key(&channel)
+    }
+
+    /// Der Strom ist zu Ende; jedes Warten auf Guthaben endet.
+    fn end(&self) {
+        lock(&self.credit).ended = true;
+        self.credited.notify_all();
     }
 
     fn send_size(&self, channel: u32, cols: u16, rows: u16) -> std::io::Result<()> {
@@ -431,15 +617,7 @@ impl ShellDoor {
     /// Der Faden ließ sich nicht starten.
     pub(crate) fn start_stream(socket: OwnedFd, agent: AgentSink) -> std::io::Result<Arc<Self>> {
         let door = Arc::new(Self {
-            door: Door::Stream(StreamDoor {
-                socket,
-                write: Mutex::new(false),
-                writable: Condvar::new(),
-                outputs: Mutex::new(BTreeMap::new()),
-                dropped: std::sync::atomic::AtomicU64::new(0),
-                heartbeat: Mutex::new(None),
-                agent_exit: Mutex::new(None),
-            }),
+            door: Door::Stream(StreamDoor::new(socket)),
             state: Mutex::new(DoorState {
                 next_id: 1,
                 ..DoorState::default()
@@ -483,6 +661,7 @@ impl ShellDoor {
         }
         // Die Shells sehen das Ende ihrer Ausgabe, wer wartet, das der Tür.
         lock(&stream.outputs).clear();
+        stream.end();
         lock(&self.state).closed = true;
         self.changed.notify_all();
     }
@@ -503,7 +682,11 @@ impl ShellDoor {
             }
             Message::Exit { channel, code } if channel == AGENT => {
                 *lock(&stream.agent_exit) = Some(code);
+                // Wie `EIO` an der Herrscherseite: Eingabe an einen Agenten,
+                // der beendet ist, scheitert, statt zu verfallen.
+                stream.close_channel(AGENT);
             }
+            Message::Credit { channel, bytes } => stream.grant(channel, bytes),
             Message::Started {
                 channel,
                 pid: value,
@@ -530,6 +713,7 @@ impl ShellDoor {
                 // nichts, auch nicht den Kanal der Ausgabe.
                 if self.apply(&answer) && mark == MARK_EXITED {
                     lock(&stream.outputs).remove(&channel);
+                    stream.close_channel(channel);
                 }
             }
             Message::Heartbeat => *lock(&stream.heartbeat) = Some(Instant::now()),
@@ -807,6 +991,7 @@ impl ShellDoor {
     ) -> Result<Terminal, Diagnostic> {
         let (output, receiver) = mpsc::sync_channel(SHELL_QUEUE);
         lock(&stream.outputs).insert(id, output);
+        stream.open_channel(id);
         let argv: Vec<&[u8]> = command.iter().map(String::as_bytes).collect();
         let mut frames = Vec::new();
         let asked = control_frame::encode_open(id, cols, rows, &argv, &mut frames)
@@ -821,6 +1006,7 @@ impl ShellDoor {
             Ok(()) => Ok(Terminal::Stream(Mutex::new(receiver))),
             Err(diagnostic) => {
                 lock(&stream.outputs).remove(&id);
+                stream.close_channel(id);
                 Err(diagnostic)
             }
         }
@@ -1153,6 +1339,7 @@ impl Drop for Shell {
         {
             let _ = stream.send_empty(Kind::Close, self.id);
             lock(&stream.outputs).remove(&self.id);
+            stream.close_channel(self.id);
         }
         self.door.release(self.id);
     }
@@ -1524,15 +1711,7 @@ mod tests {
     fn a_shim_that_reads_a_byte_a_second_does_not_hold_a_send_for_ever() {
         let (daemon, shim) =
             socketpair(AddressFamily::UNIX, SocketType::STREAM, PAIR_FLAGS, None).unwrap();
-        let door = StreamDoor {
-            socket: daemon,
-            write: Mutex::new(false),
-            writable: Condvar::new(),
-            outputs: Mutex::new(BTreeMap::new()),
-            dropped: std::sync::atomic::AtomicU64::new(0),
-            heartbeat: Mutex::new(None),
-            agent_exit: Mutex::new(None),
-        };
+        let door = StreamDoor::new(daemon);
         let done = Arc::new(std::sync::atomic::AtomicBool::new(false));
         let stop = Arc::clone(&done);
         let trickle = thread::spawn(move || {
@@ -1561,15 +1740,7 @@ mod tests {
     fn a_send_behind_a_slow_one_keeps_its_own_deadline() {
         let (daemon, shim) =
             socketpair(AddressFamily::UNIX, SocketType::STREAM, PAIR_FLAGS, None).unwrap();
-        let door = Arc::new(StreamDoor {
-            socket: daemon,
-            write: Mutex::new(false),
-            writable: Condvar::new(),
-            outputs: Mutex::new(BTreeMap::new()),
-            dropped: std::sync::atomic::AtomicU64::new(0),
-            heartbeat: Mutex::new(None),
-            agent_exit: Mutex::new(None),
-        });
+        let door = Arc::new(StreamDoor::new(daemon));
         let first = Arc::clone(&door);
         let slow = thread::spawn(move || {
             first.send_within(&vec![0u8; 8 * 1024 * 1024], Duration::from_secs(4))
@@ -1599,15 +1770,7 @@ mod tests {
     fn a_send_past_its_deadline_sends_nothing_and_closes_the_stream() {
         let (daemon, shim) =
             socketpair(AddressFamily::UNIX, SocketType::STREAM, PAIR_FLAGS, None).unwrap();
-        let door = StreamDoor {
-            socket: daemon,
-            write: Mutex::new(false),
-            writable: Condvar::new(),
-            outputs: Mutex::new(BTreeMap::new()),
-            dropped: std::sync::atomic::AtomicU64::new(0),
-            heartbeat: Mutex::new(None),
-            agent_exit: Mutex::new(None),
-        };
+        let door = StreamDoor::new(daemon);
         let sent = door.send_within(b"late", Duration::ZERO);
         assert_eq!(
             sent.map_err(|err| err.kind()),
@@ -1618,6 +1781,269 @@ mod tests {
         assert_eq!(
             read, 0,
             "bytes went out after the deadline, or the stream stayed open"
+        );
+    }
+
+    /// Liest, was der Daemon schickt, bis `until` gilt oder `wait` um ist;
+    /// gibt die Bytes der `D`-Rahmen von `channel` und alle Nachrichten
+    /// zurück.
+    #[cfg(target_os = "linux")]
+    fn shim_reads(
+        shim: &OwnedFd,
+        decoder: &mut Decoder,
+        wait: Duration,
+        mut until: impl FnMut(&[u8], &[Message]) -> bool,
+    ) -> (Vec<u8>, Vec<Message>) {
+        let deadline = Instant::now() + wait;
+        let mut data = Vec::new();
+        let mut messages = Vec::new();
+        let mut buffer = [0u8; 4096];
+        while !until(&data, &messages) {
+            let left = deadline.saturating_duration_since(Instant::now());
+            if left.is_zero() {
+                break;
+            }
+            let slice = Timespec {
+                tv_sec: 0,
+                tv_nsec: i64::from(left.min(Duration::from_millis(50)).subsec_nanos()),
+            };
+            let mut fds = [PollFd::new(shim, PollFlags::IN)];
+            if !matches!(poll(&mut fds, Some(&slice)), Ok(n) if n > 0) {
+                continue;
+            }
+            let Ok(n) = rustix::io::read(shim, &mut buffer[..]) else {
+                break;
+            };
+            if n == 0 {
+                break;
+            }
+            decoder.push(&buffer[..n], |event| {
+                if let Event::Frame(frame) = event
+                    && let Ok(message) = Message::parse(&frame)
+                {
+                    if let Message::Data { bytes, .. } = &message {
+                        data.extend_from_slice(bytes);
+                    }
+                    messages.push(message);
+                }
+            });
+        }
+        (data, messages)
+    }
+
+    #[cfg(target_os = "linux")]
+    fn push_frames(shim: &OwnedFd, wire: &[u8]) {
+        let mut rest = wire;
+        while !rest.is_empty() {
+            let taken = rustix::net::send(shim, rest, SendFlags::NOSIGNAL).unwrap();
+            rest = &rest[taken..];
+        }
+    }
+
+    /// HUM-497: Eine Eingabe, größer als das Fenster, geht nur bis zum
+    /// Fenster hinaus und wartet dann; erst das `G` des Shims lässt den Rest
+    /// folgen, und am Ende ist alles angekommen, in Reihenfolge.
+    #[cfg(target_os = "linux")]
+    #[test]
+    fn a_write_stops_at_the_window_and_goes_on_with_credit() {
+        let (daemon, shim) =
+            socketpair(AddressFamily::UNIX, SocketType::STREAM, PAIR_FLAGS, None).unwrap();
+        let door = ShellDoor::start_stream(daemon, Box::new(|_| {})).unwrap();
+        let total = WINDOW + 3 * MAX_PAYLOAD + 7;
+        let payload: Vec<u8> = (0..total).map(|i| u8::try_from(i % 251).unwrap()).collect();
+        let writer = {
+            let door = Arc::clone(&door);
+            let payload = payload.clone();
+            thread::spawn(move || door.agent_input(&payload))
+        };
+        let mut decoder = Decoder::new();
+        // Mehr als das Fenster kommt nicht, solange der Shim nichts meldet.
+        let (first, _) = shim_reads(&shim, &mut decoder, Duration::from_millis(800), |_, _| {
+            false
+        });
+        assert_eq!(first.len(), WINDOW, "the daemon sent beyond its credit");
+        assert!(
+            !writer.is_finished(),
+            "the write returned before its bytes went out"
+        );
+        let mut wire = Vec::new();
+        control_frame::encode_credit(AGENT, 4096, &mut wire);
+        control_frame::encode_credit(AGENT, u32::try_from(WINDOW).unwrap(), &mut wire);
+        push_frames(&shim, &wire);
+        let (rest, _) = shim_reads(&shim, &mut decoder, Duration::from_secs(5), |data, _| {
+            data.len() >= total - WINDOW
+        });
+        writer
+            .join()
+            .unwrap()
+            .expect("the write goes through with credit");
+        let mut got = first;
+        got.extend_from_slice(&rest);
+        assert!(
+            got == payload,
+            "{} of {total} bytes, or out of order",
+            got.len()
+        );
+    }
+
+    /// HUM-497: Ein Terminal, das nichts nimmt, lässt das Schreiben nach der
+    /// Frist mit einem Fehler enden, nicht still verfallen. Der Strom bleibt
+    /// offen, und der Rahmen danach geht hinaus.
+    #[cfg(target_os = "linux")]
+    #[test]
+    fn a_write_without_credit_fails_and_the_stream_stays_open() {
+        let (daemon, shim) =
+            socketpair(AddressFamily::UNIX, SocketType::STREAM, PAIR_FLAGS, None).unwrap();
+        let door = StreamDoor::new(daemon);
+        let reading = thread::spawn(move || {
+            let mut decoder = Decoder::new();
+            let found = shim_reads(
+                &shim,
+                &mut decoder,
+                Duration::from_secs(5),
+                |_, messages| messages.iter().any(|m| matches!(m, Message::Size { .. })),
+            );
+            (shim, found)
+        });
+        let started = Instant::now();
+        let sent =
+            door.send_data_within(AGENT, &vec![b'x'; WINDOW + 1], Duration::from_millis(300));
+        let took = started.elapsed();
+        assert_eq!(
+            sent.map_err(|err| err.kind()),
+            Err(std::io::ErrorKind::TimedOut)
+        );
+        assert!(took < Duration::from_secs(3), "the write waited {took:?}");
+        door.send_size(AGENT, 90, 20)
+            .expect("the stream is still open");
+        let (_shim, (data, messages)) = reading.join().unwrap();
+        assert_eq!(data.len(), WINDOW, "only the window went out");
+        assert!(
+            messages.contains(&Message::Size {
+                channel: AGENT,
+                cols: 90,
+                rows: 20
+            }),
+            "{messages:?}"
+        );
+    }
+
+    /// HUM-497: Wer auf Guthaben wartet, wartet nicht die volle Frist, wenn
+    /// der Agent endet oder der Strom; ein `G` für einen fremden Kanal oder
+    /// über das Fenster hinaus gibt dem Agenten nichts dazu.
+    #[cfg(target_os = "linux")]
+    #[test]
+    fn the_end_of_the_agent_or_the_stream_ends_a_wait_for_credit() {
+        for end_stream in [false, true] {
+            let (daemon, shim) =
+                socketpair(AddressFamily::UNIX, SocketType::STREAM, PAIR_FLAGS, None).unwrap();
+            let door = ShellDoor::start_stream(daemon, Box::new(|_| {})).unwrap();
+            door.agent_input(&vec![b'x'; WINDOW]).unwrap();
+            let mut wire = Vec::new();
+            control_frame::encode_credit(9, 100, &mut wire);
+            push_frames(&shim, &wire);
+            let writer = {
+                let door = Arc::clone(&door);
+                thread::spawn(move || {
+                    let started = Instant::now();
+                    (door.agent_input(b"y"), started.elapsed())
+                })
+            };
+            thread::sleep(Duration::from_millis(300));
+            assert!(
+                !writer.is_finished(),
+                "a credit for channel 9 reached the agent"
+            );
+            if end_stream {
+                drop(shim);
+            } else {
+                let mut wire = Vec::new();
+                control_frame::encode_value(Kind::Exit, AGENT, 0, &mut wire);
+                push_frames(&shim, &wire);
+            }
+            let (sent, took) = writer.join().unwrap();
+            let kind = sent.map_err(|err| err.kind()).unwrap_err();
+            let expected = if end_stream {
+                std::io::ErrorKind::BrokenPipe
+            } else {
+                std::io::ErrorKind::NotConnected
+            };
+            assert_eq!(kind, expected);
+            assert!(took < Duration::from_secs(3), "the wait took {took:?}");
+        }
+        // Ein Shim, der zu viel meldet, hebt das Guthaben nie über das Fenster.
+        let (daemon, _shim) =
+            socketpair(AddressFamily::UNIX, SocketType::STREAM, PAIR_FLAGS, None).unwrap();
+        let door = StreamDoor::new(daemon);
+        door.grant(AGENT, u32::MAX);
+        assert_eq!(lock(&door.credit).window.get(&AGENT), Some(&Window::FULL));
+    }
+
+    /// HUM-497, Review: Ein `G` gibt höchstens zurück, was geschickt und
+    /// noch nicht bestätigt ist. Ein Gast, der vorab oder doppelt meldet,
+    /// hebt das Guthaben nie über das Fenster minus das Unbestätigte.
+    #[cfg(target_os = "linux")]
+    #[test]
+    fn a_credit_beyond_what_was_sent_adds_nothing() {
+        let (daemon, shim) =
+            socketpair(AddressFamily::UNIX, SocketType::STREAM, PAIR_FLAGS, None).unwrap();
+        let door = StreamDoor::new(daemon);
+        let window = |door: &StreamDoor| *lock(&door.credit).window.get(&AGENT).unwrap();
+        // Vorab gemeldet, nichts geschickt: nichts dazu.
+        door.grant(AGENT, 4096);
+        assert_eq!(window(&door), Window::FULL);
+        door.send_data_within(AGENT, &[b'x'; 1000], Duration::from_secs(1))
+            .unwrap();
+        assert_eq!(
+            window(&door),
+            Window {
+                left: WINDOW - 1000,
+                unacked: 1000
+            }
+        );
+        // 400 bestätigt, dann zweimal mehr, als je unterwegs war.
+        door.grant(AGENT, 400);
+        door.grant(AGENT, 5000);
+        door.grant(AGENT, 5000);
+        assert_eq!(window(&door), Window::FULL);
+        drop(shim);
+    }
+
+    /// HUM-497, Review: Endet die Shell, während ihre Eingabe unterwegs ist,
+    /// und trifft ihr `E` vor dem Ende des Schreibens ein, scheitert das
+    /// Schreiben, statt Erfolg zu melden. Der Strom ist voll, das Stück
+    /// wartet auf Platz; währenddessen schließt der Kanal.
+    #[cfg(target_os = "linux")]
+    #[test]
+    fn a_write_that_crosses_the_end_of_its_terminal_fails() {
+        let (daemon, shim) =
+            socketpair(AddressFamily::UNIX, SocketType::STREAM, PAIR_FLAGS, None).unwrap();
+        let door = Arc::new(StreamDoor::new(daemon));
+        door.open_channel(5);
+        let junk = [0u8; 4096];
+        let mut filled = 0;
+        while let Ok(n) = rustix::net::send(
+            &door.socket,
+            &junk,
+            SendFlags::NOSIGNAL | SendFlags::DONTWAIT,
+        ) {
+            filled += n;
+        }
+        let writer = {
+            let door = Arc::clone(&door);
+            thread::spawn(move || door.send_data_within(5, b"late", Duration::from_secs(5)))
+        };
+        thread::sleep(Duration::from_millis(300));
+        assert!(!writer.is_finished(), "the write did not wait for room");
+        door.close_channel(5);
+        let mut buffer = vec![0u8; 64 * 1024];
+        let mut drained = 0;
+        while drained < filled {
+            drained += rustix::io::read(&shim, &mut buffer[..]).unwrap();
+        }
+        assert_eq!(
+            writer.join().unwrap().map_err(|err| err.kind()),
+            Err(std::io::ErrorKind::NotConnected)
         );
     }
 

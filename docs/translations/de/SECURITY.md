@@ -484,9 +484,19 @@ Bericht, und der Gast öffnet keine. Die Zusagen der Tür gelten unverändert, u
   aufhalten; einen Rahmen, den der Shim nicht binnen zehn Sekunden nimmt, beantwortet der Daemon
   mit dem Schließen des Stroms. Unterbrechungen kommen vom Shim (`SIGINT` an die
   Vordergrundgruppe des Terminals), weil kein Signal des Hosts einen Gast erreicht.
-- Kein Kanal hält einen anderen auf: Eingaben für ein Terminal mit voller Schlange (64 KiB)
-  werden verworfen, Ausgaben einer weiteren Shell, deren Leser stockt, über 256 Stücke hinaus,
-  beides gezählt.
+- Kein Kanal hält einen anderen auf, und keine Eingabe geht verloren, während der Schreiber
+  hört, sie sei angekommen, außer der Prozess des Terminals endet in dem Moment zwischen einem
+  gesendeten Stück und der Meldung seines Endes an den Daemon (wie beim Schreiben auf ein pty
+  kurz vor dem Ende seines Prozesses). Eingaben für ein Terminal reisen unter Guthaben (HUM-497): Der Daemon
+  schickt je Terminal höchstens 64 KiB, die der Shim noch nicht hineingeschrieben hat, und der
+  Shim gibt neues Guthaben, sobald das Terminal Bytes nimmt. Ein Schreiben an ein Terminal, dessen
+  Prozess nicht liest, wartet wie ein Schreiben auf eine volle Herrscherseite und scheitert mit
+  `TERM_002`, wenn binnen zehn Sekunden kein Guthaben kommt; der Strom bleibt offen. Einen Rahmen
+  über das Guthaben hinaus verwirft der Shim und zählt ihn. Das Guthaben schützt Eingaben vor
+  einem Agenten, der nicht liest, nicht vor einem feindlichen Gast: Ob sie den Agenten
+  erreichen, hängt am PID 1 des Gasts, und Root im Gast besitzt das Terminal und kann seine
+  Eingaben ohnehin verlieren oder verändern. Ausgaben einer weiteren Shell, deren Leser stockt,
+  werden über 256 Stücke hinaus verworfen, gezählt.
 
 ### Die Lebensleine und die Umgebung über Deskriptoren (HUM-430)
 
