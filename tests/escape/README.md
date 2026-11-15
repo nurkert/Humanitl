@@ -65,7 +65,7 @@ Der Weg in die Sandbox steht in `launch.sh` (`escape_sandbox_run`):
 | Backend | Starter | Warum |
 |---|---|---|
 | `bwrap` | `humanitl sandbox run --profile test` | der Weg, den der Nutzer nimmt (CONVENTIONS 3.11) |
-| jedes andere | `escape-launch --backend <name>` | eine Stufe vor ihrer Zulassung lehnt `humanitl sandbox run` mit `SANDBOX_048` ab; nur die Suite und die Tests starten sie, über ein Argument im Code |
+| jedes andere | `escape-launch --backend <name>` | eine Stufe vor ihrer Zulassung lehnt `humanitl sandbox run` mit `SANDBOX_048` ab; nur die Suite und die Tests starten sie, über ein Argument im Code. Podman (seit HUM-448) und die Kernel-Stufe (seit HUM-449) sind zugelassen, die Suite startet sie aber weiter auf diesem Weg |
 
 `escape-launch` gibt es nur mit dem Cargo-Feature `unadmitted-backends`
 (`required-features`), das weder `humanitld` noch `humanitl` je einschalten
@@ -77,9 +77,9 @@ die verweigerten Sockets in denselben Zeilen wie die Kommandozeile
 (`Refusal::summary_line`), damit `refusals-proof.sh` unter jedem Backend dieselbe
 Zeile liest. Er behält `HOME` und `XDG_RUNTIME_DIR` des Nutzers: Die
 Container-Engine hat ihren Speicher unter `HOME`, und ein zweiter Speicher
-neben dem des Nutzers beschädigte dessen Zustand. Mit HUM-448 wird Podman
-zugelassen; dann kann `run.sh` es über `humanitl sandbox run --backend podman`
-starten, und `escape-launch` bleibt für die Kernel-Stufe bis HUM-449.
+neben dem des Nutzers beschädigte dessen Zustand. Seit HUM-448 ist Podman
+zugelassen und seit HUM-449 die Kernel-Stufe; `run.sh` könnte beide über
+`humanitl sandbox run --backend` starten, nimmt aber weiter `escape-launch`.
 
 Ein Backend, das sich nicht starten lässt (nicht installiert, zu alt, nicht
 rootless), hinterlässt keine Ergebnisdatei und ist `error`
@@ -145,9 +145,10 @@ keine Sandbox.
 HUMANITL_ESCAPE_BACKEND=qemu ./tests/escape/run.sh     # QEMU-micro-VM, Kernel-Stufe
 ```
 
-Die Kernel-Stufe (Backend `qemu`, ADR-0021) ist bis HUM-449 nicht zugelassen;
-`run.sh` startet sie wie Podman vor HUM-448 über `escape-launch --backend qemu`
-und damit über `Backend::detect_unadmitted`. Alle Suiten laufen, auch die
+Die Kernel-Stufe (Backend `qemu`, ADR-0021) ist seit HUM-449 zugelassen, nachdem
+diese Suite im CI-Job `escape-tests-qemu` grün war; `run.sh` startet sie weiter
+wie vor der Zulassung über `escape-launch --backend qemu` und damit über
+`Backend::detect_unadmitted`. Alle Suiten laufen, auch die
 Mounttabelle aus HUM-437. Gebraucht werden `/dev/kvm`, ein Dienstverwalter des
 Nutzers und die Pakete aus `scripts/ci/install-kernel-level.sh`; den Gastkernel
 nehmen `escape-launch` und die Fälle von ESC-5 aus `HUMANITL_TEST_VM_KERNEL`

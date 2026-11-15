@@ -1,6 +1,6 @@
 ---
 source: adr/0015-ports-and-adapters.md
-source-sha256: 9fcc32f1baaa340bf71aa3faf87ce3e4e9fe23d498cc5532b6e4cc35614c7fee
+source-sha256: 7bd7c6f62448ecee465bf847da0537e01ced4008fe1fbc2a362f9e592c4c40a6
 lang: de
 ---
 # ADR-0015 · Ports und Adapter mit maschinell erzwungener Abhängigkeitsrichtung
@@ -49,7 +49,7 @@ Implementierung:
 
 | Port | Definiert in | MVP-Adapter | Spätere Adapter |
 |---|---|---|---|
-| `SandboxBackend` | sandbox | bwrap | seatbelt (macOS, ADR-0019), podman (Linux, Laufzeiten `crun` und `krun`, ADR-0020) |
+| `SandboxBackend` | sandbox | bwrap | seatbelt (macOS, ADR-0019), podman (Linux, Laufzeit `crun`, ADR-0020), qemu (Linux, Kernel-Stufe, ADR-0021) |
 | `AgentAdapter` | core | opencode | aider, codex, claude-code |
 | `Detector` | findings | regex/checksum | presidio-grpc, wasm |
 | `FlowStore` | recorder | sqlite | postgres (Team) |
@@ -186,7 +186,20 @@ zur Übersetzungszeit ein Enum `Backend` mit einer Variante je Adapter
 Podman-Adapters stehen nur in `daemon/crates/sandbox/src/podman/`, bewacht von
 `tools/coupling-baseline.toml` (HUM-145). Von den dreien sind bwrap und
 Seatbelt zugelassen und Podman mit `crun` seit HUM-448; Podman mit `krun` ist
-noch nicht zugelassen (HUM-449).
+noch nicht zugelassen (HUM-449). (So war der Stand bei HUM-441; der Nachtrag unten ersetzt `krun` durch
+das Backend `qemu`.)
+
+## Nachtrag 2026-11-15: `qemu` als vierter Adapter von `SandboxBackend` (HUM-447)
+
+Die Kernel-Stufe ist keine Laufzeit von Podman mehr, sondern ein eigener
+Adapter, `qemu` (ADR-0021), in `daemon/crates/sandbox/src/qemu/`; Podman
+behält nur `crun`. Die Port-Tabelle nennt ihn; das Enum `Backend` hat seine
+Variante bekommen, und `sandbox.backend` nennt ihn. Außerhalb des Adapters
+zählt der Abschnitt `[qemu]` in `tools/coupling-baseline.toml` die Namen
+`qemu`, `virtiofsd`, `vhost-device-vsock` und `microvm` je Datei, und eine
+Zahl darf sinken, nie steigen (HUM-145); einen Port hat der Adapter nicht
+hinzugefügt. Seit HUM-449 sind alle vier Adapter zugelassen: bwrap und
+Seatbelt, Podman mit `crun` seit HUM-448 und `qemu` seit HUM-449.
 
 ## Betroffene Issues
 
@@ -194,4 +207,4 @@ noch nicht zugelassen (HUM-449).
 (Monorepo-Aufbau mit der Aufteilung in Crates), `HUM-004` (core-types als Kern
 ohne IO), `HUM-002` (CI-Job `deps-lint`), `HUM-062` (Konfiguration im Kern,
 Vorrang als reine Funktion), `HUM-441` (die Adapter von `SandboxBackend`,
-Nachtrag).
+Nachtrag), `HUM-447` (`qemu` als vierter Adapter, Nachtrag).

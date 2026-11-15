@@ -1,6 +1,6 @@
 ---
 source: adr/0021-qemu-microvm-kernel-level.md
-source-sha256: 62b074b178092c5045f39874a5df52e4ccd46acb003cfa73a538cfc986393da7
+source-sha256: 12acdd558209d2198416d0b242b1bbff7dc1ba7383a68c7706a1b75cc81738e0
 lang: de
 ---
 # ADR-0021 · Die Kernel-Stufe läuft als QEMU-Micro-VM aus Debian-Paketen
@@ -184,9 +184,35 @@ lässt sie zu.
   Veröffentlichung und nicht in Ubuntu 24.04. Bis es das ist, ist die Stufe dort nicht
   verfügbar, und `humanitl doctor` sagt, welches Paket fehlt.
 
+## Nachtrag 2026-11-15: Die Kernel-Stufe ist zugelassen (HUM-449, HUM-447)
+
+HUM-449 hat die Stufe zugelassen. Der Beleg folgt der Regel, die bei HUM-471 in
+`backlog/sprint-7.md` steht: Die CI-Jobs `kvm-tests` (der Shim als Init eines echten Gasts,
+`daemon/crates/sandbox/src/qemu/kvm_tests.rs`) und `escape-tests-qemu` (die Escape-Suite gegen die
+Stufe, mit Root im Gast, HUM-445) waren zusammen mit der Wegwerf-Sandbox im Gast (HUM-446) auf
+`main` grün, in zehn aufeinanderfolgenden Läufen, in denen beide Jobs liefen: 43624997550,
+43630993303, 43638237420, 43641769840, 43646599744, 43648968241, 43656202366, 43661904978,
+43669712307 und 43673927540. Der erste Lauf des zulassenden Commits (43678367755) hatte
+`kvm-tests` rot, an einer Schwelle eines Tests, nicht an einer Garantie; der Owner entschied am
+2026-11-15, dass er die Zählung nicht zurücksetzt, der Test wurde behoben (HUM-487), und im Lauf
+43690771860 auf dem Commit, der die Stufe zuließ, waren beide Jobs grün.
+
+Seitdem startet `sandbox.backend = "qemu"` und `--backend qemu` eine Sitzung; `SANDBOX_048` gilt
+für sie nicht mehr. `auto` bleibt bubblewrap, ein Projekt-Profil kann die Stufe nur verlangen, nie
+wählen, und `qemu` ist das einzige Backend, das `sandbox.min_isolation = "kernel"` erfüllt. Fehlt
+eine Voraussetzung, lehnt der Start mit `SANDBOX_045` ab und weicht nie auf ein anderes Backend
+aus. `humanitl sandbox backends` und die App nennen `qemu` mit der Stufe `kernel`; die App lässt es
+nur wählen, wenn der Daemon es verfügbar meldet, und zeigt sonst die fehlende Voraussetzung mit
+ihrer Abhilfe. Was die Stufe garantiert und was nicht, steht in
+[`SECURITY.md` Abschnitt 14](../SECURITY.md#14-linux-qemu-micro-vm-kernel-stufe); die
+Bedrohungen ihrer Bestandteile sind K-30 bis K-34 in
+[`THREAT-MODEL.md`](../THREAT-MODEL.md). Das `.deb` nennt `qemu-system-x86`, `virtiofsd` und
+`vhost-device-vsock` nur unter `Suggests` (Nachtrag aus HUM-447 in ADR-0010).
+
 ## Betroffene Issues
 
 `HUM-442` (der Spike und diese Entscheidung), `HUM-443` bis `HUM-449` (`backlog/sprint-7.md`,
 für diesen Adapter neu geplant), `HUM-145` (die Kopplungs-Sperrklinke), `HUM-263` (der
-festgehaltene Projektordner), `HUM-350` (die Wegwerf-Sandbox). ADR-0020 bekommt einen Nachtrag,
-der für die Kernel-Stufe hierher zeigt.
+festgehaltene Projektordner), `HUM-350` (die Wegwerf-Sandbox), `HUM-447` (Dokumentation der
+zugelassenen Stufe, Nachtrag). ADR-0020 bekommt einen Nachtrag, der für die Kernel-Stufe hierher
+zeigt.

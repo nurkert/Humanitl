@@ -177,6 +177,18 @@ den Übergabe-Token und verdeckten Werten). Die Tabelle, die die
 Oberfläche zeigt, entsteht nicht mehr aus den bwrap-Flags, sondern aus dem
 neutralen Plan, den jedes Backend liefert (`PlanPreview`, HUM-428, HUM-429).
 
+## Nachtrag 2026-11-15: Ein eigener Kern als drittes Linux-Backend (HUM-447)
+
+Die Stufe mit eigenem Gastkern kam nicht über Podman mit `krun`, sondern als
+eigener Adapter, das Backend `qemu` (ADR-0021): eine QEMU-Micro-VM, in der der
+Shim PID 1 des Gastkerns ist. HUM-449 hat sie zugelassen, nachdem die CI-Jobs
+`kvm-tests` und `escape-tests-qemu` (die Escape-Suite mit Root im Gast) auf
+`main` grün waren (`docs/SECURITY.md` Abschnitt 14). Gewählt wird sie mit
+`sandbox.backend = "qemu"` oder `--backend qemu`. `auto` bleibt bubblewrap,
+also bleibt bubblewrap unter Linux die Vorgabe, und bubblewrap bleibt auch Teil
+der Kernel-Stufe: Jeder Hilfsprozess einer Sitzung läuft in seinem eigenen
+bubblewrap-Gefängnis innerhalb der gehärteten Unit.
+
 ## Betroffene Issues
 
 `HUM-010` (Format der Sandbox-Profile), `HUM-011` (bwrap-Launcher), `HUM-012`
@@ -184,4 +196,4 @@ neutralen Plan, den jedes Backend liefert (`PlanPreview`, HUM-428, HUM-429).
 (Harness der Escape-Tests), `HUM-040` (Bildschirm „Sandbox“), `HUM-041`
 (Bereich der Isolationsprüfung), `HUM-043` (Härtung von `/work`), `HUM-075`
 (`humanitl doctor`), `HUM-203` (`--as-pid-1`, Nachtrag), `HUM-441` (Podman
-statt Docker, Nachtrag).
+statt Docker, Nachtrag), `HUM-447` (die Kernel-Stufe, Nachtrag).

@@ -98,9 +98,19 @@ Unter Linux lässt sich Podman ohne Root mit der Laufzeit `crun` als zweites San
 (`--backend podman` oder `sandbox.backend = "podman"`; `auto` bleibt bubblewrap): Derselbe Shim
 prüft dieselben drei Garantien, auf derselben Isolationsstufe wie bubblewrap, `namespaces` über dem
 geteilten Kern des Hosts ([`docs/SECURITY.md` Abschnitt 13](docs/SECURITY.md#13-linux-podman)).
-Ein eigener Kern, das Backend `qemu` mit einer Micro-VM (ADR-0021), ist noch nicht verfügbar, und
-jeder Start damit wird abgelehnt (`SANDBOX_048`); `humanitl sandbox backends` zeigt jedes Backend mit seiner
-Stufe und dem, was ihm fehlt.
+`humanitl sandbox backends` zeigt jedes Backend mit seiner Stufe und dem, was ihm fehlt.
+
+### Unter Linux wahlweise: ein eigener Kern
+
+Unter Linux auf x86-64 lässt sich die Kernel-Stufe wählen, das Backend `qemu` (`--backend qemu` oder
+`sandbox.backend = "qemu"`; `auto` bleibt bubblewrap): Der Agent läuft in einer Micro-VM mit eigenem
+Gastkern, die drei Garantien trägt der Host, sodass sie auch mit Root im Gast halten, und die
+Escape-Suite läuft mit Root im Gast im CI-Job `escape-tests-qemu` gegen sie
+([`docs/SECURITY.md` Abschnitt 14](docs/SECURITY.md#14-linux-qemu-micro-vm-kernel-level)).
+Sie braucht `/dev/kvm`, `qemu-system-x86`, `virtiofsd`, `vhost-device-vsock` und einen Gastkern mit
+eingebautem virtiofs; fehlt eine Voraussetzung, lehnt der Start mit `SANDBOX_045` ab und weicht nie
+auf ein anderes Backend aus, und sie ist das einzige Backend, das `sandbox.min_isolation = "kernel"`
+erfüllt.
 
 ### Selbst prüfen
 

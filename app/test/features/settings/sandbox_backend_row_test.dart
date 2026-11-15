@@ -169,6 +169,61 @@ void main() {
     );
   }, variant: TargetPlatformVariant.only(TargetPlatform.linux));
 
+  // HUM-447: Das VM-Backend der Kernel-Stufe ist seit HUM-449 zugelassen und
+  // nur mit `available = true` wählbar. Der Name kommt aus dem Fake (HUM-145).
+  const String kernel = FakeSandboxBackends.kernelBackendName;
+
+  testWidgets('the VM backend is offered with the level kernel and written '
+      'when the daemon names it available', (WidgetTester tester) async {
+    final FakeDaemonClient client = clientWith(container: null);
+    await openSettings(tester, client);
+
+    expect(
+      tester
+          .widget<HSegmented<String>>(row)
+          .options
+          .map((HSegmentOption<String> o) => o.value),
+      <String>[
+        'auto',
+        for (final SandboxBackendInfo backend
+            in FakeSandboxBackends.defaultSandboxBackends.backends)
+          backend.name,
+      ],
+    );
+    expect(segment(tester, kernel).enabled, isTrue);
+    expect(
+      textOf(tester, 'settings-sandbox-backend-level-$kernel'),
+      '$kernel: own kernel in a micro VM',
+    );
+    await tapSegment(tester, control, kernel);
+    expect(client.configWrites.last, (FormKeys.sandboxBackend, kernel));
+  }, variant: TargetPlatformVariant.only(TargetPlatform.linux));
+
+  testWidgets('the VM backend without a prerequisite is not selectable and '
+      'names what is missing', (WidgetTester tester) async {
+    final FakeDaemonClient client = clientWith(
+      container: FakeSandboxBackends.kernelBackendUnavailable,
+    );
+    await openSettings(tester, client);
+
+    expect(segment(tester, kernel).enabled, isFalse);
+    expect(
+      textOf(tester, 'settings-sandbox-backend-reason-$kernel'),
+      contains('/dev/kvm readable and writable'),
+    );
+    expect(
+      find.byKey(const Key('settings-sandbox-backend-fix-$kernel')),
+      findsOneWidget,
+    );
+    final int before = client.configWrites.length;
+    final Finder entry = find.descendant(of: row, matching: find.text(kernel));
+    await tester.ensureVisible(entry);
+    await tester.pumpAndSettle();
+    await tester.tap(entry, warnIfMissed: false);
+    await tester.pumpAndSettle();
+    expect(client.configWrites, hasLength(before));
+  }, variant: TargetPlatformVariant.only(TargetPlatform.linux));
+
   testWidgets('a backend the daemon does not admit is not offered', (
     WidgetTester tester,
   ) async {

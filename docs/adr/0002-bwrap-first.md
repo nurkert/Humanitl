@@ -177,6 +177,18 @@ placeholder for the handover token and hidden values). The table the interface
 shows no longer comes from parsing bwrap flags but from the neutral plan every
 backend returns (`PlanPreview`, HUM-428, HUM-429).
 
+## Addendum 2026-11-15: A kernel of its own as a third Linux backend (HUM-447)
+
+The level with a guest kernel of its own did not come through Podman with
+`krun` but as an adapter of its own, the backend `qemu` (ADR-0021): a QEMU
+micro-VM in which the shim is PID 1 of the guest kernel. HUM-449 admitted it
+after the CI jobs `kvm-tests` and `escape-tests-qemu` (the escape suite with
+root in the guest) were green on `main` (`docs/SECURITY.md` section 14). A
+person chooses it with `sandbox.backend = "qemu"` or `--backend qemu`. `auto`
+stays bubblewrap, so bubblewrap remains the default on Linux, and bubblewrap
+also stays part of the kernel level: each helper process of a session runs
+in its own bubblewrap jail inside the hardened unit.
+
 ## Affected issues
 
 `HUM-010` (sandbox profile format), `HUM-011` (bwrap launcher), `HUM-012`
@@ -184,4 +196,4 @@ backend returns (`PlanPreview`, HUM-428, HUM-429).
 (escape test harness), `HUM-040` (sandbox screen), `HUM-041`
 (isolation check panel), `HUM-043` (`/work` hardening), `HUM-075`
 (`humanitl doctor`), `HUM-203` (`--as-pid-1`, addendum), `HUM-441` (Podman
-instead of Docker, addendum).
+instead of Docker, addendum), `HUM-447` (the kernel level, addendum).

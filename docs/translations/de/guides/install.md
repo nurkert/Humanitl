@@ -46,6 +46,7 @@ in der App.
 | `libayatana-appindicator3-1` (optional) | das Tray-Symbol; ohne sie läuft die App, und der Fenstertitel trägt die Zahl der angehaltenen Anfragen | `humanitl doctor`, Zeile `tray` |
 | `libsecret-tools` (empfohlen) | bewahrt einen Zugangsschlüssel für den Modellserver im Schlüsselbund des Systems auf; ohne es liegt der Schlüssel in einer Datei mit Modus `0600` | `command -v secret-tool` |
 | `podman` 4.9.0 oder neuer und `uidmap` (empfohlen) | Podman als zweites Sandbox-Backend, nur wenn du es wählst (`sandbox.backend = "podman"` oder `--backend podman`); ohne Root braucht es dazu 65536 untergeordnete IDs für dein Konto in `/etc/subuid` und `/etc/subgid`. bubblewrap bleibt die Vorgabe und läuft ohne beide | `humanitl sandbox backends` |
+| `/dev/kvm`, `qemu-system-x86`, `virtiofsd`, `vhost-device-vsock` und ein Gastkern (vorgeschlagen) | die Kernel-Stufe, eine Micro-VM mit eigenem Gastkern (`sandbox.backend = "qemu"` oder `--backend qemu`), nur wenn du sie wählst. `/dev/kvm` muss für dich lesbar und schreibbar sein (`sudo usermod -aG kvm "$USER"`, danach neu anmelden); der Gastkern ist als Vorgabe der des Hosts, der lesbar sein und virtiofs eingebaut haben muss (`CONFIG_VIRTIO_FS=y`), sonst nennt `sandbox.qemu.kernel` einen anderen. `vhost-device-vsock` ist in Debian testing und unstable paketiert, noch nicht in Debian 13 oder Ubuntu 24.04 | `humanitl sandbox backends`, `humanitl doctor` |
 
 Das `.deb` gibt bubblewrap, EGL und GLES 2 als Abhängigkeiten an, also
 installiert apt sie; das `.rpm` und das AUR-Paket geben dasselbe an, für dnf,
@@ -53,6 +54,13 @@ zypper und pacman. GTK 3 und GLib kommen über die Bibliotheken der App mit. Die
 Tray-Bibliothek und `libsecret-tools` sind optional; das Paket empfiehlt
 `libsecret-tools`, `podman` und `uidmap`, hängt nie von ihnen ab und installiert
 und läuft mit bubblewrap allein (`apt install --no-install-recommends` lässt sie weg).
+Die Programme der Kernel-Stufe schlägt es nur vor, also installiert apt sie
+nicht; `sudo apt install qemu-system-x86 virtiofsd vhost-device-vsock` tut es dort, wo alle drei
+paketiert sind (Debian testing und unstable); unter Debian 13 oder Ubuntu 24.04 fehlt
+`vhost-device-vsock`, und die Kernel-Stufe bleibt dort nicht verfügbar (`SANDBOX_045`), bis es
+kommt.
+Das RPM schlägt dieselben Programme vor, und das AUR-Paket führt sie als
+optionale Abhängigkeiten.
 Unter macOS braucht es dafür nichts: Der Zugangsschlüssel liegt in deinem
 Anmelde-Schlüsselbund, über das Systemwerkzeug `/usr/bin/security`.
 

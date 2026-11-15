@@ -1,6 +1,6 @@
 ---
 source: adr/README.md
-source-sha256: 46d56587a147c0ce679430c609d3efb567abac5e6e7d744cc78e0e1f80b97f87
+source-sha256: 034b4d96af3e98ab1dfb0a76d1ddc85a5cf8515fbb8152af8b034a1c72545d52
 lang: de
 ---
 # Architekturentscheidungen (ADRs)
@@ -84,7 +84,7 @@ Wo eine Entscheidung eine andere verfeinert oder korrigiert:
 | ADR-0018 | ADR-0003, ADR-0013 | Macht die Gleichwertigkeit von Oberfläche und Kommandozeile aus ADR-0013 maschinell prüfbar. |
 | ADR-0019 | ADR-0002, ADR-0015 | Der zweite Adapter von `SandboxBackend`, den ADR-0015 angekündigt hat; auf macOS tritt er an die Stelle von bwrap aus ADR-0002. |
 | ADR-0020 | ADR-0002, ADR-0010, ADR-0015 | Podman statt Docker als zweites Linux-Backend; ergänzt alle drei (Nachträge aus HUM-434 und HUM-441). |
-| ADR-0021 | ADR-0020 | Ersetzt die Kernel-Stufe aus ADR-0020 (Podman mit `krun`) durch einen eigenen Adapter; die gemeinsame Stufe bleibt, wie sie ist. |
+| ADR-0021 | ADR-0020, ADR-0002, ADR-0010, ADR-0015 | Ersetzt die Kernel-Stufe aus ADR-0020 (Podman mit `krun`) durch einen eigenen Adapter; die gemeinsame Stufe bleibt, wie sie ist. Ergänzt ADR-0002, ADR-0010 und ADR-0015, sobald die Stufe zugelassen ist (Nachträge aus HUM-447). |
 | ADR-0011 | ADR-0007 | Regelt die beiden Speicherorte für Regeln (gespeichert und Session). |
 | ADR-0012 | ADR-0010 | `FixAction::InstallService` ist der Mechanismus hinter der Installation mit einem Klick. |
 

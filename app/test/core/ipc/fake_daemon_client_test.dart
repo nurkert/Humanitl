@@ -415,56 +415,51 @@ void main() {
     );
   });
 
-  // HUM-432, HUM-440, HUM-464: Der Fake spielt den Stand nach HUM-464: das
+  // HUM-432, HUM-440, HUM-449: Der Fake spielt den Stand nach HUM-449: das
   // Backend des Systems gewählt und verfügbar, Podman zugelassen und
-  // verfügbar mit `crun`, das VM-Backend der Kernel-Stufe noch nicht
-  // zugelassen und deshalb keine Wahl.
-  test(
-    'sandboxBackends lists the system backend and an admitted podman',
-    () async {
-      final FakeDaemonClient client = FakeDaemonClient();
-      final SandboxBackendList list = await client.sandboxBackends();
-      expect(client.sandboxBackendsCalls, 1);
-      expect(list.minIsolation, IsolationLevel.policy);
-      expect(list.backends.map((b) => b.name), <String>[
-        DoctorCheckId.sandboxTool,
-        'podman',
-        'qemu',
-      ]);
-      expect(
-        list.backends.where((b) => b.selected).single.name,
-        DoctorCheckId.sandboxTool,
-      );
-      expect(list.offered.map((b) => b.name), <String>[
-        DoctorCheckId.sandboxTool,
-        'podman',
-      ]);
-      final SandboxBackendInfo podman = list.backends[1];
-      expect(podman.available, isTrue);
-      expect(podman.admitted, isTrue);
-      expect(podman.diagnostics, isEmpty);
-      final SandboxRuntimeInfo crun = podman.runtimes.single;
-      expect(crun.isolation, IsolationLevel.namespaces);
-      expect(crun.available && crun.selected, isTrue);
-      final SandboxBackendInfo kernel = list.backends.last;
-      expect(kernel.isolation, IsolationLevel.kernel);
-      expect(kernel.available || kernel.admitted, isFalse);
-      expect(
-        kernel.diagnostics.single.code,
-        DiagnosticCodes.backendNotAdmitted,
-      );
-      expect(kernel.runtimes, isEmpty);
+  // verfügbar mit `crun`, das VM-Backend der Kernel-Stufe zugelassen und
+  // verfügbar, also eine Wahl.
+  test('sandboxBackends lists the system backend, podman and an admitted VM '
+      'backend of the kernel level', () async {
+    final FakeDaemonClient client = FakeDaemonClient();
+    final SandboxBackendList list = await client.sandboxBackends();
+    expect(client.sandboxBackendsCalls, 1);
+    expect(list.minIsolation, IsolationLevel.policy);
+    expect(list.backends.map((b) => b.name), <String>[
+      DoctorCheckId.sandboxTool,
+      'podman',
+      'qemu',
+    ]);
+    expect(
+      list.backends.where((b) => b.selected).single.name,
+      DoctorCheckId.sandboxTool,
+    );
+    // Alle drei sind zugelassen, also alle drei eine Wahl.
+    expect(list.offered.map((b) => b.name), list.backends.map((b) => b.name));
+    final SandboxBackendInfo podman = list.backends[1];
+    expect(podman.available, isTrue);
+    expect(podman.admitted, isTrue);
+    expect(podman.diagnostics, isEmpty);
+    final SandboxRuntimeInfo crun = podman.runtimes.single;
+    expect(crun.isolation, IsolationLevel.namespaces);
+    expect(crun.available && crun.selected, isTrue);
+    final SandboxBackendInfo kernel = list.backends.last;
+    expect(kernel.isolation, IsolationLevel.kernel);
+    expect(kernel.name, FakeSandboxBackends.kernelBackendName);
+    expect(kernel.available && kernel.admitted, isTrue);
+    expect(kernel.selected, isFalse);
+    expect(kernel.diagnostics, isEmpty);
+    expect(kernel.runtimes, isEmpty);
 
-      client.sandboxBackendsFailure = const Diagnostic(
-        code: 'IPC_006',
-        severity: Severity.error,
-      );
-      await expectLater(
-        client.sandboxBackends(),
-        throwsA(isA<DaemonException>()),
-      );
-    },
-  );
+    client.sandboxBackendsFailure = const Diagnostic(
+      code: 'IPC_006',
+      severity: Severity.error,
+    );
+    await expectLater(
+      client.sandboxBackends(),
+      throwsA(isA<DaemonException>()),
+    );
+  });
 
   // HUM-440: Der Start nimmt das Backend dieser Sitzung mit, und die laufende
   // Momentaufnahme nennt es mit seiner Stufe.

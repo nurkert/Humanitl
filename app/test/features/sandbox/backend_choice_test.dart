@@ -2,7 +2,9 @@
 // `sandbox.backend`, eine abweichende Wahl geht als `cli_overrides` mit dem
 // Start, ein Backend, das nicht starten kann oder unter der Untergrenze liegt,
 // ist nicht wählbar und nennt den Grund des Daemons, und was der Daemon nicht
-// zulässt (`SANDBOX_048`), steht gar nicht da. Läuft eine Sitzung, nennen
+// zulässt (`SANDBOX_048`), steht gar nicht da. Das VM-Backend der
+// Kernel-Stufe ist seit HUM-449 zugelassen und wählbar, wenn der Daemon es
+// verfügbar nennt. Läuft eine Sitzung, nennen
 // Reiter und Kopf ihr Backend mit seiner Stufe.
 
 import 'package:flutter/widgets.dart';
@@ -202,6 +204,72 @@ void main() {
           .data,
       'Minimum isolation: own kernel in a micro VM',
     );
+  }, variant: TargetPlatformVariant.only(TargetPlatform.linux));
+
+  // HUM-447: Seit HUM-449 ist die Kernel-Stufe zugelassen. Ihr VM-Backend
+  // steht mit seiner Stufe da und ist wählbar, wenn der Daemon es verfügbar
+  // nennt; fehlt eine Voraussetzung, nennt die Zeile sie mit dem Befehl des
+  // Daemons. Der Name kommt aus dem Fake, damit er in der App an einer
+  // Stelle steht (HUM-145).
+  const String kernel = FakeSandboxBackends.kernelBackendName;
+
+  testWidgets('the VM backend stands with the level kernel and is selectable '
+      'when the daemon names it available', (WidgetTester tester) async {
+    final SandboxTestClient client = SandboxTestClient();
+    expect(
+      client.sandboxBackendList,
+      same(FakeSandboxBackends.defaultSandboxBackends),
+    );
+    await openIsolation(tester, client);
+
+    expect(segment(tester, kernel).enabled, isTrue);
+    expect(
+      tester
+          .widget<Text>(find.byKey(const Key('sandbox-backend-level-$kernel')))
+          .data,
+      '$kernel: own kernel in a micro VM',
+    );
+    expect(
+      find.byKey(const Key('sandbox-backend-reason-$kernel')),
+      findsNothing,
+    );
+
+    await tapChoice(tester, kernel);
+    expect(tester.widget<HSegmented<String>>(choice).selected, kernel);
+    await startAndStop(tester);
+    expect(client.startBackends, <String?>[kernel]);
+  }, variant: TargetPlatformVariant.only(TargetPlatform.linux));
+
+  testWidgets('the VM backend without a prerequisite is not selectable and '
+      'names what is missing with the fix', (WidgetTester tester) async {
+    final SandboxTestClient client = SandboxTestClient()
+      ..sandboxBackendList = listWith(
+        FakeSandboxBackends.kernelBackendUnavailable,
+      );
+    await openIsolation(tester, client);
+
+    expect(segment(tester, kernel).enabled, isFalse);
+    expect(
+      tester
+          .widget<Text>(find.byKey(const Key('sandbox-backend-level-$kernel')))
+          .data,
+      '$kernel: own kernel in a micro VM',
+    );
+    expect(
+      tester
+          .widget<Text>(find.byKey(const Key('sandbox-backend-reason-$kernel')))
+          .data,
+      contains('/dev/kvm readable and writable'),
+    );
+    expect(
+      find.byKey(const Key('sandbox-backend-fix-$kernel')),
+      findsOneWidget,
+    );
+
+    await tapChoice(tester, kernel);
+    expect(tester.widget<HSegmented<String>>(choice).selected, 'auto');
+    await startAndStop(tester);
+    expect(client.startBackends, <String?>[null]);
   }, variant: TargetPlatformVariant.only(TargetPlatform.linux));
 
   testWidgets('a backend the daemon does not admit is no choice at all', (

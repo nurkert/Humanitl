@@ -58,6 +58,15 @@ Recommends:     podman
 Recommends:     /usr/bin/newuidmap
 # Das Symbol im Infobereich braucht libayatana-appindicator3.
 Suggests:       libayatana-appindicator3.so.1()(64bit)
+# Das Gegenstueck zu `Suggests: qemu-system-x86, virtiofsd, vhost-device-vsock`
+# des .deb (HUM-447): die Programme der Kernel-Stufe, des Backends `qemu`.
+# Nur vorgeschlagen, weil die Stufe eine Wahl ist und zusaetzlich /dev/kvm und
+# einen Gastkernel mit eingebautem virtiofs braucht. Emulator und vsock-Geraet
+# als Datei in /usr/bin, weil die Paketnamen zwischen Fedora und openSUSE
+# abweichen; virtiofsd heisst auf beiden so und liegt unter /usr/libexec.
+Suggests:       /usr/bin/qemu-system-x86_64
+Suggests:       virtiofsd
+Suggests:       /usr/bin/vhost-device-vsock
 
 %description
 Runs an AI coding agent in a sandbox without a network interface and
