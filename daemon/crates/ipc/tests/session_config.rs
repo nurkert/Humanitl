@@ -994,19 +994,42 @@ fn engine_absent(fixture: &Fixture, lines: &str) {
     ));
 }
 
+/// Die Gruppe des VM-Backends der Kernel-Stufe in `config.toml` mit einer
+/// Attrappe des Emulators, die es nicht gibt: Kein Test fragt die Programme
+/// des Rechners oder startet eine Maschine (HUM-449).
+fn emulator_absent(fixture: &Fixture) -> String {
+    let vm = humanitl_sandbox::VM_BACKEND;
+    let absent = fixture.config_home.join("absent").join("emulator");
+    format!(
+        "[sandbox.{vm}]\n{vm} = {:?}\n",
+        absent.display().to_string()
+    )
+}
+
+/// Woran ein Start des VM-Backends ohne seine Voraussetzungen scheitert:
+/// `SANDBOX_045` unter Linux auf x86-64, sonst hat der Build die Stufe nicht
+/// (`SANDBOX_034`). Nie `SANDBOX_048`, seit HUM-449 die Stufe zulässt.
+const KERNEL_LEVEL_MISSING: &str = if cfg!(all(target_os = "linux", target_arch = "x86_64")) {
+    "SANDBOX_045"
+} else {
+    "SANDBOX_034"
+};
+
 /// Seit HUM-448 kommt die gemeinsame Stufe über einen Wunsch beim Start
 /// (`cli_overrides`, HUM-431) an der Zulassung vorbei: Der Start plant mit
 /// der Engine aus `config.toml`, einer Attrappe, die es nicht gibt, und
 /// scheitert erst an der Tür, die dieser Test nicht bindet. Das VM-Backend
-/// der Kernel-Stufe scheitert mit `SANDBOX_048`, aus `config.toml` beim
-/// Start, in der Vorschau und beim Ziehen eines Abbilds; den Wunsch über den
-/// Start prüft
+/// der Kernel-Stufe ist seit HUM-449 zugelassen: Aus `config.toml`, auch mit
+/// der Untergrenze `kernel`, kommt es beim Start, in der Vorschau und beim
+/// Ziehen eines Abbilds an der Zulassung vorbei und scheitert an der
+/// Attrappe seines Emulators (`SANDBOX_045`); den Wunsch über den Start
+/// prüft
 /// `the_start_takes_backend_and_runtime_and_measures_them_against_the_floor`.
 /// Die frühere Laufzeit der Kernel-Stufe unter der Engine lädt seit HUM-464 gar
 /// nicht mehr (`CONFIG_023`). Nie startet stattdessen das Backend des
 /// Systems.
 #[tokio::test(flavor = "multi_thread")]
-async fn the_shared_stage_is_admitted_and_the_kernel_stage_is_refused_on_every_path() {
+async fn the_shared_stage_and_the_kernel_level_pass_admission_on_every_path() {
     let fixture = Fixture::live();
     engine_absent(&fixture, "");
     let seen = fixture.run(with_override("sandbox.backend", ENGINE)).await;
@@ -1053,15 +1076,17 @@ async fn the_shared_stage_is_admitted_and_the_kernel_stage_is_refused_on_every_p
 
     let fixture = Fixture::live();
     fixture.user_config(&format!(
-        "[sandbox]\nbackend = \"{}\"\n",
-        humanitl_sandbox::VM_BACKEND
+        "[sandbox]\nbackend = \"{}\"\nmin_isolation = \"kernel\"\n{}",
+        humanitl_sandbox::VM_BACKEND,
+        emulator_absent(&fixture)
     ));
     let seen = fixture.run(v1::sandbox_request::Start::default()).await;
+    let found = codes(&seen);
     assert!(
-        codes(&seen).contains(&"SANDBOX_048".to_owned()),
-        "{:?}",
-        codes(&seen)
+        found.contains(&KERNEL_LEVEL_MISSING.to_owned()),
+        "{found:?}"
     );
+    assert!(!found.contains(&"SANDBOX_048".to_owned()), "{found:?}");
     assert!(failed(&seen), "{seen:?}");
     let planned = fixture.plan("").await;
     assert_eq!(
@@ -1088,7 +1113,7 @@ async fn the_shared_stage_is_admitted_and_the_kernel_stage_is_refused_on_every_p
         while let Some(event) = stream.next().await {
             pulled.push(event);
         }
-        assert_eq!(codes(&pulled), ["SANDBOX_048"], "{pulled:?}");
+        assert_eq!(codes(&pulled), [KERNEL_LEVEL_MISSING], "{pulled:?}");
         assert_eq!(pulled.len(), 1, "{pulled:?}");
     }
 }
@@ -1210,14 +1235,18 @@ fn with_overrides(pairs: &[(&str, &str)]) -> v1::sandbox_request::Start {
 /// `sandbox.backend` und `sandbox.podman.runtime` (HUM-432). Ein Wunsch nach
 /// Podman unter der Untergrenze `kernel` ist `SANDBOX_035`, bevor die
 /// Zulassung gefragt wird; das VM-Backend der Kernel-Stufe liegt nicht
-/// darunter und scheitert erst an der Zulassung (`SANDBOX_048`). Die frühere
+/// darunter, ist seit HUM-449 zugelassen und scheitert erst an der Attrappe
+/// seines Emulators (`SANDBOX_045`), nie an der Zulassung. Die frühere
 /// Laufzeit der Kernel-Stufe kommt als Wunsch an und lädt nicht
 /// (`CONFIG_023`, HUM-464). Jeder andere Schlüssel von `sandbox.podman`
 /// bleibt `CONFIG_003`.
 #[tokio::test(flavor = "multi_thread")]
 async fn the_start_takes_backend_and_runtime_and_measures_them_against_the_floor() {
     let fixture = Fixture::live();
-    fixture.user_config("[sandbox]\nmin_isolation = \"kernel\"\n");
+    fixture.user_config(&format!(
+        "[sandbox]\nmin_isolation = \"kernel\"\n{}",
+        emulator_absent(&fixture)
+    ));
     let seen = fixture
         .run(with_overrides(&[("sandbox.backend", "podman")]))
         .await;
@@ -1239,15 +1268,14 @@ async fn the_start_takes_backend_and_runtime_and_measures_them_against_the_floor
             humanitl_sandbox::VM_BACKEND,
         )]))
         .await;
+    let found = codes(&seen);
     assert!(
-        codes(&seen).contains(&"SANDBOX_048".to_owned()),
-        "{:?}",
-        codes(&seen)
+        found.contains(&KERNEL_LEVEL_MISSING.to_owned()),
+        "{found:?}"
     );
     assert!(
-        !codes(&seen).contains(&"SANDBOX_035".to_owned()),
-        "{:?}",
-        codes(&seen)
+        !found.contains(&"SANDBOX_035".to_owned()) && !found.contains(&"SANDBOX_048".to_owned()),
+        "{found:?}"
     );
     assert!(failed(&seen), "{seen:?}");
 

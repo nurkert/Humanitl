@@ -1586,7 +1586,9 @@ und ihr Zustand ist `failed`; ein „trotzdem starten" gibt es nicht.
 Suiten laufen gegen Podman im CI-Job `escape-tests-podman` (HUM-435,
 `HUMANITL_ESCAPE_BACKEND=podman`), auf einem Runner, auf dem vorher eine feindliche
 Engine-Konfiguration des Nutzers gepflanzt und an einem gewöhnlichen Container als wirksam belegt
-wurde; ein Backend ist erst zulässig, wenn jede Probe gegen es grün ist, und ein Lauf, der das
+wurde, und gegen die Kernel-Stufe im CI-Job `escape-tests-qemu` (HUM-445,
+`HUMANITL_ESCAPE_BACKEND=qemu`), mit Root im Gast und neben den KVM-Tests des CI-Jobs
+`kvm-tests`; ein Backend ist erst zulässig, wenn jede Probe gegen es grün ist, und ein Lauf, der das
 Backend nicht starten kann, ist ein Fehler, nie ein Erfolg oder ein Überspringen:
 
 | ID | Datei | Was er zeigt |
@@ -1641,6 +1643,7 @@ der Durchleitung oder an der Audit-Kette bekommt hier eine Zeile und in der Änd
 | 0.1.x | Die Escape-Suite läuft gegen jedes Backend; der CI-Job `escape-tests-podman` führt sie über `escape-launch --backend podman` gegen Podman aus, mit einer feindlichen Engine-Konfiguration, die auf dem Runner gepflanzt ist (HUM-435, [Abschnitt 9](#9-what-we-verify-in-ci), K-27). |
 | 0.1.x | Linux, Podman: ein Abbild als Wurzel der Sandbox, mit Digest festgelegt und vor jedem Start geprüft (`SANDBOX_043`), von keinem Start gezogen; `humanitl sandbox image pull` zieht auf Wunsch, direkt und nicht durch den Proxy, und sagt das vorher; Projekt, Tür, CA, Shim und Dateien der Sitzung kommen vom Host, und ESC-2 prüft die CA nach Gerät und Inode (HUM-439, [Abschnitt 13](#ein-abbild-als-wurzel-hum-439), K-28). |
 | 0.1.x | Linux: Podman in der gemeinsamen Stufe (`podman/crun`) zugelassen, nachdem `escape-tests-podman` auf `main` grün war; ein Mensch wählt es mit `sandbox.backend = "podman"` oder `--backend podman`, `auto` bleibt bubblewrap, und die Kernel-Stufe (Backend `qemu`, ADR-0021) lehnt jeder Start bis HUM-449 mit `SANDBOX_048` ab (HUM-448, [Abschnitt 13](#13-linux-podman), K-27). |
+| 0.1.x | Linux: die Kernel-Stufe (Backend `qemu`, ADR-0021) zugelassen, nachdem `kvm-tests` und `escape-tests-qemu` auf `main` mit der Wegwerf-Sandbox im Gast (HUM-446) und den Proben mit Root im Gast (HUM-445) grün waren, in zehn Läufen hintereinander, in denen beide Jobs liefen (43624997550, 43630993303, 43638237420, 43641769840, 43646599744, 43648968241, 43656202366, 43661904978, 43669712307 und 43673927540); ein Mensch wählt sie mit `sandbox.backend = "qemu"` oder `--backend qemu`, `auto` bleibt bubblewrap, und eine fehlende Voraussetzung lehnt den Start mit `SANDBOX_045` ab (HUM-449, [Abschnitt 14](#14-linux-qemu-micro-vm-kernel-stufe), K-30 bis K-34). |
 
 ## 12. macOS: Seatbelt statt bubblewrap
 
@@ -1799,8 +1802,8 @@ grün war, zusammen mit der Einhänge-Prüfung (HUM-437) und dem Dienstverwalter
 (HUM-434). Ein Start mit `sandbox.backend = "podman"` startet eine Sitzung, ob die Wahl aus
 `config.toml`, einem Profil, der Umgebung, `--backend` oder dem Start einer Sitzung kommt; ein
 Projekt-Profil kann das Backend nicht wählen. `auto` bleibt bubblewrap: Podman läuft nur, wenn ein
-Mensch es wählt. Die Kernel-Stufe, das Backend `qemu` (ADR-0021), ist noch nicht zugelassen, und jeder Start
-damit lehnt bis HUM-449 mit `SANDBOX_048` ab. Dieser Abschnitt sagt, was der Adapter
+Mensch es wählt. Die Kernel-Stufe, das Backend `qemu` (ADR-0021), ist ein eigenes Backend,
+zugelassen seit HUM-449 ([Abschnitt 14](#14-linux-qemu-micro-vm-kernel-stufe)). Dieser Abschnitt sagt, was der Adapter
 (`daemon/crates/sandbox/src/podman/`, HUM-433) tut.
 
 ### Die drei Garantien unter Podman
@@ -1907,8 +1910,8 @@ Laden der Konfiguration mit `CONFIG_003` ab).
   die eigene `registries.conf` des Daemons hat keine Suchliste und keinen Spiegel. Die
   Signaturregel ist eine eigene Datei des Daemons (`--signature-policy`) und nimmt jedes Abbild an:
   Der Vertrauensanker ist der Digest, den der Mensch genannt hat, keine Signatur. Unter der
-  Kernel-Stufe, die noch nicht zugelassen ist, lehnt das Ziehen wie jeder Start mit `SANDBOX_048`
-  ab.
+  Kernel-Stufe wird nichts gezogen: Die micro-VM nimmt kein Abbild, und das Ziehen lehnt mit
+  `SANDBOX_034` ab (mit `SANDBOX_045`, solange der Stufe eine Voraussetzung fehlt).
 - **Das Abbild gehört zur vertrauenswürdigen Basis.** Was darin liegt, läuft als der Agent unter
   dessen Filter. Der Shim läuft aus der Datei des Hosts, in einem Release statisch gebunden, also
   läuft keine Bibliothek des Abbilds, bevor der Filter steht. Projektordner, Tür, CA-Zertifikat und
@@ -1943,13 +1946,19 @@ ab; er fällt nie auf bubblewrap zurück.
 
 ## 14. Linux: QEMU-micro-VM (Kernel-Stufe)
 
-**Noch nicht zugelassen.** Die Kernel-Stufe, das Backend `qemu` (ADR-0021), lässt den Agenten in
-einer micro-VM mit eigenem Gastkernel laufen. Sie steht nicht in der Liste der zugelassenen Stufen:
-Jeder Start mit `sandbox.backend = "qemu"` lehnt mit `SANDBOX_048` ab, bis HUM-449 landet, nachdem
-die Escape-Suite mit Root im Gast (HUM-445) auf `main` grün ist. `auto` wählt sie nie. Bis dahin
-erreichen den Adapter (`daemon/crates/sandbox/src/qemu/`, HUM-444) nur die Escape-Suite und die
-Tests, über eine Umgehung, die ausgelieferter Daemon und Kommandozeile nicht enthalten. Dieser
-Abschnitt sagt, was der Adapter tut, damit die Aussage prüfbar ist, bevor die Stufe angeboten wird.
+**Zugelassen seit HUM-449.** Die Kernel-Stufe, das Backend `qemu` (ADR-0021), lässt den Agenten in
+einer micro-VM mit eigenem Gastkernel laufen. Zugelassen wurde sie erst, als die KVM-Tests (der
+CI-Job `kvm-tests`, `daemon/crates/sandbox/src/qemu/kvm_tests.rs`) und die Escape-Suite gegen sie
+mit Root im Gast (der CI-Job `escape-tests-qemu`, HUM-445) zusammen mit der Wegwerf-Sandbox im Gast
+(HUM-446) auf `main` grün waren: in zehn Läufen hintereinander auf `main`, in denen beide Jobs
+liefen, nach der Regel, die bei HUM-471 in `backlog/sprint-7.md` steht (43624997550, 43630993303, 43638237420, 43641769840, 43646599744, 43648968241, 43656202366, 43661904978, 43669712307 und 43673927540). Ein Start mit `sandbox.backend = "qemu"` startet eine
+Sitzung, ob die Wahl aus `config.toml`, einem Profil des Nutzers, der Umgebung, `--backend` oder
+dem Start einer Sitzung kommt; ein Projekt-Profil kann das Backend nicht wählen, nur verlangen
+(`SANDBOX_036` bei jeder anderen Wahl). Sie ist das einzige
+Backend, das `sandbox.min_isolation = "kernel"` erfüllt. `auto` wählt sie nie: Die Kernel-Stufe
+läuft nur, wenn ein Mensch sie wählt. Fehlt eine Voraussetzung, lehnt der Start mit `SANDBOX_045`
+ab (siehe „Voraussetzungen" unten), und er fällt nie auf ein anderes Backend zurück. Dieser
+Abschnitt sagt, was der Adapter (`daemon/crates/sandbox/src/qemu/`, HUM-444) tut.
 
 ### Die drei Garantien in der micro-VM
 
@@ -2216,7 +2225,8 @@ Dateisystemdienst mit `--readonly`, `--fd` und `--cache`, das vsock-Gerät mit
 `--uds-path` und `--groups`, bubblewrap mit `--bind-fd` und `--size`, ein lesbares Kernel-Abbild mit
 eingebautem virtiofs (`CONFIG_VIRTIO_FS=y` in der Konfiguration neben dem Abbild) und das
 Modulverzeichnis dieses Kernels. Fehlt eine Voraussetzung, lehnt der Start mit `SANDBOX_045` ab; er fällt nie auf ein
-anderes Backend zurück. `humanitl doctor` zeigt je Voraussetzung eine Zeile. Der Dienstverwalter
+anderes Backend zurück. `humanitl doctor` nennt die erste fehlende Voraussetzung in der Zeile
+`available` der Kernel-Stufe, wie `humanitl sandbox backends`. Der Dienstverwalter
 des Nutzers braucht die cgroup-Controller `memory` und `pids` (systemd delegiert sie von sich aus);
 ohne sie lehnt ein Start mit `SANDBOX_052` ab (HUM-485), was auch `humanitl doctor --probe`
 zeigt.

@@ -173,8 +173,7 @@ const REGISTER: &[(&str, &str)] = &[
     // seit HUM-444: die Pfade und `kernel`, `modules` bei der Prüfung der
     // Voraussetzungen vor jedem Start, `cpus` und `memory_mib` in der Zeile
     // der Maschine, `start_timeout_secs` als Frist bis zum Bericht des Gasts.
-    // Gestartet wird die Stufe nur über die Umgehung der Escape-Suite, bis
-    // HUM-449 sie zulässt.
+    // Zugelassen ist die Stufe seit HUM-449.
     ("sandbox.qemu.cpus", "effective"),
     ("sandbox.qemu.kernel", "effective"),
     ("sandbox.qemu.memory_mib", "effective"),

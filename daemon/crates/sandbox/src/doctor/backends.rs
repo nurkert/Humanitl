@@ -354,19 +354,15 @@ mod tests {
 
     use humanitl_config::{Env, Paths, SandboxBackendName, SandboxRef};
 
-    use super::{BackendCheckId, ProbeMode, group};
+    use super::{BackendCheckId, ProbeMode, group, unadmitted_lines};
     use crate::doctor::{CheckStatus, ProbeCache};
 
-    /// Für eine Stufe vor ihrer Zulassung liefert `doctor --probe`
-    /// `SANDBOX_048` und startet keinen Prozess: Jedes Programm im `PATH`
-    /// zählt seinen Aufruf in eine Datei, und die Datei entsteht nie. Seit
-    /// HUM-464 ist das das VM-Backend der Kernel-Stufe.
-    #[test]
-    fn before_admission_the_probe_is_refused_and_starts_nothing() {
-        let dir = tempfile::tempdir().unwrap();
-        let bin = dir.path().join("bin");
+    /// Ein Ordner mit `bwrap` und `humanitl-shim` im `PATH`, die jeden
+    /// Aufruf in die Datei `calls` schreiben, und sonst keinem Programm.
+    fn counting_programs(dir: &std::path::Path) -> (Paths, std::path::PathBuf) {
+        let bin = dir.join("bin");
         std::fs::create_dir_all(&bin).unwrap();
-        let calls = dir.path().join("calls");
+        let calls = dir.join("calls");
         for name in ["bwrap", "humanitl-shim"] {
             crate::test_support::write_program(
                 &bin.join(name),
@@ -377,53 +373,131 @@ mod tests {
             );
         }
         let paths = Paths::new(Env::from_pairs([
-            ("HOME", dir.path().to_string_lossy().into_owned()),
+            ("HOME", dir.to_string_lossy().into_owned()),
             ("PATH", bin.to_string_lossy().into_owned()),
         ]));
-        let sandbox = SandboxRef {
+        (paths, calls)
+    }
+
+    /// Die Gruppe `sandbox`, die das VM-Backend der Kernel-Stufe wählt.
+    fn kernel_level() -> SandboxRef {
+        SandboxRef {
             backend: SandboxBackendName::Qemu,
             ..SandboxRef::default()
-        };
+        }
+    }
+
+    /// Seit HUM-449 ist das VM-Backend der Kernel-Stufe zugelassen: Seine
+    /// Gruppe sucht es wie jeder Start (`available`), und fehlt eine
+    /// Voraussetzung, steht ihr `SANDBOX_045` da, nie `SANDBOX_048`. Der
+    /// Probestart auf Wunsch startet dann nichts, keinen Shim und keine
+    /// Sandbox, und merkt sich nichts.
+    #[test]
+    fn the_admitted_kernel_level_is_searched_like_a_start_and_probes_nothing_it_lacks() {
+        let dir = tempfile::tempdir().unwrap();
+        let (paths, calls) = counting_programs(dir.path());
+        let sandbox = kernel_level();
         let cache = ProbeCache::at(dir.path().join("doctor-probe.json"));
         let mode = ProbeMode::Start {
-            shim: bin.join("humanitl-shim"),
+            shim: dir.path().join("bin").join("humanitl-shim"),
         };
 
         let group = group(crate::VM_BACKEND, &sandbox, &paths, &mode, &cache);
 
         assert!(group.selected);
         assert_eq!(group.stage, crate::VM_BACKEND);
+        let admitted = group.get(BackendCheckId::Admitted).expect("admitted");
+        assert_eq!(admitted.status(), CheckStatus::Ok, "{admitted:?}");
+        let available = group.get(BackendCheckId::Available).expect("available");
+        assert_eq!(available.status(), CheckStatus::Fail, "{available:?}");
+        let missing = if cfg!(all(target_os = "linux", target_arch = "x86_64")) {
+            "SANDBOX_045"
+        } else {
+            "SANDBOX_034"
+        };
+        assert_eq!(
+            available.diagnostic().map(|d| d.code.as_str()),
+            Some(missing)
+        );
+        let probe = group.get(BackendCheckId::Probe).expect("probe");
+        assert_eq!(probe.status(), CheckStatus::Warn, "{probe:?}");
+        assert!(probe.evidence().contains(missing), "{probe:?}");
+        for line in &group.checks {
+            assert_ne!(
+                line.diagnostic().map(|d| d.code.as_str()),
+                Some("SANDBOX_048"),
+                "{line:?}"
+            );
+        }
+        let called = std::fs::read_to_string(&calls).unwrap_or_default();
+        assert!(!called.contains("humanitl-shim"), "the shim ran: {called}");
+        assert!(!cache.path().exists(), "nothing was probed, nothing cached");
+    }
+
+    /// Für eine Stufe vor ihrer Zulassung liefert `doctor --probe`
+    /// `SANDBOX_048` und startet keinen Prozess. Seit HUM-449 ist jede Stufe
+    /// dieses Builds zugelassen; die Zeilen einer künftigen, noch nicht
+    /// zugelassenen Stufe prüft dieser Test deshalb direkt, am Beispiel der
+    /// Voraussetzungen der Kernel-Stufe: Jedes Programm im `PATH` zählt seinen
+    /// Aufruf in eine Datei, und gestartet wird nichts.
+    #[test]
+    fn before_admission_the_probe_is_refused_and_starts_nothing() {
+        let dir = tempfile::tempdir().unwrap();
+        let (paths, calls) = counting_programs(dir.path());
+        let sandbox = kernel_level();
+        let mode = ProbeMode::Start {
+            shim: dir.path().join("bin").join("humanitl-shim"),
+        };
+        let refused = humanitl_core::Diagnostic::builder(
+            humanitl_core::diagnostics::codes::SANDBOX_048,
+            humanitl_core::Severity::Blocking,
+        )
+        .why("not admitted yet")
+        .build();
+
+        let checks = unadmitted_lines(
+            crate::VM_BACKEND,
+            crate::VM_BACKEND,
+            refused,
+            &sandbox,
+            &paths,
+            &mode,
+        );
+
+        let get = |id| checks.iter().find(|check| check.id() == id);
         for id in [BackendCheckId::Admitted, BackendCheckId::Probe] {
-            let line = group.get(id).expect("the line is there");
+            let line = get(id).expect("the line is there");
             assert_eq!(line.status(), CheckStatus::Warn, "{line:?}");
             assert_eq!(
                 line.diagnostic().map(|d| d.code.as_str()),
                 Some("SANDBOX_048")
             );
         }
-        assert!(group.get(BackendCheckId::Available).is_none());
-        // Seit HUM-444 hat die Kernel-Stufe je Voraussetzung eine Zeile; die
-        // Fähigkeiten eines Programms liest sie aus seiner Hilfe, wie die Liste
-        // der Backends (HUM-464). Eine Frage nach der Hilfe ist der einzige
-        // Aufruf, und gestartet wird nichts: kein Shim, keine Sandbox.
-        // Genau eine Frage, an genau dieses Programm; die übrigen Programme
-        // fehlen im `PATH` dieses Tests. Die Datei muss es geben: Ohne sie
-        // belegte das Fehlen jedes Aufrufs nichts über die Zeilen.
-        // Außerhalb von Linux auf x86-64 gibt es die Kernel-Stufe nicht; dort
-        // fragt der Doctor kein Programm, und die Datei entsteht nie.
+        assert!(get(BackendCheckId::Available).is_none());
+        // Die Kernel-Stufe hat je Voraussetzung eine Zeile (HUM-444); die
+        // Fähigkeiten eines Programms liest sie aus seiner Hilfe (HUM-464).
+        // Eine Frage nach der Hilfe ist der einzige Aufruf, und gestartet wird
+        // nichts: kein Shim, keine Sandbox. Genau eine Frage, an genau dieses
+        // Programm; die übrigen Programme fehlen im `PATH` dieses Tests. Die
+        // Datei muss es geben: Ohne sie belegte das Fehlen jedes Aufrufs
+        // nichts über die Zeilen. Außerhalb von Linux auf x86-64 gibt es die
+        // Kernel-Stufe nicht; dort fragt der Doctor kein Programm, und die
+        // Datei entsteht nie.
         if cfg!(all(target_os = "linux", target_arch = "x86_64")) {
             let calls = std::fs::read_to_string(&calls).expect("bwrap was asked for its help");
             assert_eq!(
                 calls.lines().collect::<Vec<_>>(),
-                [format!("{} --help", bin.join("bwrap").display())],
+                [format!(
+                    "{} --help",
+                    dir.path().join("bin").join("bwrap").display()
+                )],
                 "a process was started"
             );
-            assert!(group.get(BackendCheckId::Bubblewrap).is_some());
-            assert!(group.get(BackendCheckId::Kvm).is_some());
+            assert!(get(BackendCheckId::Bubblewrap).is_some());
+            assert!(get(BackendCheckId::Kvm).is_some());
         } else {
             assert!(!calls.exists(), "a process was started");
         }
-        assert!(!cache.path().exists(), "nothing was probed, nothing cached");
     }
 
     /// HUM-444: Ein gescheiterter Probestart der Kernel-Stufe ist

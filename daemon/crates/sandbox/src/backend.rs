@@ -66,7 +66,7 @@ pub const PODMAN_BACKEND: &str = "podman";
 
 /// Der Name des VM-Backends der Kernel-Stufe in `sandbox.backend` (HUM-464,
 /// ADR-0021), nur unter Linux auf x86-64. Den Adapter gibt es seit HUM-444;
-/// zugelassen wird er mit HUM-449.
+/// zugelassen ist er seit HUM-449.
 pub const VM_BACKEND: &str = "qemu";
 
 /// Die Stufen, die ein Mensch wählen kann (HUM-431).
@@ -75,10 +75,16 @@ pub const VM_BACKEND: &str = "qemu";
 /// Sie kommt erst auf diese Liste, wenn ihre Einhänge-Prüfung gelandet und die
 /// Escape-Suite gegen sie in der CI grün ist (Tor in `backlog/sprint-7.md`):
 /// die gemeinsame Stufe mit HUM-448, das VM-Backend der Kernel-Stufe
-/// ([`VM_BACKEND`]) mit HUM-449. Bis dahin lehnt jeder Start eine Stufe mit
-/// `SANDBOX_048` ab, und `auto` löst nie auf die Container-Engine oder das
-/// VM-Backend auf, auch nicht auf eine zugelassene Stufe.
-pub const ADMITTED_BACKENDS: &[&str] = &[BWRAP_BACKEND, SHARED_KERNEL_STAGE, SEATBELT_BACKEND];
+/// ([`VM_BACKEND`]) mit HUM-449. Eine Stufe, die nicht hier steht, lehnt jeder
+/// Start mit `SANDBOX_048` ab. `auto` löst nie auf die Container-Engine oder
+/// das VM-Backend auf, auch nicht auf eine zugelassene Stufe: Beide startet
+/// nur, wer sie wählt.
+pub const ADMITTED_BACKENDS: &[&str] = &[
+    BWRAP_BACKEND,
+    SHARED_KERNEL_STAGE,
+    VM_BACKEND,
+    SEATBELT_BACKEND,
+];
 
 /// Ruft `$call` auf dem gewählten Backend auf, ein Zweig je Variante.
 macro_rules! dispatch {
@@ -103,9 +109,11 @@ pub enum Backend {
     /// [`Backend::detect`] und [`Backend::fallback`], die die Zulassung
     /// prüfen, und über die Umgehung der Escape-Suite.
     Podman(PodmanBackend),
-    /// Das VM-Backend der Kernel-Stufe (HUM-444), nur unter Linux auf x86-64.
-    /// Bauen lässt es sich nur über die Umgehung der Escape-Suite
-    /// (`Backend::detect_unadmitted`), bis HUM-449 es zulässt.
+    /// Das VM-Backend der Kernel-Stufe (HUM-444), nur unter Linux auf x86-64,
+    /// zugelassen seit HUM-449. Bauen lässt es sich nur über
+    /// [`Backend::detect`], das jede Voraussetzung prüft; einen Rückfall ohne
+    /// diese Prüfung gibt es nicht, denn schon die Vorschau braucht die
+    /// gefundenen Pfade (Module des Gastkernels).
     #[cfg(all(target_os = "linux", target_arch = "x86_64"))]
     Vm(VmBackend),
     /// Seatbelt mit `sandbox-exec`, unter macOS (HUM-323).
@@ -259,11 +267,14 @@ impl Backend {
     /// Das Backend mit diesem Namen ohne Prüfung des Systems: der Rückfall,
     /// wenn [`Backend::detect`] scheitert und trotzdem ein Plan gezeigt
     /// werden soll. Ob das Programm da ist und läuft, sagt dann erst der
-    /// Start, mit dem Befund des Backends. Die Zulassung gilt auch hier.
+    /// Start, mit dem Befund des Backends. Die Zulassung gilt auch hier. Das
+    /// VM-Backend hat keinen solchen Rückfall und wird hier gesucht wie mit
+    /// [`Backend::detect`].
     ///
     /// # Errors
     ///
-    /// `SANDBOX_048`, `SANDBOX_034` oder `CONFIG_003` wie [`Backend::detect`].
+    /// `SANDBOX_048`, `SANDBOX_034` oder `CONFIG_003` wie [`Backend::detect`],
+    /// unter dem VM-Backend dazu `SANDBOX_045`.
     pub fn fallback(name: &str, paths: Paths, sandbox: &SandboxRef) -> Result<Self, Diagnostic> {
         let name = resolve(name)?;
         admitted(name, runtime_of(name, sandbox))?;
@@ -275,6 +286,11 @@ impl Backend {
             ))),
             #[cfg(target_os = "macos")]
             SEATBELT_BACKEND => Ok(Self::Seatbelt(SeatbeltBackend::fallback(paths))),
+            // Das VM-Backend plant schon die Vorschau gegen die gefundenen
+            // Voraussetzungen; ohne sie bleibt ihr Befund (`SANDBOX_045`)
+            // stehen, nie ein `SANDBOX_034`, das dem Build die Stufe abspräche.
+            #[cfg(all(target_os = "linux", target_arch = "x86_64"))]
+            VM_BACKEND => detect_in_build(name, paths, sandbox),
             other => Err(not_in_build(other)),
         }
     }
@@ -870,68 +886,81 @@ mod tests {
         }
     }
 
-    /// Die Zulassung seit HUM-448: bwrap, Seatbelt und die gemeinsame Stufe
-    /// der Container-Engine; das VM-Backend der Kernel-Stufe bleibt bis
-    /// HUM-449 draußen, auch unter der Untergrenze `kernel`, die es erfüllt.
+    /// Die Zulassung seit HUM-449: bwrap, Seatbelt, die gemeinsame Stufe der
+    /// Container-Engine und das VM-Backend der Kernel-Stufe. Mit
+    /// `sandbox.min_isolation = "kernel"` und dem VM-Backend besteht die
+    /// Wahl, ohne Untergrenze ebenso; `auto` löst trotzdem nie auf das
+    /// VM-Backend auf, auch nicht unter der Untergrenze `kernel`.
     #[test]
-    fn the_shared_stage_is_admitted_and_the_kernel_stage_is_not() {
-        use humanitl_config::MinIsolation::{Kernel, Policy};
-        use humanitl_config::SandboxBackendName::{Podman, Qemu};
+    fn the_shared_stage_and_the_kernel_level_are_admitted() {
+        use humanitl_config::MinIsolation::{Kernel, Namespaces, Policy};
+        use humanitl_config::SandboxBackendName::{Auto, Podman, Qemu as Vm};
         assert_eq!(
             ADMITTED_BACKENDS,
-            [BWRAP_BACKEND, "podman/crun", SEATBELT_BACKEND]
+            [BWRAP_BACKEND, "podman/crun", VM_BACKEND, SEATBELT_BACKEND]
         );
         assert_eq!(
             stage(PODMAN_BACKEND, Some(PodmanRuntime::Crun)),
             SHARED_KERNEL_STAGE
         );
-        for refused in [PODMAN_BACKEND, VM_BACKEND] {
-            assert!(!ADMITTED_BACKENDS.contains(&refused), "{refused}");
-        }
+        assert!(!ADMITTED_BACKENDS.contains(&PODMAN_BACKEND));
         let chosen = choose_backend(&sandbox(Podman, Policy), "auto").expect("admitted");
         assert_eq!(chosen.stage(), SHARED_KERNEL_STAGE);
         assert_eq!(chosen.isolation, IsolationLevel::Namespaces);
-        for floor in [Policy, Kernel] {
-            let err = choose_backend(&sandbox(Qemu, floor), "auto").expect_err("not admitted");
-            assert_eq!(err.code.as_str(), "SANDBOX_048", "{}", err.why);
-            assert!(
-                err.why.starts_with(&format!(
-                    "sandbox.backend = {VM_BACKEND:?} is not admitted yet"
-                )),
-                "{}",
-                err.why
-            );
+        for floor in [Policy, Namespaces, Kernel] {
+            let chosen = choose_backend(&sandbox(Vm, floor), "auto")
+                .unwrap_or_else(|err| panic!("{floor:?}: {}: {}", err.code, err.why));
+            assert_eq!(chosen.name, VM_BACKEND);
+            assert_eq!(chosen.stage(), VM_BACKEND);
+            assert_eq!(chosen.runtime, None);
+            assert_eq!(chosen.isolation, IsolationLevel::Kernel);
+            // Ein Profil, das das VM-Backend verlangt, verlangt nichts anderes.
+            choose_backend(&sandbox(Vm, floor), VM_BACKEND).expect("the profile agrees");
         }
+        // `auto` bleibt das Backend des Systems, nie die Kernel-Stufe; unter
+        // macOS liegt Seatbelt schon unter `namespaces`.
+        let floors: &[_] = if cfg!(target_os = "macos") {
+            &[Policy]
+        } else {
+            &[Policy, Namespaces]
+        };
+        for &floor in floors {
+            let auto = choose_backend(&sandbox(Auto, floor), "auto").expect("auto");
+            assert_eq!(auto.name, crate::PLATFORM_BACKEND_NAME, "{floor:?}");
+            assert_ne!(auto.name, VM_BACKEND);
+        }
+        let err = choose_backend(&sandbox(Auto, Kernel), "auto").expect_err("auto is below");
+        assert_eq!(err.code.as_str(), "SANDBOX_035", "{}", err.why);
     }
 
-    /// Das VM-Backend der Kernel-Stufe scheitert vor HUM-449 auf jedem Weg in
-    /// den Start an der Zulassung. Nur die Umgehung kommt daran vorbei; auf
-    /// diesem Rechner ohne `bwrap` endet sie an der Prüfung der
-    /// Voraussetzungen, und gestartet wird nie etwas.
+    /// Das VM-Backend der Kernel-Stufe kommt seit HUM-449 auf jedem Weg in den
+    /// Start an der Zulassung vorbei, auch unter der Untergrenze `kernel`.
+    /// Fehlt eine Voraussetzung, scheitert es an ihr (`SANDBOX_045`), nie an
+    /// der Zulassung (`SANDBOX_048`) und nie mit einem anderen Backend; hier
+    /// steht kein Programm im leeren `PATH`, und gestartet wird nichts. Ohne Linux auf x86-64 hat der Build die Stufe
+    /// nicht (`SANDBOX_034`).
     #[test]
-    fn the_kernel_level_starts_on_no_path_before_its_admission() {
+    fn the_kernel_level_passes_admission_and_fails_only_at_its_prerequisites() {
         let dir = tempfile::tempdir().expect("tempdir");
         let paths = without_bwrap(dir.path());
         let kernel = SandboxRef {
             backend: humanitl_config::SandboxBackendName::Qemu,
+            min_isolation: humanitl_config::MinIsolation::Kernel,
             ..SandboxRef::default()
+        };
+        let expected = if cfg!(all(target_os = "linux", target_arch = "x86_64")) {
+            "SANDBOX_045"
+        } else {
+            "SANDBOX_034"
         };
         for refused in [
             Backend::detect(VM_BACKEND, paths.clone(), &kernel).map(drop),
-            Backend::fallback(VM_BACKEND, paths.clone(), &kernel).map(drop),
+            Backend::fallback(VM_BACKEND, paths, &kernel).map(drop),
         ] {
-            let err = refused.expect_err("not admitted");
-            assert_eq!(err.code.as_str(), "SANDBOX_048", "{}", err.why);
+            let err = refused.expect_err("a prerequisite is missing");
+            assert_eq!(err.code.as_str(), expected, "{}", err.why);
+            assert!(err.fix.is_some(), "{err:?}");
         }
-        let err = Backend::detect_unadmitted(VM_BACKEND, paths, &kernel)
-            .map(drop)
-            .expect_err("a prerequisite is missing");
-        assert!(
-            ["SANDBOX_045", "SANDBOX_034"].contains(&err.code.as_str()),
-            "{}: {}",
-            err.code,
-            err.why
-        );
     }
 
     /// `sandbox.backend = "podman"` kommt seit HUM-448 auf jedem Weg in den
@@ -972,12 +1001,9 @@ mod tests {
         assert_eq!(err.code.as_str(), "SANDBOX_035", "{}", err.why);
         assert!(err.why.contains("podman/crun"), "{}", err.why);
         assert!(err.why.contains("kernel"), "{}", err.why);
-        // Das VM-Backend liegt nicht darunter; es scheitert nur an der
-        // Zulassung.
-        assert_eq!(
-            code_of(choose_backend(&sandbox(Qemu, Kernel), "auto")),
-            "SANDBOX_048"
-        );
+        // Das VM-Backend liegt nicht darunter und ist zugelassen (HUM-449).
+        let kernel = choose_backend(&sandbox(Qemu, Kernel), "auto").expect("met");
+        assert_eq!(kernel.isolation, IsolationLevel::Kernel);
         // Die Untergrenze selbst und alles darunter geht.
         let platform = choose_backend(&sandbox(Auto, Policy), "auto").expect("default");
         assert_eq!(platform.name, crate::PLATFORM_BACKEND_NAME);
@@ -1018,11 +1044,17 @@ mod tests {
             );
             choose_backend(&sandbox(Auto, Policy), "bwrap").expect("bwrap is auto here");
         }
-        // Ein Profil, das das VM-Backend verlangt: ohne Knopf, denn es ist
-        // nicht zugelassen, und der Knopf führte in `SANDBOX_048`.
+        // Ein Profil, das das VM-Backend verlangt: mit Knopf zu ihm, denn es
+        // ist seit HUM-449 zugelassen.
         let err = choose_backend(&sandbox(Auto, Policy), VM_BACKEND).expect_err("requires");
         assert_eq!(err.code.as_str(), "SANDBOX_036", "{}", err.why);
-        assert_eq!(err.fix, None);
+        assert_eq!(
+            err.fix,
+            Some(FixAction::ChangeSetting {
+                key: "sandbox.backend".to_owned(),
+                value: VM_BACKEND.to_owned(),
+            })
+        );
         let err = choose_backend(&sandbox(Auto, Policy), "docker").expect_err("unknown");
         assert_eq!(err.code.as_str(), "CONFIG_003", "{}", err.why);
     }

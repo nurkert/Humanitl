@@ -6279,18 +6279,20 @@ fn flows_list_passthrough_shows_the_model_traffic_and_show_takes_the_printed_end
     assert!(stdout(&shown).contains(&id), "{}", stdout(&shown));
 }
 
-/// Die Kernel-Stufe der Container-Engine scheitert an der Zulassung, ob das
-/// Backend aus der Umgebung (Ebene 6, Nutzerwille), vom Flag der
-/// Kommandozeile (Ebene 7) oder aus `config.toml` kommt, auch in der
-/// Vorschau, und keine Zeile eines anderen Backends steht stattdessen da
-/// (HUM-431). Nicht zugelassen ist seit HUM-464 das VM-Backend der
-/// Kernel-Stufe; die frühere Laufzeit der Kernel-Stufe unter der Engine lädt
-/// gar nicht (`CONFIG_023`). Die gemeinsame Stufe ist seit HUM-448
-/// zugelassen: Die Vorschau zeigt ihre Zeile, auch wenn es ihr Programm nicht
-/// gibt. Das Programm zeigt in jedem Fall ins Leere, damit kein Test die
-/// Engine des Rechners fragt.
+/// Das VM-Backend der Kernel-Stufe ist seit HUM-449 zugelassen: Ob es aus
+/// der Umgebung (Ebene 6, Nutzerwille), vom Flag der Kommandozeile (Ebene 7)
+/// oder aus `config.toml` kommt, die Vorschau scheitert nicht mehr an der
+/// Zulassung (`SANDBOX_048`), sondern an der Voraussetzung, die fehlt
+/// (`SANDBOX_045`; ohne Linux auf x86-64 hat der Build die Stufe nicht,
+/// `SANDBOX_034`), und keine Zeile eines anderen Backends steht stattdessen
+/// da (HUM-431). Der Emulator zeigt dafür ins Leere, damit kein Test die
+/// Programme des Rechners fragt. Die frühere Laufzeit der Kernel-Stufe unter
+/// der Engine lädt gar nicht (`CONFIG_023`). Die gemeinsame Stufe ist seit
+/// HUM-448 zugelassen: Die Vorschau zeigt ihre Zeile, auch wenn es ihr
+/// Programm nicht gibt. Das Programm zeigt in jedem Fall ins Leere, damit
+/// kein Test die Engine des Rechners fragt.
 #[test]
-fn sandbox_argv_refuses_a_backend_that_is_not_admitted() {
+fn sandbox_argv_takes_every_admitted_backend_and_never_another() {
     const ENGINE: &str = "podman";
     const KERNEL_LEVEL: &str = humanitl_sandbox::VM_BACKEND;
     let harness = Harness::new();
@@ -6301,6 +6303,19 @@ fn sandbox_argv_refuses_a_backend_that_is_not_admitted() {
         "[sandbox.{ENGINE}]\nprogram = {:?}\n",
         absent.display().to_string()
     );
+    let emulator = format!(
+        "[sandbox.{KERNEL_LEVEL}]\n{KERNEL_LEVEL} = {:?}\n",
+        harness
+            .path("absent")
+            .join("emulator")
+            .display()
+            .to_string()
+    );
+    let missing = if cfg!(all(target_os = "linux", target_arch = "x86_64")) {
+        "SANDBOX_045"
+    } else {
+        "SANDBOX_034"
+    };
     let write = |text: &str| std::fs::write(config.join("config.toml"), text).expect("config");
     let refused = |output: &std::process::Output, expected: &str| {
         assert_ne!(code(output), 0, "{}", stdout(output));
@@ -6308,20 +6323,26 @@ fn sandbox_argv_refuses_a_backend_that_is_not_admitted() {
         assert!(stdout(output).trim().is_empty(), "{}", stdout(output));
     };
 
-    write(&engine);
+    write(&format!("{engine}{emulator}"));
     let output = harness
         .command()
         .env("HUMANITL_SANDBOX__BACKEND", KERNEL_LEVEL)
         .args(["sandbox", "argv"])
         .output()
         .expect("the binary runs");
-    refused(&output, "SANDBOX_048");
-    refused(
-        &harness.run(["--sandbox-backend", KERNEL_LEVEL, "sandbox", "argv"]),
-        "SANDBOX_048",
+    refused(&output, missing);
+    let output = harness.run(["--sandbox-backend", KERNEL_LEVEL, "sandbox", "argv"]);
+    refused(&output, missing);
+    write(&format!(
+        "[sandbox]\nbackend = {KERNEL_LEVEL:?}\nmin_isolation = \"kernel\"\n{engine}{emulator}"
+    ));
+    let output = harness.run(["sandbox", "argv"]);
+    refused(&output, missing);
+    assert!(
+        !stderr(&output).contains("SANDBOX_048"),
+        "{}",
+        stderr(&output)
     );
-    write(&format!("[sandbox]\nbackend = {KERNEL_LEVEL:?}\n{engine}"));
-    refused(&harness.run(["sandbox", "argv"]), "SANDBOX_048");
     write(&format!(
         "[sandbox]\nbackend = {ENGINE:?}\n{engine}runtime = \"krun\"\n"
     ));
@@ -6378,9 +6399,10 @@ fn sandbox_argv_refuses_a_backend_below_the_floor() {
 
 /// `humanitl sandbox backends` ist ein dünner Client der RPC
 /// `SandboxBackends` (HUM-432): Die Liste kommt aus dem Fake, mit Stufe,
-/// Verfügbarkeit, Wahl und, unter Linux auf x86-64, dem Befund, der das
-/// VM-Backend der Kernel-Stufe bis HUM-449 sperrt (HUM-464); die gemeinsame
-/// Stufe der Container-Engine ist seit HUM-448 verfügbar.
+/// Verfügbarkeit und Wahl. Der Fake spielt einen Rechner, auf dem alles
+/// installiert ist: Die gemeinsame Stufe der Container-Engine ist seit
+/// HUM-448 verfügbar, unter Linux auf x86-64 das VM-Backend der Kernel-Stufe
+/// seit HUM-449 ebenso (HUM-464), ohne Befund.
 #[test]
 fn sandbox_backends_prints_the_list_of_the_daemon() {
     let harness = Harness::new();
@@ -6421,8 +6443,14 @@ fn sandbox_backends_prints_the_list_of_the_daemon() {
     let kernel = &backends[2];
     assert_eq!(kernel["name"], humanitl_sandbox::VM_BACKEND, "{value}");
     assert_eq!(kernel["isolation_level"], "kernel", "{value}");
-    assert_eq!(kernel["available"], false, "{value}");
-    assert_eq!(kernel["diagnostics"][0]["code"], "SANDBOX_048", "{value}");
+    assert_eq!(kernel["available"], true, "{value}");
+    assert_eq!(kernel["selected"], false, "{value}");
+    assert!(
+        kernel["diagnostics"]
+            .as_array()
+            .is_none_or(std::vec::Vec::is_empty),
+        "{value}"
+    );
 
     let table = harness.run(["sandbox", "backends"]);
     assert_eq!(code(&table), 0, "{}", stderr(&table));
@@ -6431,7 +6459,8 @@ fn sandbox_backends_prints_the_list_of_the_daemon() {
         "{}",
         stdout(&table)
     );
-    // Warum ein Backend fehlt, ist Ergebnis und bleibt auch mit `-q`.
+    // Die Liste ist Ergebnis und bleibt auch mit `-q`; kein Backend trägt
+    // mehr den Befund der Zulassung.
     for quiet in [false, true] {
         let args: &[&str] = if quiet {
             &["-q", "sandbox", "backends"]
@@ -6440,8 +6469,16 @@ fn sandbox_backends_prints_the_list_of_the_daemon() {
         };
         let shown = harness.run(args.iter().copied());
         assert_eq!(code(&shown), 0, "{}", stderr(&shown));
-        assert!(stdout(&shown).contains("SANDBOX_048"), "{}", stdout(&shown));
-        assert!(stdout(&shown).contains("why:"), "{}", stdout(&shown));
+        assert!(
+            stdout(&shown).contains(humanitl_sandbox::VM_BACKEND),
+            "{}",
+            stdout(&shown)
+        );
+        assert!(
+            !stdout(&shown).contains("SANDBOX_048"),
+            "{}",
+            stdout(&shown)
+        );
     }
 }
 
