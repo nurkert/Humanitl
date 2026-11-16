@@ -2972,6 +2972,31 @@ ConnectionReset }"; derselbe Inhalt war im nächsten Lauf grün.
 ### Akzeptanzkriterien
 1. Ursache benannt und behoben; der Test prüft weiter das Budget.
 
+### Status
+Erledigt. Ursache: Ist das Budget erschöpft, antwortet der Proxy dem vierten
+Client mit `503` und schließt, ohne den Rest des Uploads zu lesen. Liegt
+dabei noch Upload ungelesen in seinem Empfangspuffer, meldet Linux dem
+Client auf dem Unix-Socket `ECONNRESET`, aber erst nach allen zugestellten
+Bytes: Der Abbruch ersetzt das Dateiende, nie die Antwort (gleicher
+Mechanismus wie HUM-361). Der Test warf die schon gelesene, vollständige
+`503` mit `.expect` weg. Gemessen unter Last: vorher 21 von 2400 Läufen rot,
+alle mit ganzer Antwort; nachher 0 von 7200, die ganze Suite `limits` 0 von
+1200. Behoben im Test, nicht im Proxy: Ein Leeren des Uploads kostete
+Bandbreite für einen Rumpf, den niemand braucht, und der Agent bekommt die
+Antwort ohnehin ganz. Der gemeinsame Helfer `read_answer` duldet den
+Abbruch nur nach einer Antwort, deren `Content-Length` ganz dasteht (an den
+Bytes gezählt), und nur an den Stellen, an denen der Proxy vor dem Rumpf
+antwortet; `raw_exchange` und der Fall „200 nach ganzem Rumpf" lesen
+streng. Der Doc-Kommentar an `write_refusal` sagt jetzt, was gemessen
+wurde. Mutation: ohne die Nachsicht 28 von 2400 rot; mit einem Budget, das
+nie greift, rot an „the fourth is refused in time".
+
+Review: Codex und Sonnet als Ersatz für Antigravity kein blocking oder
+major; zwei minor übernommen (Länge an den Bytes statt am dekodierten
+Text; `raw_exchange` bleibt streng). Offen als Kandidat: die Stelle bei
+`limits.rs` um Zeile 1115 hat noch eine eigene Nachsicht und könnte
+`read_answer` nutzen.
+
 ---
 
 ## HUM-510 · App: eine Auffrischung desselben Backend-Mitglieds zeigt die Liste als ausstehend

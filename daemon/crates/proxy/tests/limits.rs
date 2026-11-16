@@ -34,7 +34,7 @@ use humanitl_core::{
 };
 use humanitl_recorder::{Dir, FlowQuery};
 use hyper::StatusCode;
-use support::{FakeUpstream, ProxyBuilder, body_string, post};
+use support::{FakeUpstream, ProxyBuilder, answer_is_whole, body_string, post, read_answer};
 use tokio::io::{AsyncReadExt as _, AsyncWriteExt as _};
 use tokio::net::UnixStream;
 
@@ -442,13 +442,9 @@ async fn a_chunked_body_over_the_cap_is_blocked_with_limit_001() {
     message.extend_from_slice(&chunk);
     message.extend_from_slice(b"\r\n0\r\n\r\n");
     stream.write_all(&message).await.unwrap();
-    let mut answer = Vec::new();
-    tokio::time::timeout(Duration::from_secs(10), stream.read_to_end(&mut answer))
-        .await
-        .expect("the proxy answers in time")
-        .expect("readable");
-    let answer = String::from_utf8_lossy(&answer);
+    let answer = read_answer(&mut stream, Duration::from_secs(10)).await;
     assert!(answer.starts_with("HTTP/1.1 413 "), "{answer}");
+    assert!(answer_is_whole(&answer), "cut: {answer:?}");
 
     events.wait_for("recorded").await;
     assert_eq!(upstream.hits(), 0);
@@ -849,15 +845,14 @@ async fn the_hard_block_overrides_a_stream_rule() {
             message.extend_from_slice(b"\r\n");
         }
         stream.write_all(&message).await.unwrap();
-        let mut answer = Vec::new();
-        tokio::time::timeout(Duration::from_secs(10), stream.read_to_end(&mut answer))
-            .await
-            .expect("the proxy answers in time")
-            .expect("readable");
-        let answer = String::from_utf8_lossy(&answer);
+        let answer = read_answer(&mut stream, Duration::from_secs(10)).await;
         assert!(
             answer.starts_with("HTTP/1.1 413 "),
             "chunked: {chunked}: {answer}"
+        );
+        assert!(
+            answer_is_whole(&answer),
+            "chunked: {chunked}: cut: {answer:?}"
         );
 
         events.wait_for("recorded").await;
@@ -1055,20 +1050,6 @@ async fn silent_target(read_everything: bool) -> u16 {
     port
 }
 
-/// Ob eine Antwort so lang ist, wie ihr `Content-Length` zusagt: der Kopf samt
-/// Leerzeile und jedes angekündigte Byte des Rumpfs.
-fn answer_is_whole(answer: &str) -> bool {
-    let Some((head, body)) = answer.split_once("\r\n\r\n") else {
-        return false;
-    };
-    let announced = head.lines().find_map(|line| {
-        let (name, value) = line.split_once(':')?;
-        name.eq_ignore_ascii_case("content-length")
-            .then(|| value.trim().parse::<usize>().ok())?
-    });
-    announced == Some(body.len())
-}
-
 /// Der Maßstab für [`a_stalled_streamed_upload_ends_with_limit_004`]: Ein
 /// gekürzter Rumpf, ein halber Kopf und nichts gelten nicht als Antwort.
 #[test]
@@ -1154,7 +1135,10 @@ async fn a_stalled_streamed_upload_ends_with_limit_004() {
             answer.starts_with("HTTP/1.1 502 "),
             "reads={reads}: {answer}"
         );
-        assert!(answer_is_whole(&answer), "reads={reads}: cut: {answer:?}");
+        assert!(
+            answer_is_whole(answer.as_bytes()),
+            "reads={reads}: cut: {answer:?}"
+        );
 
         events.wait_for("recorded").await;
         let flow = first_flow(&events.seen);
@@ -1212,13 +1196,12 @@ async fn the_byte_budget_counts_bodies_while_they_are_buffered() {
     // und schließt; das Schreiben des Rests darf deshalb scheitern. Die
     // Antwort steht trotzdem auf der Leitung (unter Last beobachtet).
     let _ = fourth.write_all(&vec![b'p'; PART]).await;
-    let mut answer = Vec::new();
-    tokio::time::timeout(Duration::from_secs(10), fourth.read_to_end(&mut answer))
-        .await
-        .expect("the fourth is refused in time")
-        .expect("readable");
-    let answer = String::from_utf8_lossy(&answer);
+    // Ein Abbruch statt des Dateiendes ist hier erwartbar, weil ungelesener
+    // Upload liegen bleibt; `read_answer` nimmt ihn nur nach ganzer Antwort
+    // hin (HUM-509).
+    let answer = read_answer(&mut fourth, Duration::from_secs(10)).await;
     assert!(answer.starts_with("HTTP/1.1 503 "), "{answer}");
+    assert!(answer_is_whole(&answer), "cut: {answer:?}");
     events.wait_for("recorded").await;
     let flow = first_flow(&events.seen);
     let found = diagnostics_of(&events.seen, flow);
