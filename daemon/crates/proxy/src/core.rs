@@ -253,13 +253,16 @@ fn refuse(
 /// Schreibt die `503`-Antwort, schließt die Schreibrichtung und liest weg, was
 /// die Gegenseite schon geschickt hat.
 ///
-/// **Das Leeren gehört dazu und ist keine Kosmetik.** Ein Client, der zugleich
-/// mit dem Verbinden seine Anfrage schickt, hat ihre Bytes im Empfangspuffer
-/// des Sockets liegen. Fällt der Socket mit ungelesenen Bytes, schickt der
-/// Kern ein `RST` statt eines ordentlichen Schlusses — und mit dem `RST` geht
-/// die Antwort verloren, die gerade erklären sollte, warum abgelehnt wurde.
-/// Der Client sähe einen Verbindungsabbruch statt des Grundes, also genau das,
-/// was diese Meldung verhindern soll.
+/// **Das Leeren gibt dem Client ein sauberes Dateiende.** Ein Client, der
+/// zugleich mit dem Verbinden seine Anfrage schickt, hat ihre Bytes im
+/// Empfangspuffer des Sockets liegen. Fällt der Unix-Socket mit ungelesenen
+/// Bytes, meldet Linux dem Client `ECONNRESET` statt des Dateiendes, aber erst
+/// nach allen zugestellten Bytes: Die Antwort kommt ganz an, der Abbruch
+/// ersetzt nur das Dateiende (gemessen in HUM-361 und HUM-509). Ein Client,
+/// der einen Lesefehler als Verbindungsabbruch wertet und das Gelesene
+/// verwirft, sähe trotzdem einen Abbruch statt des Grundes; das Leeren erspart
+/// ihm diesen Fall, solange die Gegenseite nicht mehr als
+/// [`REFUSAL_DRAIN_CAP_BYTES`] schickt.
 ///
 /// Gelesen wird bis zum Dateiende der Gegenseite oder bis
 /// [`REFUSAL_DRAIN_CAP_BYTES`]; die Frist des Aufrufers deckelt das Ganze

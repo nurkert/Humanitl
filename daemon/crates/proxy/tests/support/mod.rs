@@ -73,6 +73,82 @@ pub use self::upstream::{ECHO_BODY, FakeUpstream, ForeignCa, UpstreamCa};
 /// So lange wartet ein Test höchstens auf ein Ereignis oder eine Antwort.
 pub const WAIT: Duration = Duration::from_secs(10);
 
+/// Ob eine Antwort so lang ist, wie ihr `Content-Length` zusagt: der Kopf samt
+/// Leerzeile und jedes angekündigte Byte des Rumpfs.
+pub fn answer_is_whole(answer: impl AsRef<[u8]>) -> bool {
+    // Gezählt wird an den Bytes, nicht am verlustbehaftet dekodierten Text:
+    // Ein abgeschnittenes Zeichen würde sonst zu U+FFFD (drei Bytes) und eine
+    // gekürzte Antwort sähe ganz aus.
+    let answer = answer.as_ref();
+    let Some(split) = answer.windows(4).position(|w| w == b"\r\n\r\n") else {
+        return false;
+    };
+    let (head, body) = (&answer[..split], &answer[split + 4..]);
+    let announced = String::from_utf8_lossy(head).lines().find_map(|line| {
+        let (name, value) = line.split_once(':')?;
+        name.eq_ignore_ascii_case("content-length")
+            .then(|| value.trim().parse::<usize>().ok())?
+    });
+    announced == Some(body.len())
+}
+
+/// Liest eine Antwort bis zum Schließen der Verbindung, höchstens `wait` lang.
+///
+/// **Ein `ECONNRESET` gilt nur nach einer ganzen Antwort als Dateiende.**
+/// Antwortet der Proxy, bevor er den Rumpf gelesen hat (`413`, `503`, Block),
+/// und schließt dann, liegt womöglich noch Upload ungelesen in seinem
+/// Empfangspuffer. Linux meldet das dem Client auf einem Unix-Socket als
+/// `ECONNRESET`, aber erst nach allen zugestellten Bytes: Der Abbruch ersetzt
+/// das Dateiende, nie die Antwort (HUM-361, gemessen in HUM-509). Ob noch
+/// Upload liegt, hängt davon ab, wie weit der Client beim Schließen
+/// geschrieben hat; unter Last trifft es etwa jeden hundertsten Lauf.
+/// Hingenommen wird der Abbruch darum nur, wenn danach eine Antwort mit
+/// `Content-Length` ganz dasteht ([`answer_is_whole`]); jeder andere Lesefehler
+/// und jeder Abbruch mitten in der Antwort ist rot. Ein verschluckter
+/// Lesefehler machte sonst aus einer abgebrochenen Verbindung eine leere
+/// Antwort, und die Zusicherung scheiterte an einem leeren String statt am
+/// Grund.
+///
+/// Läuft die Frist ab, steht in der Meldung, was bis dahin ankam: Ein nacktes
+/// `Elapsed` sagt nur, dass gewartet wurde, und nicht, ob der Proxy geschwiegen
+/// oder die Hälfte einer Antwort geschickt hat.
+pub async fn read_answer<R>(stream: &mut R, wait: Duration) -> String
+where
+    R: tokio::io::AsyncRead + Unpin,
+{
+    read_until_close(stream, wait, true).await
+}
+
+/// Wie [`read_answer`], aber ohne jede Nachsicht: Ein Abbruch ist rot. Für
+/// Wechsel, in denen der Proxy den ganzen Rumpf gelesen hat, bevor er
+/// antwortet; dort wäre ein Abbruch nach der Antwort ein echter Fehler.
+pub async fn read_answer_strict<R>(stream: &mut R, wait: Duration) -> String
+where
+    R: tokio::io::AsyncRead + Unpin,
+{
+    read_until_close(stream, wait, false).await
+}
+
+async fn read_until_close<R>(stream: &mut R, wait: Duration, early: bool) -> String
+where
+    R: tokio::io::AsyncRead + Unpin,
+{
+    use tokio::io::AsyncReadExt as _;
+
+    let mut answer = Vec::new();
+    let read = tokio::time::timeout(wait, stream.read_to_end(&mut answer)).await;
+    let text = String::from_utf8_lossy(&answer).into_owned();
+    match read {
+        Err(elapsed) => panic!("the proxy answers in time ({elapsed}); it said so far: {text:?}"),
+        Ok(Ok(_)) => {}
+        Ok(Err(err)) => assert!(
+            early && err.kind() == std::io::ErrorKind::ConnectionReset && answer_is_whole(&answer),
+            "the proxy response is readable: {err}, after {text:?}"
+        ),
+    }
+    text
+}
+
 // ---------------------------------------------------------------------------
 // Zählende Ports
 // ---------------------------------------------------------------------------
@@ -772,21 +848,10 @@ impl Proxy {
         message.extend_from_slice(body);
         stream.write_all(&message).await.unwrap();
         stream.flush().await.unwrap();
-        let mut answer = Vec::new();
         // Bis der Proxy die Verbindung schließt; er tut es nach dieser
-        // Antwort, und eine Frist steht darum, damit ein Fehlschlag eine
-        // Meldung ist und kein hängender Lauf. Beide Ergebnisse werden
-        // ausgepackt: Ein verschluckter Lesefehler machte aus einer
-        // abgebrochenen Verbindung eine leere Antwort, und die Zusicherung
-        // scheiterte danach an einem leeren String statt am Grund.
-        let read = tokio::time::timeout(WAIT, stream.read_to_end(&mut answer)).await;
-        // Läuft die Frist ab, steht in der Meldung, was bis dahin ankam: Ein
-        // nacktes `Elapsed` sagt nur, dass gewartet wurde, und nicht, ob der
-        // Proxy geschwiegen oder die Hälfte einer Antwort geschickt hat.
-        let text = String::from_utf8_lossy(&answer).into_owned();
-        read.unwrap_or_else(|_| panic!("the proxy answers in time; it said so far: {text:?}"))
-            .expect("the proxy response is readable");
-        text
+        // Antwort. Der Rumpf ist hier mit dem Kopf in einem Zug geschrieben,
+        // ein Abbruch also ein echter Fehler: streng lesen.
+        read_answer_strict(&mut stream, WAIT).await
     }
 
     /// `CONNECT host:port`, dann [`request`](Self) im Klartext durch den Tunnel,
