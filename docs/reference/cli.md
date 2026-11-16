@@ -14,6 +14,7 @@ step, is described in [`docs/cli.md`](../cli.md); which RPC each subcommand serv
 ## Commands
 
 - [`humanitl run`](#humanitl-run) Start a session in the current directory, or show the session a profile resolves to
+- [`humanitl go`](#humanitl-go) Start a disposable session and land in the agent's terminal; afterwards choose what to keep
 - [`humanitl sandbox`](#humanitl-sandbox) Start, plan and check the sandbox
 - [`humanitl sandbox run`](#humanitl-sandbox-run) Start a sandbox with CMD as the agent and exit with its exit code
 - [`humanitl sandbox argv`](#humanitl-sandbox-argv) Print the bwrap command line for the current profile without starting it
@@ -159,6 +160,7 @@ below lists the flag names and their short aliases.
 | `--sandbox-work-dir` | `--work` | `STRING,_OPTIONAL` | `sandbox.work_dir` |
 | `--sandbox-work-mode` | `--work-mode` | `ro`, `rw` | `sandbox.work_mode` |
 | `--terminal-detach-prefix` | - | `STRING` | `terminal.detach_prefix` |
+| `--terminal-splash` | - | `true`, `false` | `terminal.splash` |
 | `--tls-trust-system-store` | - | `true`, `false` | `tls.trust_system_store` |
 | `--ui-language` | - | `en`, `de` | `ui.language` |
 | `--ui-notifications` | - | `true`, `false` | `ui.notifications` |
@@ -175,6 +177,7 @@ Usage: humanitl [OPTIONS] <COMMAND>
 
 Commands:
   run        Start a session in the current directory, or show the session a profile resolves to
+  go         Start a disposable session and land in the agent's terminal; afterwards choose what to keep
   sandbox    Start, plan and check the sandbox
   rules      List, add, change, reorder, dry-run and reload rules
   flows      The flows of this and earlier sessions
@@ -258,6 +261,39 @@ Options:
 
   -h, --help
           Print help
+```
+
+## humanitl go
+
+```text
+Start a disposable session and land in the agent's terminal; afterwards choose what to keep.
+
+The same as `humanitl run --disposable`, with this terminal handed to the agent as soon as the session runs, also for the agent from the configuration. While the session starts, a rotating fist is shown for at least one second (off with `terminal.splash = false`, without colour with `NO_COLOR`, never with --json or without a terminal). When the agent ends and changes wait in the disposable layer, the command lists them and asks whether to apply, discard or keep them for later.
+
+Usage: humanitl go [OPTIONS] [-- <CMD>...]
+
+Arguments:
+  [CMD]...
+          The command to run in the sandbox, after `--`; without it the agent from the configuration
+
+Options:
+      --json
+          Machine-readable output: one JSON value on stdout, diagnostics included
+
+      --config <PATH>
+          Read this config file instead of the one in the user's config directory
+
+  -v, --verbose...
+          Explain what is happening; repeat for more
+
+  -q, --quiet
+          Only the result, no notes
+
+      --profile <NAME>
+          Use this profile for the session; falls back to the sandbox profile of that name when no session profile exists
+
+  -h, --help
+          Print help (see a summary with '-h')
 ```
 
 ## humanitl sandbox

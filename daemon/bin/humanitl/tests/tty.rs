@@ -734,3 +734,98 @@ fn sandbox_exec_opens_a_shell_and_attaches_to_its_terminal() {
         server.terminal_inputs()
     );
 }
+
+/// Startet `humanitl go -- bash` an diesem Terminal, mit `extra` vor dem
+/// Unterkommando und `no_color` als `NO_COLOR` (HUM-496).
+fn go_at(harness: &Harness, pty: &Pty, extra: &[&str], no_color: Option<&str>) -> Child {
+    let mut command = harness.command();
+    command
+        .args(extra)
+        .args(["go", "--", "bash"])
+        .env_remove("NO_COLOR")
+        .stdin(pty.stdio())
+        .stdout(pty.stdio())
+        .stderr(pty.stdio());
+    if let Some(value) = no_color {
+        command.env("NO_COLOR", value);
+    }
+    command.spawn().expect("the binary starts")
+}
+
+/// What the boot animation enters and gives back (`src/splash/mod.rs`).
+const SPLASH_ENTER: &str = "\x1b[?1049h\x1b[?25l";
+const SPLASH_RESTORE: &str = "\x1b[0m\x1b[?25h\x1b[?1049l";
+
+/// `humanitl go -- bash` at a terminal (HUM-496): the boot animation stands
+/// at least one second although the fake starts at once, the lines of the
+/// start come after it on the ordinary screen, the session's terminal is
+/// handed over, and colours, cursor and screen come back.
+#[test]
+fn go_shows_the_splash_for_a_second_and_gives_the_terminal_back() {
+    let harness = Harness::new();
+    let server = FakeServer::start(&harness);
+    let pty = Pty::open();
+
+    let begun = Instant::now();
+    let mut child = go_at(&harness, &pty, &[], None);
+    wait_for_raw(&mut child, &pty);
+    let took = begun.elapsed();
+    pty.write(b"\x01d");
+    assert_eq!(wait_for_exit(&mut child, &pty), 0);
+    assert!(pty.is_cooked(), "modes {:?}", pty.modes());
+
+    let said = String::from_utf8_lossy(&pty.read()).into_owned();
+    assert!(
+        took >= Duration::from_secs(1),
+        "the terminal was handed over after {took:?}, before the splash stood one second"
+    );
+    let enter = said.find(SPLASH_ENTER).expect("the splash was shown");
+    let leave = said
+        .find(SPLASH_RESTORE)
+        .expect("the splash gave the terminal back");
+    assert!(enter < leave);
+    assert!(
+        said.contains("\x1b[38;2;"),
+        "the fist is yellow in true colour"
+    );
+    // Held while the splash stood, shown after it: the three guarantees and
+    // the detach key are on the ordinary screen.
+    let check = said
+        .find("no network interface")
+        .expect("the checks are shown");
+    let detach = said
+        .find("Detach: Ctrl+A d")
+        .expect("the attach is announced");
+    assert!(leave < check && leave < detach, "{said:?}");
+    assert_eq!(server.terminal_inputs().first(), Some(&"open"));
+}
+
+/// Under `NO_COLOR` the splash has no colour; `--terminal-splash=false`
+/// turns it off (HUM-496).
+#[test]
+fn go_without_colour_and_without_splash() {
+    for (extra, no_color, splash, colour) in [
+        (&[][..], Some("1"), true, false),
+        (&["--terminal-splash=false"][..], None, false, false),
+    ] {
+        let harness = Harness::new();
+        let _server = FakeServer::start(&harness);
+        let pty = Pty::open();
+        let mut child = go_at(&harness, &pty, extra, no_color);
+        wait_for_raw(&mut child, &pty);
+        pty.write(b"\x01d");
+        assert_eq!(wait_for_exit(&mut child, &pty), 0, "{extra:?}");
+        let said = String::from_utf8_lossy(&pty.read()).into_owned();
+        assert_eq!(
+            said.contains(SPLASH_ENTER),
+            splash,
+            "{extra:?} {no_color:?}"
+        );
+        assert_eq!(
+            said.contains("\x1b[38;2;"),
+            colour,
+            "{extra:?} {no_color:?}"
+        );
+        assert!(pty.is_cooked(), "{extra:?}");
+    }
+}

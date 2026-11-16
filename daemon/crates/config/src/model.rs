@@ -996,7 +996,8 @@ pub enum Theme {
 }
 
 /// Das Terminal der Kommandozeile, wenn sie an einer Sitzung hängt
-/// (`humanitl sandbox attach`, HUM-279).
+/// (`humanitl sandbox attach`, HUM-279), und die Ladeanimation von
+/// `humanitl go` (HUM-496).
 ///
 /// Die Oberfläche hat ihr eigenes Terminal und liest hier nichts: Dort hängt
 /// sich ab, wer den Bereich schließt.
@@ -1006,12 +1007,16 @@ pub struct TerminalConfig {
     /// Präfix der Taste, mit der sich `humanitl sandbox attach` abhängt: `ctrl-a` bis `ctrl-z`, `ctrl-\`, `ctrl-]`, `ctrl-^`, `ctrl-_`, oder `none`, dann gibt es keine. Nach dem Präfix hängt `d` ab und lässt die Sitzung laufen; das Präfix zweimal oder sein Buchstabe schickt es einmal an den Agenten, jede andere Taste geht mit dem Präfix unverändert weiter. `ctrl-[` ist ausgenommen, weil jede Pfeiltaste mit diesem Byte beginnt, `ctrl-h`, `ctrl-i`, `ctrl-j` und `ctrl-m`, weil Rücktaste, Tab und Enter dieselben Bytes schicken. `--detach-keys` überschreibt den Wert für einen Aufruf.
     #[schemars(extend("x-tier" = "advanced", "x-project-scope" = "denied"))]
     pub detach_prefix: String,
+    /// Die Ladeanimation von `humanitl go`: eine sich drehende Faust aus dem Logo, solange die Wegwerf-Sitzung startet, mindestens eine Sekunde lang und nie länger als der Start. Sie erscheint nur, wenn Ausgabe und Fehlerausgabe ein Terminal sind und `--json` fehlt, mit `NO_COLOR` ohne Farbe. `false` schaltet sie ab.
+    #[schemars(extend("x-tier" = "advanced", "x-project-scope" = "denied"))]
+    pub splash: bool,
 }
 
 impl Default for TerminalConfig {
     fn default() -> Self {
         Self {
             detach_prefix: DetachKeys::DEFAULT_SPEC.to_owned(),
+            splash: true,
         }
     }
 }

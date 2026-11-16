@@ -34,6 +34,8 @@ mod cmd;
 #[cfg(test)]
 mod parity;
 mod render;
+// Die Ladeanimation von `humanitl go` (HUM-496).
+mod splash;
 mod tty;
 
 use std::process::ExitCode;
@@ -215,6 +217,7 @@ async fn run(ctx: &Context, command: Cmd) -> Result<u8, Failure> {
         Cmd::Rules { cmd } => cmd::rules::run(ctx, &cmd).await,
         Cmd::Config { cmd } => cmd::config::run(ctx, &cmd).await,
         Cmd::Run(args) => cmd::run::run(ctx, &args).await,
+        Cmd::Go(args) => cmd::go::run(ctx, &args).await,
         Cmd::Audit { cmd } => cmd::audit::run(ctx, &cmd).await,
         Cmd::Update { cmd } => cmd::update::run(ctx, &cmd).await,
         Cmd::Intercept { cmd } => cmd::intercept::run(ctx, &cmd).await,

@@ -752,6 +752,74 @@ fn run_ask_terminal_without_a_terminal_is_cli_002() {
     assert!(text.contains("terminal on standard input"), "{text}");
 }
 
+/// `humanitl go` without a terminal is `humanitl run --disposable` (HUM-496):
+/// the same answer, byte for byte, with and without `--json`, and not one
+/// byte of the boot animation. The fake's start ends without an exit code,
+/// so both end with `CLI_001`; what counts is that they end alike.
+#[test]
+fn go_without_a_terminal_behaves_like_run_disposable() {
+    let harness = Harness::new();
+    let _server = FakeServer::start(&harness);
+
+    for json in [false, true] {
+        let flag: &[&str] = if json { &["--json"] } else { &[] };
+        let go = harness.run(
+            flag.iter()
+                .copied()
+                .chain(["go", "--", "sh", "-c", "exit 0"]),
+        );
+        let run = harness.run(flag.iter().copied().chain([
+            "run",
+            "--disposable",
+            "--",
+            "sh",
+            "-c",
+            "exit 0",
+        ]));
+        assert_eq!(code(&go), code(&run), "json {json}: {}", stderr(&go));
+        assert_eq!(stdout(&go), stdout(&run), "json {json}");
+        assert_eq!(stderr(&go), stderr(&run), "json {json}");
+        for (stream, text) in [("stdout", stdout(&go)), ("stderr", stderr(&go))] {
+            assert!(
+                !text.contains('\u{1b}'),
+                "json {json}: go wrote an escape to {stream}: {text:?}"
+            );
+            assert!(
+                !text.contains("starting a disposable session"),
+                "json {json}: the splash caption on {stream}"
+            );
+        }
+    }
+}
+
+/// `humanitl go` with `--ask terminal`, from the flag or from the
+/// configuration, refuses with `CLI_002` before it connects (HUM-496): in
+/// `go` this terminal belongs to the agent. No daemon runs here, so a
+/// `DAEMON_001` would mean it tried to start.
+#[test]
+fn go_with_ask_terminal_is_cli_002_before_it_connects() {
+    let flag = Harness::new();
+    let from_flag = flag.run(["go", "--ask", "terminal", "--", "bash"]);
+
+    let file = Harness::new();
+    let config = file.path("config/humanitl/config.toml");
+    std::fs::create_dir_all(config.parent().expect("a directory")).expect("the directory");
+    std::fs::write(&config, "[hold]\nask_mode = \"terminal\"\n").expect("the config");
+    let from_config = file.run(["go"]);
+
+    for (source, output) in [("flag", from_flag), ("config", from_config)] {
+        let text = stderr(&output);
+        assert_eq!(code(&output), 1, "{source}: {text}");
+        assert!(text.starts_with("error[CLI_002]: "), "{source}: {text}");
+        assert!(
+            text.contains("hands this terminal to the agent"),
+            "{source}: {text}"
+        );
+        assert!(text.contains("humanitl go --ask ui"), "{source}: {text}");
+        assert!(!text.contains("DAEMON_001"), "{source}: {text}");
+    }
+}
+
 /// Ein Sitzungsprofil, das es nicht gibt, ist `CONFIG_001` und kein stiller
 /// Start mit dem Vorgabeprofil.
 #[test]

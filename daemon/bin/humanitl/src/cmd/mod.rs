@@ -24,6 +24,8 @@ pub mod daemon;
 pub mod doctor;
 pub mod exec;
 pub mod flows;
+pub mod go;
+pub mod hold;
 pub mod image;
 pub mod intercept;
 pub mod llm;

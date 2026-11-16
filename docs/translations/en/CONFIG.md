@@ -221,6 +221,7 @@ The command line's terminal when it is attached to a session.
 | Key | Type | Default | Tier | Project | Effect | Description |
 |---|---|---|---|---|---|---|
 | `terminal.detach_prefix` | string | `"ctrl-a"` | advanced | denied | yes | Prefix of the key with which `humanitl sandbox attach` detaches: `ctrl-a` to `ctrl-z`, `ctrl-\`, `ctrl-]`, `ctrl-^`, `ctrl-_`, or `none`, in which case there is none. After the prefix, `d` detaches and leaves the session running; the prefix twice or its letter sends it once to the agent, any other key passes on unchanged together with the prefix. `ctrl-[` is excluded because every arrow key begins with this byte, and `ctrl-h`, `ctrl-i`, `ctrl-j` and `ctrl-m` because backspace, tab and enter send the same bytes. `--detach-keys` overrides the value for one invocation. |
+| `terminal.splash` | boolean | `true` | advanced | denied | yes | The boot animation of `humanitl go`: a rotating fist from the logo while the disposable session starts, at least one second and never longer than the start. It appears only when output and error output are a terminal and `--json` is absent, without colour under `NO_COLOR`. `false` turns it off. |
 
 ### `tls`
 

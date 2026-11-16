@@ -108,10 +108,44 @@ fn start_mode(
 /// einer anderen Vertrags-Major und die Befunde des Daemons für alles, was am
 /// Start scheitert.
 pub async fn run(ctx: &Context, args: &RunArgs) -> Result<u8, Failure> {
+    launch(ctx, args, &mut Launch::default()).await
+}
+
+/// Was `humanitl go` anders macht als `humanitl run` (HUM-496), und was es
+/// danach wissen muss.
+///
+/// `run` und `go` teilen sich [`launch`] und [`drive`]: Auflösen, Verbinden,
+/// Start, Anschluss und Signale gibt es nur einmal.
+#[derive(Debug, Default)]
+pub(crate) struct Launch {
+    /// `humanitl go`: das Terminal auch ohne eigenes Kommando anhängen und
+    /// die Ladeanimation zeigen, wo sie erwünscht ist.
+    pub go: bool,
+    /// Die Palette der Ladeanimation, wenn sie erscheint; [`launch`] setzt
+    /// sie nach der Konfiguration.
+    pub splash: Option<crate::splash::Palette>,
+    /// `true`, wenn der Daemon nach dem Lauf wartende Änderungen der
+    /// Wegwerf-Schicht gemeldet hat.
+    pub changes_waiting: bool,
+}
+
+/// Führt einen Lauf aus, für `humanitl run` und `humanitl go`.
+///
+/// # Errors
+///
+/// Wie [`run`].
+pub(crate) async fn launch(
+    ctx: &Context,
+    args: &RunArgs,
+    launch: &mut Launch,
+) -> Result<u8, Failure> {
     // Zuerst und immer: Das Projekt-Profil wird gelesen, bevor irgendetwas
     // startet.
     let resolved = ctx.config()?;
     let config = &resolved.config;
+    if launch.go {
+        crate::cmd::go::refuse_ask_terminal(config)?;
+    }
     ctx.render.detail(&session_lines(&resolved, args));
 
     // Beide Seiten müssen ein Terminal sein: Die Tasten kommen von `stdin`,
@@ -173,12 +207,32 @@ pub async fn run(ctx: &Context, args: &RunArgs) -> Result<u8, Failure> {
     // A command of the caller at a terminal works like `sandbox attach`
     // (HUM-280). The key is read before the start, so a typo in
     // `terminal.detach_prefix` stops nothing that already runs.
-    let keys = if attaches(args, moderate, ctx.render.is_json(), stdin_is_terminal()) {
+    let keys = if attaches(
+        args,
+        launch.go,
+        moderate,
+        ctx.render.is_json(),
+        stdin_is_terminal(),
+    ) {
         Some(crate::cmd::attach::resolve_detach_keys(ctx, None)?)
     } else {
         None
     };
-    let code = drive(ctx, &mut client, start, moderate, keys, info.proto_minor).await?;
+    // Die Ladeanimation nur für `go` und nie neben dem Kasten von
+    // `--ask terminal`, der dasselbe Terminal braucht (HUM-496).
+    if launch.go && !moderate {
+        launch.splash = crate::cmd::go::splash_palette(config, ctx.render.is_json());
+    }
+    let code = drive(
+        ctx,
+        &mut client,
+        start,
+        moderate,
+        keys,
+        info.proto_minor,
+        launch,
+    )
+    .await?;
     if ctx.render.is_json() {
         let mut value = session;
         value["exit_code"] = json!(code);
@@ -195,8 +249,14 @@ fn stdin_is_terminal() -> bool {
 /// Ob dieser Lauf sein Terminal an die Sitzung hängt (HUM-280): ein eigenes
 /// Kommando, ein Terminal auf `stdin`, kein Kasten von `--ask terminal`, der
 /// dieselbe Tastatur bräuchte, und keine JSON-Ausgabe auf `stdout`.
-const fn attaches(args: &RunArgs, moderate: bool, json: bool, terminal: bool) -> bool {
-    !args.cmd.is_empty() && terminal && !moderate && !json
+///
+/// `humanitl go` hängt auch den Agenten der Konfiguration an (`any`,
+/// HUM-496): Man landet in seinem Terminal wie nach einem nativen Start.
+// Vier Wahrheitswerte sind hier die Frage selbst: Ein Aufzählungstyp je
+// Bedingung machte den Aufruf länger und nicht klarer.
+#[allow(clippy::fn_params_excessive_bools)]
+const fn attaches(args: &RunArgs, any: bool, moderate: bool, json: bool, terminal: bool) -> bool {
+    (any || !args.cmd.is_empty()) && terminal && !moderate && !json
 }
 
 /// Der Anschluss an das Terminal der Sitzung, solange er läuft.
@@ -236,6 +296,7 @@ async fn drive(
     moderate: bool,
     keys: Option<humanitl_config::DetachKeys>,
     minor: u32,
+    launch: &mut Launch,
 ) -> Result<u8, Failure> {
     // **Erst die Signale, dann alles andere.** `open_moderation` setzt für
     // `--ask terminal` den Rohmodus (`cmd/moderate.rs`), und danach dauert der
@@ -260,6 +321,11 @@ async fn drive(
     // dieser Strom stünde, und niemand am Terminal erführe davon; der Agent
     // liefe in die Frist.
     let (mut flows, mut moderation) = open_moderation(client, moderate).await?;
+
+    // Die Ladeanimation von `humanitl go` steht ab hier, nach den Signalen
+    // und vor dem Start; solange sie steht, hält `hold` die Ereignisse des
+    // Starts zurück (HUM-496, `cmd/hold.rs`).
+    let mut hold = crate::cmd::hold::Hold::start(launch.splash);
 
     let mut events = client
         .sandbox(v1::SandboxRequest {
@@ -301,8 +367,19 @@ async fn drive(
     // einen Git-Hook geschrieben hat. Das kostet die Zeit des zweiten
     // Schnappschusses; der Strom endet unmittelbar danach.
     loop {
-        let next = tokio::select! {
+        let deadline = hold.deadline();
+        let next = if let Some(event) = hold.release() {
+            Ok(Some(event))
+        } else if !events_open && attached.is_none() && !hold.showing() {
+            break;
+        } else {
+            tokio::select! {
             event = events.message(), if events_open => event,
+            // Die Mindestzeit der Ladeanimation ist um (HUM-496).
+            () = crate::cmd::hold::until(deadline), if deadline.is_some() => {
+                hold.finish().await;
+                continue;
+            }
             // Der Anschluss an das Terminal ist zu Ende (HUM-280).
             ended = next_attached(&mut attached), if attached.is_some() => {
                 attached = None;
@@ -399,6 +476,9 @@ async fn drive(
             // zweites `Ctrl+C` kommt, weil das erste nichts bewirkt hat, und
             // dann endet dieser Befehl, statt es zu verschlucken.
             () = next_of(&mut interrupt) => {
+                // Die Zeile über das Stoppen soll auf dem gewöhnlichen
+                // Bildschirm stehen, nicht auf dem der Animation.
+                hold.stop();
                 if !signal_stops_session(watching) {
                     return Ok(leave_on_signal(2));
                 }
@@ -420,19 +500,24 @@ async fn drive(
             // Sonst hinge der Befehl bis zu einem `SIGKILL`, und das ließe das
             // Terminal im Rohmodus zurück.
             number = next_signal(&mut terminate, &mut hangup) => {
+                hold.stop();
                 if !signal_stops_session(watching) {
                     return Ok(leave_on_signal(number));
                 }
                 return Ok(end_on_signal(ctx, &mut stopper, moderation.as_mut(), number).await);
+            }
             }
         };
         let event = match next {
             Ok(Some(event)) => event,
             Ok(None) => {
                 events_open = false;
+                // Der Strom endet: Lief die Sitzung nie, geht die Animation
+                // sofort; was sie zurückhielt, kommt noch.
+                hold.stream_ended();
                 // A running attach keeps the command alive: the session is
                 // there until its terminal says it ended.
-                if attached.is_some() {
+                if attached.is_some() || hold.has_held() {
                     continue;
                 }
                 break;
@@ -442,12 +527,22 @@ async fn drive(
                     Failure::new(status_diagnostic(&status, "Sandbox(Start)"))
                 });
                 events_open = false;
-                if attached.is_some() {
+                hold.stop();
+                if attached.is_some() || hold.has_held() {
                     continue;
                 }
                 break;
             }
         };
+        let Some(event) = hold.keep(event) else {
+            continue;
+        };
+        if matches!(
+            event.event.as_ref(),
+            Some(v1::sandbox_event::Event::Changes(_))
+        ) {
+            launch.changes_waiting = true;
+        }
         // The session runs, and nothing went wrong on the way: this terminal
         // takes it over (HUM-280). A refused start also reports `running`,
         // the state of the other session, after its finding.
@@ -1208,11 +1303,27 @@ mod tests {
             disposable: false,
             direct: false,
         };
-        assert!(attaches(&bash, false, false, true));
-        assert!(!attaches(&bash, false, false, false), "no terminal");
-        assert!(!attaches(&bash, true, false, true), "--ask terminal");
-        assert!(!attaches(&bash, false, true, true), "--json");
-        assert!(!attaches(&agent, false, false, true), "the agent itself");
+        assert!(attaches(&bash, false, false, false, true));
+        assert!(!attaches(&bash, false, false, false, false), "no terminal");
+        assert!(!attaches(&bash, false, true, false, true), "--ask terminal");
+        assert!(!attaches(&bash, false, false, true, true), "--json");
+        assert!(
+            !attaches(&agent, false, false, false, true),
+            "the agent itself"
+        );
+        // `humanitl go` lands in the agent's terminal, also without a
+        // command of its own, but never without a terminal, with --json or
+        // next to the box of --ask terminal (HUM-496).
+        assert!(attaches(&agent, true, false, false, true), "go: the agent");
+        assert!(
+            !attaches(&agent, true, false, false, false),
+            "go: no terminal"
+        );
+        assert!(!attaches(&agent, true, false, true, true), "go: --json");
+        assert!(
+            !attaches(&agent, true, true, false, true),
+            "go: --ask terminal"
+        );
     }
 
     /// A viewer that fell back to watching (`TERM_001`) never stops the
