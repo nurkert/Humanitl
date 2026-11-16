@@ -115,6 +115,9 @@ Diagnose-Codes, hier nur geplant (registriert vom genannten Issue in `codes.rs` 
 | HUM-508 | doctor: `doctor-probe.json` ohne den Klartextpfad des Programms | S | HUM-506 |
 | HUM-509 | Proxy-Test `the_byte_budget_counts_bodies_while_they_are_buffered` wackelt (Connection reset) | S | — |
 | HUM-510 | App: eine Auffrischung desselben Backend-Mitglieds zeigt die Liste als ausstehend | S | HUM-504 |
+| HUM-511 | Egress: der Adapter `HttpProxy` zu einem Entscheidungs-Proxy des Nutzers | M | ADR-0022 |
+| HUM-512 | `hold.ask_mode = "upstream"`: Anfragen ohne Regel entscheidet der Proxy dahinter | M | HUM-511 |
+| HUM-513 | Entscheidungs-Proxy: Anleitung für mitmproxy, Ende-zu-Ende-Test | S | HUM-512 |
 
 ## HUM-428 · Port neutral: `PlanRequest`, `LaunchOptions`, `IsolationLevel`, Enum `Backend` statt `PlatformBackend`
 
@@ -2959,4 +2962,152 @@ auffrischt.
 ### Akzeptanzkriterien
 1. Kein Flackern beim Nachfragen, keine alte Liste als aktuell nach einem
    Wechsel des Projekts.
+
+---
+
+## HUM-511 · Egress: der Adapter `HttpProxy` zu einem Entscheidungs-Proxy des Nutzers
+
+### Kontext
+ADR-0022 (Idee des Owners, BACKLOG Abschnitt 9, Punkt 22). ADR-0017 nennt
+`HttpProxy(Url)` als zweiten Adapter des Egress-Ports; jetzt gibt es den
+Nutzer dafür.
+
+### Spezifikation
+0. Ohne `egress.proxy` ändert sich nichts: Humanitl ist der einzige Proxy,
+   ADR-0006 gilt ganz. Der zweite Proxy gibt es nur nach ausdrücklichem
+   Opt-in.
+1. Schlüssel `egress.proxy` (`http://HOST:PORT`), `egress.proxy_ca` (absoluter
+   PEM-Pfad), `egress.proxy_auth_ref` (Verweis wie `llm.api_key_ref`),
+   `egress.proxy_resolve` (`proxy`, Vorgabe, oder `humanitl`),
+   `egress.proxy_response_timeout_secs` (Vorgabe wie `hold.timeout_secs`);
+   alle `x-project-scope = denied`, mit Schema, `docs/CONFIG.md` und
+   Schnappschüssen.
+2. Adapter unter `daemon/crates/proxy/src/egress/`. Mit `proxy_resolve =
+   "proxy"`: keine Auflösung in Humanitl, `CONNECT host:port`, `http` in
+   absoluter Form mit dem Namen; vorher Sperre für private IP-Literale und
+   lokale Namen (`localhost`, `*.localhost`, `*.local`, `*.internal`,
+   Metadaten-Namen). Mit `"humanitl"`: `CONNECT IP:PORT` mit der Adresse,
+   die der Handler nach der Entscheidung aufgelöst und geprüft hat, `http`
+   mit der angehefteten Adresse und dem Namen in `Host`. Danach TLS mit
+   `SNI = host` gegen die CA aus `egress.proxy_ca` (nur auf diesem Weg, nie
+   direkt). Dafür sagt der Port dem
+   Sender, welche Form er schreibt (Vertrag von `Egress` und
+   `Upstream::send`, nicht nur ein neuer Adapter). Die CA steckt in einer
+   eigenen `ClientConfig` für diesen Weg. Die Prüfung auf private Adressen
+   gilt dem Ziel, nicht `egress.proxy`.
+5. Fristen getrennt: `CONNECT` und TLS-Handschlag wie heute, nur der Kopf
+   der Antwort wartet bis `egress.proxy_response_timeout_secs`, auch nach
+   einem gestreamten Upload.
+6. `egress.proxy` gilt für den Verkehr des Agenten (Handler, LLM-Alias);
+   Anfragen des Daemons selbst (LLM-Suche, Update-Prüfung) bleiben direkt.
+3. Jeder Fehler ein `Diagnostic` mit `why` und `fix` (Proxy nicht
+   erreichbar, `407` auf `CONNECT` und auf eine `http`-Anfrage, Antwort auf
+   `CONNECT` nicht `200`, Zertifikat passt nicht zur CA); `forward_to` reicht
+   das Diagnostic bis zur Oberfläche durch, statt es auf
+   `UpstreamError::Connect` zu verkürzen.
+4. `humanitl doctor` und die Zeile im Isolationsbereich: „Egress: über
+   HOST:PORT".
+7. Global und sitzungsübergreifend einstellbar, in App und CLI gleich (ADR-018):
+   - App, Einstellungen, eigener Abschnitt „Entscheidungs-Proxy": Adresse,
+     CA-Datei mit Dateiauswahl (Hinweis auf
+     `~/.mitmproxy/mitmproxy-ca-cert.pem`), wer auflöst, Zugangsdaten über
+     den Schlüsselbund wie bei den Modellservern; Texte über ARB.
+   - RPC „Verbindung prüfen": baut über `egress.proxy` einen Tunnel zu einem
+     festen Ziel auf und meldet Erfolg oder ein `Diagnostic`; in der App ein
+     Knopf, in der CLI `humanitl egress check`.
+   - `humanitl config set egress.*` wie jeder Schlüssel.
+
+### Tests
+- Test mit einem Stellvertreter-Proxy im Test (CONNECT, eigene CA): mit
+  `"proxy"` kommt der Name in der CONNECT-Zeile an und Humanitl stellt keine
+  DNS-Anfrage; mit `"humanitl"` die Adresse in der CONNECT-Zeile und der
+  Name in SNI.
+- Ein privates IP-Literal und `localhost` werden in beiden Fällen
+  abgelehnt, bevor der Proxy etwas sieht; ein Name mit privater Antwort mit
+  `"humanitl"` ebenso.
+- Ohne `egress.proxy` ist das Verhalten unverändert (bestehende Tests
+  grün).
+- Die CA des Proxys gilt nicht für eine direkte Verbindung.
+- `http` über den Proxy: Anfragezeile in absoluter Form mit der Adresse,
+  `Host` mit dem Namen.
+- Eine Antwort, die erst nach 60 s kommt, erreicht den Agenten.
+- Mutationen: Name statt Adresse in der CONNECT-Zeile, CA auf allen Wegen,
+  Fristen vertauscht.
+
+### Akzeptanzkriterien
+1. Mit `egress.proxy` verlässt jede erlaubte Anfrage den Daemon über diesen
+   Proxy; ohne ändert sich nichts.
+2. Ohne Opt-in gilt ADR-0006 unverändert; mit `"humanitl"` kein Ziel, das
+   Humanitl nicht selbst aufgelöst und geprüft hat; mit `"proxy"` keine
+   DNS-Anfrage aus Humanitl.
+
+---
+
+## HUM-512 · `hold.ask_mode = "upstream"`: Anfragen ohne Regel entscheidet der Proxy dahinter
+
+### Kontext
+ADR-0022, Punkt 3 und 4.
+
+### Spezifikation
+1. Neuer Wert `upstream` für `hold.ask_mode`, nur gültig mit `egress.proxy`
+   (sonst ein Diagnostic beim Laden, der Start verweigert).
+2. Eine Anfrage ohne Regel oder mit `ask` wird nicht gehalten, sondern
+   weitergeleitet; neue Entscheidungsquelle `upstream` und der Übergang
+   `Analyzed` zu `Decided(Forward)` in der Zustandsmaschine, vollständig im
+   Übergangstest aufgezählt. `block` bleibt endgültig, `allow` geht ebenfalls
+   über den Proxy, `redact` hält weiter in Humanitl.
+2a. Die letzte Sperre vor dem Senden gilt auch für `Forward`: mit
+   `hold.hard_block_checksum_secrets` sperrt das System eine Anfrage mit
+   prüfsummen-sicherem Geheimnis, sie erreicht den Proxy nie.
+3. Audit und Aufzeichnung tragen die Quelle `upstream` und den Status der
+   Antwort; sie behaupten keine Entscheidung, die Humanitl nicht gesehen
+   hat.
+4. App und CLI zeigen den Modus (Moduszeile jeder Sitzung, „Ohne Regel:
+   entscheidet HOST:PORT", `humanitl sessions`), über RPC (ADR-018); neue
+   Texte über ARB. In den Einstellungen ist „Entscheidet der Proxy dahinter"
+   die vierte Wahl beim Fragemodus, nur wählbar mit eingetragenem Proxy. Die Moduszeile sagt, wer auflöst und was
+   daraus folgt.
+5. Im selben Commit `docs/SECURITY.md` und `docs/THREAT-MODEL.md` (en und
+   de) und, wo nötig, die Sicherheitsaussage in `README.md`: Der Proxy
+   dahinter sieht den entschlüsselten Verkehr (auch LLM-Passthrough); die
+   Vertrauensgrenze für Inhalte wandert zu ihm, die Isolierung nicht; mit
+   `proxy_resolve = "proxy"` prüft er, ob ein Name auf eine private Adresse
+   zeigt, mit `"humanitl"` geht die DNS-Anfrage vor seiner Entscheidung
+   hinaus (ADR-0006 gilt im Opt-in nur zur Hälfte).
+
+### Tests
+- Ohne `egress.proxy` lehnt der Start `upstream` ab.
+- Ein Block-Treffer erreicht den Proxy nie; eine Anfrage ohne Regel kommt
+  ohne Halt beim Proxy an; die Antwort des Proxys (auch `403`) erreicht den
+  Agenten und steht im Audit.
+- Eine Anfrage mit prüfsummen-sicherem Geheimnis erreicht den Proxy nicht.
+- `redact` hält weiter.
+- Mutationen: Block geht zum Proxy, Halt trotz `upstream`, Sperre für
+  Geheimnisse ohne `Forward`.
+
+### Akzeptanzkriterien
+1. Nichts, was eine Regel sperrt, erreicht den Proxy dahinter.
+2. Keine Anfrage ohne Regel oder mit `ask` wartet in Humanitl auf eine
+   Person, wenn `upstream` gilt.
+3. Sicherheitsaussage und Bedrohungsmodell nennen den Modus und seine
+   Grenzen im selben Commit.
+
+---
+
+## HUM-513 · Entscheidungs-Proxy: Anleitung für mitmproxy, Ende-zu-Ende-Test
+
+### Kontext
+ADR-0022, Abschnitt Folgen.
+
+### Spezifikation
+1. Anleitung `docs/guides/`: mitmproxy hinter Humanitl (CA exportieren,
+   `egress.proxy`, `egress.proxy_ca`, `hold.ask_mode = "upstream"`, in
+   mitmproxy abfangen und entscheiden).
+2. Ende-zu-Ende-Test in der CI mit einem Stellvertreter-Proxy, der wie
+   mitmproxy `CONNECT` zu einer Adresse annimmt und den Namen aus SNI nimmt.
+3. ADR-0022 auf `Accepted`. Burp nur nennen, wenn ein aktueller Build
+   ausprobiert wurde.
+
+### Akzeptanzkriterien
+1. Die Anleitung führt mit Belegen zu einem laufenden Aufbau mit mitmproxy.
 
