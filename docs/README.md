@@ -13,6 +13,7 @@ fails when they are stale.
 | [`guides/first-session.md`](guides/first-session.md) | from the setup screen to the first held request, a rule and the audit check |
 | [`guides/agent-profiles.md`](guides/agent-profiles.md) | session profiles, the OpenCode adapter, writing an adapter, phone-home hosts |
 | [`guides/verify-download.md`](guides/verify-download.md) | checking a download against `SHA256SUMS`, and what that proves |
+| [`guides/decision-proxy-mitmproxy.md`](guides/decision-proxy-mitmproxy.md) | mitmproxy behind Humanitl: the two CAs, `egress.proxy`, ask mode `upstream`, deciding in mitmproxy |
 
 ## Reference
 
