@@ -65,6 +65,9 @@ pub static PARITY: &[(&str, &str)] = &[
     ("Humanitl.Rules", "rules reorder"),
     ("Humanitl.Rules", "rules test"),
     ("Humanitl.Rules", "rules update"),
+    // `go` ist `run --disposable` mit Anschluss und der Frage am Ende
+    // (HUM-496).
+    ("Humanitl.Sandbox", "go"),
     ("Humanitl.Sandbox", "run"),
     ("Humanitl.Sandbox", "run --direct"),
     ("Humanitl.Sandbox", "run --disposable"),

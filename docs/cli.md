@@ -6,7 +6,7 @@ Applies to: Humanitl 0.1
 first; the command line calls it and formats the answer. It contains no
 domain logic, and it makes nothing up.
 
-This document describes `humanitl run`, `humanitl doctor`, `humanitl config`,
+This document describes `humanitl run`, `humanitl go`, `humanitl doctor`, `humanitl config`,
 `humanitl audit` and the three `humanitl daemon` commands in full, and the
 remaining subcommands only as far as they concern `run`. The canonical list of
 all subcommands is in `backlog/CONVENTIONS.md` 3.8, the schema of all
@@ -579,6 +579,56 @@ and sends nothing up; at a terminal it uses raw mode for it, and `Ctrl+C`
 detaches as well. With `--detach-keys none` it leaves the terminal alone.
 The terminal of the application is not affected: there, closing the pane
 detaches.
+
+## `humanitl go`
+
+```sh
+humanitl go [--backend NAME] [--profile NAME] [--work DIR] [-- CMD...]
+```
+
+One command from the shell to the agent's prompt in a disposable session
+(HUM-496). `humanitl go` is `humanitl run --disposable` with three
+differences; resolving the profile, the start, the three guarantees and the
+signals are the same code as for `run`, and every capability behind it is the
+`Sandbox` RPC (ADR-018).
+
+1. **This terminal goes to the agent** as soon as the session runs, also
+   without `-- CMD`, so with the agent from the configuration: you land in its
+   terminal as after starting it natively. The detach key of
+   `humanitl sandbox attach` works (`terminal.detach_prefix`, `Ctrl+A d`);
+   after a detach the session keeps running and nothing is asked.
+2. **A boot animation**: while the session starts, the fist of the logo turns
+   in brand yellow, at least one second and never longer than the start
+   itself. It is drawn on `stderr` in the alternate screen and leaves the
+   scrollback as it was; the lines of the start (the server, the three
+   guarantees) follow after it. It appears only when `stdout` and `stderr`
+   are a terminal and `--json` is absent, without colour under `NO_COLOR`,
+   and `terminal.splash = false` turns it off. A failed start ends it at once,
+   and `Ctrl+C` ends it before the session is stopped.
+3. **At the end the question** what to do with the changes that wait in the
+   disposable layer: the list as `humanitl sandbox changes --stat` shows it,
+   then `[a]pply all`, `[d]iscard all`, `[v]iew the diffs`, or keep them for
+   later. Only `a` and `d` touch the project folder; any other answer leaves
+   the changes waiting for `humanitl sandbox changes|apply|discard`. A
+   refused apply (a conflict, for example) is shown as its diagnostic, and
+   the exit code stays the agent's.
+
+```sh
+$ humanitl go                       # the configured agent, disposable
+$ humanitl go --backend <name>      # the same with another sandbox backend
+$ humanitl go -- bash               # a shell instead of the agent
+```
+
+Without a terminal on `stdin`, or with `--json`, `humanitl go` behaves like
+`humanitl run --disposable`: it reads along, shows no animation and asks
+nothing. Where the system cannot keep the project folder untouched, the start
+refuses, as with `run --disposable`.
+
+With `--ask terminal`, from the flag or from `hold.ask_mode`, `humanitl go`
+refuses with `CLI_002` before it starts anything: in `go` this terminal
+belongs to the agent. Decide in the app with `--ask ui`, or answer in the
+terminal with `humanitl run --ask terminal`. Ctrl+C at the closing question
+keeps the changes waiting and ends with the usual signal code.
 
 ## `humanitl doctor`
 

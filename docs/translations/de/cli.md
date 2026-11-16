@@ -11,7 +11,7 @@ Applies to: Humanitl 0.1
 ein RPC; die Kommandozeile ruft ihn auf und formatiert die Antwort. Sie enthält
 keine Fachlogik, und sie erfindet nichts.
 
-Dieses Dokument beschreibt `humanitl run`, `humanitl doctor`, `humanitl config`,
+Dieses Dokument beschreibt `humanitl run`, `humanitl go`, `humanitl doctor`, `humanitl config`,
 `humanitl audit` und die drei `humanitl daemon`-Befehle vollständig, die übrigen
 Unterkommandos nur, soweit sie `run` betreffen. Die kanonische Liste aller
 Unterkommandos steht in `backlog/CONVENTIONS.md` 3.8, das Schema aller
@@ -559,6 +559,56 @@ sendet nichts hinauf; an einem Terminal nutzt es dafür den Raw-Modus, und
 `Ctrl+C` trennt ebenfalls. Mit `--detach-keys none` lässt es das Terminal in
 Ruhe. Das Terminal der Anwendung ist nicht betroffen: Dort trennt das Schließen
 des Bereichs.
+
+## `humanitl go`
+
+```sh
+humanitl go [--backend NAME] [--profile NAME] [--work DIR] [-- CMD...]
+```
+
+Ein Befehl von der Shell bis zum Prompt des Agenten in einer
+Wegwerf-Sitzung (HUM-496). `humanitl go` ist `humanitl run --disposable` mit
+drei Unterschieden; Auflösen des Profils, Start, die drei Garantien und die
+Signale sind derselbe Code wie bei `run`, und jede Fähigkeit dahinter ist die
+`Sandbox`-RPC (ADR-018).
+
+1. **Dieses Terminal geht an den Agenten**, sobald die Sitzung läuft, auch
+   ohne `-- CMD`, also mit dem Agenten der Konfiguration: Man landet in seinem
+   Terminal wie nach einem nativen Start. Die Taste zum Abhängen von
+   `humanitl sandbox attach` gilt (`terminal.detach_prefix`, `Ctrl+A d`); nach
+   dem Abhängen läuft die Sitzung weiter, und es wird nichts gefragt.
+2. **Eine Ladeanimation**: Während die Sitzung startet, dreht sich die Faust
+   des Logos im Gelb der Marke, mindestens eine Sekunde und nie länger als der
+   Start selbst. Sie steht auf `stderr` im alternativen Bildschirm und lässt
+   den Verlauf des Terminals, wie er war; die Zeilen des Starts (der Server,
+   die drei Garantien) folgen nach ihr. Sie erscheint nur, wenn `stdout` und
+   `stderr` ein Terminal sind und `--json` fehlt, ohne Farbe mit `NO_COLOR`,
+   und `terminal.splash = false` schaltet sie ab. Ein gescheiterter Start
+   beendet sie sofort, `Ctrl+C` beendet sie, bevor die Sitzung gestoppt wird.
+3. **Am Ende die Frage**, was mit den Änderungen geschieht, die in der
+   Wegwerf-Schicht warten: die Liste wie bei `humanitl sandbox changes --stat`,
+   dann `[a]pply all`, `[d]iscard all`, `[v]iew the diffs` oder warten lassen.
+   Nur `a` und `d` berühren den Projektordner; jede andere Antwort lässt die
+   Änderungen für `humanitl sandbox changes|apply|discard` warten. Eine
+   abgelehnte Übernahme (etwa ein Konflikt) steht als ihr Befund da, und der
+   Exit-Code bleibt der des Agenten.
+
+```sh
+$ humanitl go                       # der Agent der Konfiguration, zum Wegwerfen
+$ humanitl go --backend <name>      # dasselbe mit einem anderen Sandbox-Backend
+$ humanitl go -- bash               # eine Shell statt des Agenten
+```
+
+Ohne Terminal auf `stdin` oder mit `--json` verhält sich `humanitl go` wie
+`humanitl run --disposable`: Es liest mit, zeigt keine Animation und fragt
+nichts. Wo das System den Projektordner nicht unberührt halten kann, lehnt der
+Start ab, wie bei `run --disposable`.
+
+Mit `--ask terminal`, vom Schalter oder aus `hold.ask_mode`, lehnt
+`humanitl go` mit `CLI_002` ab, bevor irgendetwas startet: In `go` gehört
+dieses Terminal dem Agenten. Entschieden wird dann in der App mit `--ask ui`,
+oder im Terminal mit `humanitl run --ask terminal`. `Ctrl+C` an der Frage am
+Ende lässt die Änderungen warten und endet mit dem üblichen Signal-Code.
 
 ## `humanitl doctor`
 

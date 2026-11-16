@@ -401,6 +401,7 @@ Every command takes `--json` for machine-readable output.
 
 ```sh
 humanitl run --profile llm-only                            # a session that may reach only the model
+humanitl go                                                # a disposable session, straight to the agent's prompt
 humanitl rules test https://registry.npmjs.org/left-pad    # which rule decides; exit 10 block, 11 ask
 humanitl audit verify                                      # check the hash chain with key and anchors
 humanitl doctor                                            # one line per precondition, with a fix
@@ -414,7 +415,7 @@ humanitl sessions summary <id>                             # what a sandbox run 
 | Rules | `humanitl rules list`, `add`, `update`, `remove`, `test` |
 | History | `humanitl flows list`, `humanitl flows show` |
 | Audit | `humanitl audit verify`, `humanitl audit export` |
-| Sandbox | `humanitl run`, `humanitl sandbox attach`, `humanitl sandbox exec` |
+| Sandbox | `humanitl run`, `humanitl go`, `humanitl sandbox attach`, `humanitl sandbox exec` |
 
 Every RPC next to its command and screen: [`docs/reference/parity.md`](docs/reference/parity.md).
 

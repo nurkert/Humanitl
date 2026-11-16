@@ -234,6 +234,7 @@ Das Terminal der Kommandozeile, wenn sie an einer Sitzung hängt.
 | Schlüssel | Typ | Vorgabe | Stufe | Projekt | Wirkung | Beschreibung |
 |---|---|---|---|---|---|---|
 | `terminal.detach_prefix` | string | `"ctrl-a"` | advanced | denied | ja | Präfix der Taste, mit der sich `humanitl sandbox attach` abhängt: `ctrl-a` bis `ctrl-z`, `ctrl-\`, `ctrl-]`, `ctrl-^`, `ctrl-_`, oder `none`, dann gibt es keine. Nach dem Präfix hängt `d` ab und lässt die Sitzung laufen; das Präfix zweimal oder sein Buchstabe schickt es einmal an den Agenten, jede andere Taste geht mit dem Präfix unverändert weiter. `ctrl-[` ist ausgenommen, weil jede Pfeiltaste mit diesem Byte beginnt, `ctrl-h`, `ctrl-i`, `ctrl-j` und `ctrl-m`, weil Rücktaste, Tab und Enter dieselben Bytes schicken. `--detach-keys` überschreibt den Wert für einen Aufruf. |
+| `terminal.splash` | boolean | `true` | advanced | denied | ja | Die Ladeanimation von `humanitl go`: eine sich drehende Faust aus dem Logo, solange die Wegwerf-Sitzung startet, mindestens eine Sekunde lang und nie länger als der Start. Sie erscheint nur, wenn Ausgabe und Fehlerausgabe ein Terminal sind und `--json` fehlt, mit `NO_COLOR` ohne Farbe. `false` schaltet sie ab. |
 
 ### `tls`
 

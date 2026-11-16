@@ -2480,6 +2480,36 @@ Heute geht der Start schon mit `humanitl run --disposable --backend qemu`.
 2. Die Animation läuft mindestens eine Sekunde und hält den Start nicht
    länger auf, als er ohnehin dauert.
 
+### Status
+Erledigt. `humanitl go [-- CMD]` ist `humanitl run --disposable` mit
+übergebenem Terminal, auch für den Agenten aus der Konfiguration ohne
+`-- CMD`; am Ende listet es die wartenden Änderungen und fragt: übernehmen,
+verwerfen, Diffs ansehen oder liegen lassen (nur übernehmen und verwerfen
+berühren das Projekt, Ctrl+C lässt alles liegen). `--ask terminal` lehnt `go`
+vor dem Start mit `CLI_002` ab, weil das Terminal dem Agenten gehört. Die
+Ladeanimation ist ein kleiner eigener CPU-Raymarcher (`src/splash/`, ohne
+neue Abhängigkeit): die Faust aus `packaging/deb/humanitl.svg`, gerastert von
+`tools/splash_fist.py`, in die Tiefe gezogen, gelb in Truecolor mit
+Halbblöcken, einfarbig bei `NO_COLOR`, nur auf einem Terminal und nie bei
+`--json`, abschaltbar mit `terminal.splash = false`. Sie steht mindestens
+eine Sekunde; Start-Ereignisse werden so lange gehalten (`cmd/hold.rs`) und
+danach in Reihenfolge gezeigt. Der Zeichen-Thread besitzt den Schreiber und
+schreibt das Wiederherstellen selbst; vor der Übergabe ans Terminal des
+Agenten wartet `go`, bis es geschrieben ist, Signale und Fehler halten nur
+250 ms. Tests: Rahmen, Einfarbigkeit, Mindestdauer, pty-Übergabe nach einer
+Sekunde, ein angehaltenes Terminal, Signale an der Schlussfrage, `go` ohne
+Terminal byte-gleich zu `run --disposable`; Mutationen rot.
+
+Review: Codex Runde 1 zwei blocking (Stopp hinter einem blockierten
+Schreiben; `go --ask terminal` gab das Terminal der Moderation) und ein
+major (Signale an der Schlussfrage verschluckt), alle behoben; Delta ein
+blocking (Wiederherstellen nach Zeitablauf über dem Bild des Agenten) und
+ein minor (Signale während des Abholens der Änderungen), beide behoben.
+Sonnet als Ersatz für Antigravity kein blocking oder major, Minors
+übernommen (`print_diffs`, das Halten der Ereignisse aus `drive` gelöst).
+Offen: `run.rs` hat weiter rund 1740 Zeilen; die Animation will der Owner
+später noch schöner machen.
+
 ---
 
 ## HUM-497 · Stromkanal: Eingabe an ein Terminal bekommt Gegendruck statt still zu verfallen

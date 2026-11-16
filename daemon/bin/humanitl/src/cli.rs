@@ -114,6 +114,18 @@ pub enum Cmd {
     /// Start a session in the current directory, or show the session a profile resolves to.
     Run(RunArgs),
 
+    /// Start a disposable session and land in the agent's terminal; afterwards
+    /// choose what to keep.
+    ///
+    /// The same as `humanitl run --disposable`, with this terminal handed to
+    /// the agent as soon as the session runs, also for the agent from the
+    /// configuration. While the session starts, a rotating fist is shown for at
+    /// least one second (off with `terminal.splash = false`, without colour
+    /// with `NO_COLOR`, never with --json or without a terminal). When the agent ends
+    /// and changes wait in the disposable layer, the command lists them and
+    /// asks whether to apply, discard or keep them for later.
+    Go(GoArgs),
+
     /// Start, plan and check the sandbox.
     Sandbox {
         /// Was mit der Sandbox geschehen soll.
@@ -478,6 +490,19 @@ pub struct RunArgs {
     /// disposable sandbox. The same as sandbox.mode = "direct" for this run.
     #[arg(long)]
     pub direct: bool,
+}
+
+/// Die Argumente von `humanitl go` (HUM-496).
+///
+/// Nur das Kommando: Der Modus ist immer `disposable`, und alles andere
+/// (`--backend`, `--work`, `--profile`, `--llm`) sind die globalen Schalter,
+/// die auch `humanitl run` nimmt.
+#[derive(Debug, Args)]
+pub struct GoArgs {
+    /// The command to run in the sandbox, after `--`; without it the agent
+    /// from the configuration.
+    #[arg(last = true, value_name = "CMD")]
+    pub cmd: Vec<OsString>,
 }
 
 /// Die Unterkommandos von `humanitl audit`.

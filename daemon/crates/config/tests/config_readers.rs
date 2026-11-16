@@ -187,6 +187,9 @@ const REGISTER: &[(&str, &str)] = &[
     // Gelesen in `humanitl sandbox attach`, wenn `--detach-keys` fehlt
     // (`cmd/attach.rs`, HUM-279). Daemon und Oberfläche lesen ihn nicht.
     ("terminal.detach_prefix", "effective"),
+    // Gelesen in `humanitl go`, bevor die Ladeanimation startet
+    // (`cmd/run.rs`, HUM-496). Daemon und Oberfläche lesen ihn nicht.
+    ("terminal.splash", "effective"),
     // Gelesen in `humanitld` und `build_llm_probe` über
     // `TrustAnchors::configured`, bevor ein Verbindungsstapel steht (HUM-257).
     ("tls.trust_system_store", "effective"),

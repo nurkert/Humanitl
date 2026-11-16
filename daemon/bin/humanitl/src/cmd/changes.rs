@@ -35,11 +35,7 @@ pub async fn changes(ctx: &Context, stat: bool) -> Result<u8, Failure> {
         println!("{line}");
     }
     if !stat {
-        for change in &changes.changes {
-            if !change.diff.is_empty() {
-                print!("\n{}", change.diff);
-            }
-        }
+        print_diffs(&changes);
     }
     ctx.render
         .note("Apply: humanitl sandbox apply [ID ...]   Discard: humanitl sandbox discard");
@@ -79,8 +75,19 @@ pub async fn apply(
         let shown: Vec<String> = chosen.iter().map(|change| row(change)).collect();
         confirm(ctx, &question, &shown, "apply")?;
     }
+    send_apply(ctx, &changes.sandbox_id, ids, overwrite).await?;
+    Ok(EXIT_OK)
+}
+
+/// Schickt `ApplyChanges` und zeigt das Ergebnis.
+async fn send_apply(
+    ctx: &Context,
+    sandbox_id: &str,
+    ids: &[String],
+    overwrite: bool,
+) -> Result<(), Failure> {
     let request = v1::sandbox_request::ApplyChanges {
-        sandbox_id: changes.sandbox_id.clone(),
+        sandbox_id: sandbox_id.to_owned(),
         ids: ids.iter().map(|id| id.trim().to_owned()).collect(),
         overwrite,
         // `--overwrite` gilt für jede gewählte Änderung; einzeln bestätigt
@@ -89,7 +96,7 @@ pub async fn apply(
     };
     let outcome = outcome_of(ask(ctx, v1::sandbox_request::Op::ApplyChanges(request)).await?)?;
     report(ctx, &outcome);
-    Ok(EXIT_OK)
+    Ok(())
 }
 
 /// `sandbox discard`: alle wartenden Änderungen verwerfen.
@@ -108,13 +115,210 @@ pub async fn discard(ctx: &Context, yes: bool) -> Result<u8, Failure> {
         let shown: Vec<String> = changes.changes.iter().map(row).collect();
         confirm(ctx, &question, &shown, "discard")?;
     }
+    send_discard(ctx, &changes.sandbox_id).await?;
+    Ok(EXIT_OK)
+}
+
+/// Schickt `DiscardChanges` und zeigt das Ergebnis.
+async fn send_discard(ctx: &Context, sandbox_id: &str) -> Result<(), Failure> {
     let request = v1::sandbox_request::DiscardChanges {
-        sandbox_id: changes.sandbox_id.clone(),
+        sandbox_id: sandbox_id.to_owned(),
     };
     let outcome = outcome_of(ask(ctx, v1::sandbox_request::Op::DiscardChanges(request)).await?)?;
     report(ctx, &outcome);
-    Ok(EXIT_OK)
+    Ok(())
 }
+
+/// Was der Mensch nach einem Lauf von `humanitl go` mit den wartenden
+/// Änderungen tun will (HUM-496).
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+pub enum Choice {
+    /// Alle übernehmen.
+    Apply,
+    /// Alle verwerfen.
+    Discard,
+    /// Die Diffs zeigen und noch einmal fragen.
+    View,
+    /// Warten lassen; `humanitl sandbox changes|apply|discard` später.
+    Keep,
+}
+
+/// Liest die Antwort auf die Frage nach dem Lauf. Alles außer `a`, `d` und
+/// `v` heißt warten lassen: Eine Eingabe, die niemand so gemeint hat, ändert
+/// nichts im Projekt.
+#[must_use]
+pub fn choice(answer: &str) -> Choice {
+    match answer.trim().to_ascii_lowercase().as_str() {
+        "a" | "apply" => Choice::Apply,
+        "d" | "discard" => Choice::Discard,
+        "v" | "view" => Choice::View,
+        _ => Choice::Keep,
+    }
+}
+
+/// Die Text-Diffs aller Änderungen auf `stdout`.
+fn print_diffs(changes: &v1::DisposableChanges) {
+    for change in &changes.changes {
+        if !change.diff.is_empty() {
+            print!("\n{}", change.diff);
+        }
+    }
+}
+
+/// Was auf die Frage nach dem Lauf kam.
+#[derive(Debug, PartialEq, Eq)]
+pub enum Answer {
+    /// Eine Zeile vom Terminal; leer am Ende der Eingabe.
+    Line(String),
+    /// Ein Signal mit dieser Nummer.
+    Signal(u8),
+}
+
+/// Die Zeile oder das Signal, was zuerst kommt. Ein Signal gewinnt, wenn
+/// beides bereitsteht: `Ctrl+C` heißt nichts tun.
+pub async fn line_or_signal<L, S>(line: L, signal: S) -> Answer
+where
+    L: std::future::Future<Output = String>,
+    S: std::future::Future<Output = u8>,
+{
+    tokio::select! {
+        biased;
+        number = signal => Answer::Signal(number),
+        text = line => Answer::Line(text),
+    }
+}
+
+/// Liest eine Zeile von `stdin` in einem eigenen Thread.
+///
+/// Nicht in einem Thread der Laufzeit: Ein Lesen, das nach einem Signal
+/// stehen bleibt, hielte sonst nichts auf, aber es gehört niemandem mehr.
+/// Der Thread endet mit dem Prozess.
+fn read_line() -> impl std::future::Future<Output = String> {
+    let (tell, line) = tokio::sync::oneshot::channel();
+    let _ = std::thread::Builder::new()
+        .name("humanitl-answer".to_owned())
+        .spawn(move || {
+            let mut answer = String::new();
+            let _ = std::io::stdin().lock().read_line(&mut answer);
+            let _ = tell.send(answer);
+        });
+    async move { line.await.unwrap_or_default() }
+}
+
+/// Die Signale `SIGINT`, `SIGTERM` und `SIGHUP`, ab jetzt gehört.
+///
+/// Die Ströme von `drive` sind nach dem Lauf fallengelassen, der Handler der
+/// Laufzeit aber bleibt: Ohne eigene Ströme verschluckte er ein `Ctrl+C` an
+/// der Frage. Die Ströme entstehen beim Aufruf, nicht erst beim ersten Warten.
+struct Signals(
+    Option<(
+        tokio::signal::unix::Signal,
+        tokio::signal::unix::Signal,
+        tokio::signal::unix::Signal,
+    )>,
+);
+
+impl Signals {
+    /// Legt die Ströme an; ohne Handler wartet [`Signals::next`] für immer.
+    fn listen() -> Self {
+        use tokio::signal::unix::{SignalKind, signal};
+
+        match (
+            signal(SignalKind::interrupt()),
+            signal(SignalKind::terminate()),
+            signal(SignalKind::hangup()),
+        ) {
+            (Ok(interrupt), Ok(terminate), Ok(hangup)) => {
+                Self(Some((interrupt, terminate, hangup)))
+            }
+            _ => Self(None),
+        }
+    }
+
+    /// Das nächste dieser Signale, als Nummer.
+    async fn next(&mut self) -> u8 {
+        let Some((interrupt, terminate, hangup)) = self.0.as_mut() else {
+            return std::future::pending().await;
+        };
+        tokio::select! {
+            _ = interrupt.recv() => 2,
+            _ = terminate.recv() => 15,
+            _ = hangup.recv() => 1,
+        }
+    }
+}
+
+/// Zeigt nach einem Lauf von `humanitl go`, was der Agent geändert hat, und
+/// fragt, was damit geschehen soll (HUM-496). Übernehmen und Verwerfen
+/// laufen über dieselben RPCs wie `sandbox apply` und `sandbox discard`; die
+/// Antwort ist die Bestätigung.
+///
+/// Nur auf einem Terminal; der Aufrufer prüft das. Ein Signal an der Frage
+/// lässt alles, wie es ist, und kommt als `Some(Nummer)` zurück.
+///
+/// # Errors
+///
+/// Wie [`apply`] und [`discard`].
+pub async fn review(ctx: &Context) -> Result<Option<u8>, Failure> {
+    use std::io::Write as _;
+
+    // Gehört wird schon während der Frage nach den Änderungen: Hängt sie,
+    // beendet `Ctrl+C` das Warten, ohne etwas anzufassen.
+    let mut signals = Signals::listen();
+    let mut stderr = std::io::stderr();
+    let changes = tokio::select! {
+        biased;
+        number = signals.next() => {
+            ctx.render.note(KEPT);
+            return Ok(Some(number));
+        }
+        fetched = fetch(ctx) => fetched?,
+    };
+    if changes.changes.is_empty() {
+        return Ok(None);
+    }
+    for line in listing(&changes) {
+        let _ = writeln!(stderr, "{line}");
+    }
+    loop {
+        let _ = write!(
+            stderr,
+            "[a]pply all to {}, [d]iscard all, [v]iew the diffs, or keep them for later [k]? ",
+            changes.work_dir
+        );
+        let _ = stderr.flush();
+        let answer = match line_or_signal(read_line(), signals.next()).await {
+            Answer::Line(answer) => answer,
+            Answer::Signal(number) => {
+                let _ = writeln!(stderr);
+                ctx.render.note(KEPT);
+                return Ok(Some(number));
+            }
+        };
+        match choice(&answer) {
+            Choice::Apply => {
+                send_apply(ctx, &changes.sandbox_id, &[], false).await?;
+                return Ok(None);
+            }
+            Choice::Discard => {
+                send_discard(ctx, &changes.sandbox_id).await?;
+                return Ok(None);
+            }
+            Choice::View => {
+                print_diffs(&changes);
+                println!();
+            }
+            Choice::Keep => {
+                ctx.render.note(KEPT);
+                return Ok(None);
+            }
+        }
+    }
+}
+
+/// Der Hinweis, wenn die Änderungen warten bleiben.
+const KEPT: &str = "The changes keep waiting. Review: humanitl sandbox changes   Apply: \
+                    humanitl sandbox apply   Discard: humanitl sandbox discard";
 
 /// Fragt den Daemon nach den wartenden Änderungen.
 async fn fetch(ctx: &Context) -> Result<v1::DisposableChanges, Failure> {
@@ -391,5 +595,37 @@ mod tests {
         let lines = listing(&changes);
         assert_eq!(lines[0], "Changes of sandbox s in /p (1):");
         assert!(lines.last().is_some_and(|line| line.contains("cut short")));
+    }
+
+    /// After `humanitl go` only `a` applies and only `d` discards; anything
+    /// else, an empty line included, leaves the project folder as it is
+    /// (HUM-496).
+    #[test]
+    fn only_an_explicit_answer_touches_the_project() {
+        assert_eq!(choice("a\n"), Choice::Apply);
+        assert_eq!(choice(" Apply "), Choice::Apply);
+        assert_eq!(choice("d"), Choice::Discard);
+        assert_eq!(choice("v"), Choice::View);
+        for kept in ["", "\n", "k", "y", "yes", "n", "ad"] {
+            assert_eq!(choice(kept), Choice::Keep, "{kept:?}");
+        }
+    }
+
+    /// A signal at the question after `humanitl go` is not swallowed by a
+    /// blocked read: it ends the question, before and over a line (HUM-496).
+    #[allow(clippy::expect_used)]
+    #[tokio::test]
+    async fn a_signal_at_the_question_is_not_swallowed() {
+        let ended = tokio::time::timeout(
+            std::time::Duration::from_secs(2),
+            line_or_signal(std::future::pending::<String>(), async { 2 }),
+        )
+        .await
+        .expect("the signal ended the question");
+        assert_eq!(ended, Answer::Signal(2));
+        let both = line_or_signal(async { "a\n".to_owned() }, async { 15 }).await;
+        assert_eq!(both, Answer::Signal(15), "a signal means: touch nothing");
+        let line = line_or_signal(async { "d\n".to_owned() }, std::future::pending()).await;
+        assert_eq!(line, Answer::Line("d\n".to_owned()));
     }
 }
