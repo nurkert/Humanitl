@@ -73,6 +73,12 @@ pub const FORM_KEYS: &[&str] = &[
     // the names `SandboxBackends` lists. Closed to project profiles; here
     // only the human writes.
     "sandbox.backend",
+    // The decision proxy behind Humanitl (HUM-511, ADR-0022): address, CA
+    // file and who resolves. Closed to project profiles; here only the human
+    // writes. The credentials go through `Egress`, never through this form.
+    "egress.proxy",
+    "egress.proxy_ca",
+    "egress.proxy_resolve",
 ];
 
 /// The key of the agent choice in the form (HUM-274).

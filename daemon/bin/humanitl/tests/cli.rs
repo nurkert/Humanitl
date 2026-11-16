@@ -112,9 +112,14 @@ fn every_subcommand_has_a_help_of_its_own() {
 
 /// Die elf Kennungen, in der Reihenfolge der Anzeige.
 fn doctor_ids() -> Vec<String> {
+    // Hinter `llm` die Zeile `egress`, die der Bericht aus der Konfiguration
+    // dazusetzt (HUM-511, `humanitl_ipc::egress::insert_doctor_line`).
     humanitl_sandbox::doctor::CheckId::ALL
         .iter()
-        .map(|id| (*id).as_str().to_owned())
+        .flat_map(|id| {
+            let id = (*id).as_str();
+            std::iter::once(id.to_owned()).chain((id == "llm").then(|| "egress".to_owned()))
+        })
         .collect()
 }
 

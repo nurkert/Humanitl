@@ -62,6 +62,7 @@ use humanitl_audit_log::{
 };
 use humanitl_catalog::Catalog;
 use humanitl_config::private_dir::{ensure_private_dir, with_own_runtime_dir_fix};
+use humanitl_config::secret::KeyStore;
 use humanitl_config::{Config, Paths as XdgPaths, ResolverConfig, WorkMode};
 use humanitl_core::diagnostics::codes;
 use humanitl_core::shell::shell_path;
@@ -1773,23 +1774,21 @@ fn build_handler(
     // `resolver.test_ca` (HUM-087). Der Normalfall sind damit genau die Anker
     // aus `tls.trust_system_store`: die Zertifikatsablage des Systems, oder
     // nur `webpki-roots`, wenn der Schlüssel aus ist (HUM-257).
-    let client_tls = ClientTls::configured(
-        config.tls.trust_system_store,
-        extra_roots,
-        config.experimental.h2_upstream,
-    )?;
-    let upstream = Upstream::new(
-        Arc::new(Direct::new(Duration::from_secs(
-            config.limits.connect_timeout_secs,
-        ))),
-        // Der Resolver-Port kappt, zwischenspeichert und zaehlt (HUM-024).
-        // Mit `SystemResolver` direkt gaebe es keinen Zaehler, keinen Cache
-        // und keine Ueberpruefung der Adressen, die eine Antwort mitbringt.
-        Arc::clone(resolver),
-        client_tls,
-        config.resolver.prefer,
-        Duration::from_secs(config.limits.header_timeout_secs),
-    );
+    //
+    // Mit `egress.proxy` geht der Verkehr des Agenten über den
+    // Entscheidungs-Proxy des Nutzers (ADR-0022, HUM-511); dessen CA steht
+    // nur in der TLS-Konfiguration dieses Wegs, `client_tls` bleibt die der
+    // direkten Verbindungen. Die Zugangsdaten liest der Start einmal aus dem
+    // Schlüsselbund.
+    let keys = config
+        .egress
+        .proxy_auth_ref
+        .as_ref()
+        .map(|_reference| KeyStore::for_paths(&XdgPaths::from_process()));
+    // Der Resolver-Port kappt, zwischenspeichert und zaehlt (HUM-024). Mit
+    // `SystemResolver` direkt gaebe es keinen Zaehler, keinen Cache und keine
+    // Ueberpruefung der Adressen, die eine Antwort mitbringt.
+    let upstream = Upstream::from_config(config, Arc::clone(resolver), extra_roots, keys.as_ref())?;
     // Reihenfolge des Pfads (HUM-023): Der Handler prüft Authority und lässt
     // die Detektoren laufen, dann entscheidet die Regel-Engine, und gehalten
     // wird nur, was `ask` ergibt. Ohne Regel fragt die Warteschlange. Die
@@ -3252,9 +3251,18 @@ mod tests {
             compact
                 .matches("ClientTls::configured(config.tls.trust_system_store,")
                 .count(),
-            2,
-            "this binary builds exactly two stacks, the proxy handler and the endpoint probe, \
-             and both take their anchors from tls.trust_system_store (HUM-257)"
+            1,
+            "the endpoint probe takes its anchors from tls.trust_system_store (HUM-257)"
+        );
+        // Der Stapel des Proxys entsteht seit HUM-511 in
+        // `Upstream::from_config`, das die Anker ebenso aus
+        // `tls.trust_system_store` nimmt, samt `extra_roots`.
+        assert_eq!(
+            compact
+                .matches("Upstream::from_config(config,Arc::clone(resolver),extra_roots,")
+                .count(),
+            1,
+            "the proxy handler builds its stack from the configuration with the extra roots"
         );
         assert_eq!(
             production.matches("ClientTls::new(").count(),

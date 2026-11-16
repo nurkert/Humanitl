@@ -171,6 +171,9 @@ pub struct IpcServer {
     /// setzt sie, also nur ein Client am Socket des Daemons; `None` in einem
     /// Daemon ohne Proxy-Sitzung, und `Intercept` antwortet dann `IPC_006`.
     intercept: Option<Arc<humanitl_core::InterceptPause>>,
+    /// Der Weg hinaus des Verkehrs des Agenten seit dem Start des Daemons
+    /// (HUM-511): direkt, oder über `egress.proxy`.
+    egress: v1::EgressRoute,
 }
 
 /// Woraus der Update-RPC liest (HUM-382).
@@ -341,6 +344,7 @@ impl IpcServer {
             bodies: BodyIndex::new(),
             keys: None,
             intercept: None,
+            egress: crate::egress::route(&config.egress),
         }
     }
 
@@ -2058,6 +2062,11 @@ impl v1::humanitl_server::Humanitl for IpcServer {
                 let mut report = convert::doctor_report_to_proto(&humanitl_sandbox::doctor::run(
                     &machine.collect(daemon, llm),
                 ));
+                // Der Weg hinaus, wie die Datei ihn jetzt sagt (HUM-511).
+                let egress = crate::egress::configured(&setup.paths)
+                    .map(|config| config.egress)
+                    .unwrap_or_default();
+                crate::egress::insert_doctor_line(&mut report, &egress);
                 if let Ok(Some(groups)) = groups.join() {
                     report.backends = convert::doctor_backends_to_proto(&groups);
                 }
@@ -2224,6 +2233,51 @@ impl v1::humanitl_server::Humanitl for IpcServer {
             .await
             .map_err(|error| diagnostic_to_status(&unfinished("LlmKey", &error)))?
             .map_err(|diagnostic| diagnostic_to_status(&diagnostic))?;
+        Ok(Response::new(status))
+    }
+
+    /// Der Entscheidungs-Proxy hinter Humanitl (HUM-511, [`crate::egress`]):
+    /// Stand, Prüfung der Verbindung, Zugangsdaten. Keine Antwort trägt die
+    /// Zugangsdaten.
+    async fn egress(
+        &self,
+        request: Request<v1::EgressRequest>,
+    ) -> Result<Response<v1::EgressStatus>, Status> {
+        let mut request = request.into_inner();
+        let paths = self.doctor.paths.clone();
+        let keys = self.key_store();
+        let active = self.egress.clone();
+        let check = matches!(request.op, Some(v1::egress_request::Op::CheckConnection(_)));
+        let checked = if check {
+            // Die Datei, wie sie jetzt steht: Wer eben den Proxy eingetragen
+            // hat, prüft ihn vor dem Neustart.
+            let config = {
+                let paths = paths.clone();
+                tokio::task::spawn_blocking(move || crate::egress::configured(&paths))
+                    .await
+                    .map_err(|error| diagnostic_to_status(&unfinished("Egress", &error)))?
+                    .map_err(|diagnostic| diagnostic_to_status(&diagnostic))?
+            };
+            Some(Upstream::check_decision_proxy(&config, Some(keys.clone())).await)
+        } else {
+            None
+        };
+        let op = request.op.take();
+        let mut status =
+            tokio::task::spawn_blocking(move || crate::egress::answer(&paths, &keys, &active, op))
+                .await
+                .map_err(|error| diagnostic_to_status(&unfinished("Egress", &error)))?
+                .map_err(|diagnostic| diagnostic_to_status(&diagnostic))?;
+        if let Some(result) = checked {
+            let (host, port) = Upstream::CHECK_TARGET;
+            status.check_target = format!("{host}:{port}");
+            match result {
+                Ok(()) => status.reachable = true,
+                Err(diagnostic) => status
+                    .diagnostics
+                    .insert(0, convert::diagnostic_to_proto(&diagnostic)),
+            }
+        }
         Ok(Response::new(status))
     }
 

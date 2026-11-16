@@ -12,6 +12,7 @@ import 'package:freezed_annotation/freezed_annotation.dart';
 
 import 'diagnostic.dart';
 import 'disposable.dart';
+import 'egress.dart';
 import 'ids.dart';
 import 'sandbox_backends.dart';
 
@@ -327,6 +328,12 @@ abstract class SandboxStatus with _$SandboxStatus {
     /// running session's while one runs, otherwise the one a start would
     /// get. Null when no saved server applies or the daemon did not say.
     LlmServerChoice? llmServer,
+
+    /// The way out the running daemon takes for the agent's traffic, mirror
+    /// of `SandboxEvent.Status.egress` (HUM-511): direct, or through the
+    /// decision proxy of `egress.proxy`. Null from a daemon before contract
+    /// 1.41.
+    EgressRoute? egress,
   }) = _SandboxStatus;
 
   const SandboxStatus._();

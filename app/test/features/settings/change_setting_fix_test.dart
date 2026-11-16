@@ -108,6 +108,12 @@ const Map<String, Key> fieldOf = <String, Key>{
   // HUM-440: die ganze Zeile, denn ihr Control kommt erst mit der Antwort
   // von `SandboxBackends`.
   FormKeys.sandboxBackend: Key('settings-sandbox-backend'),
+  // HUM-511: der Entscheidungs-Proxy. CA und Zugangsdaten als ganze Zeile,
+  // weil ihr Control aus mehreren Teilen besteht.
+  FormKeys.egressProxy: Key('settings-egress-proxy'),
+  FormKeys.egressProxyCa: Key('settings-egress-ca-row'),
+  FormKeys.egressProxyResolve: Key('settings-egress-resolve'),
+  FormKeys.egressProxyAuthRef: Key('settings-egress-auth-row'),
 };
 
 void main() {

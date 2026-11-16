@@ -185,8 +185,9 @@ impl ForeignCa {
         &self.pem
     }
 
-    /// Eine Serverkonfiguration mit einem Blatt für `name` aus dieser CA.
-    fn server_config(&self, name: &str) -> ServerConfig {
+    /// Eine Serverkonfiguration mit einem Blatt für `name` aus dieser CA;
+    /// auch für den Stellvertreter-Proxy in `tests/decision_proxy.rs`.
+    pub fn server_config(&self, name: &str) -> ServerConfig {
         let key = rcgen::KeyPair::generate().unwrap();
         let params = rcgen::CertificateParams::new(vec![name.to_owned()]).unwrap();
         let leaf = params.signed_by(&key, &self.issuer).unwrap();

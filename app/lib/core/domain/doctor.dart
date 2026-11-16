@@ -269,6 +269,11 @@ abstract final class DoctorCheckId {
   /// Does the language model answer? Only when somebody asked.
   static const String llm = 'llm';
 
+  /// Which way the agent's traffic leaves: directly, or through the
+  /// decision proxy of `egress.proxy` (HUM-511). Read from the
+  /// configuration; nothing is contacted.
+  static const String egress = 'egress';
+
   /// Has the desktop a place for the tray icon?
   static const String tray = 'tray';
 

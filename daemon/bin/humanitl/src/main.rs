@@ -221,6 +221,7 @@ async fn run(ctx: &Context, command: Cmd) -> Result<u8, Failure> {
         Cmd::Audit { cmd } => cmd::audit::run(ctx, &cmd).await,
         Cmd::Update { cmd } => cmd::update::run(ctx, &cmd).await,
         Cmd::Intercept { cmd } => cmd::intercept::run(ctx, &cmd).await,
+        Cmd::Egress { cmd } => cmd::egress::run(ctx, &cmd).await,
     }
 }
 

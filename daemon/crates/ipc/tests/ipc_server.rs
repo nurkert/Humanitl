@@ -624,9 +624,12 @@ async fn doctor_reports_every_check_and_measures_no_network() {
         .iter()
         .map(|check| check.id.as_str())
         .collect();
+    // Hinter `llm` die Zeile des Wegs hinaus (HUM-511).
     let expected: Vec<&str> = humanitl_sandbox::doctor::CheckId::ALL
         .iter()
-        .map(|id| id.as_str())
+        .flat_map(|id| {
+            std::iter::once(id.as_str()).chain((id.as_str() == "llm").then_some("egress"))
+        })
         .collect();
     assert_eq!(ids, expected, "the order is the display order");
 

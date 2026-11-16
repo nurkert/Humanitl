@@ -379,6 +379,12 @@ class TestDaemonClient implements DaemonClient {
   Future<SandboxBackendList> sandboxBackends({String? backend}) async =>
       const SandboxBackendList();
 
+  // Der Entscheidungs-Proxy gehört den Einstellungen (HUM-511); dieser
+  // Client geht direkt hinaus.
+  @override
+  Future<EgressStatus> egress(EgressOp op, {String credentials = ''}) async =>
+      EgressStatus.none;
+
   // Das Ziehen eines Abbilds gehört dem Sandbox-Bildschirm (HUM-439); dieser
   // Client zieht nichts und sagt das.
   @override

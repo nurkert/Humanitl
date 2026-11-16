@@ -55,6 +55,9 @@ const DENIED_BY_CONVENTION: &[&str] = &[
     "pseudonyms.*",
     "resolver.*",
     "tls.*",
+    // HUM-511: ein Projekt, das einen Entscheidungs-Proxy setzt, leitete den
+    // ganzen Verkehr samt Klartext an einen Rechner seiner Wahl.
+    "egress.*",
     "experimental.*",
     "recorder.retention_days",
     "limits.recorder_max_body_bytes",

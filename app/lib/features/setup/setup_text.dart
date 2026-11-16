@@ -126,6 +126,7 @@ String doctorCheckTitle(
   DoctorCheckId.daemon => l10n.doctorCheckDaemon,
   DoctorCheckId.agent => l10n.doctorCheckAgent,
   DoctorCheckId.llm => l10n.doctorCheckLlm,
+  DoctorCheckId.egress => l10n.doctorCheckEgress,
   DoctorCheckId.tray => l10n.doctorCheckTray,
   DoctorCheckId.renderer => l10n.doctorCheckRenderer,
   DoctorCheckId.diskSpace => l10n.doctorCheckDiskSpace,

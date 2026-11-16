@@ -65,6 +65,11 @@ abstract class DaemonInfo with _$DaemonInfo {
   bool get offersInterceptPause =>
       capabilities.contains(interceptPauseCapability);
 
+  /// True when the daemon answers `Egress` and reports the way out of the
+  /// agent's traffic: contract 1.41 or later, or the fake, which plays it
+  /// (HUM-511). The settings of the decision proxy stand only then.
+  bool get offersEgress => isFake || (protoMajor == 1 && protoMinor >= 41);
+
   /// True when a session is running.
   bool get hasSession => sessionId.isNotEmpty;
 

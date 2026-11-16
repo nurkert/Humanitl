@@ -734,6 +734,25 @@ fn table() -> Vec<Case> {
             expected: Seen::ok(),
             call: both!(sandbox_backends, v1::SandboxBackendsRequest::default()),
         },
+        // HUM-511: Der Stand des Entscheidungs-Proxys antwortet auf beiden
+        // Seiten; ein Auftrag ohne Operation wird auf beiden abgelehnt.
+        Case {
+            what: "egress status",
+            expected: Seen::ok(),
+            call: both!(
+                egress,
+                v1::EgressRequest {
+                    op: Some(v1::egress_request::Op::Status(
+                        v1::egress_request::Status {},
+                    )),
+                }
+            ),
+        },
+        Case {
+            what: "egress without an operation",
+            expected: refused(Code::Internal, codes::CONFIG_020),
+            call: both!(egress, v1::EgressRequest { op: None }),
+        },
     ]
 }
 

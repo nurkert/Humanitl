@@ -9,6 +9,7 @@ export 'diagnostic.dart';
 export 'diagnostic_codes.dart';
 export 'disposable.dart';
 export 'doctor.dart';
+export 'egress.dart';
 export 'flow.dart';
 export 'flow_event.dart';
 export 'flow_state.dart';

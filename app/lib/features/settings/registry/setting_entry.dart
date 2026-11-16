@@ -32,6 +32,9 @@ enum SettingsCategory {
   /// The certificates the daemon trusts.
   network,
 
+  /// An intercepting proxy of the person behind Humanitl (HUM-511).
+  egress,
+
   /// The background service itself: version, updates, `config.toml`.
   daemon;
 
@@ -44,6 +47,7 @@ enum SettingsCategory {
     SettingsCategory.interface => l10n.settingsCategoryInterface,
     SettingsCategory.shortcuts => l10n.settingsCategoryShortcuts,
     SettingsCategory.network => l10n.settingsCategoryNetwork,
+    SettingsCategory.egress => l10n.settingsCategoryEgress,
     SettingsCategory.daemon => l10n.settingsCategoryDaemon,
   };
 }
@@ -74,6 +78,10 @@ abstract final class SettingIds {
   /// "Who uses which server": `llm.server` of the project and of each
   /// session profile, and the default (HUM-405).
   static const String llmServerUsage = 'llm.server';
+
+  /// "Check connection" of the decision proxy (HUM-511); no key of the
+  /// file, the button asks `Egress(check)`.
+  static const String egressCheck = 'egress.check';
 
   /// The group of the keyboard shortcuts of [scope] (HUM-420).
   static String shortcutGroup(ShortcutScope scope) => 'shortcuts.${scope.name}';

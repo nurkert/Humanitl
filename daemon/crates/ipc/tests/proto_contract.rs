@@ -470,6 +470,10 @@ fn all_contract_messages_exist() {
         "SandboxBackendsRequest",
         "SandboxBackend",
         "SandboxRuntime",
+        "EgressRoute",
+        "EgressRequest",
+        "EgressRequest.SetAuth",
+        "EgressStatus",
     ];
 
     let present: Vec<String> = messages().into_iter().map(|(name, _)| name).collect();
@@ -1482,6 +1486,15 @@ const EXPECTED_RPCS: &[(&str, &str, &str, bool, bool)] = &[
         "SandboxBackends",
         ".humanitl.v1.SandboxBackendsRequest",
         ".humanitl.v1.SandboxBackendList",
+        false,
+        false,
+    ),
+    // HUM-511: der Entscheidungs-Proxy hinter Humanitl. Unär; keine Antwort
+    // trägt Zugangsdaten.
+    (
+        "Egress",
+        ".humanitl.v1.EgressRequest",
+        ".humanitl.v1.EgressStatus",
         false,
         false,
     ),

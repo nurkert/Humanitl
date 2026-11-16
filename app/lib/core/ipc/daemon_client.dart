@@ -467,6 +467,18 @@ abstract class DaemonClient {
   /// [DaemonException] with `IPC_006` when the daemon has no proxy session.
   Future<InterceptStatus> intercept(InterceptOp op);
 
+  /// `Egress`: the decision proxy behind Humanitl (HUM-511).
+  ///
+  /// [EgressOp.status] reads the state, [EgressOp.check] opens a tunnel
+  /// through `egress.proxy` as `config.toml` names it now and the TLS
+  /// handshake in it, [EgressOp.setAuth] stores [credentials]
+  /// (`USER:PASSWORD`) in the keyring, [EgressOp.removeAuth] removes them.
+  /// No answer carries the credentials. A failed check is no exception: the
+  /// finding stands first in [EgressStatus.diagnostics]. Throws a
+  /// [DaemonException] for a refusal, and `UNIMPLEMENTED` from a daemon
+  /// before contract 1.41.
+  Future<EgressStatus> egress(EgressOp op, {String credentials = ''});
+
   /// `SandboxBackends`: the sandbox backends of this system with their
   /// isolation level, whether a start would pass, which one the
   /// configuration chooses and what is missing (HUM-432). Starts nothing.

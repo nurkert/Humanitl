@@ -342,6 +342,8 @@ void main() {
     await press(tester, LogicalKeyboardKey.end);
     expect(page(SettingsCategory.daemon), findsOneWidget);
     await press(tester, LogicalKeyboardKey.arrowUp);
+    expect(page(SettingsCategory.egress), findsOneWidget);
+    await press(tester, LogicalKeyboardKey.arrowUp);
     expect(page(SettingsCategory.network), findsOneWidget);
 
     await press(tester, LogicalKeyboardKey.tab);

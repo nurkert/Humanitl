@@ -15,6 +15,7 @@ import '../../../core/ui/ui.dart';
 import '../../../l10n/l10n.dart';
 import '../categories/agent_category.dart';
 import '../categories/daemon_category.dart';
+import '../categories/egress_category.dart';
 import '../categories/interface_category.dart';
 import '../categories/models_category.dart';
 import '../categories/network_category.dart';
@@ -180,6 +181,56 @@ final List<SettingEntry> settingsRegistry = <SettingEntry>[
         l10n.settingsTrustSystemStoreHelp(ClientDiagnostics.restartUnitCommand),
     keywords: (AppLocalizations l10n) => l10n.settingsKeywordsTrust,
     build: (SettingsPageData data) => TrustStoreRow(config: data.config),
+  ),
+  // Entscheidungs-Proxy (HUM-511): ein eigener Abschnitt, erst ab einem
+  // Daemon mit `Egress`. Adresse, CA und Auflösung über `SetConfig`, die
+  // Zugangsdaten und die Prüfung über `Egress`.
+  SettingEntry(
+    id: FormKeys.egressProxy,
+    category: SettingsCategory.egress,
+    title: (AppLocalizations l10n) => l10n.settingsEgressProxyLabel,
+    help: (AppLocalizations l10n) => l10n.settingsEgressProxyHelp,
+    details: (AppLocalizations l10n) => l10n.settingsEgressProxyDetails,
+    keywords: (AppLocalizations l10n) => l10n.settingsKeywordsEgress,
+    shownWhen: (DaemonInfo? info) => info?.offersEgress ?? false,
+    build: (SettingsPageData data) => EgressProxyRow(config: data.config),
+  ),
+  SettingEntry(
+    id: FormKeys.egressProxyCa,
+    category: SettingsCategory.egress,
+    title: (AppLocalizations l10n) => l10n.settingsEgressCaLabel,
+    help: (AppLocalizations l10n) => l10n.settingsEgressCaHelp(mitmproxyCaHint),
+    keywords: (AppLocalizations l10n) => l10n.settingsKeywordsEgress,
+    shownWhen: (DaemonInfo? info) => info?.offersEgress ?? false,
+    build: (SettingsPageData data) => EgressCaRow(config: data.config),
+  ),
+  SettingEntry(
+    id: FormKeys.egressProxyResolve,
+    category: SettingsCategory.egress,
+    title: (AppLocalizations l10n) => l10n.settingsEgressResolveLabel,
+    help: (AppLocalizations l10n) => l10n.settingsEgressResolveHelp,
+    details: (AppLocalizations l10n) => l10n.settingsEgressResolveDetails,
+    keywords: (AppLocalizations l10n) => l10n.settingsKeywordsEgress,
+    shownWhen: (DaemonInfo? info) => info?.offersEgress ?? false,
+    build: (SettingsPageData data) => EgressResolveRow(config: data.config),
+  ),
+  SettingEntry(
+    id: FormKeys.egressProxyAuthRef,
+    category: SettingsCategory.egress,
+    title: (AppLocalizations l10n) => l10n.settingsEgressAuthLabel,
+    help: (AppLocalizations l10n) => l10n.settingsEgressAuthHelp,
+    keywords: (AppLocalizations l10n) => l10n.settingsKeywordsEgress,
+    shownWhen: (DaemonInfo? info) => info?.offersEgress ?? false,
+    build: (SettingsPageData data) => const EgressAuthRow(),
+  ),
+  SettingEntry(
+    id: SettingIds.egressCheck,
+    category: SettingsCategory.egress,
+    title: (AppLocalizations l10n) => l10n.settingsEgressCheckLabel,
+    help: (AppLocalizations l10n) => l10n.settingsEgressCheckHelp,
+    keywords: (AppLocalizations l10n) => l10n.settingsKeywordsEgress,
+    shownWhen: (DaemonInfo? info) => info?.offersEgress ?? false,
+    build: (SettingsPageData data) => const EgressCheckRow(),
   ),
   SettingEntry(
     id: SettingIds.daemonVersion,

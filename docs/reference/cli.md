@@ -85,6 +85,12 @@ step, is described in [`docs/cli.md`](../cli.md); which RPC each subcommand serv
 - [`humanitl intercept status`](#humanitl-intercept-status) Show whether intercepting is on or paused, and since when
 - [`humanitl intercept pause`](#humanitl-intercept-pause) Pause intercepting until you resume it, the next session starts or the daemon stops
 - [`humanitl intercept resume`](#humanitl-intercept-resume) Resume intercepting: every request no rule decides waits again
+- [`humanitl egress`](#humanitl-egress) The decision proxy behind Humanitl (`egress.proxy`): show it, check the connection, store its credentials
+- [`humanitl egress status`](#humanitl-egress-status) Show the decision proxy as config.toml names it, the way out the running daemon takes, and whether credentials are stored
+- [`humanitl egress check`](#humanitl-egress-check) Open a tunnel through `egress.proxy` to a fixed target (example.com:443) and the TLS handshake in it, as config.toml says now. Sends no request, so nobody has to decide anything at the proxy
+- [`humanitl egress auth`](#humanitl-egress-auth) Store or remove the credentials of the decision proxy
+- [`humanitl egress auth set`](#humanitl-egress-auth-set) Store USER:PASSWORD in the system keyring and set `egress.proxy_auth_ref`. Read from stdin, never from the command line; at a terminal the input is hidden
+- [`humanitl egress auth remove`](#humanitl-egress-auth-remove) Remove the credentials and `egress.proxy_auth_ref`
 
 ## Configuration flags
 
@@ -104,6 +110,11 @@ below lists the flag names and their short aliases.
 | `--audit-fsync-every` | - | `INTEGER` | `audit.fsync_every` |
 | `--audit-max-bytes` | - | `INTEGER` | `audit.max_bytes` |
 | `--audit-retention-days` | - | `INTEGER` | `audit.retention_days` |
+| `--egress-proxy` | - | `STRING,_OPTIONAL` | `egress.proxy` |
+| `--egress-proxy-auth-ref` | - | `STRING,_OPTIONAL` | `egress.proxy_auth_ref` |
+| `--egress-proxy-ca` | - | `STRING,_OPTIONAL` | `egress.proxy_ca` |
+| `--egress-proxy-resolve` | - | `proxy`, `humanitl` | `egress.proxy_resolve` |
+| `--egress-proxy-response-timeout-secs` | - | `INTEGER` | `egress.proxy_response_timeout_secs` |
 | `--experimental-h2-upstream` | - | `true`, `false` | `experimental.h2_upstream` |
 | `--findings-email-allow-domains` | - | `LIST_OF_STRING` | `findings.email_allow_domains` |
 | `--findings-enabled` | - | `true`, `false` | `findings.enabled` |
@@ -189,6 +200,7 @@ Commands:
   update     Check for a newer Humanitl and install it
   llm        Find LLM servers in the local network
   intercept  Pause intercepting, resume it, or show whether it is paused
+  egress     The decision proxy behind Humanitl (`egress.proxy`): show it, check the connection, store its credentials
   help       Print this message or the help of the given subcommand(s)
 
 Options:
@@ -2776,6 +2788,179 @@ Options:
 Resume intercepting: every request no rule decides waits again
 
 Usage: humanitl intercept resume [OPTIONS]
+
+Options:
+      --json
+          Machine-readable output: one JSON value on stdout, diagnostics included
+
+      --config <PATH>
+          Read this config file instead of the one in the user's config directory
+
+  -v, --verbose...
+          Explain what is happening; repeat for more
+
+  -q, --quiet
+          Only the result, no notes
+
+      --profile <NAME>
+          Use this profile for the session; falls back to the sandbox profile of that name when no session profile exists
+
+  -h, --help
+          Print help
+```
+
+## humanitl egress
+
+```text
+The decision proxy behind Humanitl (`egress.proxy`): show it, check the connection, store its credentials
+
+Usage: humanitl egress [OPTIONS] <COMMAND>
+
+Commands:
+  status  Show the decision proxy as config.toml names it, the way out the running daemon takes, and whether credentials are stored
+  check   Open a tunnel through `egress.proxy` to a fixed target (example.com:443) and the TLS handshake in it, as config.toml says now. Sends no request, so nobody has to decide anything at the proxy
+  auth    Store or remove the credentials of the decision proxy
+  help    Print this message or the help of the given subcommand(s)
+
+Options:
+      --json
+          Machine-readable output: one JSON value on stdout, diagnostics included
+
+      --config <PATH>
+          Read this config file instead of the one in the user's config directory
+
+  -v, --verbose...
+          Explain what is happening; repeat for more
+
+  -q, --quiet
+          Only the result, no notes
+
+      --profile <NAME>
+          Use this profile for the session; falls back to the sandbox profile of that name when no session profile exists
+
+  -h, --help
+          Print help
+```
+
+## humanitl egress status
+
+```text
+Show the decision proxy as config.toml names it, the way out the running daemon takes, and whether credentials are stored
+
+Usage: humanitl egress status [OPTIONS]
+
+Options:
+      --json
+          Machine-readable output: one JSON value on stdout, diagnostics included
+
+      --config <PATH>
+          Read this config file instead of the one in the user's config directory
+
+  -v, --verbose...
+          Explain what is happening; repeat for more
+
+  -q, --quiet
+          Only the result, no notes
+
+      --profile <NAME>
+          Use this profile for the session; falls back to the sandbox profile of that name when no session profile exists
+
+  -h, --help
+          Print help
+```
+
+## humanitl egress check
+
+```text
+Open a tunnel through `egress.proxy` to a fixed target (example.com:443) and the TLS handshake in it, as config.toml says now. Sends no request, so nobody has to decide anything at the proxy
+
+Usage: humanitl egress check [OPTIONS]
+
+Options:
+      --json
+          Machine-readable output: one JSON value on stdout, diagnostics included
+
+      --config <PATH>
+          Read this config file instead of the one in the user's config directory
+
+  -v, --verbose...
+          Explain what is happening; repeat for more
+
+  -q, --quiet
+          Only the result, no notes
+
+      --profile <NAME>
+          Use this profile for the session; falls back to the sandbox profile of that name when no session profile exists
+
+  -h, --help
+          Print help
+```
+
+## humanitl egress auth
+
+```text
+Store or remove the credentials of the decision proxy
+
+Usage: humanitl egress auth [OPTIONS] <COMMAND>
+
+Commands:
+  set     Store USER:PASSWORD in the system keyring and set `egress.proxy_auth_ref`. Read from stdin, never from the command line; at a terminal the input is hidden
+  remove  Remove the credentials and `egress.proxy_auth_ref`
+  help    Print this message or the help of the given subcommand(s)
+
+Options:
+      --json
+          Machine-readable output: one JSON value on stdout, diagnostics included
+
+      --config <PATH>
+          Read this config file instead of the one in the user's config directory
+
+  -v, --verbose...
+          Explain what is happening; repeat for more
+
+  -q, --quiet
+          Only the result, no notes
+
+      --profile <NAME>
+          Use this profile for the session; falls back to the sandbox profile of that name when no session profile exists
+
+  -h, --help
+          Print help
+```
+
+## humanitl egress auth set
+
+```text
+Store USER:PASSWORD in the system keyring and set `egress.proxy_auth_ref`. Read from stdin, never from the command line; at a terminal the input is hidden
+
+Usage: humanitl egress auth set [OPTIONS]
+
+Options:
+      --json
+          Machine-readable output: one JSON value on stdout, diagnostics included
+
+      --config <PATH>
+          Read this config file instead of the one in the user's config directory
+
+  -v, --verbose...
+          Explain what is happening; repeat for more
+
+  -q, --quiet
+          Only the result, no notes
+
+      --profile <NAME>
+          Use this profile for the session; falls back to the sandbox profile of that name when no session profile exists
+
+  -h, --help
+          Print help
+```
+
+## humanitl egress auth remove
+
+```text
+Remove the credentials and `egress.proxy_auth_ref`
+
+Usage: humanitl egress auth remove [OPTIONS]
 
 Options:
       --json

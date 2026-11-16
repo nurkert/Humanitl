@@ -198,6 +198,43 @@ pub enum Cmd {
         #[command(subcommand)]
         cmd: InterceptCmd,
     },
+
+    /// The decision proxy behind Humanitl (`egress.proxy`): show it, check
+    /// the connection, store its credentials.
+    Egress {
+        /// Was mit dem Entscheidungs-Proxy geschehen soll.
+        #[command(subcommand)]
+        cmd: EgressCmd,
+    },
+}
+
+/// Die Unterkommandos von `humanitl egress` (HUM-511).
+#[derive(Debug, Subcommand)]
+pub enum EgressCmd {
+    /// Show the decision proxy as config.toml names it, the way out the
+    /// running daemon takes, and whether credentials are stored.
+    Status,
+    /// Open a tunnel through `egress.proxy` to a fixed target (example.com:443)
+    /// and the TLS handshake in it, as config.toml says now. Sends no
+    /// request, so nobody has to decide anything at the proxy.
+    Check,
+    /// Store or remove the credentials of the decision proxy.
+    Auth {
+        /// Was mit den Zugangsdaten geschehen soll.
+        #[command(subcommand)]
+        cmd: EgressAuthCmd,
+    },
+}
+
+/// Die Unterkommandos von `humanitl egress auth` (HUM-511).
+#[derive(Debug, Subcommand)]
+pub enum EgressAuthCmd {
+    /// Store USER:PASSWORD in the system keyring and set
+    /// `egress.proxy_auth_ref`. Read from stdin, never from the command line;
+    /// at a terminal the input is hidden.
+    Set,
+    /// Remove the credentials and `egress.proxy_auth_ref`.
+    Remove,
 }
 
 /// Die Unterkommandos von `humanitl intercept` (HUM-407).

@@ -20,7 +20,7 @@
 //! nur heben kann, siehe [`mod@crate::load`]), `agent.adapter`, `agent.command`, `hold.ask_mode`,
 //! `hold.hard_block_checksum_secrets`, `findings.enabled`,
 //! `findings.ignored_hashes`, `findings.email_allow_domains`, `pseudonyms.*`,
-//! `limits.recorder_max_body_bytes`, `resolver.*`, `tls.*`, `experimental.*`,
+//! `limits.recorder_max_body_bytes`, `resolver.*`, `tls.*`, `egress.*`, `experimental.*`,
 //! `recorder.retention_days`, `audit.*`, `terminal.*`. Eine Gruppe ist `denied`,
 //! wenn jedes Blatt darunter es ist.
 //!
@@ -63,6 +63,9 @@ pub struct Config {
     /// Wem der Daemon auf dem Weg zum Ziel vertraut.
     #[schemars(extend("x-tier" = "advanced", "x-project-scope" = "denied"))]
     pub tls: TlsConfig,
+    /// Ein Entscheidungs-Proxy des Nutzers hinter Humanitl (ADR-0022, HUM-511).
+    #[schemars(extend("x-tier" = "advanced", "x-project-scope" = "denied"))]
+    pub egress: EgressConfig,
     /// Erkennung von Geheimnissen und persönlichen Daten.
     #[schemars(extend("x-tier" = "basic", "x-project-scope" = "allowed"))]
     pub findings: FindingsConfig,
@@ -266,10 +269,17 @@ pub struct HoldConfig {
     pub hard_block_checksum_secrets: bool,
 }
 
+impl HoldConfig {
+    /// Die Vorgabe von `hold.timeout_secs`; dieselbe Zahl gilt für
+    /// `egress.proxy_response_timeout_secs`, denn hinter dem
+    /// Entscheidungs-Proxy wartet wie hier ein Mensch (ADR-0022).
+    pub const DEFAULT_TIMEOUT_SECS: u64 = 300;
+}
+
 impl Default for HoldConfig {
     fn default() -> Self {
         Self {
-            timeout_secs: 300,
+            timeout_secs: Self::DEFAULT_TIMEOUT_SECS,
             ask_mode: AskMode::Ui,
             hard_block_checksum_secrets: false,
         }
@@ -402,6 +412,92 @@ impl Default for TlsConfig {
     fn default() -> Self {
         Self {
             trust_system_store: true,
+        }
+    }
+}
+
+/// Der Weg hinaus über einen Entscheidungs-Proxy des Nutzers (ADR-0022,
+/// HUM-511).
+///
+/// Ohne `egress.proxy` ist nichts davon wirksam: Humanitl ist der einzige
+/// Proxy, löst erst nach seiner Entscheidung auf und prüft jedes Ziel auf
+/// private Adressen (ADR-0006). Jeder Schlüssel ist im Projekt-Profil
+/// gesperrt.
+#[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize, JsonSchema)]
+#[serde(default, deny_unknown_fields)]
+pub struct EgressConfig {
+    /// Adresse eines Entscheidungs-Proxys des Nutzers als `http://HOST:PORT` (etwa mitmproxy). Gesetzt verlässt jede erlaubte Anfrage des Agenten den Daemon über diesen Proxy; `https` geht als `CONNECT`-Tunnel, in dem Humanitl TLS neu aufbaut, `http` als Anfrage in absoluter Form. Anfragen des Daemons selbst (Suche nach Modellservern, Update-Prüfung) bleiben direkt. Die Prüfung auf private Adressen gilt dem Ziel, nie diesem Proxy; er darf auf `127.0.0.1` laufen. Leer heißt: kein zweiter Proxy, nichts ändert sich. Wirkt nach dem Neustart des Daemons.
+    #[schemars(extend("x-tier" = "advanced", "x-project-scope" = "denied"), with = "Option<String>")]
+    pub proxy: Option<url::Url>,
+    /// Absoluter Pfad der PEM-Datei mit der CA des Entscheidungs-Proxys, bei mitmproxy `~/.mitmproxy/mitmproxy-ca-cert.pem` (ausgeschrieben, ohne `~`). Ihr wird nur auf dem Weg über `egress.proxy` vertraut, zusätzlich zu den Ankern aus `tls.trust_system_store`, nie auf einer direkten Verbindung. Wirkt nach dem Neustart des Daemons.
+    #[schemars(extend("x-tier" = "advanced", "x-project-scope" = "denied"))]
+    pub proxy_ca: Option<PathBuf>,
+    /// Verweis auf die Zugangsdaten des Entscheidungs-Proxys als `NUTZER:PASSWORT` (geteilt am ersten Doppelpunkt; das Passwort darf Leerzeichen tragen) im Schlüsselbund oder, wenn er nicht antwortet, in einer Datei mit `0600` (`CONFIG_019`), nie die Daten selbst: `secret-service:humanitl/egress-proxy`, unter macOS `keychain:humanitl/egress-proxy`, oder `file:egress-proxy`. Gesetzt wird er mit `humanitl egress auth set` oder in den Einstellungen; der Daemon schickt sie als `Proxy-Authorization: Basic` nur an diesen Proxy. Leer heißt: ohne Anmeldung.
+    #[schemars(extend("x-tier" = "advanced", "x-project-scope" = "denied"))]
+    pub proxy_auth_ref: Option<String>,
+    /// Wer den Namen des Ziels auflöst, wenn `egress.proxy` gesetzt ist. `proxy` (Vorgabe): Humanitl löst nichts auf und schickt `CONNECT host:port`, der Entscheidungs-Proxy löst nach seiner Entscheidung auf; Humanitl lehnt vorher nur private IP-Literale und lokale Namen ab (`localhost`, `*.localhost`, `*.local`, `*.internal`, `*.home.arpa` und jeden Namen ohne Punkt, etwa `metadata`), und das bei beiden Werten, bevor irgendetwas aufgelöst wird. Ein öffentlicher Name, der auf eine private Adresse zeigt, ist dann Sache des Entscheidungs-Proxys. `humanitl`: Humanitl löst nach seiner Entscheidung auf, prüft die Adresse wie ohne zweiten Proxy und schickt `CONNECT IP:PORT`; die DNS-Anfrage verlässt den Rechner dann, bevor der Entscheidungs-Proxy entschieden hat.
+    #[schemars(extend("x-tier" = "advanced", "x-project-scope" = "denied"))]
+    pub proxy_resolve: ProxyResolve,
+    /// Sekunden, die der Daemon über `egress.proxy` auf den Kopf der Antwort wartet, auch nach einem gestreamten Upload, weil dort ein Mensch entscheiden kann. `CONNECT` und der TLS-Handschlag behalten `limits.connect_timeout_secs` und `limits.header_timeout_secs`. Läuft die Frist ab, bekommt der Agent `502`.
+    #[schemars(extend("x-tier" = "advanced", "x-project-scope" = "denied"))]
+    pub proxy_response_timeout_secs: u64,
+}
+
+impl EgressConfig {
+    /// Die Vorgabe von `egress.proxy_response_timeout_secs`: dieselbe wie
+    /// `hold.timeout_secs`, denn hinter dem Proxy wartet wie in Humanitl
+    /// ein Mensch.
+    pub const DEFAULT_RESPONSE_TIMEOUT_SECS: u64 = HoldConfig::DEFAULT_TIMEOUT_SECS;
+
+    /// Der Name, unter dem `humanitl egress auth set` die Zugangsdaten
+    /// ablegt: `secret-service:humanitl/egress-proxy`, unter macOS
+    /// `keychain:humanitl/egress-proxy`, oder die Datei `egress-proxy.key`.
+    pub const CREDENTIALS_NAME: &'static str = "egress-proxy";
+
+    /// `host:port` des Entscheidungs-Proxys, für Zeilen wie „Egress: über
+    /// HOST:PORT"; `None` ohne `egress.proxy`.
+    #[must_use]
+    pub fn proxy_address(&self) -> Option<String> {
+        let url = self.proxy.as_ref()?;
+        let host = url.host_str()?;
+        let port = url.port_or_known_default()?;
+        Some(format!("{host}:{port}"))
+    }
+}
+
+impl Default for EgressConfig {
+    fn default() -> Self {
+        Self {
+            proxy: None,
+            proxy_ca: None,
+            proxy_auth_ref: None,
+            proxy_resolve: ProxyResolve::Proxy,
+            proxy_response_timeout_secs: Self::DEFAULT_RESPONSE_TIMEOUT_SECS,
+        }
+    }
+}
+
+/// Wer den Namen des Ziels auflöst, wenn ein Entscheidungs-Proxy hinter
+/// Humanitl steht (ADR-0022).
+#[derive(Debug, Clone, Copy, PartialEq, Eq, Default, Serialize, Deserialize, JsonSchema)]
+#[serde(rename_all = "snake_case")]
+pub enum ProxyResolve {
+    /// Der Entscheidungs-Proxy, nach seiner Entscheidung; Humanitl schickt den
+    /// Namen.
+    #[default]
+    Proxy,
+    /// Humanitl, nach seiner eigenen Entscheidung; es schickt die geprüfte
+    /// Adresse.
+    Humanitl,
+}
+
+impl ProxyResolve {
+    /// Der Wert, wie er in `config.toml` steht.
+    #[must_use]
+    pub const fn as_str(self) -> &'static str {
+        match self {
+            Self::Proxy => "proxy",
+            Self::Humanitl => "humanitl",
         }
     }
 }

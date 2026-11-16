@@ -1781,6 +1781,23 @@ after it; `--json` prints `{"paused": …, "paused_since": …}` with the start 
 The app shows the same pause, whoever set it: the header pill turns to "Intercept PAUSED" and a
 caution tape runs across the window. A daemon without a proxy session answers `IPC_006`.
 
+## `humanitl egress`
+
+`egress.proxy` puts a decision proxy of your own (mitmproxy, Burp) behind Humanitl (HUM-511,
+ADR-0022): every request Humanitl allows leaves through it. `humanitl egress status` shows the
+proxy as `config.toml` names it now, the way out the running daemon takes since its start (the file
+takes effect after `humanitl daemon restart`), the CA file and whether credentials are stored.
+`humanitl egress check` opens a tunnel through the proxy to `example.com:443` and the TLS handshake
+in it, as `config.toml` says now, and sends no request, so nobody at the proxy has to decide
+anything; it ends with exit code 3 and the finding (`PROXY_012` to `PROXY_017`) when that fails.
+`humanitl egress auth set` reads `USER:PASSWORD` from `stdin` (hidden at a terminal, never from the
+command line), stores it in the system keyring, or in a `0600` file with `CONFIG_019`, and sets
+`egress.proxy_auth_ref`; `humanitl egress auth remove` removes both. No output carries the
+credentials. Every subcommand is one call of the RPC `Egress`; `--json` prints the state as one
+object. The other keys are set like every key, for example
+`humanitl config set egress.proxy http://127.0.0.1:8080` and
+`humanitl config set egress.proxy_ca /home/you/.mitmproxy/mitmproxy-ca-cert.pem`.
+
 ## The global switches
 
 Five switches apply to every subcommand, because `clap` carries them as

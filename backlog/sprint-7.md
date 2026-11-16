@@ -3100,6 +3100,44 @@ Nutzer dafür.
    Humanitl nicht selbst aufgelöst und geprüft hat; mit `"proxy"` keine
    DNS-Anfrage aus Humanitl.
 
+### Status
+Erledigt. Der Egress-Port liefert mit `open(Target)` eine `Route` (Strom,
+Form der Anfrage, eigene `ClientTls`, Frist für den Antwortkopf); der neue
+Adapter `egress/http_proxy.rs` spricht `CONNECT host:port` (Vorgabe
+`egress.proxy_resolve = "proxy"`, keine DNS-Anfrage aus Humanitl) oder
+`CONNECT IP:PORT` nach eigener Auflösung und Prüfung (`"humanitl"`), `http`
+in absoluter Form, `Host` immer der Name. Lokale Namen (`localhost`,
+`*.localhost`, `*.local`, `*.internal`, `*.home.arpa`, Namen ohne Punkt) und
+private IP-Literale fallen in beiden Modi vor jeder Auflösung, außer
+`allow_private` erlaubt sie. Die CA aus `egress.proxy_ca` gilt nur auf
+diesem Weg; ein kaputter Proxy-Weg scheitert mit `PROXY_017`, nie direkt.
+Fristen getrennt: Verbindung und `CONNECT` unter
+`limits.connect_timeout_secs`, TLS unter dem Handschlag-Limit, nur der
+Antwortkopf unter `egress.proxy_response_timeout_secs` (Vorgabe 300, auch
+nach gestreamtem Upload). Befunde `PROXY_012` bis `PROXY_019` mit `why` und
+`fix` am Fluss; ein Passwort in `egress.proxy` steht in keinem Befund.
+Zugangsdaten über `egress.proxy_auth_ref` (Schlüsselbund oder
+`0600`-Rückfalldatei), gesetzt nur über den RPC `Egress` bzw. `humanitl
+egress auth set` von stdin. CLI `humanitl egress status|check|auth`, Zeile
+`egress` in `doctor`, im Isolationsreiter „Egress: über HOST:PORT", in der
+App der Abschnitt „Entscheidungs-Proxy" mit Dateiauswahl, Auflösung,
+Zugangsdaten und „Verbindung prüfen"; die Einstellungen wirken nach einem
+Neustart des Daemons, App und CLI sagen das. Protokoll 1.41.
+`docs/SECURITY.md` und `docs/THREAT-MODEL.md` (K-35) nennen den Opt-in und
+seine Grenzen schon hier, weil er die Aussage schwächt (CLAUDE.md).
+
+Review: Codex Runde 1 ein blocking (lokale Namen bei `"humanitl"` nicht
+vorab geprüft) und ein major (Befunde nach dem `CONNECT` ohne Diagnostic),
+beide behoben; Delta ein major (Passwort aus `egress.proxy` im Befund) und
+ein minor (doppelter Fristhinweis nach gestreamtem Upload), beide behoben.
+Sonnet als Ersatz für Antigravity kein blocking oder major; neun minor
+übernommen (Neustart-Hinweis sofort, Module `egress/screen.rs`,
+`diagnostics.rs`, `check.rs` statt Rückabhängigkeit, `OpenError` statt
+Codevergleich, `HttpProxy::connect` gesperrt, Test für gestreamten Upload,
+gemeinsame Vorgabe, Doku zum Datei-Rückfall, Passwörter mit Leerzeichen).
+Offen: Ein Daemon vor 1.41 zeigt die Kategorie leer; der Dart-Fake-Doctor
+hat keine Zeile `egress`; Burp ist nicht erprobt (HUM-513).
+
 ---
 
 ## HUM-512 · `hold.ask_mode = "upstream"`: Anfragen ohne Regel entscheidet der Proxy dahinter

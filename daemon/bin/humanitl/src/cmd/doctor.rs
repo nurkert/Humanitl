@@ -335,6 +335,9 @@ async fn local(
     })
     .await;
     let mut report = report.unwrap_or_default();
+    // Dieselbe Zeile, die der Daemon schreibt (HUM-511): Sie liest nur die
+    // Konfiguration.
+    humanitl_ipc::egress::insert_doctor_line(&mut report, &config.egress);
     report.backends = local_backends(ctx, config, probe).await;
     report
 }

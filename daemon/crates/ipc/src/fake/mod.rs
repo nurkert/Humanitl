@@ -732,7 +732,7 @@ impl DaemonApi for FakeDaemon {
     async fn doctor(&self) -> v1::DoctorReport {
         use humanitl_sandbox::doctor::{CheckId, CheckOutcome};
 
-        v1::DoctorReport {
+        let mut report = v1::DoctorReport {
             checks: CheckId::ALL
                 .into_iter()
                 .map(|id| {
@@ -745,7 +745,11 @@ impl DaemonApi for FakeDaemon {
                 .collect(),
             // Der Fake hat keine Backends, die er fragen könnte (HUM-436).
             backends: Vec::new(),
-        }
+        };
+        // Die Zeile des Wegs hinaus, wie im echten Daemon (HUM-511): Der
+        // Fake geht direkt.
+        crate::egress::insert_doctor_line(&mut report, &humanitl_config::EgressConfig::default());
+        report
     }
 
     /// Meldet den Endpunkt der Sitzungsdatei, sonst nichts Gemessenes.
@@ -863,6 +867,31 @@ impl DaemonApi for FakeDaemon {
             &entries,
             humanitl_sandbox::IsolationLevel::from(sandbox.min_isolation),
         ))
+    }
+
+    /// Der Entscheidungs-Proxy (HUM-511): Der Fake hat keinen und keinen
+    /// Schlüsselbund. `status` nennt den direkten Weg, `check` antwortet
+    /// wie ein Daemon ohne `egress.proxy` mit `PROXY_017`, und Zugangsdaten
+    /// legt er nicht ab (`IPC_006`).
+    async fn egress(&self, request: v1::EgressRequest) -> Result<v1::EgressStatus, Diagnostic> {
+        let direct = crate::egress::route(&humanitl_config::EgressConfig::default());
+        let status = v1::EgressStatus {
+            configured: Some(direct.clone()),
+            active: Some(direct),
+            ..v1::EgressStatus::default()
+        };
+        match request.op {
+            Some(v1::egress_request::Op::Status(_)) => Ok(status),
+            Some(v1::egress_request::Op::CheckConnection(_)) => {
+                Err(crate::egress::nothing_to_check())
+            }
+            Some(v1::egress_request::Op::SetAuth(_) | v1::egress_request::Op::RemoveAuth(_)) => {
+                Err(Diagnostic::builder(codes::IPC_006, Severity::Error)
+                    .why("the fake daemon has no keyring for proxy credentials".to_owned())
+                    .build())
+            }
+            None => Err(crate::egress::no_operation()),
+        }
     }
 }
 
@@ -1441,6 +1470,11 @@ impl FakeDaemon {
                     backend: "bwrap".to_owned(),
                     // Die Stufe dieses Backends, wie im echten Daemon (HUM-432).
                     isolation_level: v1::IsolationLevel::Namespaces.into(),
+                    // Der Fake geht direkt hinaus, wie ein Daemon ohne
+                    // `egress.proxy` (HUM-511).
+                    egress: Some(crate::egress::route(
+                        &humanitl_config::EgressConfig::default(),
+                    )),
                     policy_text: String::new(),
                     door: "socket_file /run/humanitl/proxy.sock".to_owned(),
                     llm_endpoint: session.llm_endpoint,

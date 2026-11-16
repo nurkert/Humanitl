@@ -30,6 +30,7 @@ use std::time::{Duration, SystemTime};
 
 use bytes::Bytes;
 use humanitl_config::IpPreference;
+use humanitl_config::secret::KeyStore;
 use humanitl_core::{
     Diagnostic, FlowEvent, FlowId, HostName, HttpRequest, UpstreamError, ip_is_private,
 };
@@ -43,7 +44,10 @@ use rustls::pki_types::{CertificateDer, ServerName};
 use tokio_rustls::TlsConnector;
 
 use crate::body::{self, ResponseBody, Stall, StreamProgress};
-use crate::egress::Egress;
+use crate::egress::diagnostics::{self, wants_credentials};
+use crate::egress::{
+    AsyncStream, Egress, OpenError, RequestForm, Resolution, Route, Target, screen,
+};
 use crate::hold::HoldQueue;
 use crate::resolver::{self, AddressRefusal, Resolver};
 use crate::trust::{TrustAnchors, TrustSource};
@@ -268,13 +272,23 @@ impl From<Bytes> for Outgoing {
 /// geprüft wurde (HUM-257). Daraus bauen Handler und Endpunkt-Probe ein `why`
 /// mit dem nächsten Schritt; die Antwort an den Agenten bleibt
 /// `reason: upstream_tls`.
-#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+#[derive(Debug, Clone, PartialEq)]
 pub struct ForwardError {
     /// Was der Automat verbucht.
     pub error: UpstreamError,
     /// Gesetzt, wenn das Zertifikat des Ziels von einer unbekannten Stelle
     /// unterschrieben ist (`UnknownIssuer`), mit der Herkunft der Anker.
     pub untrusted_issuer: Option<TrustSource>,
+    /// Der Befund des Wegs, ungekürzt bis zur Oberfläche (HUM-511): etwa
+    /// ein Entscheidungs-Proxy, der nicht erreichbar ist (`PROXY_012`),
+    /// `407` sagt (`PROXY_014`) oder dessen CA nicht passt (`PROXY_015`).
+    /// Der Handler stellt ihn an den Fluss; der Agent sieht weiter nur
+    /// [`ForwardError::error`].
+    pub diagnostic: Option<Box<Diagnostic>>,
+    /// Gesetzt, wenn ein lokaler Name vor einem Entscheidungs-Proxy
+    /// abgelehnt wurde; der Handler stellt `PROXY_016` mit einer Regel an
+    /// den Fluss, wie `PROXY_008` zu einer privaten Adresse.
+    pub local_name: bool,
 }
 
 impl ForwardError {
@@ -298,6 +312,30 @@ impl ForwardError {
         Self {
             error: UpstreamError::Tls,
             untrusted_issuer: unknown_issuer.then_some(source),
+            diagnostic: None,
+            local_name: false,
+        }
+    }
+
+    /// Ein Scheitern mit einem Befund, den der Mensch sehen soll.
+    #[must_use]
+    pub fn with_diagnostic(error: UpstreamError, diagnostic: Diagnostic) -> Self {
+        Self {
+            error,
+            untrusted_issuer: None,
+            diagnostic: Some(Box::new(diagnostic)),
+            local_name: false,
+        }
+    }
+
+    /// Ein lokaler Name vor einem Entscheidungs-Proxy (ADR-0022).
+    #[must_use]
+    pub const fn local_name() -> Self {
+        Self {
+            error: UpstreamError::Dns,
+            untrusted_issuer: None,
+            diagnostic: None,
+            local_name: true,
         }
     }
 }
@@ -307,6 +345,8 @@ impl From<UpstreamError> for ForwardError {
         Self {
             error,
             untrusted_issuer: None,
+            diagnostic: None,
+            local_name: false,
         }
     }
 }
@@ -353,6 +393,49 @@ impl Upstream {
         }
     }
 
+    /// Der Weiterleiter des Verkehrs des Agenten aus der Konfiguration
+    /// (HUM-511): direkt, oder mit `egress.proxy` über den
+    /// Entscheidungs-Proxy ([`crate::egress::from_config`]).
+    ///
+    /// `keys` liest die Zugangsdaten aus `egress.proxy_auth_ref` und
+    /// blockiert dafür; ohne `keys` geht der Proxy ohne Anmeldung.
+    ///
+    /// # Errors
+    ///
+    /// Wie [`crate::egress::from_config`].
+    pub fn from_config(
+        config: &humanitl_config::Config,
+        resolver: Arc<dyn Resolver>,
+        extra_roots: &[CertificateDer<'static>],
+        keys: Option<&KeyStore>,
+    ) -> Result<Self, Diagnostic> {
+        let wiring = crate::egress::from_config(config, extra_roots, keys)?;
+        Ok(Self::new(
+            wiring.egress,
+            resolver,
+            wiring.client_tls,
+            config.resolver.prefer,
+            Duration::from_secs(config.limits.header_timeout_secs),
+        ))
+    }
+
+    /// Das feste Ziel von [`Upstream::check_decision_proxy`].
+    pub const CHECK_TARGET: (&'static str, u16) = crate::egress::check::CHECK_TARGET;
+
+    /// Prüft den Entscheidungs-Proxy aus `config` (`humanitl egress check`,
+    /// HUM-511): Tunnel und TLS-Handschlag zu [`Upstream::CHECK_TARGET`],
+    /// ohne eine Anfrage ([`crate::egress::check::run`]).
+    ///
+    /// # Errors
+    ///
+    /// Wie [`crate::egress::check::run`].
+    pub async fn check_decision_proxy(
+        config: &humanitl_config::Config,
+        keys: Option<KeyStore>,
+    ) -> Result<(), Diagnostic> {
+        crate::egress::check::run(config, keys).await
+    }
+
     /// Leitet `request` mit dem gepufferten `body` zum Ziel und liefert die
     /// Antwort ungepuffert zurück.
     ///
@@ -373,8 +456,29 @@ impl Upstream {
         body: impl Into<Outgoing>,
         allow_private: bool,
     ) -> Result<Response<Incoming>, ForwardError> {
-        let ip = self.resolve(&request.authority, allow_private).await?;
-        self.forward_to(request, body, ip).await
+        let resolved = self.pin(request, allow_private).await?;
+        self.send_via(request, body.into(), resolved).await
+    }
+
+    /// Die Adresse, mit der der Egress verbindet, nach den Prüfungen vor
+    /// einem zweiten Proxy (ADR-0022): Ein lokaler Name fällt vor jeder
+    /// Auflösung, gleich wer auflöst; mit `egress.proxy_resolve = "proxy"`
+    /// fragt Humanitl danach keinen Namensdienst, der Proxy löst nach seiner
+    /// Entscheidung auf.
+    async fn pin(
+        &self,
+        request: &HttpRequest,
+        allow_private: bool,
+    ) -> Result<Option<std::net::IpAddr>, ForwardError> {
+        if self.egress.behind_second_proxy() {
+            screen::local_name(request, allow_private)?;
+        }
+        match self.egress.resolution() {
+            Resolution::Humanitl => {
+                Ok(Some(self.resolve(&request.authority, allow_private).await?))
+            }
+            Resolution::Proxy => screen::literal(request, allow_private),
+        }
     }
 
     /// Löst die Authority auf und prüft die Adresse.
@@ -450,42 +554,174 @@ impl Upstream {
         body: impl Into<Outgoing>,
         ip: std::net::IpAddr,
     ) -> Result<Response<Incoming>, ForwardError> {
-        let body = body.into();
-        let authority = &request.authority;
-        let stream = self
-            .egress
-            .connect(authority, Some(ip))
-            .await
-            .map_err(|diag| {
-                tracing::debug!(?diag, "egress connect failed");
-                UpstreamError::Connect
-            })?;
+        self.send_via(request, body.into(), Some(ip)).await
+    }
 
-        if request.scheme.is_secure() {
-            let connector = TlsConnector::from(Arc::clone(&self.client_tls.config));
+    /// Baut den Weg zu `request` auf, samt TLS, und sendet nichts (HUM-511).
+    ///
+    /// Die Prüfung von `humanitl egress check`: Löst auf oder prüft das Ziel
+    /// wie [`Upstream::forward`], öffnet den Weg über den Egress und, bei
+    /// `https`, den TLS-Handschlag darin. Hinter einem Entscheidungs-Proxy
+    /// beweist das, dass er erreichbar ist, den Tunnel aufbaut und seine CA
+    /// passt, ohne dass dort jemand über eine Anfrage entscheiden muss.
+    ///
+    /// # Errors
+    ///
+    /// Wie [`Upstream::forward`].
+    pub async fn handshake(&self, request: &HttpRequest) -> Result<(), ForwardError> {
+        let resolved = self.pin(request, false).await?;
+        self.open(request, resolved).await.map(drop)
+    }
+
+    /// Öffnet den Weg über den Egress und, bei `https`, TLS darin.
+    async fn open(
+        &self,
+        request: &HttpRequest,
+        resolved: Option<std::net::IpAddr>,
+    ) -> Result<Opened, ForwardError> {
+        let authority = &request.authority;
+        let route = self
+            .egress
+            .open(Target {
+                authority,
+                secure: request.scheme.is_secure(),
+                resolved,
+            })
+            .await
+            .map_err(|failure| {
+                tracing::debug!(diag = ?failure.diagnostic(), "egress connect failed");
+                // Der Befund eines Entscheidungs-Proxys geht bis zur
+                // Oberfläche; ein gescheitertes direktes Verbinden bleibt,
+                // was es war (HUM-511).
+                match failure {
+                    OpenError::Direct(_) => ForwardError::from(UpstreamError::Connect),
+                    OpenError::Route(diag) => {
+                        ForwardError::with_diagnostic(UpstreamError::Connect, diag)
+                    }
+                }
+            })?;
+        let Route {
+            stream,
+            form,
+            tls,
+            response_timeout,
+            via,
+        } = route;
+        let wait = Wait {
+            handshake: self.handshake_timeout,
+            response: response_timeout.unwrap_or(self.handshake_timeout),
+        };
+        let stream: Box<dyn AsyncStream> = if request.scheme.is_secure() {
+            let client_tls = tls.as_ref().unwrap_or(&self.client_tls);
+            let connector = TlsConnector::from(Arc::clone(&client_tls.config));
             let name = server_name(&authority.host)?;
             let tls = tokio::time::timeout(self.handshake_timeout, connector.connect(name, stream))
                 .await
-                .map_err(|_elapsed| UpstreamError::Timeout)?
-                .map_err(|err| ForwardError::tls(&err, self.client_tls.source))?;
-            Ok(self.send(request, body, tls).await?)
+                .map_err(|_elapsed| {
+                    via.as_deref().map_or_else(
+                        || ForwardError::from(UpstreamError::Timeout),
+                        |proxy| {
+                            ForwardError::with_diagnostic(
+                                UpstreamError::Timeout,
+                                diagnostics::tls_failed(
+                                    proxy,
+                                    authority,
+                                    &format!(
+                                        "no handshake within {}s",
+                                        self.handshake_timeout.as_secs()
+                                    ),
+                                ),
+                            )
+                        },
+                    )
+                })?
+                .map_err(|err| {
+                    let failure = ForwardError::tls(&err, client_tls.source);
+                    // Hinter dem Entscheidungs-Proxy ist eine unbekannte
+                    // Stelle fast immer dessen CA, die fehlt; der Rat, die
+                    // Ablage des Systems zu erweitern, wäre falsch. Jeder
+                    // andere Grund nennt den Proxy und das Ziel.
+                    match (&via, failure.untrusted_issuer) {
+                        (Some(proxy), Some(_)) => ForwardError::with_diagnostic(
+                            UpstreamError::Tls,
+                            diagnostics::ca_mismatch(proxy, authority),
+                        ),
+                        (Some(proxy), None) => ForwardError::with_diagnostic(
+                            UpstreamError::Tls,
+                            diagnostics::tls_failed(proxy, authority, &err.to_string()),
+                        ),
+                        (None, _) => failure,
+                    }
+                })?;
+            Box::new(tls)
         } else {
-            Ok(self.send(request, body, stream).await?)
+            stream
+        };
+        Ok(Opened {
+            stream,
+            form,
+            wait,
+            via,
+        })
+    }
+
+    /// Öffnet den Weg über den Egress und sendet die Anfrage in der Form, die
+    /// er verlangt ([`Route`]).
+    async fn send_via(
+        &self,
+        request: &HttpRequest,
+        body: Outgoing,
+        resolved: Option<std::net::IpAddr>,
+    ) -> Result<Response<Incoming>, ForwardError> {
+        let Opened {
+            stream,
+            form,
+            wait,
+            via,
+        } = self.open(request, resolved).await?;
+        let response = self
+            .send(request, body, stream, &form, wait)
+            .await
+            .map_err(|failure| match (&via, failure) {
+                // Über den Proxy wartet der Kopf der Antwort auf einen
+                // Menschen dort; der Befund nennt die Frist und den Schlüssel.
+                (Some(proxy), Failed::HeadLate) => ForwardError::with_diagnostic(
+                    UpstreamError::Timeout,
+                    diagnostics::response_late(proxy, &request.authority, wait.response),
+                ),
+                (_, failure) => ForwardError::from(failure.error()),
+            })?;
+        // Ein `407` auf eine Anfrage in absoluter Form kommt vom Proxy, nicht
+        // vom Ziel. Der Agent hat keine Zugangsdaten für ihn und bekommt
+        // `502`; der Befund sagt dem Menschen, was fehlt.
+        if let (RequestForm::Absolute { .. }, Some(proxy)) = (&form, &via)
+            && response.status() == hyper::StatusCode::PROXY_AUTHENTICATION_REQUIRED
+        {
+            return Err(ForwardError::with_diagnostic(
+                UpstreamError::Connect,
+                wants_credentials(proxy, &format!("the request to {}", request.authority)),
+            ));
         }
+        Ok(response)
     }
 
     /// Sendet die Anfrage über einen bereits offenen Strom (h1).
+    ///
+    /// `form` sagt, wie die Anfragezeile aussieht; `wait` trennt die Frist
+    /// des HTTP-Handschlags von der für den Kopf der Antwort (HUM-511).
     async fn send<S>(
         &self,
         request: &HttpRequest,
         body: Outgoing,
         stream: S,
-    ) -> Result<Response<Incoming>, UpstreamError>
+        form: &RequestForm,
+        wait: Wait,
+    ) -> Result<Response<Incoming>, Failed>
     where
         S: tokio::io::AsyncRead + tokio::io::AsyncWrite + Send + Unpin + 'static,
     {
         let (mut sender, conn) = tokio::time::timeout(
-            self.handshake_timeout,
+            wait.handshake,
             hyper::client::conn::http1::handshake(TokioIo::new(stream)),
         )
         .await
@@ -498,10 +734,16 @@ impl Upstream {
         });
 
         let watch = match &body {
-            Outgoing::Streamed { watch, .. } => Some(watch.clone()),
+            // Hinter einem Entscheidungs-Proxy wartet der Upload nach seinem
+            // Ende so lange auf den Kopf der Antwort wie jede Anfrage dort.
+            Outgoing::Streamed { watch, .. } => Some(StreamWatch {
+                head: wait.response,
+                ..watch.clone()
+            }),
             Outgoing::Buffered(_) => None,
         };
-        let outgoing = build_outgoing(request, body).map_err(|_err| UpstreamError::Connect)?;
+        let outgoing =
+            build_outgoing(request, body, form).map_err(|_err| UpstreamError::Connect)?;
         if let Some(watch) = watch {
             // Ein gestreamter Rumpf kann beliebig groß sein, und das Ziel
             // antwortet meist erst nach dem ganzen Rumpf. Eine Frist über die
@@ -515,7 +757,7 @@ impl Upstream {
             loop {
                 tokio::select! {
                     response = &mut send => {
-                        let response = response.map_err(|_err| UpstreamError::Connect)?;
+                        let response = response.map_err(|_err| Failed::Other(UpstreamError::Connect))?;
                         // Das Ziel kann antworten, bevor es den Upload gelesen
                         // hat. Dann hält die Verbindung den Rest des Rumpfs
                         // noch, und die Wache läuft weiter, bis er zu Ende ist
@@ -534,16 +776,19 @@ impl Upstream {
                             // Client-Rumpfs und einen Deskriptor, solange das
                             // Ziel schweigt, also unbegrenzt.
                             connection.abort();
-                            return Err(UpstreamError::Timeout);
+                            return Err(match stall {
+                                Stall::NoResponseHead => Failed::HeadLate,
+                                Stall::NotReading => Failed::Other(UpstreamError::Timeout),
+                            });
                         }
                     }
                 }
             }
         }
-        tokio::time::timeout(self.handshake_timeout, sender.send_request(outgoing))
+        tokio::time::timeout(wait.response, sender.send_request(outgoing))
             .await
-            .map_err(|_elapsed| UpstreamError::Timeout)?
-            .map_err(|_err| UpstreamError::Connect)
+            .map_err(|_elapsed| Failed::HeadLate)?
+            .map_err(|_err| Failed::Other(UpstreamError::Connect))
     }
 }
 
@@ -580,13 +825,73 @@ async fn watch_after_head(watch: StreamWatch, connection: tokio::task::JoinHandl
     }
 }
 
+/// Wie das Senden scheiterte: der Kopf der Antwort kam nicht in seiner
+/// Frist, oder etwas anderes. Nur der erste Fall bekommt über einen
+/// Entscheidungs-Proxy einen eigenen Befund (`PROXY_019`).
+#[derive(Debug, Clone, Copy)]
+enum Failed {
+    /// Der Kopf der Antwort blieb aus, auch nach dem Ende eines gestreamten
+    /// Uploads.
+    HeadLate,
+    /// Alles andere.
+    Other(UpstreamError),
+}
+
+impl Failed {
+    /// Was der Automat verbucht.
+    const fn error(self) -> UpstreamError {
+        match self {
+            Self::HeadLate => UpstreamError::Timeout,
+            Self::Other(error) => error,
+        }
+    }
+}
+
+impl From<UpstreamError> for Failed {
+    fn from(error: UpstreamError) -> Self {
+        Self::Other(error)
+    }
+}
+
+/// Ein offener Weg, bereit zum Senden.
+struct Opened {
+    stream: Box<dyn AsyncStream>,
+    form: RequestForm,
+    wait: Wait,
+    via: Option<String>,
+}
+
+/// Die zwei Fristen des Senders (HUM-511).
+#[derive(Debug, Clone, Copy)]
+struct Wait {
+    /// `limits.header_timeout_secs`: der HTTP-Handschlag.
+    handshake: Duration,
+    /// Bis zum Kopf der Antwort: direkt dieselbe Grenze, über einen
+    /// Entscheidungs-Proxy `egress.proxy_response_timeout_secs`.
+    response: Duration,
+}
+
 /// Baut die Anfrage, die zum Ziel geht: Origin-Form-URI, Host-Kopf gesetzt,
 /// Verbindungs-Kopfzeilen entfernt, Body als bekannter Puffer oder, bei
 /// [`Outgoing::Streamed`], als Strom mit der angekündigten Länge.
-fn build_outgoing(request: &HttpRequest, body: Outgoing) -> Result<Request<ResponseBody>, ()> {
+///
+/// Über einen Proxy in absoluter Form (`GET http://AUTHORITY/pfad`, RFC 9112
+/// 3.2.2), mit `Host` aus dem Namen und `Proxy-Authorization`, falls der
+/// Proxy sie verlangt (HUM-511).
+fn build_outgoing(
+    request: &HttpRequest,
+    body: Outgoing,
+    form: &RequestForm,
+) -> Result<Request<ResponseBody>, ()> {
+    let uri = match form {
+        RequestForm::Origin => request.path_and_query.clone(),
+        RequestForm::Absolute { authority, .. } => {
+            format!("http://{authority}{}", request.path_and_query)
+        }
+    };
     let mut builder = Request::builder()
         .method(request.method.clone())
-        .uri(request.path_and_query.as_str())
+        .uri(uri.as_str())
         .version(Version::HTTP_11);
 
     if let Some(headers) = builder.headers_mut() {
@@ -603,6 +908,16 @@ fn build_outgoing(request: &HttpRequest, body: Outgoing) -> Result<Request<Respo
         }
         if let Ok(host) = HeaderValue::from_str(&host_header(request)) {
             headers.insert(HeaderName::from_static("host"), host);
+        }
+        // Erst nach dem Filter oben gesetzt: Eine `Proxy-Authorization` des
+        // Agenten fällt dort als Hop-by-Hop-Zeile weg, und nur die des
+        // Daemons erreicht den Proxy.
+        if let RequestForm::Absolute {
+            proxy_authorization: Some(value),
+            ..
+        } = form
+        {
+            headers.insert(hyper::header::PROXY_AUTHORIZATION, value.clone());
         }
         // Ausdrücklich gesetzt und nicht hyper überlassen: hyper schreibt für
         // einen leeren `Full`-Rumpf gar keinen `content-length`, auch nicht

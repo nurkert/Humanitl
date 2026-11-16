@@ -217,10 +217,12 @@ impl Resolver for MockResolver {
     }
 }
 
-/// Der direkte Egress, mit Zähler davor.
+/// Der direkte Egress, mit Zähler davor; mit [`ProxyBuilder::egress`] ein
+/// anderer Egress hinter dem Zähler (HUM-511).
 #[derive(Default)]
 pub struct CountingEgress {
     inner: Direct,
+    behind: Option<Arc<dyn Egress>>,
     connects: AtomicUsize,
 }
 
@@ -232,6 +234,37 @@ impl CountingEgress {
 
 #[async_trait]
 impl Egress for CountingEgress {
+    fn resolution(&self) -> humanitl_proxy::egress::Resolution {
+        self.behind
+            .as_ref()
+            .map_or(humanitl_proxy::egress::Resolution::Humanitl, |behind| {
+                behind.resolution()
+            })
+    }
+
+    fn behind_second_proxy(&self) -> bool {
+        self.behind
+            .as_ref()
+            .is_some_and(|behind| behind.behind_second_proxy())
+    }
+
+    async fn open(
+        &self,
+        target: humanitl_proxy::egress::Target<'_>,
+    ) -> Result<humanitl_proxy::egress::Route, humanitl_proxy::egress::OpenError> {
+        match &self.behind {
+            Some(behind) => {
+                self.connects.fetch_add(1, Ordering::SeqCst);
+                behind.open(target).await
+            }
+            None => Ok(humanitl_proxy::egress::Route::direct(
+                self.connect(target.authority, target.resolved)
+                    .await
+                    .map_err(humanitl_proxy::egress::OpenError::Direct)?,
+            )),
+        }
+    }
+
     async fn connect(
         &self,
         authority: &Authority,
@@ -279,6 +312,8 @@ pub struct ProxyBuilder {
     llm_endpoint: Option<url::Url>,
     /// Datenordner und Sitzung eines frueheren Proxys (`restart_of`).
     restart: Option<(PathBuf, SessionId)>,
+    /// Ein Egress statt des direkten, hinter dem Zähler (HUM-511).
+    egress: Option<Arc<dyn Egress>>,
 }
 
 impl Default for ProxyBuilder {
@@ -307,6 +342,7 @@ impl Default for ProxyBuilder {
             llm_endpoint: None,
             recording: false,
             restart: None,
+            egress: None,
         }
     }
 }
@@ -411,6 +447,13 @@ impl ProxyBuilder {
     /// eigene CA des Fake-Upstreams ([`UpstreamCa`]).
     pub fn trust(mut self, cert: CertificateDer<'static>) -> Self {
         self.extra_roots.push(cert);
+        self
+    }
+
+    /// Ein anderer Egress statt des direkten, etwa ein Entscheidungs-Proxy
+    /// (HUM-511); der Zähler bleibt davor.
+    pub fn egress(mut self, egress: Arc<dyn Egress>) -> Self {
+        self.egress = Some(egress);
         self
     }
 
@@ -624,7 +667,10 @@ impl ProxyBuilder {
             )
             .unwrap(),
         );
-        let egress = Arc::new(CountingEgress::default());
+        let egress = Arc::new(CountingEgress {
+            behind: self.egress.clone(),
+            ..CountingEgress::default()
+        });
         let mut roots = vec![ca.cert_der().clone()];
         roots.extend(self.extra_roots);
         let tls = ClientTls::new(&TrustAnchors::bundled(), &roots, false).unwrap();

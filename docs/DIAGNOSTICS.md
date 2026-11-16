@@ -18,7 +18,7 @@ Entfernen eines Codes.
 | ipc | `IPC` | 001 | 009 | gRPC-Schnittstelle, Token, Aufrufe gegen den Zustand |
 | config | `CONFIG` | 001 | 029 | 001-006 Datei, Schlüssel, Wertebereiche, 007-009 Profile (HUM-066), 010-012 Test-Wurzel und ihr Flag (HUM-087), 013 der Projektordner der Einrichtung (HUM-044), 017-018 Editor und Gruppenschlüssel (HUM-070), 019-020 der Zugangsschlüssel des Modells (HUM-140, Bereich dafür bis 029 erweitert), 021 die gespeicherten Modellserver (HUM-289), 022 der Server des Projekts (HUM-405), 023 ein entfallener Wert einer Einstellung (HUM-464) |
 | sandbox | `SANDBOX` | 001 | 059 | 001-006 Launcher und Profil, 007 Bridge-Richtung, 010-012 Start-Fehler, 019 verweigerte Versuche ungemeldet (HUM-138), 020-025 /work-Härtung (HUM-043), 030-032 Wegwerf-Sandbox (HUM-350), 033 Vorgabe fällt auf direkt zurück (HUM-357), 034-036 und 048 Wahl des Backends, Untergrenze der Isolation und Zulassung (HUM-431, Bereich dafür bis 059 erweitert), 037-044 und 049 Podman (Sprint 7), 045-047 die Kernel-Stufe (HUM-464), 050 Dienstverwalter des Nutzers (HUM-434), 051 beschreibbare Erweiterung unter der Kernel-Stufe (HUM-466) |
-| proxy | `PROXY` | 001 | 019 | Anfragen, Caps, Protokoll, 010-011 Grenzen der Verbindung (HUM-120) |
+| proxy | `PROXY` | 001 | 019 | Anfragen, Caps, Protokoll, 010-011 Grenzen der Verbindung (HUM-120), 012-019 Entscheidungs-Proxy hinter Humanitl (HUM-511) |
 | tls | `TLS` | 001 | 009 | CA, Zertifikate, Handschlag |
 | llm | `LLM` | 001 | 009 | LLM-Endpunkt und seine Antworten, 009 der Zugangsschlüssel (HUM-140) |
 | rules | `RULES` | 001 | 019 | 001-008 Regeldatei und Muster, 009-011 Regelspeicher (HUM-027) |
@@ -855,6 +855,70 @@ Anfrage-Rumpf ist stehengeblieben
 **Auslöser.** Ein Anfrage-Rumpf ist stehengeblieben und hat die Frist überschritten.
 
 **Fix.** `ChangeSetting` auf eine längere Frist.
+
+#### PROXY_012
+
+Decision proxy unreachable
+
+**Auslöser.** `egress.proxy` is set, so every allowed request of the agent leaves through that proxy, and the daemon could not open a connection to it within `limits.connect_timeout_secs`. The request did not go out directly instead; the agent got `502`.
+
+**Fix.** `CopyCommand` with `humanitl egress check` once the proxy runs; or `ChangeSetting` on `egress.proxy` with the address it listens on, or empty to leave without it.
+
+#### PROXY_013
+
+Decision proxy refused the tunnel
+
+**Auslöser.** Humanitl asked the decision proxy for a tunnel to the target with `CONNECT`, and the proxy answered with another status than `200`, or not with HTTP at all. The sentence names the status; the agent got `502`.
+
+**Fix.** No automatic fix; the sentence names the target and the status. `humanitl egress check` repeats the question.
+
+#### PROXY_014
+
+Decision proxy wants credentials
+
+**Auslöser.** The decision proxy answered `407 Proxy Authentication Required`. Either `egress.proxy_auth_ref` is empty, or the credentials it names are not the ones the proxy expects. The agent got `502`; it never sees the `407`.
+
+**Fix.** `CopyCommand` with `humanitl egress auth set`, which stores `USER:PASSWORD` in the keyring and sets `egress.proxy_auth_ref`.
+
+#### PROXY_015
+
+Certificate does not match the decision proxy CA
+
+**Auslöser.** Through the tunnel of the decision proxy, Humanitl speaks TLS with the name of the target and checks the certificate against the CA in `egress.proxy_ca` and the usual anchors. The certificate came from neither: `egress.proxy_ca` is empty or names another CA than the one the proxy signs with. That CA is trusted only on this way, never on a direct connection.
+
+**Fix.** `ChangeSetting` on `egress.proxy_ca` with the PEM file of the proxy's CA, for mitmproxy the absolute path of `~/.mitmproxy/mitmproxy-ca-cert.pem`.
+
+#### PROXY_016
+
+Local name refused before the decision proxy
+
+**Auslöser.** Behind a decision proxy, names that are local by definition (`localhost`, `*.localhost`, `*.local`, `*.internal`, `*.home.arpa`, a name without a dot such as `metadata`) mean the machine where they are resolved or connected to: its own services, its network or the metadata service of a cloud. Humanitl refuses them before any resolution and before forwarding, with either value of `egress.proxy_resolve`, as it refuses private address literals (`PROXY_008`). The agent got `502`.
+
+**Fix.** `AddRule` with `allow_private` for exactly this host, if the agent should reach it.
+
+#### PROXY_017
+
+Decision proxy settings unusable
+
+**Auslöser.** `egress.proxy` is set, and a setting it needs cannot be used: `egress.proxy_ca` cannot be read or holds no certificate, or the keyring does not hand out the credentials `egress.proxy_auth_ref` names. The daemon read them at its start; every allowed request fails with this finding and nothing leaves directly.
+
+**Fix.** `ChangeSetting` on the named key, or `CopyCommand` with `humanitl egress auth set`; then restart the daemon (`humanitl daemon restart`).
+
+#### PROXY_018
+
+TLS through the decision proxy failed
+
+**Auslöser.** Through the tunnel of the decision proxy, Humanitl speaks TLS with the name of the target. The handshake failed for another reason than an unknown CA, such as a certificate that names another host, or it did not finish within `limits.header_timeout_secs`. The sentence names the proxy, the target and the reason; the agent got `502`.
+
+**Fix.** `CopyCommand` with `humanitl egress check`, and check that the proxy intercepts this host with a certificate for its name.
+
+#### PROXY_019
+
+Decision proxy answered too late
+
+**Auslöser.** The request went through the decision proxy, and the head of its answer did not arrive within `egress.proxy_response_timeout_secs`, also after a streamed upload. A person deciding at the proxy may need longer. The agent got `502`.
+
+**Fix.** `ChangeSetting` on `egress.proxy_response_timeout_secs` with a longer wait.
 
 ### Bereich tls
 

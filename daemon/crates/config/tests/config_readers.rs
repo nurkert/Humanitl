@@ -91,6 +91,14 @@ const REGISTER: &[(&str, &str)] = &[
     // heißt „für immer" und ist das Einzige, was heute wirkt. Die Löschung
     // mit dokumentierter Lücke ist HUM-157; HUM-051 hat sie nicht gebaut.
     ("audit.retention_days", "effective"),
+    // Gelesen in `humanitld` beim Bau des Egress des Handlers
+    // (`humanitl_proxy::egress::from_config`), von `EgressCheck` und von der
+    // Doctor-Zeile (HUM-511).
+    ("egress.proxy", "effective"),
+    ("egress.proxy_auth_ref", "effective"),
+    ("egress.proxy_ca", "effective"),
+    ("egress.proxy_resolve", "effective"),
+    ("egress.proxy_response_timeout_secs", "effective"),
     ("experimental.h2_upstream", "effective"),
     ("findings.email_allow_domains", "effective"),
     ("findings.enabled", "effective"),
