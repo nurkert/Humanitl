@@ -335,7 +335,7 @@ mod tests {
         let Some(ask) = field("hold.ask_mode") else {
             panic!("hold.ask_mode is missing from the schema");
         };
-        assert_eq!(ask.type_label, "ui | terminal | none");
+        assert_eq!(ask.type_label, "ui | terminal | none | upstream");
 
         let Some(paths) = field("llm.passthrough_paths") else {
             panic!("llm.passthrough_paths is missing from the schema");

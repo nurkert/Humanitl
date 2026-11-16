@@ -434,6 +434,30 @@ fn egress_is_well_formed(egress: &EgressConfig) -> Result<(), Diagnostic> {
     )
 }
 
+/// `hold.ask_mode = "upstream"` reicht jede Anfrage ohne Regel an den
+/// Entscheidungs-Proxy weiter (ADR-0022, HUM-512). Ohne `egress.proxy` gäbe
+/// es ihn nicht, und eine solche Anfrage ginge ohne jede Entscheidung direkt
+/// hinaus; deshalb verweigert schon das Laden diese Verbindung.
+///
+/// Der Fix setzt den Frage-Modus auf die Vorgabe zurück, nicht einen Proxy
+/// ein: Welchen Proxy der Nutzer meint, weiß nur er.
+fn upstream_has_a_proxy(config: &Config) -> Result<(), Diagnostic> {
+    if config.hold.ask_mode != crate::model::AskMode::Upstream || config.egress.proxy.is_some() {
+        return Ok(());
+    }
+    Err(Diagnostic::builder(CONFIG_003, Severity::Error)
+        .why(
+            "hold.ask_mode = \"upstream\" hands every request without a rule to the decision \
+             proxy, but egress.proxy is empty; without it such a request would leave with no \
+             decision at all. Set egress.proxy to http://HOST:PORT, or choose another ask mode",
+        )
+        .fix(FixAction::ChangeSetting {
+            key: "hold.ask_mode".to_owned(),
+            value: "ui".to_owned(),
+        })
+        .build())
+}
+
 /// `url` ohne Nutzername und Passwort, für jede Stelle, die die Adresse
 /// zeigt.
 fn without_credentials(url: &url::Url) -> url::Url {
@@ -831,6 +855,7 @@ impl Config {
         audit_is_well_formed(&self.audit)?;
         resolver_is_well_formed(&self.resolver)?;
         egress_is_well_formed(&self.egress)?;
+        upstream_has_a_proxy(self)?;
         at_least(
             "pseudonyms.max_response_bytes",
             self.pseudonyms.max_response_bytes,
@@ -869,6 +894,27 @@ mod tests {
     #[test]
     fn the_defaults_are_valid() {
         assert!(Config::default().validate().is_ok());
+    }
+
+    /// HUM-512: `upstream` nur mit `egress.proxy`; ohne ihn verweigert das
+    /// Laden, und der Fix setzt den Frage-Modus zurück.
+    #[test]
+    fn the_upstream_ask_mode_needs_a_decision_proxy() {
+        let mut config = Config::default();
+        config.hold.ask_mode = crate::model::AskMode::Upstream;
+        let why = why_of(&config);
+        assert!(why.contains("egress.proxy is empty"), "{why}");
+        let refused = config.validate().unwrap_err();
+        assert_eq!(
+            refused.fix,
+            Some(FixAction::ChangeSetting {
+                key: "hold.ask_mode".to_owned(),
+                value: "ui".to_owned(),
+            })
+        );
+
+        config.egress.proxy = Some(url::Url::parse("http://127.0.0.1:8080").unwrap());
+        assert!(config.validate().is_ok());
     }
 
     #[test]

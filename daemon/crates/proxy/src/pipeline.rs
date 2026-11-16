@@ -17,7 +17,12 @@
 //! - [`AskPipeline`] hält jeden Flow über die [`HoldQueue`], bis jemand
 //!   entscheidet oder die Frist abläuft. Während einer Pause des Abfangens
 //!   (HUM-407, [`humanitl_core::InterceptPause`]) hält sie nicht, sondern lässt mit
-//!   [`DecisionSource::Paused`] durch; die harte Sperre bleibt.
+//!   [`DecisionSource::Paused`] durch; die harte Sperre bleibt. Mit
+//!   `hold.ask_mode = "upstream"` (ADR-0022, HUM-512) hält sie ebenfalls
+//!   nicht, sondern reicht den Flow mit [`DecisionSource::Upstream`] an den
+//!   Entscheidungs-Proxy hinter Humanitl weiter, der dort entscheidet; die
+//!   harte Sperre bleibt auch hier, und was eine Regel `redact` trifft, hält
+//!   sie weiter ([`FlowPipeline::decide_here`]).
 //! - [`PassthroughPipeline`] lässt jeden Flow sofort durch
 //!   ([`DecisionSource::Passthrough`]). Sie ist der Test-Hook, mit dem sich der
 //!   Weiterleitungs-Pfad ohne Oberfläche prüfen lässt. Die echte Durchreiche
@@ -73,6 +78,16 @@ pub use crate::connect::{ConnMeta, ConnectionContext};
 pub trait FlowPipeline: Send + Sync {
     /// Entscheidet und lässt den Flow in `Decided` zurück.
     async fn decide(&self, flow: &mut Flow, meta: &ConnMeta) -> Decision;
+
+    /// Entscheidet in Humanitl, nie beim Entscheidungs-Proxy dahinter.
+    ///
+    /// Für eine Regel `redact` (HUM-512): Sie bittet einen Menschen hier, die
+    /// Anfrage zu bearbeiten, und das kann der Proxy dahinter nicht. Die
+    /// Vorgabe ist [`FlowPipeline::decide`]; nur [`AskPipeline`] kennt einen
+    /// Unterschied.
+    async fn decide_here(&self, flow: &mut Flow, meta: &ConnMeta) -> Decision {
+        self.decide(flow, meta).await
+    }
 
     /// Die Erlaubnis zu streamen, falls eine Regel mit `stream: true` diesen
     /// Flow trifft (HUM-057).
@@ -186,6 +201,18 @@ impl AskPipeline {
         }
     }
 
+    /// Ob eine Anfrage, die sonst wartete, an den Entscheidungs-Proxy geht
+    /// (`hold.ask_mode = "upstream"`, HUM-512).
+    ///
+    /// Nur mit den Einstellungen einer Sitzung: Eine feste Frist kennt keinen
+    /// Frage-Modus.
+    fn forwards_upstream(&self) -> bool {
+        match &self.deadline {
+            Deadline::Fixed(_) => false,
+            Deadline::Session(settings) => settings.forwards_upstream(),
+        }
+    }
+
     /// Die Frist, die für den nächsten Fluss gilt.
     fn timeout(&self) -> Duration {
         match &self.deadline {
@@ -206,7 +233,28 @@ impl FlowPipeline for AskPipeline {
     /// Warteschlange und damit durch [`HoldQueue::publish`], das die Registry
     /// mitführt; `Recorded` hängt der Handler an, nachdem die Block-Antwort
     /// steht.
-    async fn decide(&self, flow: &mut Flow, _meta: &ConnMeta) -> Decision {
+    ///
+    /// Mit `hold.ask_mode = "upstream"` wartet hier nichts: Der Flow geht mit
+    /// [`DecisionSource::Upstream`] an den Entscheidungs-Proxy (HUM-512), vor
+    /// der Pause, denn auch während einer Pause entscheidet dort jemand.
+    /// Die letzte Sperre vor dem Senden gilt auch für diesen Weg: Trägt der
+    /// Flow den Befund der harten Sperre, sperrt das System, und der Proxy
+    /// sieht kein Byte davon.
+    async fn decide(&self, flow: &mut Flow, meta: &ConnMeta) -> Decision {
+        if self.forwards_upstream() {
+            let (decision, source) = if flow.send_refusal.is_some() {
+                (hard_block_decision(), DecisionSource::System)
+            } else {
+                (Decision::Allow, DecisionSource::Upstream)
+            };
+            return decide_now(&self.queue, flow, decision, source);
+        }
+        self.decide_here(flow, meta).await
+    }
+
+    /// Hält wie ohne Entscheidungs-Proxy: Pause, Frist null, sonst die
+    /// Warteschlange.
+    async fn decide_here(&self, flow: &mut Flow, _meta: &ConnMeta) -> Decision {
         let timeout = self.timeout();
         // Die Pause des Abfangens (HUM-407) lässt nur durch, was sonst auf
         // einen Menschen gewartet hätte. Ohne Frist (`ask_mode = none`,
@@ -354,8 +402,8 @@ fn system_block(queue: &HoldQueue, flow: &mut Flow) -> Decision {
 /// | `Matched { Allow }`, `passthrough_llm` | `Decision::Allow`, Quelle [`DecisionSource::Passthrough`], dazu `LLM_005` bei Funden |
 /// | `Matched { Allow }` | `Decision::Allow`, Quelle [`DecisionSource::Rule`] |
 /// | `Matched { Block }` | `Decision::Block { BlockReason::Rule }`, `403` |
-/// | `Matched { Redact }` | wie `Default`; der Pseudonymisierer kommt in HUM-079 |
-/// | `Matched { Ask }`, `Default` | die innere Strategie, also der Hold |
+/// | `Matched { Redact }` | der Hold in Humanitl ([`FlowPipeline::decide_here`]), auch mit `upstream`; der Pseudonymisierer kommt in HUM-079 |
+/// | `Matched { Ask }`, `Default` | die innere Strategie, also der Hold, oder mit `hold.ask_mode = "upstream"` der Entscheidungs-Proxy ([`DecisionSource::Upstream`]) |
 ///
 /// Trägt die treffende Regel `allow_private: true`, gilt das für **jede** der
 /// vier Aktionen und nicht nur für `allow`: Das Recht öffnet das Ziel, es
@@ -656,7 +704,9 @@ impl FlowPipeline for RulesPipeline {
                     %rule,
                     "rule action redact is treated as ask until HUM-079"
                 );
-                self.inner.decide(flow, meta).await
+                // In Humanitl, auch mit `hold.ask_mode = "upstream"`: Das
+                // Bearbeiten kann der Proxy dahinter nicht (HUM-512).
+                self.inner.decide_here(flow, meta).await
             }
             Action::Ask => self.inner.decide(flow, meta).await,
         }

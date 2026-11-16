@@ -119,6 +119,11 @@ enum DecisionSource {
   /// The pause of intercepting let the request pass instead of holding it:
   /// no person and no rule decided (HUM-407).
   paused,
+
+  /// The decision proxy behind Humanitl decided (`hold.ask_mode =
+  /// "upstream"`, HUM-512): Humanitl forwarded instead of holding. What the
+  /// proxy decided, only the status of its answer says.
+  upstream,
 }
 
 /// Why an allowed request never reached its target (CONVENTIONS 4.10).

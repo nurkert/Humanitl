@@ -35,6 +35,7 @@
 //! | Tool-Fristen über `{timeout}`s, keine Schleifen, keine parallelen Duplikate, kein Wechsel von Werkzeug oder Spiegel (HUM-364) | Jede neue Anfrage ist ein neuer Flow und wartet von vorn; viele gleichzeitig enden in `503` (`BlockReason::HoldMaxFlows`) |
 //! | Gibt ein Werkzeug früher auf, ist die Anfrage weg; `curl` wartet (nur mit Frage, HUM-308) | Bricht der Client ab, endet der Flow in `HoldQueue::hold` als `ClientTimeout`, und die Karte verlässt die Warteschlange. `webfetch` von `OpenCode` 1.18.31 gibt nach 30, höchstens 120 Sekunden auf, fest im Code; `curl` hat keine eigene Gesamtfrist, `bash` von pi 1.4.0 keine Vorgabefrist, und die von `OpenCode` hebt `opencode::bash_default_timeout_ms` über `hold.timeout_secs` |
 //! | Ohne Frage geht nur durch, was Regeln erlauben, nichts wartet, alles andere sofort `504` | `ask_mode = none` setzt die Frist auf null, der Flow endet sofort als `TimedOut` |
+//! | Mit `upstream`: wartet bis `{timeout}`s, dann `502`; die Antwort trägt womöglich kein `Blocked by Humanitl.`, ein `403` gilt trotzdem (HUM-512) | `AskPipeline` reicht mit `DecisionSource::Upstream` an den Entscheidungs-Proxy weiter, dessen Antwort unverändert durchgeht; sein Kopf wartet bis `egress.proxy_response_timeout_secs`, danach `UpstreamError::Timeout` (`502`). `{timeout}` ist die längere der beiden Fristen (`HoldConfig::for_agent`), weil `redact` weiter hier hält |
 //! | Mehr im Skill `humanitl` (HUM-364) | Beide Adapter legen ihn neben dem Briefing an, solange `agent.briefing.enabled` gilt ([`crate::agent::skill`]) |
 //!
 //! **Kein Mensch im Text (HUM-364).** Entscheidung des Owners vom
@@ -223,6 +224,14 @@ const VARIANT_ASK: &str = "ui";
 /// Der Name der Variante für `ask_mode = none`.
 const VARIANT_NONE: &str = "none";
 
+/// Der Name der Variante für `ask_mode = upstream` (HUM-512).
+///
+/// Hier hält Humanitl nicht, die Anfrage wartet auf die Antwort des
+/// Entscheidungs-Proxys dahinter. Nach der Frist kommt deshalb `502`
+/// (`upstream_timeout`), nicht `504`, und eine Ablehnung dort trägt nicht
+/// zwingend den Text von Humanitl.
+const VARIANT_UPSTREAM: &str = "upstream";
+
 /// Beginn eines HTML-Kommentars.
 const COMMENT_OPEN: &str = "<!--";
 
@@ -314,6 +323,7 @@ pub(crate) const fn variant_for(ask_mode: AskMode) -> &'static str {
     match ask_mode {
         AskMode::Ui | AskMode::Terminal => VARIANT_ASK,
         AskMode::None => VARIANT_NONE,
+        AskMode::Upstream => VARIANT_UPSTREAM,
     }
 }
 
@@ -477,7 +487,7 @@ mod tests {
         for (language, template) in [(Language::En, TEMPLATE_EN), (Language::De, TEMPLATE_DE)] {
             let (body, variants) = split_variants(template);
             let names: Vec<&str> = variants.iter().map(|(name, _)| name.as_str()).collect();
-            assert_eq!(names, vec!["ui", "none"], "{language:?}");
+            assert_eq!(names, vec!["ui", "none", "upstream"], "{language:?}");
             assert!(
                 body.contains(PLACEHOLDER_ASK_MODE),
                 "{language:?}: the body carries the placeholder the variants replace"

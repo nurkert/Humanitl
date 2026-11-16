@@ -623,7 +623,7 @@ impl Writer {
             "UPDATE flows SET state = 'decided', decision = ?2, block_reason = ?3, \
              rule_id = COALESCE(?4, rule_id), held_ms = COALESCE(?5, held_ms), edited = ?6, \
              passthrough = MAX(passthrough, ?7), decision_note = ?8, unresolved_findings = ?9, \
-             paused = MAX(paused, ?10) WHERE id = ?1",
+             paused = MAX(paused, ?10), upstream = MAX(upstream, ?11) WHERE id = ?1",
             rusqlite::params![
                 flow_id.to_string(),
                 decision.as_str(),
@@ -635,6 +635,7 @@ impl Writer {
                 decision_note(decision, source),
                 findings.unresolved.map(i64::from),
                 i64::from(source == DecisionSource::Paused),
+                i64::from(source == DecisionSource::Upstream),
             ],
         )?;
         for index in &findings.acknowledged {

@@ -32,6 +32,10 @@ const TABLE: &[(&str, &str, &str, &str)] = &[
     ("analyzed", "hold", "held", "held"),
     ("analyzed", "decide:rule", "decided", "decided"),
     ("analyzed", "decide:passthrough", "decided", "decided"),
+    ("analyzed", "decide:paused", "decided", "decided"),
+    // `Decided(Forward)`: Der Entscheidungs-Proxy hinter Humanitl entscheidet
+    // (HUM-512); aus `Held` führt dieser Weg nicht.
+    ("analyzed", "decide:upstream", "decided", "decided"),
     ("held", "decide:user", "decided", "decided"),
     ("held", "decide:rule", "decided", "decided"),
     ("held", "timeout", "decided", "timed_out"),
@@ -183,6 +187,8 @@ fn inputs() -> Vec<(&'static str, TransitionInput)> {
         ("decide:passthrough", decide(DecisionSource::Passthrough)),
         ("decide:timeout", decide(DecisionSource::Timeout)),
         ("decide:system", decide(DecisionSource::System)),
+        ("decide:paused", decide(DecisionSource::Paused)),
+        ("decide:upstream", decide(DecisionSource::Upstream)),
         ("forward", TransitionInput::Forward),
         ("respond", TransitionInput::Respond { status: 200 }),
         ("record", TransitionInput::Record),
@@ -342,6 +348,64 @@ fn the_system_may_refuse_but_never_allow() {
         ))
         .is_err(),
         "the system must never allow"
+    );
+}
+
+/// Der Entscheidungs-Proxy (HUM-512) leitet nur weiter: ein unbearbeitetes
+/// `Allow` aus `Analyzed`. Er sperrt nie im Namen von Humanitl, bearbeitet
+/// nichts und nimmt keinen gehaltenen Flow an sich; `redact` hält weiter hier.
+#[test]
+fn upstream_only_forwards_from_analyzed() {
+    let flow = FlowId::new();
+    let at = SystemTime::now();
+    let analyzed = || FlowState::Analyzed {
+        findings: Vec::new(),
+    };
+    let (next, _) = analyzed()
+        .on(Transition::decide(
+            flow,
+            at,
+            Decision::Allow,
+            DecisionSource::Upstream,
+        ))
+        .expect("analyzed may be forwarded to the decision proxy");
+    assert_eq!(next, FlowState::Decided(Decision::Allow));
+
+    for decision in [
+        Decision::Block {
+            reason: BlockReason::Rule(RuleId::new()),
+            note: None,
+        },
+        Decision::AllowEdited {
+            request: Box::new(request()),
+        },
+        Decision::TimedOut,
+    ] {
+        let shown = decision.as_str();
+        assert!(
+            analyzed()
+                .on(Transition::decide(
+                    flow,
+                    at,
+                    decision,
+                    DecisionSource::Upstream
+                ))
+                .is_err(),
+            "upstream must not decide {shown}"
+        );
+    }
+    let held = FlowState::Held {
+        deadline: Instant::now(),
+    };
+    assert!(
+        held.on(Transition::decide(
+            flow,
+            at,
+            Decision::Allow,
+            DecisionSource::Upstream
+        ))
+        .is_err(),
+        "a held flow is never handed to the decision proxy"
     );
 }
 

@@ -5,6 +5,7 @@ library;
 import 'dart:async';
 
 import 'package:flutter/widgets.dart';
+import 'package:flutter_riverpod/flutter_riverpod.dart';
 
 import '../../../core/domain/domain.dart';
 import '../../../core/ui/ui.dart';
@@ -12,6 +13,7 @@ import '../../../l10n/l10n.dart';
 import '../settings_scope.dart';
 import '../widgets/setting_controls.dart';
 import '../widgets/setting_row.dart';
+import 'egress_category.dart' show egressStatusProvider;
 
 /// `hold.timeout_secs`, written when the field is left or submitted.
 class TimeoutRow extends StatefulWidget {
@@ -73,8 +75,13 @@ class _TimeoutRowState extends State<TimeoutRow> {
   }
 }
 
-/// `hold.ask_mode`: in the app, in the terminal, or nowhere.
-class AskModeRow extends StatelessWidget {
+/// `hold.ask_mode`: in the app, in the terminal, nowhere, or at the decision
+/// proxy behind Humanitl (HUM-512).
+///
+/// The fourth choice can be made only with an address in `egress.proxy`; the
+/// daemon refuses it otherwise, and the row says why the segment is off
+/// instead of letting a click run into that refusal.
+class AskModeRow extends ConsumerWidget {
   /// Creates the row for [config].
   const AskModeRow({required this.config, super.key});
 
@@ -82,10 +89,31 @@ class AskModeRow extends StatelessWidget {
   final ConfigValues config;
 
   @override
-  Widget build(BuildContext context) {
+  Widget build(BuildContext context, WidgetRef ref) {
     final AppLocalizations l10n = context.l10n;
+    final HTokens tokens = HTheme.of(context);
+    // `host:port` as the daemon reads `egress.proxy` (HUM-511); until its
+    // answer arrives, the address as the configuration holds it.
+    final String proxy =
+        ref.watch(egressStatusProvider).value?.configured.proxy ??
+        config.egressProxy;
+    final bool upstream = config.holdAskMode == 'upstream';
     return SettingRow(
       settingId: FormKeys.holdAskMode,
+      status: <Widget>[
+        if (upstream && proxy.isNotEmpty)
+          Text(
+            l10n.settingsAskModeUpstreamActive(proxy),
+            key: const Key('settings-ask-mode-upstream'),
+            style: tokens.typography.ui12.tinted(tokens.colors.warningText),
+          )
+        else if (proxy.isEmpty)
+          Text(
+            l10n.settingsAskModeUpstreamNeedsProxy,
+            key: const Key('settings-ask-mode-needs-proxy'),
+            style: tokens.typography.ui12.tinted(tokens.colors.fg1),
+          ),
+      ],
       child: HSegmented<String>(
         key: const Key('settings-ask-mode'),
         options: <HSegmentOption<String>>[
@@ -97,6 +125,12 @@ class AskModeRow extends StatelessWidget {
           HSegmentOption<String>(
             value: 'none',
             label: l10n.settingsAskModeNone,
+          ),
+          HSegmentOption<String>(
+            value: 'upstream',
+            label: l10n.settingsAskModeUpstream,
+            semanticsLabel: l10n.settingsAskModeUpstreamSemantics,
+            enabled: proxy.isNotEmpty || upstream,
           ),
         ],
         selected: config.holdAskMode,

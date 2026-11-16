@@ -306,6 +306,11 @@ class _Head extends StatelessWidget {
     final HTokens tokens = HTheme.of(context);
     final AppLocalizations l10n = context.l10n;
     final HFlowState state = historyVisualState(flow);
+    // A flow the decision proxy decided is "forwarded", never "allowed"
+    // (HUM-512).
+    final String stateText = historyForwarded(flow)
+        ? historyForwardedLabel(l10n, flow)
+        : l10n.flowStateLabel(state);
     final String unknown = l10n.historyUnknownValue;
     return Padding(
       padding: EdgeInsets.all(tokens.spacing.x3),
@@ -320,13 +325,10 @@ class _Head extends StatelessWidget {
               // rule 4).
               HMethodBadge(method: flow.methodLabel),
               SizedBox(width: tokens.spacing.x2),
-              HStateGlyph(
-                state: state,
-                semanticsLabel: l10n.flowStateLabel(state),
-              ),
+              HStateGlyph(state: state, semanticsLabel: stateText),
               SizedBox(width: tokens.spacing.x1),
               Text(
-                l10n.flowStateLabel(state),
+                stateText,
                 // The text-capable reading, never `stateColor`: that palette
                 // is clamped to 3:1 as an area (`docs/UX.md` 6).
                 style: tokens.typography.ui12.tinted(
@@ -387,6 +389,8 @@ class _Head extends StatelessWidget {
                   DecisionKind()
                       when flow.blockReason == BlockReason.clientAborted =>
                     l10n.historyDecisionAborted,
+                  DecisionKind() when historyForwarded(flow) =>
+                    historyForwardedLabel(l10n, flow),
                   final DecisionKind decision => l10n.flowStateLabel(
                     historyDecisionLabelState(decision),
                   ),
@@ -455,6 +459,7 @@ class _Head extends StatelessWidget {
         HistoryDecider.meta => l10n.historyDeciderMeta,
         HistoryDecider.client => l10n.historyDeciderClient,
         HistoryDecider.paused => l10n.historyDeciderPaused,
+        HistoryDecider.upstream => l10n.historyDeciderUpstream,
       };
 }
 

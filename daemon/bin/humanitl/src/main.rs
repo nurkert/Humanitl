@@ -213,7 +213,7 @@ async fn run(ctx: &Context, command: Cmd) -> Result<u8, Failure> {
         Cmd::Doctor(args) => cmd::doctor::run(ctx, &args).await,
         Cmd::Llm { cmd } => cmd::llm::run(ctx, &cmd).await,
         Cmd::Flows { cmd } => cmd::flows::run(ctx, &cmd).await,
-        Cmd::Sessions { cmd } => cmd::sessions::run(ctx, &cmd).await,
+        Cmd::Sessions { cmd } => cmd::sessions::run(ctx, cmd.as_ref()).await,
         Cmd::Rules { cmd } => cmd::rules::run(ctx, &cmd).await,
         Cmd::Config { cmd } => cmd::config::run(ctx, &cmd).await,
         Cmd::Run(args) => cmd::run::run(ctx, &args).await,

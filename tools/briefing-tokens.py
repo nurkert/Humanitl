@@ -129,7 +129,7 @@ def main() -> int:
     failed = False
     for language, path in sorted(TEMPLATES.items()):
         template = path.read_text(encoding="utf-8")
-        for variant in ("ui", "none"):
+        for variant in ("ui", "none", "upstream"):
             text = render(template, variant)
             if args.show:
                 print(f"--- {language} / ask_mode={variant} ---")

@@ -1370,6 +1370,7 @@ impl FlowHandler {
             block_reason: row.block_reason,
             rule_id: row.rule_id,
             passthrough: row.passthrough,
+            upstream: row.upstream,
             // Die Spalte trägt, was der Agent in der 403-Antwort gelesen hat;
             // gesäubert wurde beim Schreiben, und hier wird nichts nachgeholt.
             note: row.decision_note.unwrap_or_default(),

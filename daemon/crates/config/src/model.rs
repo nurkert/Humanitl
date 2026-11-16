@@ -259,7 +259,7 @@ pub struct HoldConfig {
     /// Sekunden, die eine angehaltene Anfrage auf eine Entscheidung wartet, bevor sie als Zeitüberschreitung endet.
     #[schemars(extend("x-tier" = "basic", "x-project-scope" = "allowed"))]
     pub timeout_secs: u64,
-    /// Wo gefragt wird: in der Oberfläche, im Terminal oder gar nicht.
+    /// Wo gefragt wird: in der Oberfläche, im Terminal, gar nicht, oder `upstream`: Eine Anfrage ohne Regel oder mit `ask` wird nicht gehalten, sondern geht an den Entscheidungs-Proxy aus `egress.proxy`, der dort entscheidet (nur mit `egress.proxy`). `block` bleibt endgültig, `redact` hält weiter hier.
     #[schemars(extend("x-tier" = "advanced", "x-project-scope" = "denied"))]
     pub ask_mode: AskMode,
     /// Lässt Anfragen mit prüfsummen-sicheren Geheimnissen nur bearbeitet hinaus; keine Regel und keine Freigabe sendet sie unverändert.
@@ -274,6 +274,23 @@ impl HoldConfig {
     /// `egress.proxy_response_timeout_secs`, denn hinter dem
     /// Entscheidungs-Proxy wartet wie hier ein Mensch (ADR-0022).
     pub const DEFAULT_TIMEOUT_SECS: u64 = 300;
+
+    /// Die Haltung, die ein Agent kennen muss (Briefing, Werkzeugfristen).
+    ///
+    /// Gleich `self`, nur bei [`AskMode::Upstream`] ist die Frist die
+    /// längere aus `hold.timeout_secs` und `egress.proxy_response_timeout_secs`:
+    /// Eine Anfrage ohne Regel wartet dann nicht hier, sondern auf die Antwort
+    /// des Entscheidungs-Proxys, und eine `redact`-Anfrage wartet weiter hier
+    /// (HUM-512). Ein Agent, dem die kürzere Frist genannt wird, bräche eine
+    /// der beiden zu früh ab.
+    #[must_use]
+    pub fn for_agent(&self, egress: &EgressConfig) -> Self {
+        let mut hold = self.clone();
+        if hold.ask_mode == AskMode::Upstream {
+            hold.timeout_secs = hold.timeout_secs.max(egress.proxy_response_timeout_secs);
+        }
+        hold
+    }
 }
 
 impl Default for HoldConfig {
@@ -296,6 +313,10 @@ pub enum AskMode {
     Terminal,
     /// Es wird nicht gefragt; jede Anfrage ohne Regel läuft in die Zeitüberschreitung.
     None,
+    /// Hier wird nicht gefragt; eine Anfrage ohne Regel oder mit `ask` geht an
+    /// den Entscheidungs-Proxy aus `egress.proxy`, der dort entscheidet
+    /// (ADR-0022, HUM-512). Nur gültig mit `egress.proxy`.
+    Upstream,
 }
 
 /// Alle Caps und Zeitgrenzen (`backlog/CONVENTIONS.md` 4.4).

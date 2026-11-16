@@ -2660,7 +2660,7 @@ class FakeDaemonClient
       Diagnostic(code: 'CONFIG_003', severity: Severity.error, why: why),
     );
     const Map<String, List<String>> choices = <String, List<String>>{
-      FormKeys.holdAskMode: <String>['ui', 'terminal', 'none'],
+      FormKeys.holdAskMode: <String>['ui', 'terminal', 'none', 'upstream'],
       FormKeys.uiLanguage: <String>['en', 'de'],
       FormKeys.uiTheme: <String>['dark', 'light', 'system'],
       // The ids of the registry, as the daemon checks them (HUM-274).

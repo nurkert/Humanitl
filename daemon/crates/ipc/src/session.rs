@@ -693,6 +693,7 @@ pub const fn ask_mode_name(mode: AskMode) -> &'static str {
         AskMode::Ui => "ui",
         AskMode::Terminal => "terminal",
         AskMode::None => "none",
+        AskMode::Upstream => "upstream",
     }
 }
 
@@ -708,9 +709,10 @@ pub fn parse_ask_mode(text: &str) -> Result<Option<AskMode>, Diagnostic> {
         "ui" => Ok(Some(AskMode::Ui)),
         "terminal" => Ok(Some(AskMode::Terminal)),
         "none" => Ok(Some(AskMode::None)),
+        "upstream" => Ok(Some(AskMode::Upstream)),
         other => Err(Diagnostic::builder(codes::CONFIG_003, Severity::Blocking)
             .why(format!(
-                "{other:?} is not an ask mode; it is one of ui, terminal, none"
+                "{other:?} is not an ask mode; it is one of ui, terminal, none, upstream"
             ))
             .fix(FixAction::ChangeSetting {
                 key: "hold.ask_mode".to_owned(),

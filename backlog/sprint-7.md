@@ -3189,6 +3189,40 @@ ADR-0022, Punkt 3 und 4.
 3. Sicherheitsaussage und Bedrohungsmodell nennen den Modus und seine
    Grenzen im selben Commit.
 
+### Stand nach der Umsetzung (2026-11-16)
+
+Neuer Wert `AskMode::Upstream`, nur gültig mit `egress.proxy`: Laden und
+`SetConfig` lehnen ihn sonst mit `CONFIG_003` ab, der Sitzungsstart ebenso,
+solange der laufende Daemon noch direkt hinausgeht (Neustart fehlt). Keine
+neue `Decision`-Variante: `Decided(Forward)` ist `Allow` mit der Quelle
+`DecisionSource::Upstream`, erreichbar nur aus `Analyzed` und nur
+unbearbeitet. `block` bleibt endgültig, `redact` hält weiter in Humanitl
+(`FlowPipeline::decide_here`), ein Prüfsummen-Geheimnis wird zur
+Systemsperre `403`, bevor der Proxy ein Byte sieht. Audit `decision:
+forward`, `decided_by: upstream`, Recorder-Migration V12 mit Spalte
+`upstream`, `/why` antwortet `upstream` auch nach einem Neustart. Protokoll
+1.42 (`DECISION_SOURCE_UPSTREAM`, `SandboxEvent.Status.ask_mode`). CLI-
+Moduszeile in `humanitl sessions`, `sandbox plan` und `run`; `humanitl
+flows` zeigt `forward`. App: vierte Wahl „Proxy dahinter" (ohne Proxy
+gesperrt, mit Begründung), Moduszeile im Isolationsreiter, im Verlauf
+„Weitergereicht, Proxy antwortete N" statt „Erlaubt". Briefing und SKILL
+mit eigener Variante (Wartezeit bis zur längeren Frist, dann `502`, `403`
+endgültig). SECURITY, THREAT-MODEL (K-35, auch die deutschen
+Übersetzungen) und README nennen Modus und Grenzen.
+
+Review: Codex ein blocking (die mitgelieferte Durchreiche zum Sprachmodell
+steht vor Block-Regeln und erreicht so den Proxy) auf minor herabgestuft,
+weil die Rangfolge in jedem Modus gilt und nicht aus diesem Issue stammt;
+die Ausnahme steht jetzt in README, SECURITY und K-35, mit Test. Codex
+minor „Erlaubt" im Verlauf übernommen; minor „Pause lässt `redact` zum
+Proxy" verworfen, weil die Pause in jedem Modus alles Wartende sofort
+hinauslässt, die Doku sagt es. Sonnet als Ersatz für Antigravity kein
+blocking oder major; zwei minor übernommen (`redact`-Ausnahme in der
+Moduszeile, eigener Text ohne aktiven Proxy). Offen: der lange Text
+„Entscheidet der Proxy dahinter" steht nur im Screenreader-Label; ein
+Hinweis im Isolationsreiter, wenn `upstream` eingestellt ist, der Daemon
+aber noch direkt sendet, ist Kandidat für ein eigenes Issue.
+
 ---
 
 ## HUM-513 · Entscheidungs-Proxy: Anleitung für mitmproxy, Ende-zu-Ende-Test

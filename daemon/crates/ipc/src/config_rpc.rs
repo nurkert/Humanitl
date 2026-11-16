@@ -603,6 +603,8 @@ mod tests {
         let paths = paths_in(dir.path());
         for (key, value) in [
             ("hold.ask_mode", "sometimes"),
+            // Without egress.proxy there is no proxy to decide (HUM-512).
+            ("hold.ask_mode", "upstream"),
             ("ui.theme", "pink"),
             ("hold.timeout_secs", "0"),
             ("hold.timeout_secs", "soon"),

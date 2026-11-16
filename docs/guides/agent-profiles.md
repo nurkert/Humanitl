@@ -406,7 +406,7 @@ The adapter adds these variables to the environment of the sandbox profile:
 | `OPENCODE_ENABLE_PARALLEL` | `false` | No hosted web search (Parallel). |
 | `OPENCODE_DISABLE_LSP_DOWNLOAD` | `true` | No language servers downloaded from the network. |
 | `OPENCODE_PERMISSION` | the `permission` block as JSON | Merged over every configuration source last. |
-| `OPENCODE_EXPERIMENTAL_BASH_DEFAULT_TIMEOUT_MS` | `hold.timeout_secs` plus 60 seconds, in milliseconds, at least `120000` (`360000` by default) | A command in `bash` waits for a held request instead of being cut after OpenCode's 120 seconds. Not set with `hold.ask_mode = "none"`, where nothing waits. The model can still pass its own timeout for one call. |
+| `OPENCODE_EXPERIMENTAL_BASH_DEFAULT_TIMEOUT_MS` | `hold.timeout_secs` plus 60 seconds, in milliseconds, at least `120000` (`360000` by default); with `hold.ask_mode = "upstream"` the longer of `hold.timeout_secs` and `egress.proxy_response_timeout_secs` (HUM-512) | A command in `bash` waits for a held request, or for the answer of the decision proxy, instead of being cut after OpenCode's 120 seconds. Not set with `hold.ask_mode = "none"`, where nothing waits. The model can still pass its own timeout for one call. |
 | `HOME`, `XDG_CONFIG_HOME`, `XDG_DATA_HOME`, `XDG_CACHE_HOME` | under `/home/agent` | OpenCode's state stays in the tmpfs, not on the host. |
 | `NODE_EXTRA_CA_CERTS` | `/etc/humanitl/ca.crt` | Node trusts the local CA of the proxy. |
 | `TERM`, `COLORTERM`, `LANG` | `xterm-256color`, `truecolor`, `C.UTF-8` | The terminal of the agent. |

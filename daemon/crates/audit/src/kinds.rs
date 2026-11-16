@@ -118,6 +118,9 @@ pub struct SessionEnded {
     pub passthrough: u64,
     /// Während einer Pause des Abfangens ohne Halten durchgelassen (HUM-407).
     pub paused: u64,
+    /// An den Entscheidungs-Proxy hinter Humanitl weitergereicht, statt hier
+    /// zu warten (`hold.ask_mode = "upstream"`, HUM-512).
+    pub upstream: u64,
 }
 
 impl SessionEnded {
@@ -137,6 +140,7 @@ impl SessionEnded {
             "auto_rule": self.auto_rule,
             "passthrough": self.passthrough,
             "paused": self.paused,
+            "upstream": self.upstream,
         })
     }
 }
@@ -246,6 +250,12 @@ pub enum DecisionKind {
     /// Während einer Pause des Abfangens durchgelassen, statt zu warten
     /// (HUM-407).
     Paused,
+    /// An den Entscheidungs-Proxy hinter Humanitl weitergereicht
+    /// (`hold.ask_mode = "upstream"`, HUM-512). Im Log `forward`, nicht
+    /// `allow`: Humanitl hat nicht erlaubt, sondern die Entscheidung dorthin
+    /// gegeben; was dort entschieden wurde, steht nur als Status in
+    /// `flow.responded`.
+    Forward,
 }
 
 impl DecisionKind {
@@ -255,6 +265,7 @@ impl DecisionKind {
         match (decision, source) {
             (_, DecisionSource::Passthrough) => Self::Passthrough,
             (_, DecisionSource::Paused) => Self::Paused,
+            (_, DecisionSource::Upstream) => Self::Forward,
             (Decision::TimedOut, _) | (_, DecisionSource::Timeout) => Self::TimedOut,
             (Decision::Allow | Decision::AllowEdited { .. }, DecisionSource::Rule(_)) => {
                 Self::AutoAllow
@@ -278,6 +289,7 @@ impl DecisionKind {
             Self::AutoBlock => "auto_block",
             Self::Passthrough => "passthrough",
             Self::Paused => "paused",
+            Self::Forward => "forward",
         }
     }
 }
@@ -308,8 +320,10 @@ pub struct FlowDecided {
     /// Werte, die mit dieser Entscheidung auf die Ausnahmeliste kamen. `None`,
     /// bis es diesen Weg gibt.
     pub allowlisted_added: Option<u64>,
-    /// Wer entschieden hat: `user`, `rule`, `timeout`, `system` oder `paused`
-    /// (HUM-407: die Pause des Abfangens, kein Mensch und keine Regel).
+    /// Wer entschieden hat: `user`, `rule`, `timeout`, `system`, `paused`
+    /// (HUM-407: die Pause des Abfangens, kein Mensch und keine Regel) oder
+    /// `upstream` (HUM-512: der Entscheidungs-Proxy hinter Humanitl, dessen
+    /// Entscheidung Humanitl nur als Status der Antwort kennt).
     pub decided_by: &'static str,
 }
 
@@ -332,6 +346,7 @@ impl FlowDecided {
             DecisionSource::Timeout => "timeout",
             DecisionSource::System => "system",
             DecisionSource::Paused => "paused",
+            DecisionSource::Upstream => "upstream",
         };
         Self {
             flow: flow.to_string(),
@@ -959,6 +974,12 @@ mod tests {
                 "rule",
             ),
             (Decision::Allow, DecisionSource::Paused, "paused", "paused"),
+            (
+                Decision::Allow,
+                DecisionSource::Upstream,
+                "forward",
+                "upstream",
+            ),
         ];
         for (decision, source, word, by) in cases {
             let decided = FlowDecided::new(FlowId::new(), &decision, source);

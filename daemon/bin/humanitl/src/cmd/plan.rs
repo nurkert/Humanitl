@@ -26,6 +26,36 @@ pub const SERVER_CHOICE_MINOR: u32 = 28;
 /// `DAEMON_001` ohne Daemon, die Befunde des Plans, und `CONFIG_021`, wenn
 /// der gewählte Server nicht gespeichert ist: Der Start lehnte dann ab.
 pub async fn run(ctx: &Context) -> Result<u8, Failure> {
+    let (status, minor) = snapshot(ctx).await?;
+    if ctx.render.is_json() {
+        ctx.render.value(&plan_json(&status));
+    } else {
+        for line in plan_lines(&status, minor) {
+            ctx.render.line(&line);
+        }
+    }
+    // Ein Name ohne gespeicherten Server: Der Plan zeigt ihn, der Start
+    // lehnte ab, und das sagt der Exit-Code.
+    if let Some(refusal) = status
+        .llm_server
+        .as_ref()
+        .and_then(|choice| choice.refusal.as_ref())
+        .and_then(from_proto)
+    {
+        return Err(Failure::new(refusal));
+    }
+    Ok(EXIT_OK)
+}
+
+/// Die Momentaufnahme des Plans und die Vertrags-Minor des Daemons.
+///
+/// Gemeinsam mit `humanitl sessions` (HUM-512), das aus derselben Antwort
+/// die Moduszeile zeigt.
+///
+/// # Errors
+///
+/// Wie [`run`], ohne den Befund eines nicht gespeicherten Servers.
+pub async fn snapshot(ctx: &Context) -> Result<(v1::sandbox_event::Status, u32), Failure> {
     let resolved = ctx.config()?;
     let (work_dir, work_dir_source) = ctx.work_dir(&resolved);
     let mut client = ctx.connect().await?;
@@ -52,7 +82,9 @@ pub async fn run(ctx: &Context) -> Result<u8, Failure> {
         .map_err(|status| Failure::new(status_diagnostic(&status, "Sandbox")))?
         .into_inner();
     let minor = info.proto_minor;
-    collect(ctx, &mut stream, minor).await
+    collect(ctx, &mut stream)
+        .await
+        .map(|status| (status, minor))
 }
 
 /// Die Anfrage des Plans, mit den Flags wie unter `humanitl run` (HUM-400):
@@ -90,12 +122,11 @@ fn plan_request(
     }
 }
 
-/// Liest die Antwort des Plans und gibt sie aus.
+/// Liest die Antwort des Plans; Warnungen gehen gleich hinaus.
 async fn collect(
     ctx: &Context,
     stream: &mut tonic::Streaming<v1::SandboxEvent>,
-    minor: u32,
-) -> Result<u8, Failure> {
+) -> Result<v1::sandbox_event::Status, Failure> {
     let mut status = None;
     while let Some(event) = stream
         .message()
@@ -115,32 +146,51 @@ async fn collect(
             _ => {}
         }
     }
-    let Some(status) = status else {
-        return Err(Failure::new(
+    status.ok_or_else(|| {
+        Failure::new(
             Diagnostic::builder(codes::CLI_004, Severity::Error)
                 .why("the daemon answered the plan without a snapshot".to_owned())
                 .fix(FixAction::CopyCommand("humanitl daemon status".to_owned()))
                 .build(),
-        ));
-    };
-    if ctx.render.is_json() {
-        ctx.render.value(&plan_json(&status));
-    } else {
-        for line in plan_lines(&status, minor) {
-            ctx.render.line(&line);
+        )
+    })
+}
+
+/// Die erste Minor des Vertrags, die `Status.ask_mode` kennt (HUM-512).
+pub const ASK_MODE_MINOR: u32 = 42;
+
+/// Wer eine Anfrage ohne Regel entscheidet, als eine Zeile (HUM-512).
+///
+/// Die Moduszeile der Oberfläche in Textform: Mit `upstream` nennt sie den
+/// Entscheidungs-Proxy aus `Status.egress`, wer auflöst und was daraus
+/// folgt. Vor 1.42 kennt der Daemon das Feld nicht; ein leeres heißt dann
+/// „unbekannt" und nicht „in der App".
+#[must_use]
+pub fn decided_by_line(status: &v1::sandbox_event::Status, minor: u32) -> String {
+    let route = status.egress.clone().unwrap_or_default();
+    let text = match status.ask_mode.as_str() {
+        "ui" => "asked in the app".to_owned(),
+        "terminal" => "asked in the terminal of the run".to_owned(),
+        "none" => "refused at once".to_owned(),
+        "upstream" if route.proxy.is_empty() => {
+            // Der Start lehnt das ab (`CONFIG_003`); die Zeile sagt es,
+            // statt einen Proxy zu nennen, den es nicht gibt.
+            "the decision proxy, but this daemon goes direct: the start refuses".to_owned()
         }
-    }
-    // Ein Name ohne gespeicherten Server: Der Plan zeigt ihn, der Start
-    // lehnte ab, und das sagt der Exit-Code.
-    if let Some(refusal) = status
-        .llm_server
-        .as_ref()
-        .and_then(|choice| choice.refusal.as_ref())
-        .and_then(from_proto)
-    {
-        return Err(Failure::new(refusal));
-    }
-    Ok(EXIT_OK)
+        "upstream" if route.resolve == "humanitl" => format!(
+            "decided by {}; Humanitl resolves and checks every address first, so the name \
+             leaves as a DNS query before the decision there",
+            route.proxy
+        ),
+        "upstream" => format!(
+            "decided by {}; it resolves the names, so a public name that points into your \
+             network is its to refuse",
+            route.proxy
+        ),
+        _ if minor < ASK_MODE_MINOR => format!("unknown (daemon 1.{minor})"),
+        other => format!("unknown ({other})"),
+    };
+    format!("without a rule: {text}")
 }
 
 /// Der Server aus `--llm NAME` oder `--llm-server NAME`, wenn einer dasteht.
@@ -203,6 +253,7 @@ fn plan_lines(status: &v1::sandbox_event::Status, minor: u32) -> Vec<String> {
         lines.push(format!("mode: {}", status.sandbox_mode));
     }
     lines.push(server_line(status.llm_server.as_ref(), minor));
+    lines.push(decided_by_line(status, minor));
     lines.push(format!(
         "llm endpoint: {}",
         if status.llm_endpoint.is_empty() {
@@ -239,6 +290,11 @@ fn plan_json(status: &v1::sandbox_event::Status) -> serde_json::Value {
         "sandbox_mode": status.sandbox_mode,
         "llm_server": server,
         "llm_endpoint": status.llm_endpoint,
+        "ask_mode": status.ask_mode,
+        "egress": status.egress.as_ref().map(|route| json!({
+            "proxy": route.proxy,
+            "resolve": route.resolve,
+        })),
     })
 }
 
@@ -271,6 +327,43 @@ mod tests {
             project_dir: String::new(),
             project_path: String::new(),
         }
+    }
+
+    /// Die Moduszeile in Textform (HUM-512): der Proxy und wer auflöst mit
+    /// `upstream`, die übrigen Modi kurz, ein älterer Daemon unbekannt.
+    #[test]
+    fn the_mode_line_names_the_decision_proxy_and_who_resolves() {
+        let mut status = v1::sandbox_event::Status {
+            ask_mode: "upstream".to_owned(),
+            egress: Some(v1::EgressRoute {
+                proxy: "127.0.0.1:8080".to_owned(),
+                resolve: "proxy".to_owned(),
+            }),
+            ..v1::sandbox_event::Status::default()
+        };
+        let line = super::decided_by_line(&status, 42);
+        assert!(
+            line.starts_with("without a rule: decided by 127.0.0.1:8080"),
+            "{line}"
+        );
+        assert!(line.contains("its to refuse"), "{line}");
+        status.egress = Some(v1::EgressRoute {
+            proxy: "127.0.0.1:8080".to_owned(),
+            resolve: "humanitl".to_owned(),
+        });
+        assert!(super::decided_by_line(&status, 42).contains("DNS query before the decision"));
+        status.egress = None;
+        assert!(super::decided_by_line(&status, 42).contains("the start refuses"));
+        status.ask_mode = "ui".to_owned();
+        assert_eq!(
+            super::decided_by_line(&status, 42),
+            "without a rule: asked in the app"
+        );
+        status.ask_mode = String::new();
+        assert_eq!(
+            super::decided_by_line(&status, 41),
+            "without a rule: unknown (daemon 1.41)"
+        );
     }
 
     #[test]

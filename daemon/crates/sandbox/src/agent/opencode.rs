@@ -335,6 +335,10 @@ const JS_TIMER_MAX_MS: u64 = 2_147_483_647 - 100;
 /// auf den Menschen wartet; der Abbruch schließt die Verbindung, und der
 /// Proxy beendet den Fluss als `ClientTimeout`, bevor jemand entschieden hat.
 ///
+/// Mit `ask_mode = upstream` wartet die Anfrage beim Entscheidungs-Proxy;
+/// `hold.timeout_secs` ist dann schon die längere der beiden Fristen
+/// (`HoldConfig::for_agent`, HUM-512).
+///
 /// Gilt nur, wenn jemand gefragt wird. Mit `ask_mode = none` endet eine
 /// Anfrage ohne Regel sofort, und `None` lässt die Vorgabe von `OpenCode`
 /// stehen. Nie kleiner als diese Vorgabe, nie größer als ein
@@ -343,7 +347,7 @@ const JS_TIMER_MAX_MS: u64 = 2_147_483_647 - 100;
 pub fn bash_default_timeout_ms(hold: &HoldConfig) -> Option<u64> {
     match hold.ask_mode {
         AskMode::None => None,
-        AskMode::Ui | AskMode::Terminal => Some(
+        AskMode::Ui | AskMode::Terminal | AskMode::Upstream => Some(
             hold.timeout_secs
                 .saturating_add(BASH_TIMEOUT_MARGIN_SECS)
                 .saturating_mul(1000)

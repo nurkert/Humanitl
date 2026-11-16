@@ -19,6 +19,8 @@
 //! | `Received` | `Answer` (nur über [`Flow::answer`]) | `Recorded` | `Recorded` |
 //! | `Analyzed` | `Hold` | `Held` | `Held` |
 //! | `Analyzed` | `Decide` (Regel, Passthrough oder System-Ablehnung) | `Decided` | `Decided` |
+//! | `Analyzed` | `Decide` (Pause, nur `Allow`) | `Decided` | `Decided` |
+//! | `Analyzed` | `Decide` (Upstream, nur `Allow`: `Decided(Forward)`) | `Decided` | `Decided` |
 //! | `Held` | `Decide` (Nutzer, Regel oder System-Ablehnung) | `Decided` | `Decided` |
 //! | `Held` | `Timeout` | `Decided(TimedOut)` | `TimedOut` |
 //! | `Decided(Allow\|AllowEdited)` | `Decide` (nur System, nur `Block`) | `Decided(Block)` | `Decided` |
@@ -334,6 +336,14 @@ pub enum DecisionSource {
     /// Daemons beschlossen, dass bis zum Einschalten nichts gehalten wird, und
     /// diese Anfrage hätte sonst gewartet. Sie lässt nur durch, nie ab.
     Paused,
+    /// Der Entscheidungs-Proxy hinter Humanitl (`hold.ask_mode = "upstream"`,
+    /// ADR-0022, HUM-512): Keine Regel hat entschieden, und statt einen
+    /// Menschen hier zu fragen, reicht Humanitl die Anfrage an diesen Proxy
+    /// weiter, der dort entscheidet. Die Entscheidung ist ein `Allow` nur im
+    /// Sinn von „Humanitl leitet weiter" (`Decided(Forward)` in
+    /// `docs/ARCHITECTURE.md` 3); was der Proxy daraus macht, weiß Humanitl
+    /// nur aus dessen Antwort. Sie lässt nur weiter, nie ab.
+    Upstream,
 }
 
 impl DecisionSource {
@@ -347,6 +357,7 @@ impl DecisionSource {
             Self::Passthrough => "passthrough",
             Self::System => "system",
             Self::Paused => "paused",
+            Self::Upstream => "upstream",
         }
     }
 }
@@ -614,6 +625,11 @@ fn unseen(decision: &Decision, findings: &[Finding]) -> DecidedFindings {
 /// Die Pause (`Paused`, HUM-407) entscheidet nur nach `Analyzed` und nur mit
 /// einem unveränderten `Allow`: Sie ersetzt das Halten, nicht eine Antwort
 /// auf einen gehaltenen Flow, und sie sperrt nie selbst.
+///
+/// Der Entscheidungs-Proxy (`Upstream`, HUM-512) ebenso: Er ersetzt das
+/// Halten nach `Analyzed`, gibt nur weiter (`Allow`, unbearbeitet) und nimmt
+/// nie einen gehaltenen Flow an sich. Eine Sperre aus seinem Namen gibt es
+/// nicht; was er ablehnt, steht als Status seiner Antwort im Datensatz.
 fn may_decide(from_held: bool, source: DecisionSource, decision: &Decision) -> bool {
     match source {
         DecisionSource::Rule(_) => true,
@@ -621,7 +637,9 @@ fn may_decide(from_held: bool, source: DecisionSource, decision: &Decision) -> b
         DecisionSource::User => from_held,
         DecisionSource::Timeout => false,
         DecisionSource::System => decision.is_refusal(),
-        DecisionSource::Paused => !from_held && matches!(decision, Decision::Allow),
+        DecisionSource::Paused | DecisionSource::Upstream => {
+            !from_held && matches!(decision, Decision::Allow)
+        }
     }
 }
 

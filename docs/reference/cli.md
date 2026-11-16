@@ -43,7 +43,7 @@ step, is described in [`docs/cli.md`](../cli.md); which RPC each subcommand serv
 - [`humanitl flows list`](#humanitl-flows-list) List flows, newest first; --asc turns the order around
 - [`humanitl flows show`](#humanitl-flows-show) Show one flow, or one of its bodies
 - [`humanitl flows decide`](#humanitl-flows-decide) Decide one waiting flow: allow it or block it
-- [`humanitl sessions`](#humanitl-sessions) What the agent left in the project during a sandbox run
+- [`humanitl sessions`](#humanitl-sessions) The session and who decides a request without a rule; with a subcommand, what the agent left in the project during a sandbox run
 - [`humanitl sessions summary`](#humanitl-sessions-summary) Show what a sandbox run changed in the project
 - [`humanitl audit`](#humanitl-audit) Verify and export the audit chain
 - [`humanitl audit verify`](#humanitl-audit-verify) Check the hash chain: every record, its predecessor and the anchors
@@ -120,7 +120,7 @@ below lists the flag names and their short aliases.
 | `--findings-enabled` | - | `true`, `false` | `findings.enabled` |
 | `--findings-ignored-hashes` | - | `LIST_OF_STRING` | `findings.ignored_hashes` |
 | `--findings-user-terms` | - | `LIST_OF_STRING` | `findings.user_terms` |
-| `--hold-ask-mode` | `--ask` | `ui`, `terminal`, `none` | `hold.ask_mode` |
+| `--hold-ask-mode` | `--ask` | `ui`, `terminal`, `none`, `upstream` | `hold.ask_mode` |
 | `--hold-hard-block-checksum-secrets` | - | `true`, `false` | `hold.hard_block_checksum_secrets` |
 | `--hold-timeout-secs` | - | `INTEGER` | `hold.timeout_secs` |
 | `--limits-body-timeout-secs` | - | `INTEGER` | `limits.body_timeout_secs` |
@@ -192,7 +192,7 @@ Commands:
   sandbox    Start, plan and check the sandbox
   rules      List, add, change, reorder, dry-run and reload rules
   flows      The flows of this and earlier sessions
-  sessions   What the agent left in the project during a sandbox run
+  sessions   The session and who decides a request without a rule; with a subcommand, what the agent left in the project during a sandbox run
   audit      Verify and export the audit chain
   config     The resolved configuration and its schema
   daemon     The background service
@@ -1278,7 +1278,7 @@ List flows, newest first; --asc turns the order around.
 
 SIZE is request plus response in bytes, MS the duration in milliseconds, PATH shortened in the middle to 40 characters. What the daemon does not know stays a dash.
 
-ID is the end of the flow id, as many characters as it takes to tell the rows of this page apart and at least eight; `flows show` takes it as it stands. DECISION reads `aborted` where the client gave up its TLS connection to the proxy before there was anything to decide (nobody blocked it; `flows show` names the cause), and `passthrough` for the requests to the model endpoint, which only --passthrough lists.
+ID is the end of the flow id, as many characters as it takes to tell the rows of this page apart and at least eight; `flows show` takes it as it stands. DECISION reads `aborted` where the client gave up its TLS connection to the proxy before there was anything to decide (nobody blocked it; `flows show` names the cause), `passthrough` for the requests to the model endpoint, which only --passthrough lists, and `forward` for a request the decision proxy decided (`hold.ask_mode = "upstream"`); STATUS is its answer.
 
 Usage: humanitl flows list [OPTIONS] [FILTER]...
 
@@ -1423,9 +1423,11 @@ Options:
 ## humanitl sessions
 
 ```text
-What the agent left in the project during a sandbox run
+The session and who decides a request without a rule; with a subcommand, what the agent left in the project during a sandbox run.
 
-Usage: humanitl sessions [OPTIONS] <COMMAND>
+Without a subcommand: the running session, or the one a start here would get, its state and the mode line: who decides a request without a rule, with `hold.ask_mode = "upstream"` the decision proxy as `HOST:PORT` and who resolves names.
+
+Usage: humanitl sessions [OPTIONS] [COMMAND]
 
 Commands:
   summary  Show what a sandbox run changed in the project
@@ -1448,7 +1450,7 @@ Options:
           Use this profile for the session; falls back to the sandbox profile of that name when no session profile exists
 
   -h, --help
-          Print help
+          Print help (see a summary with '-h')
 ```
 
 ## humanitl sessions summary

@@ -128,8 +128,12 @@ abstract final class ProtoVersion {
   /// Raised to 41 with the decision proxy behind Humanitl: the settings
   /// section "Decision proxy" reads and writes through `Egress`, and the
   /// isolation tab reads `SandboxEvent.Status.egress` (HUM-511).
+  /// Raised to 42 with the ask mode `upstream`: the settings offer it as a
+  /// fourth choice, the isolation tab reads `SandboxEvent.Status.ask_mode`
+  /// for the mode line, and the history names `DECISION_SOURCE_UPSTREAM`
+  /// (HUM-512).
   /// Raising the number without a reader would claim otherwise.
-  static const int minor = 41;
+  static const int minor = 42;
 
   /// `major.minor` as text.
   static const String text = '$major.$minor';

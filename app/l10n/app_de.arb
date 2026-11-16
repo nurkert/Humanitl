@@ -1935,5 +1935,18 @@
   "diagPROXY018Title": "TLS über den Entscheidungs-Proxy gescheitert",
   "diagPROXY018Why": "Der TLS-Handschlag mit dem Ziel über den Entscheidungs-Proxy ist gescheitert, etwa weil das Zertifikat einen anderen Host nennt. Die Anfrage ging nicht stattdessen direkt hinaus.",
   "diagPROXY019Title": "Entscheidungs-Proxy hat zu spät geantwortet",
-  "diagPROXY019Why": "Die Antwort kam nicht innerhalb von egress.proxy_response_timeout_secs über den Entscheidungs-Proxy. Ein Mensch, der dort entscheidet, braucht vielleicht länger."
+  "diagPROXY019Why": "Die Antwort kam nicht innerhalb von egress.proxy_response_timeout_secs über den Entscheidungs-Proxy. Ein Mensch, der dort entscheidet, braucht vielleicht länger.",
+  "historyDeciderUpstream": "Proxy",
+  "settingsAskModeUpstream": "Proxy dahinter",
+  "settingsAskModeUpstreamSemantics": "Entscheidet der Proxy dahinter",
+  "settingsAskModeUpstreamNeedsProxy": "„Proxy dahinter“ ist wählbar, sobald unter Entscheidungs-Proxy eine Adresse steht.",
+  "settingsAskModeUpstreamActive": "Ohne Regel: entscheidet {proxy}. Hier wartet nichts; Block-Regeln halten eine Anfrage weiter vorher an, und eine Regel redact wartet weiter hier.",
+  "isolationAskModeUi": "Ohne Regel: gefragt in der App.",
+  "isolationAskModeTerminal": "Ohne Regel: gefragt im Terminal des Laufs.",
+  "isolationAskModeNone": "Ohne Regel: sofort abgelehnt.",
+  "isolationAskModeUpstreamProxyResolves": "Ohne Regel: entscheidet {proxy}. Hier wartet nichts außer einer Regel redact. Der Proxy löst Namen auf; ein öffentlicher Name, der in dein Netz zeigt, ist von ihm abzulehnen.",
+  "isolationAskModeUpstreamHumanitlResolves": "Ohne Regel: entscheidet {proxy}. Hier wartet nichts außer einer Regel redact. Humanitl löst auf und prüft jede Adresse vorher; der Name geht als DNS-Frage hinaus, bevor dort entschieden ist.",
+  "historyDecisionForwarded": "Weitergereicht",
+  "historyDecisionForwardedStatus": "Weitergereicht, Proxy antwortete {status}",
+  "isolationAskModeUpstreamNotActive": "Ohne Regel: Der Entscheidungs-Proxy soll entscheiden, aber der Hintergrunddienst sendet noch direkt; ein Start wird deshalb abgelehnt. Starte ihn neu, um den Proxy zu nutzen."
 }

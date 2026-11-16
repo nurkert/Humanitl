@@ -748,6 +748,7 @@ extension SandboxStatusToDomain on pb.SandboxEvent_Status {
         : null,
     llmServer: hasLlmServer() ? llmServer.toDomain() : null,
     egress: hasEgress() ? egress.toDomain() : null,
+    askMode: askMode.isEmpty ? null : askMode,
   );
 }
 

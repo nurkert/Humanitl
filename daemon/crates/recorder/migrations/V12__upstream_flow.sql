@@ -1,0 +1,11 @@
+-- Anfragen, die der Entscheidungs-Proxy hinter Humanitl entschied
+-- (`hold.ask_mode = "upstream"`, ADR-0022, HUM-512).
+--
+-- Keine Regel hat entschieden, und hier wartete niemand: Humanitl hat die
+-- Anfrage an den Proxy dahinter weitergereicht, und was dort entschieden
+-- wurde, weiß es nur aus dem Status der Antwort (`status`). Ohne diese Spalte
+-- hieße `decision = 'allow'` nach einem Neustart des Daemons „ein Mensch hat
+-- hier erlaubt", und das hat niemand.
+--
+-- Wie `paused` eine Spalte neben `decision`, ohne Index.
+ALTER TABLE flows ADD COLUMN upstream INTEGER NOT NULL DEFAULT 0;

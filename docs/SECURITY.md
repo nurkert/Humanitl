@@ -1385,6 +1385,40 @@ recording all happen in Humanitl first, and a `block` never reaches that proxy.
   does not answer (`CONFIG_019`), never in `config.toml`. The daemon's own requests (model search, update check) stay direct; `humanitl
   doctor` and the isolation panel say which way out is in use. Effective after a daemon restart.
 
+#### The proxy behind decides (`hold.ask_mode = "upstream"`, HUM-512)
+
+A second opt-in on top of the first: with `hold.ask_mode = "upstream"` a request without a rule,
+or with an `ask` rule, is not held in Humanitl but forwarded to that proxy, where the person
+decides with the tool they know. The statement "every outbound request waits for a person in
+Humanitl" becomes "every outbound request is approved by a rule, a person, or the decision proxy
+of the person's choice".
+
+- *Only with a proxy that is in use.* Without `egress.proxy` the configuration refuses the mode at
+  load (`CONFIG_003`); a session start refuses it as well while the running daemon still goes
+  direct, because the setting takes effect only after a restart. A request without a rule never
+  leaves undecided.
+- *Rules first.* A `block` rule stays final and never reaches the proxy; an `allow` rule and the
+  LLM passthrough leave through the proxy as well, unheld. One exception to "block first" holds
+  in every ask mode: the declared LLM passthrough is a bundled `allow` that ranks ahead of the
+  person's own block rules, so a request it matches leaves through the proxy even under a
+  `block "**"`, recorded as `passthrough`, never as `upstream`. A `redact` rule keeps holding in
+  Humanitl, because it asks a person here to edit the request, unless intercepting is paused
+  (then it goes out at once, recorded as `paused`, like everything that would wait). The hard block on verified secrets
+  (`hold.hard_block_checksum_secrets`) covers the forwarding too: such a request is blocked by
+  the system (`403`, reason `secret`) and the proxy sees no byte of it.
+- *Content.* The proxy sees the decrypted traffic, the LLM passthrough included, and now also
+  decides about it: the trust boundary for content moves to it, for the decision as well as for
+  what it reads. The isolation does not move: the agent still reaches only Humanitl.
+- *Who resolves.* With `egress.proxy_resolve = "proxy"` the proxy resolves after its own decision;
+  a public name that points to `127.0.0.1`, the LAN or a metadata address is its to refuse, and
+  mitmproxy has no such guard of its own. With `"humanitl"` the private check is whole, but the
+  name leaves as a DNS query before the person at the proxy decides (ADR-0006 holds only half in
+  the opt-in). The mode line of every session and `humanitl sessions` say which applies.
+- *What Humanitl records.* Such a flow is recorded with the source `upstream` (audit `decision:
+  forward`, `decided_by: upstream`) and the status of the proxy's answer in `flow.responded`;
+  Humanitl claims no allow or block it did not see. The agent gets the proxy's answer unchanged,
+  a `403` of the proxy included; after `egress.proxy_response_timeout_secs` it gets `502`.
+
 ### Pausing intercept
 
 Since HUM-407 a person can pause intercepting: from the header pill of the app, after a question
@@ -1813,6 +1847,7 @@ passthrough or the audit chain gets a line here and in the change history of
 | 0.1.x | Linux, Podman: an image as the root of the sandbox, pinned by digest and checked before every start (`SANDBOX_043`), never pulled by a start; `humanitl sandbox image pull` pulls on request, directly and not through the proxy, and says so first; project, door, CA, shim and session files come from the host, and ESC-2 checks the CA by device and inode (HUM-439, [section 13](#an-image-as-the-root-hum-439), K-28). |
 | 0.1.x | Linux: Podman admitted at the plain level (`podman/crun`) after `escape-tests-podman` was green on `main`; a person chooses it with `sandbox.backend = "podman"` or `--backend podman`, `auto` stays bubblewrap, and the kernel level (backend `qemu`, ADR-0021) stays refused with `SANDBOX_048` until HUM-449 (HUM-448, [section 13](#13-linux-podman), K-27). |
 | 0.1.x | Linux: the kernel level (backend `qemu`, ADR-0021) admitted after `kvm-tests` and `escape-tests-qemu` were green on `main` with the disposable sandbox in the guest (HUM-446) and the probes with root in the guest (HUM-445), in ten consecutive runs in which both jobs ran (43624997550, 43630993303, 43638237420, 43641769840, 43646599744, 43648968241, 43656202366, 43661904978, 43669712307 and 43673927540); a person chooses it with `sandbox.backend = "qemu"` or `--backend qemu`, `auto` stays bubblewrap, and a missing prerequisite refuses the start with `SANDBOX_045` (HUM-449, [section 14](#14-linux-qemu-micro-vm-kernel-level), K-30 to K-34). |
+| 0.1.x | The decision proxy decides requests without a rule (`hold.ask_mode = "upstream"`, off by default, only with a proxy the running daemon uses): `block` stays final and never reaches it (the declared LLM passthrough ranks ahead of block rules and does, as any allow), `redact` (unless intercepting is paused) and the hard block on verified secrets stay in Humanitl, the flow is recorded as forwarded with the proxy's status, never as an allow (HUM-512, [section 6](#the-proxy-behind-decides-holdask_mode--upstream-hum-512), K-35). |
 | 0.1.x | A decision proxy of the person behind Humanitl (`egress.proxy`, off by default): allowed requests leave only through it, re-encrypted against its CA, which is trusted on that way only; no direct fallback; who resolves is `egress.proxy_resolve` (`proxy` refuses local names and private literals first, `humanitl` resolves and checks every address); keys closed to project profiles, credentials in the keyring or the `0600` fallback file, never in `config.toml` (HUM-511, [section 6](#a-decision-proxy-behind-humanitl-hum-511), K-35). |
 
 ## 12. macOS: Seatbelt instead of bubblewrap

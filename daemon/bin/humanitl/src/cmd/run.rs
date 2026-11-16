@@ -201,8 +201,7 @@ pub(crate) async fn launch(
             .collect::<Vec<_>>(),
     });
 
-    ctx.render
-        .note(&where_decisions_happen(config.hold.ask_mode));
+    ctx.render.note(&where_decisions_happen(config));
     let moderate = config.hold.ask_mode == AskMode::Terminal;
     // A command of the caller at a terminal works like `sandbox attach`
     // (HUM-280). The key is read before the start, so a typo in
@@ -1000,8 +999,12 @@ const fn state_name(state: i32) -> &'static str {
 /// einzelne Zeile je gehaltener Anfrage (`[humanitl] request held: …`) braucht
 /// den `Subscribe`-Strom und die Säuberung der Werte, die der Agent schickt;
 /// sie kommt mit dem Terminal (HUM-042).
-fn where_decisions_happen(ask_mode: AskMode) -> String {
-    match ask_mode {
+///
+/// Mit `upstream` (HUM-512) nennt sie den Entscheidungs-Proxy und wer dort
+/// auflöst, aus derselben Konfiguration, mit der der Start den Daemon fragt;
+/// geht der Daemon noch direkt hinaus, lehnt er den Start ab (`CONFIG_003`).
+fn where_decisions_happen(config: &Config) -> String {
+    match config.hold.ask_mode {
         AskMode::Ui => "[humanitl] a request without a rule waits for a decision in the app; \
                         without one it is blocked when the hold timeout is over"
             .to_owned(),
@@ -1016,6 +1019,26 @@ fn where_decisions_happen(ask_mode: AskMode) -> String {
         AskMode::Terminal => "[humanitl] a request without a rule is asked right here; \
                               without an answer it is blocked when the hold timeout is over"
             .to_owned(),
+        AskMode::Upstream => {
+            let proxy = config
+                .egress
+                .proxy_address()
+                .unwrap_or_else(|| "-".to_owned());
+            let resolves = match config.egress.proxy_resolve {
+                humanitl_config::ProxyResolve::Proxy => {
+                    "it resolves names, so a public name that points into your network is its \
+                     to refuse"
+                }
+                humanitl_config::ProxyResolve::Humanitl => {
+                    "Humanitl resolves and checks every address first, so the name leaves as a \
+                     DNS query before the decision there"
+                }
+            };
+            format!(
+                "[humanitl] without a rule: decided by {proxy}; nothing is held here, block rules \
+                 still stop a request before it; {resolves}"
+            )
+        }
     }
 }
 
@@ -1442,13 +1465,25 @@ mod tests {
     #[test]
     fn every_ask_mode_says_where_a_decision_happens() {
         assert!(
-            super::where_decisions_happen(AskMode::Ui).contains("in the app"),
+            super::where_decisions_happen(&with(AskMode::Ui, "opencode")).contains("in the app"),
             "ui points at the app"
         );
         assert!(
-            super::where_decisions_happen(AskMode::None).contains("blocked right away"),
+            super::where_decisions_happen(&with(AskMode::None, "opencode"))
+                .contains("blocked right away"),
             "none says that nobody is asked"
         );
+        // HUM-512: `upstream` nennt den Proxy und wer auflöst.
+        let mut upstream = with(AskMode::Upstream, "opencode");
+        upstream.egress.proxy = "http://127.0.0.1:8080".parse().ok();
+        let line = super::where_decisions_happen(&upstream);
+        assert!(
+            line.contains("decided by 127.0.0.1:8080") && line.contains("its to refuse"),
+            "{line}"
+        );
+        upstream.egress.proxy_resolve = humanitl_config::ProxyResolve::Humanitl;
+        let line = super::where_decisions_happen(&upstream);
+        assert!(line.contains("DNS query before the decision"), "{line}");
     }
 
     #[test]

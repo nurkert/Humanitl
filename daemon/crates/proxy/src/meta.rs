@@ -191,6 +191,9 @@ pub struct ArchivedFlow {
     pub rule_id: Option<String>,
     /// Wahr für die Durchreichregel zum Sprachmodell.
     pub passthrough: bool,
+    /// Wahr, wenn der Entscheidungs-Proxy hinter Humanitl entschied
+    /// (`hold.ask_mode = "upstream"`, HUM-512).
+    pub upstream: bool,
     /// Die Notiz an den Agenten, leer wenn es keine gibt.
     ///
     /// Sie steht in der Spalte, wie der Agent sie gelesen hat: Der Schreiber
@@ -632,12 +635,15 @@ fn agent_visible_source(source: Option<humanitl_core::DecisionSource>) -> &'stat
 /// Entscheidung, Grund und Notiz einer aufgezeichneten Zeile.
 ///
 /// Die Tabelle `flows` führt keine Herkunft einer Entscheidung, nur die Regel
-/// und den Passthrough-Vermerk. Für eine aufgezeichnete Freigabe heißt der
-/// Grund deshalb `rule`, `passthrough` oder `unknown`; `user` würde behauptet,
+/// und die Vermerke `passthrough` und `upstream` (HUM-512). Für eine
+/// aufgezeichnete Freigabe heißt der Grund deshalb `rule`, `passthrough`,
+/// `upstream` oder `unknown`; `user` würde behauptet,
 /// nicht gewusst (`backlog/CONVENTIONS.md` 4.13).
 fn archived_fields(archived: &ArchivedFlow) -> (String, String, String) {
     let source = if archived.passthrough {
         "passthrough"
+    } else if archived.upstream {
+        "upstream"
     } else if archived.rule_id.is_some() {
         "rule"
     } else {
@@ -834,6 +840,7 @@ fn ask_mode_name(mode: AskMode) -> &'static str {
         AskMode::Ui => "ui",
         AskMode::Terminal => "terminal",
         AskMode::None => "none",
+        AskMode::Upstream => "upstream",
     }
 }
 
@@ -1785,5 +1792,26 @@ mod tests {
             panic!("two asks make two events");
         };
         assert_ne!(one, two);
+    }
+
+    /// Nach einem Neustart sagt `/why` für einen Fluss, den der
+    /// Entscheidungs-Proxy entschied, `upstream` und nicht `unknown`
+    /// (HUM-512).
+    #[test]
+    fn an_archived_flow_decided_upstream_names_upstream() {
+        let archived = super::ArchivedFlow {
+            session: humanitl_core::SessionId::new(),
+            state: "recorded".to_owned(),
+            decision: Some("allow".to_owned()),
+            block_reason: None,
+            rule_id: None,
+            passthrough: false,
+            upstream: true,
+            note: String::new(),
+        };
+        assert_eq!(
+            super::archived_fields(&archived),
+            ("allow".to_owned(), "upstream".to_owned(), String::new())
+        );
     }
 }

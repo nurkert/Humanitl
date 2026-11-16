@@ -139,7 +139,9 @@ pub struct AgentContext {
     /// (`hold.ask_mode`), und beide Angaben müssen die sein, nach denen der
     /// Proxy tatsächlich arbeitet: ein Agent, dem eine falsche Frist genannt
     /// wird, bricht zu früh ab oder wartet auf eine Frage, die niemand stellt
-    /// (HUM-071).
+    /// (HUM-071). Mit `ask_mode = upstream` ist die Frist die, nach der der
+    /// Agent die Antwort des Entscheidungs-Proxys abwartet
+    /// ([`HoldConfig::for_agent`], HUM-512).
     pub hold: HoldConfig,
     /// Ob die Instruktionsdatei angelegt wird (`agent.briefing`).
     pub briefing: AgentBriefing,

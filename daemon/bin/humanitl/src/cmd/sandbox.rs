@@ -1292,7 +1292,7 @@ fn agent_contribution(
         // Frist und Ask-Modus stehen im Briefing (HUM-071); sie müssen die
         // sein, nach denen der Proxy arbeitet, sonst nennt der Text dem Agenten
         // eine Wartezeit, die es nicht gibt.
-        .with_hold(config.hold.clone())
+        .with_hold(config.hold.for_agent(&config.egress))
         .with_briefing(config.agent.briefing.clone())
         .with_pi_web_access(config.agent.pi.web_access)
         // Das Heimatverzeichnis, das der Agent tatsächlich vorfindet, und das

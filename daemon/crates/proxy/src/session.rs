@@ -63,7 +63,11 @@ impl SessionState {
             ask_mode,
             hold_timeout: match ask_mode {
                 AskMode::None => Duration::ZERO,
-                AskMode::Ui | AskMode::Terminal => Duration::from_secs(timeout_secs),
+                // Mit `upstream` hält Humanitl nur noch, was eine Regel
+                // `redact` trifft (HUM-512); dafür gilt die Frist wie sonst.
+                AskMode::Ui | AskMode::Terminal | AskMode::Upstream => {
+                    Duration::from_secs(timeout_secs)
+                }
             },
             llm,
             llm_alias: None,
@@ -143,6 +147,13 @@ impl SessionSettings {
         self.get().hold_timeout
     }
 
+    /// Ob eine Anfrage ohne Regel jetzt an den Entscheidungs-Proxy geht,
+    /// statt hier zu warten (`hold.ask_mode = "upstream"`, HUM-512).
+    #[must_use]
+    pub fn forwards_upstream(&self) -> bool {
+        self.get().ask_mode == AskMode::Upstream
+    }
+
     /// Das Ziel des reservierten Namens, das jetzt gilt (HUM-387).
     #[must_use]
     pub fn llm_alias(&self) -> Option<LlmAliasTarget> {
@@ -207,7 +218,8 @@ mod tests {
 
     #[test]
     fn with_a_question_the_deadline_is_the_configured_one() {
-        for mode in [AskMode::Ui, AskMode::Terminal] {
+        // `upstream` hält nur noch `redact`, aber dafür mit der Frist.
+        for mode in [AskMode::Ui, AskMode::Terminal, AskMode::Upstream] {
             let state = SessionState::for_config(mode, 42, None);
             assert_eq!(state.hold_timeout, Duration::from_secs(42));
         }

@@ -190,6 +190,12 @@ enum DecisionSource {
   // Waehrend einer Pause des Abfangens ohne Halten durchgelassen (HUM-407):
   // weder ein Mensch noch eine Regel, und immer ein `allow`.
   DECISION_SOURCE_PAUSED = 6;
+  // An den Entscheidungs-Proxy hinter Humanitl weitergereicht, statt hier zu
+  // warten (`hold.ask_mode = "upstream"`, ADR-0022, HUM-512): immer ein
+  // `allow` im Sinn von "weitergereicht". Was dort entschieden wurde, sagt
+  // nur der Status der Antwort; ein Client nennt den Fluss nie "erlaubt"
+  // (PROTO_MINOR 42).
+  DECISION_SOURCE_UPSTREAM = 7;
 }
 
 // Grund, warum eine erlaubte Anfrage den Upstream nicht erreicht hat
@@ -1113,7 +1119,9 @@ message SandboxRequest {
     // erneut auf; Regelspeicher, Haltefrist und Durchreiche entstehen daraus
     // neu (HUM-067).
     string session_profile = 5;
-    // `ui`, `terminal` oder `none`. Leer heisst: der Wert aus dem Profil.
+    // `ui`, `terminal`, `none` oder `upstream` (HUM-512, nur mit
+    // `egress.proxy`, den der laufende Daemon auch nutzt; sonst `CONFIG_003`).
+    // Leer heisst: der Wert aus dem Profil.
     string ask_mode = 6;
     // Einzelne Konfigurationswerte fuer diese Sitzung, auf der Ebene der
     // Kommandozeile. Der Daemon nimmt nur die Pfade seiner Erlaubnisliste an
@@ -1555,6 +1563,13 @@ message SandboxEvent {
     // `egress.proxy`, wie er beim Start des Daemons galt. Fehlt bei einem
     // Daemon vor Minor 41.
     EgressRoute egress = 22;
+    // Wer eine Anfrage ohne Regel entscheidet (`hold.ask_mode`, HUM-512):
+    // `ui`, `terminal`, `none` oder `upstream`. Waehrend eine Sandbox laeuft
+    // der Modus ihrer Sitzung, sonst der, den die Konfiguration ohne Wunsch
+    // des Starts ergibt. Mit `upstream` entscheidet der Entscheidungs-Proxy
+    // aus `egress`; die Oberflaeche nennt ihn und wer aufloest. Leer im
+    // Schnappschuss eines Befunds und bei einem Daemon vor Minor 42.
+    string ask_mode = 23;
   }
 
   // Eine Zeile aus dem Log der Sandbox.

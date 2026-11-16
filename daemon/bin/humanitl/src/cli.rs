@@ -147,11 +147,18 @@ pub enum Cmd {
         cmd: FlowsCmd,
     },
 
-    /// What the agent left in the project during a sandbox run.
+    /// The session and who decides a request without a rule; with a
+    /// subcommand, what the agent left in the project during a sandbox run.
+    ///
+    /// Without a subcommand: the running session, or the one a start here
+    /// would get, its state and the mode line: who decides a request without
+    /// a rule, with `hold.ask_mode = "upstream"` the decision proxy as
+    /// `HOST:PORT` and who resolves names.
     Sessions {
-        /// Was mit den Läufen geschehen soll.
+        /// Was mit den Läufen geschehen soll; ohne Unterkommando die
+        /// Moduszeile der Sitzung (HUM-512).
         #[command(subcommand)]
-        cmd: SessionsCmd,
+        cmd: Option<SessionsCmd>,
     },
 
     /// Verify and export the audit chain.
@@ -825,8 +832,10 @@ pub enum FlowsCmd {
     /// the rows of this page apart and at least eight; `flows show` takes it
     /// as it stands. DECISION reads `aborted` where the client gave up its TLS
     /// connection to the proxy before there was anything to decide (nobody
-    /// blocked it; `flows show` names the cause), and `passthrough` for the
-    /// requests to the model endpoint, which only --passthrough lists.
+    /// blocked it; `flows show` names the cause), `passthrough` for the
+    /// requests to the model endpoint, which only --passthrough lists, and
+    /// `forward` for a request the decision proxy decided
+    /// (`hold.ask_mode = "upstream"`); STATUS is its answer.
     List {
         /// The filter, for example `host:github.com state:blocked`. Several
         /// words are joined with one space and passed to the daemon

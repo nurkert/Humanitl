@@ -1475,6 +1475,9 @@ impl FakeDaemon {
                     egress: Some(crate::egress::route(
                         &humanitl_config::EgressConfig::default(),
                     )),
+                    // Ohne Entscheidungs-Proxy fragt der Fake in der
+                    // Oberfläche, wie die Vorgabe (HUM-512).
+                    ask_mode: "ui".to_owned(),
                     policy_text: String::new(),
                     door: "socket_file /run/humanitl/proxy.sock".to_owned(),
                     llm_endpoint: session.llm_endpoint,

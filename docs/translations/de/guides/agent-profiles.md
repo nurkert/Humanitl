@@ -385,7 +385,7 @@ Der Adapter fügt der Umgebung des Sandbox-Profils diese Variablen hinzu:
 | `OPENCODE_ENABLE_PARALLEL` | `false` | Keine gehostete Websuche (Parallel). |
 | `OPENCODE_DISABLE_LSP_DOWNLOAD` | `true` | Keine Sprachserver aus dem Netzwerk herunterladen. |
 | `OPENCODE_PERMISSION` | der `permission`-Block als JSON | Zuletzt über jede Konfigurationsquelle gelegt. |
-| `OPENCODE_EXPERIMENTAL_BASH_DEFAULT_TIMEOUT_MS` | `hold.timeout_secs` plus 60 Sekunden, in Millisekunden, mindestens `120000` (standardmäßig `360000`) | Ein Befehl in `bash` wartet auf eine angehaltene Anfrage, statt nach den 120 Sekunden von OpenCode abgeschnitten zu werden. Nicht gesetzt bei `hold.ask_mode = "none"`, wo nichts wartet. Das Modell kann für einen Aufruf weiterhin eine eigene Zeitgrenze mitgeben. |
+| `OPENCODE_EXPERIMENTAL_BASH_DEFAULT_TIMEOUT_MS` | `hold.timeout_secs` plus 60 Sekunden, in Millisekunden, mindestens `120000` (standardmäßig `360000`); mit `hold.ask_mode = "upstream"` die längere aus `hold.timeout_secs` und `egress.proxy_response_timeout_secs` (HUM-512) | Ein Befehl in `bash` wartet auf eine angehaltene Anfrage oder die Antwort des Entscheidungs-Proxys, statt nach den 120 Sekunden von OpenCode abgeschnitten zu werden. Nicht gesetzt bei `hold.ask_mode = "none"`, wo nichts wartet. Das Modell kann für einen Aufruf weiterhin eine eigene Zeitgrenze mitgeben. |
 | `HOME`, `XDG_CONFIG_HOME`, `XDG_DATA_HOME`, `XDG_CACHE_HOME` | unter `/home/agent` | Der Zustand von OpenCode bleibt im tmpfs, nicht auf dem Rechner. |
 | `NODE_EXTRA_CA_CERTS` | `/etc/humanitl/ca.crt` | Node vertraut der lokalen CA des Proxys. |
 | `TERM`, `COLORTERM`, `LANG` | `xterm-256color`, `truecolor`, `C.UTF-8` | Das Terminal des Agenten. |

@@ -12,7 +12,7 @@
 //! | Start des Sinks | `session.started` |
 //! | `Received`, dann `Analyzed` | `flow.received`, sobald die Funde feststehen, spätestens mit der Entscheidung |
 //! | `Decided`, `TimedOut` | `flow.decided` mit `unresolved_findings` und `acknowledged` (HUM-160); bei einem Block des Daemons zusätzlich `flow.blocked_reason` |
-//! | `Forwarded`, `ResponseHeaders`, `ResponseChunk`, `Recorded` | `flow.responded` |
+//! | `Forwarded`, `ResponseHeaders`, `ResponseChunk`, `Recorded` | `flow.responded`; nach `decided_by: upstream` (HUM-512) ist sein `status` alles, was Humanitl von der Entscheidung des Proxys dahinter weiß |
 //! | `Intercept` | `intercept.paused` oder `intercept.resumed` mit dem Grund (HUM-407) |
 //! | Ende des Sinks | `session.ended` mit den Zahlen der Sitzung |
 //!
@@ -310,6 +310,7 @@ fn counter(counts: &mut SessionEnded, kind: DecisionKind) -> &mut u64 {
         DecisionKind::AutoAllow | DecisionKind::AutoBlock => &mut counts.auto_rule,
         DecisionKind::Passthrough => &mut counts.passthrough,
         DecisionKind::Paused => &mut counts.paused,
+        DecisionKind::Forward => &mut counts.upstream,
     }
 }
 
@@ -325,6 +326,7 @@ fn is_retraction(before: DecisionKind, decision: &Decision, source: DecisionSour
             | DecisionKind::AutoAllow
             | DecisionKind::Passthrough
             | DecisionKind::Paused
+            | DecisionKind::Forward
     );
     let_out && matches!(decision, Decision::Block { .. }) && source == DecisionSource::System
 }
@@ -452,6 +454,69 @@ mod tests {
                 "{secret} leaked into the log: {text}"
             );
         }
+    }
+
+    /// Eine Anfrage, die der Entscheidungs-Proxy entschied (HUM-512): im Log
+    /// `decision: forward` und `decided_by: upstream`, dahinter der Status
+    /// seiner Antwort, auch eine Ablehnung (`403`). Eine Freigabe eines
+    /// Menschen oder einer Regel steht nirgends.
+    #[test]
+    fn a_flow_decided_upstream_is_audited_as_forward_with_the_status_of_the_proxy() {
+        let (_dir, writer) = log();
+        let mut tally = Tally::new(writer.handle(), SessionId::new());
+        let flow = FlowId::new();
+        tally.apply(&received(flow, "/x", b""));
+        tally.apply(&FlowEvent::Analyzed {
+            flow_id: flow,
+            at: SystemTime::now(),
+            findings: Vec::new(),
+        });
+        tally.apply(&FlowEvent::Decided {
+            flow_id: flow,
+            at: SystemTime::now(),
+            decision: Decision::Allow,
+            source: DecisionSource::Upstream,
+            findings: humanitl_core::DecidedFindings::unresolved(0),
+        });
+        tally.apply(&FlowEvent::Forwarded {
+            flow_id: flow,
+            at: SystemTime::now(),
+        });
+        tally.apply(&FlowEvent::ResponseHeaders {
+            flow_id: flow,
+            at: SystemTime::now(),
+            status: 403,
+        });
+        tally.apply(&FlowEvent::Recorded {
+            flow_id: flow,
+            at: SystemTime::now(),
+        });
+        let counts = tally.finish();
+        assert_eq!(
+            (
+                counts.upstream,
+                counts.allowed,
+                counts.auto_rule,
+                counts.held
+            ),
+            (1, 0, 0, 0)
+        );
+
+        let (_, records) = records(writer);
+        let kinds: Vec<&str> = records.iter().map(|r| r.body.kind.as_str()).collect();
+        assert_eq!(
+            kinds,
+            [
+                "flow.received",
+                "flow.decided",
+                "flow.responded",
+                "session.ended"
+            ]
+        );
+        assert_eq!(records[1].body.data["decision"], "forward");
+        assert_eq!(records[1].body.data["decided_by"], "upstream");
+        assert_eq!(records[2].body.data["status"], 403);
+        assert_eq!(records[3].body.data["upstream"], 1);
     }
 
     /// Beginn und Ende der Pause stehen im Log, dazwischen jede Anfrage, die
