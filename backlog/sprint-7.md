@@ -119,9 +119,15 @@ Diagnose-Codes, hier nur geplant (registriert vom genannten Issue in `codes.rs` 
 | HUM-512 | `hold.ask_mode = "upstream"`: Anfragen ohne Regel entscheidet der Proxy dahinter | M | HUM-511 |
 | HUM-513 | Entscheidungs-Proxy: Anleitung für mitmproxy, Ende-zu-Ende-Test | S | HUM-512 |
 | HUM-516 | Cloud-Agenten: gemeinsamer Hinweis auf den Abfluss über die Inferenz | S | HUM-037 |
-| HUM-514 | Agent-Adapter Claude Code | M | HUM-516 |
-| HUM-515 | Agent-Adapter Codex | M | HUM-516 |
-| HUM-517 | Agent-Adapter Antigravity CLI (`agy`, Gemini) | M | HUM-516 |
+| HUM-518 | Agent-Depot: Kern, `agents.source`, Sperre durch Firmenvorgabe, RPC und CLI `status`, `source`, `remove` | M | ADR-0023 |
+| HUM-519 | Agent-Depot: Installation und Update in einer Wartungs-Sandbox, Version angeheftet | M | HUM-518 |
+| HUM-520 | Agent-Depot: Anmeldung in der Sandbox und Wächter für das Zurückschreiben der Zugangsdatei | M | HUM-519 |
+| HUM-521 | App: Abschnitt „Agenten" für Quelle und Depot | M | HUM-520 |
+| HUM-514 | Agent-Adapter Claude Code | M | HUM-516, HUM-518, HUM-519, HUM-520 |
+| HUM-515 | Agent-Adapter Codex | M | HUM-516, HUM-518, HUM-519, HUM-520 |
+| HUM-517 | Agent-Adapter Antigravity CLI (`agy`, Gemini) | M | HUM-516, HUM-518, HUM-519, HUM-520 |
+| HUM-522 | Agent-Depot: Ende-zu-Ende-Lauf mit Claude Code und Anleitung | S | HUM-514, HUM-521 |
+| HUM-523 | Agent-Depot: Zugangsdateien verschlüsselt mit Schlüssel aus dem Schlüsselbund | S | HUM-520 |
 
 ## HUM-428 · Port neutral: `PlanRequest`, `LaunchOptions`, `IsolationLevel`, Enum `Backend` statt `PlatformBackend`
 
@@ -3348,6 +3354,22 @@ code.claude.com/docs/en/network-config, /settings, /env-vars.
    unserer nicht); im Briefing steht, dass die äußere Grenze Humanitl ist.
 6. Hinweis auf die Inferenz aus HUM-516.
 
+### Agent-Depot (ADR-0023, Nachtrag 2026-11-16)
+Mit `agents.claude.source = "depot"` kommt `claude` aus dem Depot
+(HUM-518 bis HUM-520), nicht vom Host; Punkt 1 (Erkennung) gilt dann nicht.
+Der Adapter liefert dafür seine Depot-Angaben: Installation über den
+nativen Installer bzw. `downloads.claude.ai/claude-code-releases/<version>/`
+mit Prüfung des signierten `manifest.json` (Fingerabdruck
+`31DD DE24 DDFA B679 F42D 7BD2 BAA9 29FF 1A7E CACE`,
+code.claude.com/docs/en/setup); `DISABLE_UPDATES=1` in der Sitzung;
+`CLAUDE_CONFIG_DIR` auf die Kopie von `config/`; Zugangsdatei
+`.credentials.json` mit Format und Anmelde-Hosts; Anmeldung mit
+„Paste code here if prompted" (code.claude.com/docs/en/authentication);
+Schlüssel, die Befehle ausführen (`hooks`, `apiKeyHelper`, `statusLine`,
+`mcpServers`, `env`). Punkt 4, letzter Spiegelstrich („persistent je
+Projekt"), entfällt bei `"depot"`: Zustand lebt dann in der Kopie der
+Sitzung, die Anmeldung im Depot.
+
 ### Tests
 - Adapter-Tests wie für OpenCode und pi (Env-Kit, Dateien, Argumente).
 - Ende-zu-Ende-Lauf in der CI mit einem Stellvertreter-Endpunkt über
@@ -3399,6 +3421,22 @@ developers.openai.com/codex); vor dem Bau erneut prüfen.
    `openai_base_url`, wenn `llm.endpoint` gesetzt ist.
 7. Hinweis auf die Inferenz aus HUM-516.
 
+### Agent-Depot (ADR-0023, Nachtrag 2026-11-16)
+Mit `agents.codex.source = "depot"` kommt `codex` aus dem Depot
+(HUM-518 bis HUM-520). Depot-Angaben des Adapters: Installation als
+natives Release-Artefakt (Hosts vor dem Bau belegen), `CODEX_HOME` auf die
+Kopie von `config/`, `cli_auth_credentials_store = "file"`, Zugangsdatei
+`auth.json` mit Format und Kontoabgleich (`chatgpt_account_id` aus dem
+`id_token`, nur gelesen, nicht geprüft), Anmeldung über
+`codex login --device-auth` und als Rückfall das Einfügen der Callback-URL
+(learn.chatgpt.com/docs/auth: Callback auf `localhost:1455`, den die
+Sandbox nicht empfängt; unter Seatbelt auf macOS nur der Geräte-Fluss,
+HUM-520 Punkt 2). Rotierende Refresh-Tokens: siehe Fallstricke von
+HUM-520.
+Das Rezept nennt die Orte einer Host-Installation (globales npm unter
+`/usr/lib/node_modules`, `/usr/bin`, `/usr/local/bin`; vor dem Bau belegen),
+die der Launcher bei `depot` maskiert (HUM-518 Punkt 4).
+
 ### Tests
 - Adapter-Tests (Env-Kit, `config.toml` unter `CODEX_HOME`).
 - Ende-zu-Ende-Lauf wie in HUM-514 mit Stellvertreter-Endpunkt.
@@ -3436,6 +3474,20 @@ Werkzeug neben Claude Code.
 4. Nebenverkehr aus, soweit `agy` das erlaubt.
 5. Hinweis auf die Inferenz und orangefarbenes Tag aus HUM-516.
 
+### Agent-Depot (ADR-0023, Nachtrag 2026-11-16)
+Mit `agents.agy.source = "depot"` kommt `agy` aus dem Depot (HUM-518 bis
+HUM-520). `agy` legt seine Anmeldung laut Doku im Schlüsselbund des Systems
+ab (Secret Service über D-Bus, antigravity.google/docs/install, Reiter CLI);
+der Session-Bus des Hosts kommt nie in eine Sandbox. Bis belegt ist, ob
+`agy` ohne Schlüsselbund in eine Datei schreibt, unterstützt das Depot
+`agy` nur mit API-Schlüssel (`modelProvider = "gemini"` in
+`antigravity-cli/settings.json` im Depot, `GEMINI_API_KEY` aus dem
+Schlüsselbund von Humanitl); `agents login agy` meldet das mit `why` und
+`fix`. Das Ergebnis der Prüfung steht im Issue-Status.
+Das Rezept nennt die Orte einer Host-Installation (globales npm unter
+`/usr/lib/node_modules`, `/usr/bin`, `/usr/local/bin`; vor dem Bau belegen),
+die der Launcher bei `depot` maskiert (HUM-518 Punkt 4).
+
 ### Tests
 - Adapter-Tests wie für HUM-514; Ende-zu-Ende-Lauf mit
   Stellvertreter-Endpunkt, wenn `agy` das zulässt, sonst mit
@@ -3447,3 +3499,607 @@ Werkzeug neben Claude Code.
    Wegwerf-Sitzung.
 2. Die Anmeldedaten des Hosts erreichen die Sandbox nicht.
 
+
+---
+
+## HUM-518 · Agent-Depot: Kern, `agents.source`, Sperre durch Firmenvorgabe, RPC und CLI `status`, `source`, `remove`
+
+### Kontext
+Entscheidung in [ADR-0023](../docs/adr/0023-agent-depot.md), Wunsch des
+Owners vom 2026-11-16 (BACKLOG Abschnitt 9, Punkt 23): Agenten wie Claude
+Code sollen nicht auf dem Host installiert werden müssen. Ein Depot je
+Agent unter dem Datenordner des Daemons hält Programm, Konfiguration und
+Anmeldung; jede Sandbox nimmt sie von dort. Dieses Issue baut den Kern:
+Ablage, Auswahl der Quelle, Einhängen in die Sitzung, Status, Entfernen.
+Installation (HUM-519) und Anmeldung (HUM-520) kommen danach; bis dahin
+füllen die Tests das Depot von Hand.
+
+### Spezifikation
+0. Ohne Opt-in ändert sich nichts: `agents.source = "host"` ist Vorgabe,
+   der Adapter findet das Programm wie heute (HUM-278).
+1. **Konfiguration**, alle `x-project-scope = denied`, mit Schema,
+   `docs/CONFIG.md` und Schnappschüssen: `agents.source` (`host`, `depot`),
+   `agents.<id>.source` je bekanntem Adapter (`opencode`, `pi`, `claude`,
+   `codex`, `agy`; ungesetzt gilt `agents.source`),
+   `agents.<id>.credential_writeback` (Vorgabe `true`, wirkt ab HUM-520).
+   Neuer Abschnitt `agents` neben dem bestehenden `agent` (der den Adapter
+   wählt); der Unterschied steht in `backlog/CONVENTIONS.md` Abschnitt 4.
+2. **Sperre:** Ein Auflöser `effective_source(adapter, config, lock)` gibt
+   Quelle, Herkunft und gegebenenfalls `Locked { by }` zurück. Die Sperre
+   kommt später aus der Firmen-Vorgabedatei (BACKLOG Abschnitt 9, Punkt 21)
+   und darf nur `depot` nennen; bis dahin ist sie ein Parameter, den die
+   Tests setzen. Gesperrt auf `depot` lehnt der Start mit Quelle `host`
+   ab (`AGENT_010`, `why` nennt die Vorgabe als Quelle, kein `fix` zum
+   Umgehen). Die Sperre gilt für jeden Schreibweg der Einstellung gleich:
+   `humanitl agents source <id> host`, `humanitl config set
+   agents.<id>.source host` bzw. `agents.source host`, die generische
+   Einstellungszeile und `ChangeSetting` werden abgelehnt.
+3. **Jeder Startweg folgt der Quelle** (ADR-0023 Punkt 1). Mit `depot`,
+   und unter der Sperre immer, kommt das Programm aus dem Depot, egal ob
+   die Sitzung über `humanitl go`, `humanitl run`, die App, `agent.command`
+   oder ein Kommando hinter `humanitl run --` startet. Ein solches
+   Kommando darf Argumente anhängen und das Depot-Programm beim Namen
+   nennen; ein Pfad auf dem Host oder ein Programm des Hosts, das ein
+   Adapter als seinen Agenten erkennt (`claude`, `codex`, `agy`, auch über
+   einen Wrapper-Pfad oder einen Symlink darauf), wird mit `AGENT_017`
+   abgelehnt. Unter der Sperre gilt das für jeden Adapter ohne Ausnahme;
+   ohne Sperre und mit `host` bleibt alles wie heute.
+   **Ein Wächter für alle Startwege:** Heute entsteht das Kommando auf
+   getrennten Wegen (`plan_configured_agent` für das konfigurierte
+   Programm neben einem Kommando des Aufrufers,
+   `bind_agent_program` für das Kommando des Adapters, aufgerufen in
+   `daemon/crates/ipc/src/sandbox.rs` um Zeile 4030 und in
+   `daemon/bin/humanitl/src/cmd/sandbox.rs` um Zeile 1350). Der Wächter
+   prüft deshalb nicht dort, sondern das endgültige Kommando und die
+   Einhängungen, die die Sandbox bekommt (`PlanRequest`), im Sandbox-Crate
+   in einer gemeinsamen Funktion, die jeder `SandboxBackend::plan` als
+   Erstes ruft (Muster wie `refuse_stream`). Danach löst kein Startweg
+   mehr ein Programm auf oder hängt eines ein. Nicht in App oder CLI.
+4. **Bekannte Host-Installationen maskiert.** Eine Startprüfung hält
+   keine Shell auf: das Standardprofil hängt `/usr` des Hosts nur lesbar
+   ein (`profiles/sandbox/default.toml`, `[mounts] ro`), also erreichte
+   `humanitl run -- /bin/sh -c /usr/bin/claude` eine Installation dort.
+   Mit `depot`, und unter der Sperre immer, legt der Launcher über jeden
+   Ort, den das Rezept des Adapters als Host-Installation nennt (Claude
+   Code: `/usr/bin/claude`, `/usr/local/bin/claude`,
+   `/usr/lib/node_modules/@anthropic-ai/claude-code`; Codex und `agy` in
+   HUM-515 und HUM-517 belegen), eine leere, nur lesbare Einhängung; das
+   Heimatverzeichnis des Hosts ist ohnehin nicht eingehängt (im Test
+   nachweisen). Maskiert werden nur Orte, die auf dem Host bestehen; ein
+   fehlender wird übersprungen, weil dort nichts zu erreichen ist und bwrap
+   unter dem nur lesbaren `/usr` keinen Einhängepunkt anlegen kann
+   (`EROFS`, `daemon/crates/sandbox/src/bwrap_args.rs` um Zeile 38).
+   Seatbelt (macOS) kennt keine Einhängungen: dort sind die Masken
+   ausdrückliche Verbotsregeln `file-read*` und `process-exec` für
+   dieselben Pfade im Profil, hinter der Regel, die Lesen außerhalb der
+   privaten Bäume erlaubt (`daemon/crates/sandbox/src/seatbelt.rs` um
+   Zeile 409), denn in SBPL gewinnt die letzte passende Regel.
+   Grenze, ausdrücklich: Die Sperre verhindert, dass
+   Humanitl einen Agenten des Hosts startet oder in die Sandbox bringt;
+   gegen einen Nutzer, der ein Agentenprogramm absichtlich an einen
+   ungelisteten Ort kopiert, schützt sie nicht, auf seinem eigenen Rechner
+   bestimmt er das.
+5. **Ablage** unter `$XDG_DATA_HOME/humanitl/agents/<id>/`, Ordner `0700`,
+   Dateien `0600` bzw. `0700` für Programme, Besitzer der Nutzer des
+   Daemons: `program/<version>/` mit `manifest.json` (Version, Quelle,
+   SHA-256 je Datei, Signaturergebnis, Zeit), Verweis `current`,
+   `config/`, `credentials/`. Modul im Sandbox-Crate unter
+   `daemon/crates/sandbox/src/agent/depot/`, Pfade über
+   `humanitl_config::paths`. Beim Öffnen prüft der Daemon Besitzer, Rechte
+   und dass kein Pfadteil ein Symlink nach außen ist; sonst Befund.
+6. **Einhängen:** Mit Quelle `depot` baut der Daemon den `LaunchPlan` so:
+   `program/<version>/` (aufgelöst, nie `current`) nur lesbar unter
+   `/run/humanitl/agent/`. Das ist eine neue Einhängeart nur des Daemons
+   neben `AgentProgram` (eine reguläre Datei, HUM-278): ein Ordner, vor
+   jedem Einhängen mit den Vertrauensregeln aus `locate.rs` (`Trust`:
+   Besitzer, kein Schreibrecht für andere, kein Symlink aus dem Baum)
+   für jeden Eintrag des Versionsordners geprüft; kein Adapter kann sie
+   hinzufügen. Der Modulkommentar von `locate.rs` („one regular file,
+   never a directory") wird im selben Commit um diese zweite Art ergänzt.
+   `config/` und die Zugangsdatei werden in einen
+   Arbeitsordner der Sitzung kopiert (unter dem Laufzeitordner der
+   Sitzung, Obergrenze 64 MiB, darüber Befund) und schreibbar als
+   Konfigurationsordner des Agenten eingehängt, weil Agenten ihren
+   Konfigurationsordner laufend schreiben (Claude Code `.claude.json`);
+   am Ende der Sitzung wird der Arbeitsordner gelöscht, auch nach einem
+   Absturz beim nächsten Start des Daemons. Zusage: nichts, was eine
+   Sitzung schreibt, bleibt im Depot, außer der geprüften Zugangsdatei
+   (HUM-520). Innerhalb der eigenen Sitzung darf der Agent seine Kopie
+   ändern. Backend-neutral über die vorhandenen Einhängearten des
+   Plans; bwrap, Podman, `qemu` und Seatbelt (Pfadregeln) tragen es gleich.
+   Neue Adapter-Angaben im `AgentAdapter`, alle optional: Name des
+   Programms im Depot, Umgebungsvariable des Konfigurationsordners
+   (`CLAUDE_CONFIG_DIR`, `CODEX_HOME`, …), Schalter gegen Selbst-Update.
+   Ein Adapter ohne diese Angaben kennt nur `host`; `depot` meldet dann
+   einen Befund. Ausdrücklich: `agents.opencode.source` und
+   `agents.pi.source` sind gültige Schlüssel (das Schema kennt alle fünf
+   Adapter), aber bis ein Issue für OpenCode bzw. pi ein Rezept liefert,
+   ergibt `depot` für sie beim Laden einen Hinweis und beim Start
+   `AGENT_015`.
+7. **Nie auf dem Host ausführen:** Weder Vorprüfung noch Doctor noch
+   Status starten etwas aus dem Depot; die Version kommt aus
+   `manifest.json`.
+8. **RPC** `Agents` (ADR-018, Muster wie `Egress`): Status aller Agenten
+   (wirksame Quelle mit Herkunft und Sperre, installierte Version,
+   Signatur, angemeldet ja/nein, letzte Rückschrift, Größe), Quelle setzen,
+   Depot entfernen. Protokoll-Minor +1, `docs/PROTOCOL.md`.
+9. **CLI:** `humanitl agents status [<id>] [--json]`,
+   `humanitl agents source <id> host|depot`, `humanitl agents remove <id>`
+   (fragt nach, `--yes`; verweigert, solange eine Sitzung das Depot nutzt;
+   ändert die Quelle nicht, eine Sitzung mit `depot` meldet danach
+   „nicht installiert"). Zeile in der Paritätstabelle.
+10. **Doctor:** eine Zeile je Agent mit Quelle `depot`: Version, angemeldet,
+   oder was fehlt.
+11. **Befunde** (registriert in `codes.rs` und `docs/DIAGNOSTICS.md`,
+   Bereich `AGENT` wächst von 001-007 auf 001-029; die Liste der Codes in
+   `backlog/CONVENTIONS.md` Abschnitt 4.17 (Agent-Adapter, HUM-037) wird im
+   selben Commit nachgeführt): `AGENT_008` Agent nicht
+   im Depot installiert (`fix`: `humanitl agents install <id>`),
+   `AGENT_009` nicht angemeldet (`fix`: `humanitl agents login <id>`, ab
+   HUM-520), `AGENT_010` Quelle durch Vorgabe festgelegt, `AGENT_013`
+   Depot unbrauchbar (Besitzer, Rechte, Symlink, Größe), `AGENT_015`
+   Adapter oder Backend kennt das Depot nicht, `AGENT_017` Kommando nennt
+   ein Programm des Hosts, obwohl die Quelle `depot` ist oder gesperrt.
+   `AGENT_011`, `AGENT_012`,
+   `AGENT_014` und `AGENT_016` registrieren HUM-519 und HUM-520.
+
+### Tests
+- Auflöser: Vorgabe `host`; `agents.source = "depot"` gilt für alle,
+  `agents.<id>.source` gewinnt; Sperre schlägt beides; Sperre auf `host`
+  wird abgelehnt.
+- Projekt-Profil mit `agents.*` wird beim Laden abgelehnt.
+- Unter Sperre: `agents source claude host`, `config set
+  agents.claude.source host`, `config set agents.source host` und
+  `ChangeSetting` über RPC werden abgelehnt, die Datei bleibt unverändert.
+- Ein Wächter für alle Wege: je ein Test für das konfigurierte Programm,
+  `agent.command`, `run --` über den Daemon (`ipc/src/sandbox.rs`), den
+  Startweg der CLI (`cmd/sandbox.rs`) und den Start aus der App über den
+  RPC; jeder endet mit `Depot`-Programm bzw. `AGENT_017`.
+- Unter Sperre mit einem Stellvertreter-`claude` unter `/usr/local/bin`
+  des Testsystems (bzw. einem Profil, das den Ort einhängt): in der
+  Sandbox ist der maskierte Ort leer, `run -- /bin/sh -c
+  /usr/local/bin/claude` findet nichts; `$HOME` des Hosts ist nicht
+  sichtbar. Mutationsbeweis: Maske entfernt färbt den Test rot.
+- Ein Ort aus dem Rezept, der auf dem Host fehlt, wird übersprungen: der
+  Plan enthält für ihn keine Einhängung, die Sitzung startet (kein
+  `EROFS`). Mutationsbeweis: Prüfung auf Bestehen entfernt färbt den Test
+  rot.
+- macOS (CI-Job `macos`): das Seatbelt-Profil einer Depot-Sitzung enthält
+  `deny file-read*` und `deny process-exec` für die Orte des Rezepts
+  hinter der allgemeinen Leseregel; eine Depot-Sitzung kann ein
+  Stellvertreter-`/usr/local/bin/claude` des Hosts weder lesen noch
+  starten. Mutationsbeweis: Verbotsregel vor die Leseregel gestellt
+  oder entfernt färbt den Test rot.
+- Startwege mit `depot`: `agent.command = ["/home/u/.local/bin/claude"]`,
+  `humanitl run -- /usr/local/bin/claude`, ein Symlink `~/bin/c` auf ein
+  Host-`claude` und `run -- codex` mit Host-`codex` im `PATH` ergeben
+  `AGENT_017`; `agent.command = ["claude", "--model", "x"]` startet das
+  Depot-Programm mit den Argumenten. Unter Sperre dasselbe auch mit
+  `agents.claude.source = "host"` in einer Ebene unter der Sperre.
+- `agents.opencode.source = "depot"` lädt, der Start meldet `AGENT_015`.
+- Mit `sandbox.backend = "bwrap"` und `sandbox.min_isolation` auf
+  Vorgabe startet eine Depot-Sitzung; das Depot verlangt keine
+  Kernel-Stufe.
+- Plan mit Quelle `depot`: Programmordner nur lesbar, aufgelöste Version
+  statt `current`, Arbeitsordner schreibbar, Arbeitsordner nach dem Ende
+  weg; mit Quelle `host` ist der Plan Byte für Byte der von heute
+  (Schnappschuss).
+- In der Sandbox (bwrap, Escape-Suite-Muster): Schreiben in den
+  Programmordner scheitert; eine Datei im Arbeitsordner erscheint nicht im
+  Depot; die Socket-Prüfung aus `README.md` zeigt weiter genau eine Zeile.
+- Depot mit fremdem Besitzer, `0755` oder Symlink nach `/home` ergibt
+  `AGENT_013`.
+- Kein Prozess startet aus dem Depot auf dem Host: Test mit einem
+  Programm im Depot, das beim Start eine Markerdatei schreibt, nach Status,
+  Doctor und Vorprüfung fehlt die Markerdatei.
+- RPC und CLI: `status --json`, `source`, `remove` (mit laufender Sitzung
+  abgelehnt).
+- Mutationsbeweise: `current` statt aufgelöster Version eingehängt färbt
+  den Plantest rot; Programmordner schreibbar färbt den Sandbox-Test rot;
+  Sperre ignoriert färbt den Auflösertest rot; der gemeinsame Wächter
+  nur in einem der Backends gerufen färbt die Startweg-Tests rot; die Sperre nur in `agents source`, nicht in `config set`, färbt den
+  Test zu `config set` rot.
+
+### Fallstricke
+- `agent` und `agents` sind zwei Abschnitte; keine Umbenennung des
+  bestehenden `agent.*`, sonst brechen Konfigurationen.
+- Den Arbeitsordner nie unter `config/` des Depots anlegen, sonst landet
+  ein Schreiben der Sitzung doch im Depot.
+- Unter der Kernel-Stufe ist der Arbeitsordner eine virtiofs-Freigabe; sie
+  darf nicht das Depot selbst freigeben.
+- macOS: die Seatbelt-Regel für den Programmordner nur `file-read*`; den
+  CI-Job `macos` grün halten, Linux-Teile mit `cfg` abgrenzen.
+- `codes.rs`, `fake_daemon_client.dart` und ARB sind gemeinsam genutzte
+  Dateien (CLAUDE.md).
+
+### Akzeptanzkriterien
+1. Ohne `agents.*` startet jede Sitzung wie vorher.
+2. Mit `depot` startet der Agent aus dem Depot, sein Programm ist in der
+   Sitzung nicht änderbar, und nichts, was die Sitzung schreibt, bleibt im
+   Depot (die Zugangsdatei regelt HUM-520).
+3. Eine Sperre auf `depot` lässt keinen Agenten vom Host starten, über
+   keinen Startweg (`go`, `run`, `run --`, `agent.command`, App), und
+   keinen Schreibweg der Einstellung zurück auf `host`; App und CLI nennen
+   die Vorgabe als Grund.
+4. Das Depot funktioniert auf der gemeinsamen Stufe mit bwrap;
+   `sandbox.min_isolation` bleibt unverändert.
+5. Kein Programm aus dem Depot läuft je außerhalb einer Sandbox.
+6. `docs/SECURITY.md` und `docs/THREAT-MODEL.md` (en und de) nennen das
+   Depot als Herkunft des Agenten, die Einhängungen, die Masken (leere
+   Einhängungen unter Linux nur für bestehende Orte, Verbotsregeln unter
+   Seatbelt) und die Grenze der Sperre aus Punkt 4 wörtlich (neuer Eintrag K-36, erster
+   Teil); die drei Garantien und `tests/escape/` bleiben
+   unverändert grün.
+
+---
+
+## HUM-519 · Agent-Depot: Installation und Update in einer Wartungs-Sandbox, Version angeheftet
+
+### Kontext
+ADR-0023 Punkt 5. Installation und Update laufen nie auf dem Host, sondern
+in einer gewöhnlichen Humanitl-Sandbox ohne Projekt und ohne Daten des
+Hosts; das Netz geht nur durch Humanitl, mit Regeln für die Paket- und
+Download-Hosts des Agenten.
+
+### Spezifikation
+1. **Wartungslauf** als Sitzungsart `DepotMaintenance { agent, task }`:
+   kein `/work`, `HOME` ein Arbeitsordner, Netz nur über den Proxy, das
+   gewählte Backend, Briefing aus. Der Lauf hat ein Terminal wie jede
+   Sitzung, App und CLI hängen sich an.
+2. **Adapter-Angaben** (optional im `AgentAdapter`): Installationsrezept
+   (Kommando in der Sandbox, abhängig von Version), Liste der Hosts für
+   Installation und Update (genau, keine Platzhalter außer wo der Anbieter
+   sie nötig macht, mit Beleg), wo das Programm nach dem Lauf liegt,
+   Signaturprüfung, falls der Anbieter signiert. Die Hosts werden zu
+   Regeln `allow` nur dieser Sitzung; alles andere wird gehalten.
+3. **Version angeheftet:** `install` nimmt die angegebene Version oder die
+   aktuelle des Anbieters und schreibt sie fest; nur `update` ändert sie.
+   Sitzungen schalten das Selbst-Update ab (Angabe aus HUM-518) und
+   finden den Programmordner nur lesbar.
+4. **Übernahme** nach einem erfolgreichen Lauf: Der Daemon prüft den Baum
+   (nur reguläre Dateien, Ordner, relative Symlinks innerhalb; keine
+   Sockets, FIFOs, Geräte, harten Links, Set-UID/Set-GID; Obergrenze für
+   Größe und Dateizahl), berechnet SHA-256 je Datei, schreibt
+   `manifest.json`, verschiebt nach `program/<version>/` und setzt
+   `current` atomar um. Ein gescheiterter Lauf ändert nichts am Depot.
+5. **Signatur:** Wo der Anbieter signiert (Claude Code: `manifest.json` mit
+   Schlüssel `31DD DE24 DDFA B679 F42D 7BD2 BAA9 29FF 1A7E CACE`,
+   code.claude.com/docs/en/setup), prüft der Lauf in der Sandbox mit `gpg`
+   aus dem `/usr` des Hosts gegen den im Adapter festen Fingerabdruck und
+   die SHA-256 des Programms gegen das Manifest; das Ergebnis steht in
+   `manifest.json`. Keine eigene Kryptographie im Daemon. Wo der Adapter
+   eine Signatur angibt, schlägt der Lauf geschlossen fehl: fehlt `gpg` im
+   `/usr` des Hosts, endet `gpg` mit Fehler, oder fehlt die Zeile mit dem
+   erwarteten Fingerabdruck in der Ausgabe, gibt es `AGENT_011` und nichts
+   wird übernommen, nie eine unsignierte Übernahme.
+6. **Update:** neue Version in einen eigenen Ordner, dann `current`
+   umsetzen; laufende Sitzungen behalten ihre Version. Alte Versionen
+   räumt der Daemon, wenn keine Sitzung sie nutzt; die vorige bleibt für
+   ein Zurück (`agents update <id> --version <alt>`).
+7. **RPC** zum Starten von Installation und Update (gibt die Sitzung
+   zurück), **CLI** `humanitl agents install <id> [--version V]` und
+   `humanitl agents update <id> [--version V]`, beide hängen sich an das
+   Terminal des Laufs; mit `--yes` ohne Rückfrage.
+8. **Befunde:** `AGENT_011` Installation oder Update gescheitert (Download,
+   Signatur, Prüfsumme, unzulässige Datei im Baum, Obergrenze), mit dem
+   Schritt im `why`.
+9. Vor dem Bau je Adapter mit Depot-Angaben die Hosts und das Rezept an der
+   offiziellen Doku belegen und im Code verlinken (Stand 2026-11-16 für
+   Claude Code: `claude.ai/install.sh`, `downloads.claude.ai`; Codex und
+   `agy` offen, HUM-515, HUM-517).
+
+### Tests
+- Mit einem Stellvertreter-Adapter und einem Download-Server im Test:
+  Installation landet in `program/<version>/`, `manifest.json` stimmt,
+  `current` zeigt darauf.
+- Ein Baum mit Socket, FIFO, Set-UID-Datei, Symlink nach `/etc` oder einem
+  harten Link wird abgelehnt (`AGENT_011`), das Depot bleibt wie vorher.
+- Ein Host außerhalb der Liste wird im Lauf gehalten, nicht erlaubt.
+- Signatur falsch oder Prüfsumme falsch: Abbruch, nichts übernommen.
+- `gpg` fehlt in der Sandbox (Test mit leerem `PATH` für `gpg`), `gpg`
+  endet mit Status ungleich 0, oder der Fingerabdruck in der Ausgabe ist
+  ein anderer: jeweils `AGENT_011`, Depot unverändert. Mutationsbeweis:
+  fehlendes `gpg` als „nicht geprüft" statt Fehler gewertet färbt den Test
+  rot.
+- Update während einer laufenden Sitzung: die Sitzung sieht die alte
+  Version weiter; neue Sitzung die neue.
+- Selbst-Update in der Sitzung scheitert am nur lesbaren Ordner.
+- Mutationsbeweise: Prüfung des Baums auf Sockets entfernt färbt den
+  Socket-Test rot; Regel aus der Wartungssitzung in die globalen Regeln
+  geschrieben färbt den Test „Host außerhalb wird gehalten" in der
+  Folgesitzung rot.
+
+### Fallstricke
+- Der native Installer von Claude Code legt einen Starter unter
+  `~/.local/bin` und Versionen unter `~/.local/share/claude/versions/` an;
+  übernommen wird nur die Versionsdatei, nicht der Starter.
+- Die Regeln des Laufs sind Sitzungsregeln; sie dürfen die gespeicherten
+  Regeln nie berühren.
+- Ein Installer, der `sudo` will oder ins `/usr` schreibt, scheitert in
+  der Sandbox; das ist richtig, die Meldung sagt es.
+
+### Akzeptanzkriterien
+1. Ein Agent lässt sich installieren und aktualisieren, ohne dass auf dem
+   Host etwas außerhalb des Depots geschrieben oder ausgeführt wird.
+2. Jede Anfrage des Laufs geht durch Humanitl und steht in der
+   Aufzeichnung; nur die Hosts des Adapters gehen ohne Halt.
+3. Die Version ändert sich nur über `update`.
+4. `docs/SECURITY.md` und `docs/THREAT-MODEL.md` (K-36) nennen
+   Wartungsläufe, Signaturprüfung und Anheften im selben Commit.
+
+---
+
+## HUM-520 · Agent-Depot: Anmeldung in der Sandbox und Wächter für das Zurückschreiben der Zugangsdatei
+
+### Kontext
+ADR-0023 Punkte 4, 5 und 7. Die Anmeldung soll einmal geschehen und für
+jede Sitzung gelten. Weil Tokens ablaufen und manche Anbieter den
+Refresh-Token bei jeder Nutzung tauschen, muss genau eine Datei aus der
+Sitzung zurück ins Depot. Das ist die neue Angriffsfläche: Eine
+kompromittierte Sitzung, die etwas ins Depot schreibt, wirkt in jeder
+späteren. Der Wächter lässt nur die Zugangsdatei durch, und nur geprüft.
+
+### Spezifikation
+1. **Anmeldung** als Wartungslauf (HUM-519) mit `task = Login`: Anmeldehosts
+   des Adapters als Sitzungsregeln, Kommando des Adapters (Claude Code:
+   `claude` bzw. `claude auth login`; Codex: `codex login --device-auth`;
+   `agy`: siehe HUM-517). App und CLI zeigen die Anmelde-URL aus der
+   Ausgabe und öffnen sie auf dem Host nur auf Klick bzw. Bestätigung und
+   nur für Hosts aus der Liste des Adapters; andere URLs werden gezeigt,
+   nicht geöffnet.
+2. **Wo der Callback die Sandbox nicht erreicht** (Codex,
+   `localhost:1455`): zuerst der Geräte-Fluss; sonst fügt der Nutzer die
+   URL aus der Adresszeile des Browsers in App bzw. CLI ein, der Daemon
+   prüft, dass es genau `http://localhost:1455/auth/callback?…` ist, und
+   stellt sie in der Sandbox an `127.0.0.1:1455` zu (ein Prozess im Lauf,
+   kein Weg von außen hinein). Keine Weiterleitung eines Ports vom Host in
+   die Sandbox. Das Zustellen gibt es nur auf Backends, deren Sandbox ein
+   eigenes Loopback hat, auf dem der Agent binden darf (bwrap, Podman,
+   `qemu`). Unter Seatbelt (macOS) erlaubt das Profil nur die zwei Ports
+   der Sitzung und teilt das Loopback des Hosts
+   (`daemon/crates/sandbox/src/seatbelt.rs`, `render_network`); dort ist der
+   Geräte-Fluss der einzige unterstützte Weg, das Feld zum Einfügen
+   erscheint nicht, und ist der Geräte-Fluss im ChatGPT-Konto aus, endet
+   die Anmeldung mit `AGENT_014`, dessen `fix` die Einstellung nennt.
+3. **Übernahme nach der Anmeldung: nur Anmeldedaten.** Übernommen wird die
+   Zugangsdatei über den Wächter (Punkt 4), sonst nichts aus dem
+   Anmeldelauf. Wo ein Agent Kontodaten in einer Datei hält, die auch
+   Konfiguration trägt (Claude Code `.claude.json` mischt Kontozustand mit
+   Befehlen in `mcpServers`), wird die Datei nie übernommen; der Adapter
+   darf höchstens einzeln benannte Felder angeben (etwa
+   `oauthAccount`, vor dem Bau messen), die der Daemon selbst ausliest,
+   nach Typ und Form prüft und in die Kopie im Depot schreibt. Jede andere
+   Änderung des Laufs wird verworfen; Konfiguration ändert sich nur über
+   den bestätigten Konfigurationslauf (Punkt 5). Der Daemon merkt sich
+   das Konto, wo das Format es nennt.
+4. **Wächter** für jede Rückschrift, auch aus normalen Sitzungen:
+   - nur die eine Datei, die der Adapter angibt, relativ zum Arbeitsordner
+     mit `openat` und `O_NOFOLLOW`, reguläre Datei, höchstens 64 KiB;
+   - Format des Adapters: nur bekannte Schlüssel, Werte mit erwartetem Typ
+     und erwarteter Form. **Erste Anmeldung:** es gibt noch keine
+     gespeicherte Datei; geprüft wird nur gegen das Schema des Adapters
+     (Pflichtschlüssel vorhanden, Typen, Form der Werte, Obergrenze).
+     **Jede spätere Rückschrift:** Schema und zusätzlich Vergleich mit der
+     gespeicherten Datei (kein Schlüssel mehr oder weniger, gleiche Form je
+     Wert);
+   - nicht älter als die gespeicherte, wo das Format einen Ablauf trägt;
+     dasselbe Konto wie bei der Anmeldung, wo das Format es nennt
+     (`AGENT_016` sonst, die gespeicherte bleibt);
+   - atomar geschrieben (`0600`, temporäre Datei, `rename`) unter einer
+     Sperre je Agent; Audit-Eintrag mit Agent, Sitzung und SHA-256 alt und
+     neu, nie dem Inhalt;
+   - abgelehnt: gespeicherte Datei unverändert, Befund `AGENT_012` an der
+     Sitzung, Audit-Eintrag.
+   Der Daemon prüft die Datei bei Änderung (abgefragt, etwa alle 10 s) und
+   am Ende der Sitzung. Mit `agents.<id>.credential_writeback = false`
+   schreibt er nichts zurück.
+5. **Konfiguration ändern** über einen Wartungslauf `task = Config`
+   (`humanitl agents config <id>`): der Agent läuft mit dem Depot als
+   schreibbarer Kopie ohne Projekt; danach zeigen App und CLI die geänderten
+   Dateien, Schlüssel, die Befehle ausführen (Angabe des Adapters, für
+   Claude Code `hooks`, `apiKeyHelper`, `statusLine`, `mcpServers`, `env`),
+   hervorgehoben; übernommen wird erst nach Bestätigung. `agents config
+   <id> --show` listet den Stand.
+6. **RPC** für Anmeldung, Konfigurationslauf und deren Übernahme bzw.
+   Verwerfen; **CLI** `humanitl agents login <id>` und `humanitl agents
+   config <id> [--show]`.
+7. **Befunde:** `AGENT_012` Rückschrift abgelehnt, `AGENT_014` Anmeldung
+   gescheitert oder Callback nicht zustellbar, `AGENT_016` anderes Konto
+   oder älteres Token.
+
+### Tests
+- Stellvertreter-Adapter mit einer JSON-Zugangsdatei: gültige Erneuerung
+  wird übernommen; nach dem Ende der Sitzung steht sie im Depot, `0600`.
+- Erste Anmeldung ohne gespeicherte Datei: schemagerechte Datei wird
+  übernommen; fehlender Pflichtschlüssel, falscher Typ, zusätzlicher
+  Schlüssel oder Übergröße abgelehnt, Depot bleibt ohne Zugangsdatei.
+- Spätere Rückschrift: Datei, die gegenüber der gespeicherten einen im
+  Schema erlaubten optionalen Schlüssel ergänzt oder weglässt, abgelehnt.
+  Mutationsbeweis: Vergleich mit der gespeicherten Datei entfernt färbt
+  diesen Test rot; Pflichtschlüsselprüfung der ersten Anmeldung entfernt
+  färbt den Test davor rot.
+- Abgelehnt werden: unbekannter Schlüssel (`"hooks"`), falscher Typ,
+  65 KiB, Symlink auf eine Datei des Hosts, FIFO, ein älteres Token, ein
+  anderes Konto.
+- Eine Sitzung schreibt `settings.json`, eine zweite Datei neben die
+  Zugangsdatei und eine Datei in den Programmordner: nichts davon steht
+  danach im Depot.
+- Zwei Sitzungen erneuern nacheinander: die neuere gewinnt, die ältere
+  überschreibt sie nicht.
+- `credential_writeback = false`: nichts zurück.
+- Callback-Einfügen: genau die erwartete URL wird zugestellt; eine URL mit
+  anderem Host, Port oder Pfad wird abgelehnt.
+- Seatbelt-Plan (macOS-Test): kein Zustellen, kein Einfügefeld im Status;
+  Geräte-Fluss aus ergibt `AGENT_014` mit `fix`.
+- Anmeldelauf, in dem der Stellvertreter-Agent neben der Zugangsdatei eine
+  `.claude.json` mit `mcpServers` und `oauthAccount`, eine `settings.json`
+  mit `hooks` und eine Datei in `config/` schreibt: im Depot steht danach
+  nur die Zugangsdatei und, falls benannt, das Feld `oauthAccount` in der
+  Kopie des Daemons; kein `mcpServers`, kein `hooks`. Mutationsbeweis:
+  ganze `.claude.json` übernommen färbt den Test rot.
+- Konfigurationslauf: ohne Bestätigung keine Änderung; ein neuer `hooks`
+  Eintrag ist in der Liste hervorgehoben.
+- **Mutationsbeweise** für den Wächter, jeder färbt mindestens einen Test
+  rot: Formatprüfung durch `Ok(())` ersetzt; ganzen Arbeitsordner statt
+  der einen Datei übernommen; `O_NOFOLLOW` entfernt; Altersvergleich
+  entfernt; `rename` durch direktes Schreiben ersetzt (Test mit Abbruch
+  mitten im Schreiben).
+
+### Fallstricke
+- Rotierende Refresh-Tokens (Codex): zwei gleichzeitige Sitzungen können
+  einander das Token ungültig machen; dann ist eine neue Anmeldung nötig.
+  Der Status sagt, welche Sitzung zuletzt schrieb; nie ein älteres über
+  ein neueres schreiben.
+- Ein Format mit Ablaufzeit kann sie in Sekunden oder Millisekunden
+  führen; je Adapter am Beispiel belegen.
+- `claude` schreibt Kontozustand nach `.claude.json`, dieselbe Datei
+  trägt `mcpServers`; welche Felder nötig sind, damit eine Sitzung ohne
+  erneute Einrichtung startet, vor dem Bau messen, nicht raten. Fehlt ein
+  Feld, startet die Sitzung mit einer Rückfrage des Agenten, nicht mit
+  übernommener Datei.
+- Den D-Bus-Session-Bus des Hosts nie einbinden, auch nicht für `agy`.
+- Nie die eigenen Anmeldedateien des Entwicklers (`~/.claude`,
+  `~/.codex`, Schlüsselbund) für Tests lesen; nur Stellvertreter.
+
+### Akzeptanzkriterien
+1. Einmal anmelden, danach startet jede Sitzung mit `depot` angemeldet,
+   auch eine Wegwerf-Sitzung, ohne erneute Anmeldung.
+2. Keine Sitzung kann etwas anderes als die geprüfte Zugangsdatei ins Depot
+   schreiben; die Mutationsbeweise belegen es.
+3. Konfiguration ändert sich nur über einen bestätigten Konfigurationslauf.
+4. `docs/SECURITY.md` (neuer Abschnitt in 5, Seitenkanal „Zugangsdatei des
+   Depots"), `docs/THREAT-MODEL.md` (K-36 vollständig: Persistenz,
+   Kontotausch, verdeckter Kanal über die Zugangsdatei, parallele
+   Sitzungen) und die Tabelle der Seitenkanäle in `README.md` (en und de)
+   im selben Commit.
+
+---
+
+## HUM-521 · App: Abschnitt „Agenten" für Quelle und Depot
+
+### Kontext
+ADR-0023 Punkt 8, ADR-018: Alles aus HUM-518 bis HUM-520 soll auch in der
+Oberfläche gehen. Die App ist ein dünner Client der RPCs.
+
+### Spezifikation
+1. Einstellungen, eigener Abschnitt „Agenten", eine Karte je Agent: Quelle
+   Host/Depot (Umschalter), installierte Version und Signatur, angemeldet
+   ja/nein mit letzter Rückschrift, Größe; Knöpfe Installieren, Anmelden,
+   Aktualisieren, Konfigurieren, Entfernen (mit Bestätigung), je nach
+   Zustand aktiv.
+2. Gleichstand mit der CLI aus HUM-518 bis HUM-520, jeweils über RPC:
+   - Schalter „Zugangsdaten zurückschreiben" je Agent
+     (`agents.<id>.credential_writeback`);
+   - Versionswahl bei Installieren und Aktualisieren (aktuelle oder
+     eingegebene Version, Liste der im Depot vorhandenen für ein Zurück),
+     wie `--version`;
+   - Ansicht der Konfiguration im Depot (wie `agents config <id> --show`),
+     nur lesend.
+   Der Schalter für `agents.encrypt_credentials` kommt mit HUM-523.
+3. Gesperrte Quelle: Umschalter ausgegraut, Text „Von deiner Firma
+   festgelegt" mit Quelle der Vorgabe; Host-Knöpfe aus.
+4. Wartungsläufe öffnen das Terminal der Sitzung wie jede Sitzung; die
+   Anmelde-URL als Knopf „Im Browser öffnen" nur für die Hosts des
+   Adapters; Feld zum Einfügen der Callback-URL, wo der Adapter es braucht.
+5. Nach einem Konfigurationslauf die Liste der geänderten Dateien mit
+   hervorgehobenen Befehls-Schlüsseln, Knöpfe Übernehmen und Verwerfen.
+6. Texte über ARB (en Quelle, de Übersetzung); Befunde aus HUM-518 bis
+   HUM-520 mit `why` und `fix` an der Karte.
+7. Fake-Daemon für Widget-Tests ergänzen (gemeinsam genutzte Datei).
+
+### Tests
+- Widget-Tests je Zustand (nicht installiert, installiert, angemeldet,
+  gesperrt, Fehler) mit `TargetPlatformVariant` für Linux und macOS;
+  Golden der Karte hell und dunkel.
+- Klick auf eine URL eines fremden Hosts öffnet nichts.
+- Schalter „Zugangsdaten zurückschreiben" ruft den RPC und zeigt den neuen
+  Stand; Versionswahl schickt die gewählte Version; Zurück auf eine ältere
+  Version aus der Liste; Konfigurationsansicht zeigt die Dateien.
+- Gesperrt: Umschalter ohne Wirkung, Text sichtbar.
+- Mutationsbeweis: Sperre in der Karte ignoriert färbt den Test rot.
+
+### Fallstricke
+- Screenshot und Design-Prüfung vor dem Landen (Owner-Beschwerde vom
+  2026-11-01 über UI-Knöpfe).
+- Die App entscheidet nichts selbst: ob ein Knopf aktiv ist, kommt aus dem
+  Status des RPC.
+
+### Akzeptanzkriterien
+1. Jede Fähigkeit von `humanitl agents` aus HUM-518 bis HUM-520
+   (`status`, `source`, `install`/`update` mit `--version` samt Zurück,
+   `login`, `config` samt `--show`, `remove`) und der Schlüssel
+   `agents.<id>.credential_writeback` sind in der App erreichbar.
+2. Eine gesperrte Quelle ist sichtbar und in der App nicht änderbar.
+
+---
+
+## HUM-522 · Agent-Depot: Ende-zu-Ende-Lauf mit Claude Code und Anleitung
+
+### Kontext
+Abschluss von ADR-0023: Ein echter Agent durch die ganze Kette, und eine
+Anleitung für Nutzer.
+
+### Spezifikation
+1. Ende-zu-Ende-Test in der CI: `agents source claude depot`, `agents
+   install claude --version <fest>` gegen einen Stellvertreter-Server, der
+   eine echte Version und ihr signiertes Manifest aus einem Cache liefert
+   (oder, wo das nicht geht, ein Stellvertreter-Programm), Anmeldung mit
+   einem Stellvertreter-Endpunkt über `ANTHROPIC_BASE_URL` statt echter
+   Anmeldung, zwei Wegwerf-Sitzungen nacheinander ohne erneute Anmeldung,
+   `agents remove claude`.
+2. Anleitung `docs/guides/agent-depot.md` (en, de unter
+   `docs/translations/`): wann das Depot, wie wechseln, was es schützt und
+   was nicht (gleicher Nutzer auf dem Host, Kontotausch, Seitenkanal),
+   Firmen-Vorgabe.
+3. `docs/cli.md` mit `humanitl agents`.
+
+### Tests
+- Der Ende-zu-Ende-Lauf selbst; auf dem Host liegt danach kein `claude`
+  außerhalb des Depots (Prüfung von `PATH` und `~/.local`).
+
+### Akzeptanzkriterien
+1. Ein Nutzer ohne Agent auf dem Host kommt mit der Anleitung bis zum
+   Prompt von Claude Code in einer Wegwerf-Sitzung, und die zweite Sitzung
+   fragt nicht erneut nach der Anmeldung.
+
+---
+
+## HUM-523 · Agent-Depot: Zugangsdateien verschlüsselt mit Schlüssel aus dem Schlüsselbund
+
+### Kontext
+ADR-0023 Punkt 6. Wahlweise sollen die Zugangsdateien im Depot nicht im
+Klartext liegen.
+
+### Spezifikation
+1. Schlüssel `agents.encrypt_credentials` (Vorgabe `false`,
+   `x-project-scope = denied`). Mit `true`: AEAD aus einer etablierten
+   Crate (Vorschlag `chacha20poly1305` aus RustCrypto; Aufnahme in
+   `daemon/Cargo.toml` zentral, nicht durch den Agenten), Schlüssel im
+   Schlüsselbund wie `llm.api_key_ref` (`config/src/secret.rs`).
+2. Ohne erreichbaren Schlüsselbund wird die Einstellung abgelehnt; kein
+   Rückfall auf eine Schlüsseldatei neben den Daten.
+3. Entschlüsselt wird nur in den Arbeitsordner der Sitzung; der Wächter
+   (HUM-520) verschlüsselt beim Zurückschreiben.
+4. Umschalten verschlüsselt bzw. entschlüsselt die vorhandenen Dateien
+   atomar; Status, App und CLI zeigen „verschlüsselt".
+5. Umschalten über RPC, in der CLI über `humanitl config set
+   agents.encrypt_credentials`, in der App als Schalter im Abschnitt
+   „Agenten" (HUM-521), mit dem Befund bei fehlendem Schlüsselbund an der
+   Karte.
+
+### Tests
+- Datei im Depot ist nicht Klartext; Sitzung bekommt Klartext; Rückschrift
+  wieder verschlüsselt.
+- Falscher Schlüssel: Befund, Datei unverändert.
+- Ohne Schlüsselbund: Einstellung abgelehnt.
+- Widget-Test: Schalter einschalten und ausschalten ruft jeweils den RPC,
+  der Stand „verschlüsselt" folgt; ohne Schlüsselbund bleibt er aus und
+  der Befund steht an der Karte.
+- Mutationsbeweis: Rückschrift im Klartext färbt den Test rot.
+
+### Akzeptanzkriterien
+1. Mit `true` liegt keine Zugangsdatei im Klartext im Depot.
+2. Die Verschlüsselung lässt sich in App und CLI ein- und ausschalten.
+3. `docs/SECURITY.md` und `docs/THREAT-MODEL.md` (K-36) nennen die
+   Verschlüsselung und ihre Grenze (der Daemon entschlüsselt für jede
+   Sitzung) im selben Commit.
