@@ -121,6 +121,7 @@ Diagnose-Codes, hier nur geplant (registriert vom genannten Issue in `codes.rs` 
 | HUM-516 | Cloud-Agenten: gemeinsamer Hinweis auf den Abfluss über die Inferenz | S | HUM-037 |
 | HUM-514 | Agent-Adapter Claude Code | M | HUM-516 |
 | HUM-515 | Agent-Adapter Codex | M | HUM-516 |
+| HUM-517 | Agent-Adapter Antigravity CLI (`agy`, Gemini) | M | HUM-516 |
 
 ## HUM-428 · Port neutral: `PlanRequest`, `LaunchOptions`, `IsolationLevel`, Enum `Backend` statt `PlatformBackend`
 
@@ -3334,6 +3335,43 @@ developers.openai.com/codex); vor dem Bau erneut prüfen.
 
 ### Akzeptanzkriterien
 1. `humanitl go` mit Codex führt bis zu dessen Prompt in der
+   Wegwerf-Sitzung.
+2. Die Anmeldedaten des Hosts erreichen die Sandbox nicht.
+
+---
+
+## HUM-517 · Agent-Adapter Antigravity CLI (`agy`, Gemini)
+
+### Kontext
+Wunsch des Owners vom 2026-11-16: Gemini über die Antigravity CLI (`agy`)
+soll im selben Zug wie Claude Code (HUM-514) und Codex (HUM-515) als Agent
+in Humanitl laufen, auch mit `humanitl go`. Der Owner nutzt `agy` schon als
+Werkzeug neben Claude Code.
+
+### Spezifikation
+1. Adapter nach HUM-037 aus denselben Bausteinen wie HUM-514 und HUM-515
+   (Erkennung des Programms, Profil, Standardregeln, Env-Kit, Briefing),
+   kein kopierter Adapter.
+2. Vor dem Bau an der offiziellen Dokumentation von Antigravity bzw. am
+   Quelltext belegen und im Code verlinken: wie `agy` einen HTTP-Proxy und
+   eine zusätzliche CA liest, wo Zustand und Anmeldung liegen und wie man
+   sie auf einen Ordner in der Sandbox umlenkt, welche Hosts Modell und
+   Anmeldung brauchen, wie Telemetrie und Update-Prüfung abgeschaltet
+   werden, ob `agy` eine eigene Sandbox mitbringt und wie sie sich in bwrap
+   verhält. Wo die Dokumentation schweigt, steht das im Issue-Status.
+3. Zugangsdaten aus dem Schlüsselbund wie `llm.servers`; die Anmeldung des
+   Hosts wird nicht eingebunden.
+4. Nebenverkehr aus, soweit `agy` das erlaubt.
+5. Hinweis auf die Inferenz und orangefarbenes Tag aus HUM-516.
+
+### Tests
+- Adapter-Tests wie für HUM-514; Ende-zu-Ende-Lauf mit
+  Stellvertreter-Endpunkt, wenn `agy` das zulässt, sonst mit
+  Stellvertreter-Programm, das die Umgebung prüft.
+- Nichts aus der Anmeldung des Hosts ist in der Sandbox sichtbar.
+
+### Akzeptanzkriterien
+1. `humanitl go` mit `agy` führt bis zu dessen Prompt in der
    Wegwerf-Sitzung.
 2. Die Anmeldedaten des Hosts erreichen die Sandbox nicht.
 
