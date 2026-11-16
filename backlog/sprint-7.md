@@ -111,6 +111,10 @@ Diagnose-Codes, hier nur geplant (registriert vom genannten Issue in `codes.rs` 
 | HUM-504 | App: der Abschnitt der Backends verschwindet nicht beim Wechsel | S | HUM-440 |
 | HUM-505 | CLI: der Fix von `sandbox image pull` nennt die Referenz | S | HUM-439 |
 | HUM-506 | doctor: der gespeicherte Probestart der Kernel-Stufe veraltet mit ihren Programmen und dem Gastkernel | S | HUM-444 |
+| HUM-507 | Konfiguration: Fixes von `ChangeSetting`, die `config set` nicht annimmt | S | HUM-503 |
+| HUM-508 | doctor: `doctor-probe.json` ohne den Klartextpfad des Programms | S | HUM-506 |
+| HUM-509 | Proxy-Test `the_byte_budget_counts_bodies_while_they_are_buffered` wackelt (Connection reset) | S | — |
+| HUM-510 | App: eine Auffrischung desselben Backend-Mitglieds zeigt die Liste als ausstehend | S | HUM-504 |
 
 ## HUM-428 · Port neutral: `PlanRequest`, `LaunchOptions`, `IsolationLevel`, Enum `Backend` statt `PlatformBackend`
 
@@ -2872,3 +2876,87 @@ Delta-Review (Codex): beide Befunde geschlossen; neu, als minor hingenommen
 und als Kandidat notiert: `doctor-probe.json` speichert den Pfad des
 Programms im Klartext in Schlüssel und Beleg (so schon vor HUM-506; ein Pfad
 ist kein Geheimnis, kann aber einen privaten Ordner aus dem `PATH` nennen).
+
+---
+
+## HUM-507 · Konfiguration: Fixes von `ChangeSetting`, die `config set` nicht annimmt
+
+### Kontext
+Rest aus HUM-503. Der Fix eines `ChangeSetting` soll ein Wert sein, den
+`humanitl config set <key> <wert>` so annimmt. Einige Fixes sind aber Prosa
+oder eine Aufforderung, ein verdoppelter Timeout kann über der Obergrenze
+liegen, und ein Schlüssel außerhalb des Schemas hat keinen Wert, den das
+Schema kennt.
+
+### Spezifikation
+1. Jeder Fix eines `ChangeSetting` ist ein Wert, den `config set` für diesen
+   Schlüssel annimmt; sonst ist er kein `ChangeSetting`, sondern ein Fix in
+   Prosa.
+2. Vorgeschlagene Werte liegen innerhalb der Grenzen des Schemas.
+
+### Tests
+- Ein Test über alle Diagnosen mit `ChangeSetting`: der Wert läuft durch
+  die Prüfung von `config set` (wie
+  `every_change_setting_fix_is_a_value_config_set_takes`, auf alle Quellen
+  ausgedehnt).
+
+### Akzeptanzkriterien
+1. Kein `ChangeSetting` mit einem Wert, den `config set` ablehnt.
+
+---
+
+## HUM-508 · doctor: `doctor-probe.json` ohne den Klartextpfad des Programms
+
+### Kontext
+Delta-Review von HUM-506. Schlüssel und Beleg eines gespeicherten
+Probestarts enthalten den Pfad des Programms im Klartext; so war es schon vor
+HUM-506. Ein Pfad ist kein Geheimnis, kann aber einen privaten Ordner aus dem
+`PATH` nennen.
+
+### Spezifikation
+1. In der Datei steht vom Programm nur ein Hash, im Beleg kein Pfad.
+
+### Tests
+- Test liest die geschriebene JSON-Datei und findet den Pfad nicht.
+
+### Akzeptanzkriterien
+1. `doctor-probe.json` enthält keinen Pfad aus der Umgebung des Daemons.
+
+---
+
+## HUM-509 · Proxy-Test `the_byte_budget_counts_bodies_while_they_are_buffered` wackelt
+
+### Kontext
+CI-Lauf 43763720057 (HUM-506, ohne Änderung am Proxy): `rust-test` rot in
+`crates/proxy/tests/limits.rs:1219` mit „readable: Os { code: 104, kind:
+ConnectionReset }"; derselbe Inhalt war im nächsten Lauf grün.
+
+### Spezifikation
+1. Ursache finden (der Proxy schließt die Verbindung, bevor der Test liest,
+   oder der Test erwartet eine Reihenfolge, die nicht garantiert ist), kein
+   Wiederholen.
+
+### Akzeptanzkriterien
+1. Ursache benannt und behoben; der Test prüft weiter das Budget.
+
+---
+
+## HUM-510 · App: eine Auffrischung desselben Backend-Mitglieds zeigt die Liste als ausstehend
+
+### Kontext
+Rest aus HUM-504. Wechselt das Projekt oder die Konfiguration, frischt
+Riverpod dasselbe Mitglied von `sandboxBackendsProvider` auf und hält dabei
+den alten Wert; der Abschnitt zeigt die alte Liste dann als aktuell. Ein
+einfaches `isLoading` ginge nicht, weil das Nachfragen aus HUM-502 alle 2 s
+auffrischt.
+
+### Spezifikation
+1. Eine Auffrischung, deren Plan sich geändert hat, zeigt die Liste
+   gedämpft und die Segmente gesperrt wie in HUM-504; das Nachfragen eines
+   noch geprüften Backends nicht.
+2. Die Farbe der Gründe während des Ladens ist eigens getestet.
+
+### Akzeptanzkriterien
+1. Kein Flackern beim Nachfragen, keine alte Liste als aktuell nach einem
+   Wechsel des Projekts.
+
