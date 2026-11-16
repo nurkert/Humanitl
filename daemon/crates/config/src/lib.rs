@@ -85,11 +85,11 @@ pub use crate::load::{
     DEFAULT_ENV_PREFIX, ENV_SEPARATOR, PROFILE_SECTION, Sources, load, retired_values,
 };
 pub use crate::model::{
-    AgentBriefing, AgentRef, AskMode, AuditConfig, Config, DetachKeys, Experimental,
+    AgentBriefing, AgentRef, AskMode, AuditConfig, Config, DetachKeys, EgressConfig, Experimental,
     FindingsConfig, HoldConfig, IpPreference, Language, Limits, LlmConfig, LlmServer, MinIsolation,
-    PiAgentConfig, PiWebAccess, PodmanConfig, PodmanRootfs, PodmanRuntime, PseudonymConfig,
-    QemuConfig, RecorderConfig, ResolverConfig, SandboxBackendName, SandboxMode, SandboxRef,
-    TerminalConfig, Theme, TlsConfig, UiConfig, UpdateConfig, WorkMode,
+    PiAgentConfig, PiWebAccess, PodmanConfig, PodmanRootfs, PodmanRuntime, ProxyResolve,
+    PseudonymConfig, QemuConfig, RecorderConfig, ResolverConfig, SandboxBackendName, SandboxMode,
+    SandboxRef, TerminalConfig, Theme, TlsConfig, UiConfig, UpdateConfig, WorkMode,
 };
 pub use crate::origin::{Origin, Resolved};
 pub use crate::paths::{APP_DIR, DIR_MODE, FILE_MODE, MAC_APP_DIR, Paths, RuntimeDir};

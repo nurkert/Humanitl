@@ -263,6 +263,24 @@ pub trait DaemonApi: Send + Sync + 'static {
         .why("this daemon runs no sandbox, so it lists no sandbox backends".to_owned())
         .build())
     }
+
+    /// Der Entscheidungs-Proxy hinter Humanitl: Stand, Prüfung der
+    /// Verbindung, Zugangsdaten (HUM-511).
+    ///
+    /// Die Vorgabe antwortet `IPC_006`.
+    ///
+    /// # Errors
+    ///
+    /// [`Diagnostic`] mit `IPC_006`, `CONFIG_020` ohne Operation, oder dem
+    /// Befund der Prüfung.
+    async fn egress(&self, _request: v1::EgressRequest) -> Result<v1::EgressStatus, Diagnostic> {
+        Err(Diagnostic::builder(
+            humanitl_core::diagnostics::codes::IPC_006,
+            humanitl_core::Severity::Error,
+        )
+        .why("this daemon has no egress to describe".to_owned())
+        .build())
+    }
 }
 
 /// Der tonic-Dienst über einem beliebigen [`DaemonApi`].
@@ -701,6 +719,18 @@ impl<T: DaemonApi> v1::humanitl_server::Humanitl for DaemonService<T> {
         self.check_token(&request)?;
         self.api
             .sandbox_backends(request.into_inner())
+            .await
+            .map(Response::new)
+            .map_err(|diagnostic| diagnostic_to_status(&diagnostic))
+    }
+
+    async fn egress(
+        &self,
+        request: Request<v1::EgressRequest>,
+    ) -> Result<Response<v1::EgressStatus>, Status> {
+        self.check_token(&request)?;
+        self.api
+            .egress(request.into_inner())
             .await
             .map(Response::new)
             .map_err(|diagnostic| diagnostic_to_status(&diagnostic))

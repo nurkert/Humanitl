@@ -747,6 +747,30 @@ extension SandboxStatusToDomain on pb.SandboxEvent_Status {
         ? sandboxModeNotice.toDomain()
         : null,
     llmServer: hasLlmServer() ? llmServer.toDomain() : null,
+    egress: hasEgress() ? egress.toDomain() : null,
+  );
+}
+
+/// `EgressRoute` to [EgressRoute] (HUM-511).
+extension EgressRouteToDomain on pb.EgressRoute {
+  /// The domain form.
+  EgressRoute toDomain() => EgressRoute(proxy: proxy, resolve: resolve);
+}
+
+/// `EgressStatus` to [EgressStatus] (HUM-511).
+extension EgressStatusToDomain on pb.EgressStatus {
+  /// The domain form; it has no field for the credentials.
+  EgressStatus toDomain() => EgressStatus(
+    configured: hasConfigured() ? configured.toDomain() : EgressRoute.direct,
+    active: hasActive() ? active.toDomain() : EgressRoute.direct,
+    proxyCa: proxyCa,
+    authSet: authSet,
+    authRef: authRef,
+    checkTarget: checkTarget,
+    reachable: reachable,
+    diagnostics: List<Diagnostic>.unmodifiable(
+      diagnostics.map((pb.Diagnostic d) => d.toDomain()),
+    ),
   );
 }
 

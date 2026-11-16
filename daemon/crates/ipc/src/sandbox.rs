@@ -616,6 +616,10 @@ impl Drop for StartClaim {
 
 #[derive(Debug)]
 struct Inner {
+    /// Der Weg hinaus des Verkehrs des Agenten, wie er beim Start des Daemons
+    /// galt (HUM-511): Der Proxy baut ihn einmal, ein `SetConfig` ändert ihn
+    /// erst mit dem Neustart.
+    egress: v1::EgressRoute,
     /// Die Konfiguration, die gerade gilt.
     ///
     /// Sie steht hinter einem Schloss und nicht als Wert, weil ein Start sie
@@ -814,8 +818,10 @@ impl SandboxService {
         let paths = resolver.paths().clone();
         let config = Arc::new(resolver.base().config.clone());
         let keys = ports.keys.unwrap_or_else(|| KeyStore::for_paths(&paths));
+        let egress = crate::egress::route(&config.egress);
         Self {
             inner: Arc::new(Inner {
+                egress,
                 config: RwLock::new(config),
                 session_config: std::sync::atomic::AtomicBool::new(false),
                 generation: std::sync::atomic::AtomicU64::new(0),
@@ -1051,7 +1057,9 @@ impl SandboxService {
         let (tx, rx) = mpsc::channel(EVENT_BUFFER);
         match request.op {
             Some(Op::Start(start)) => {
-                tokio::spawn(async move { inner.start(start, tx).await });
+                // Auf dem Heap: Der Start trägt mehrere Momentaufnahmen und
+                // liegt über der Grenze von `clippy::large_futures`.
+                tokio::spawn(async move { Box::pin(inner.start(start, tx)).await });
             }
             Some(Op::Stop(())) => {
                 tokio::spawn(async move { inner.stop(tx).await });
@@ -3357,6 +3365,7 @@ impl Inner {
             // dasselbe, das startet oder läuft (HUM-432).
             isolation_level: crate::convert::isolation_level_to_proto(prepared.backend.isolation())
                 .into(),
+            egress: Some(self.egress.clone()),
             llm_endpoint: config
                 .llm
                 .endpoint
@@ -3441,6 +3450,7 @@ impl Inner {
             // Die Stufe des Systems wäre eine Behauptung über ein Backend,
             // das womöglich gar nicht gewählt war.
             isolation_level: v1::IsolationLevel::Unspecified.into(),
+            egress: Some(self.egress.clone()),
             llm_endpoint: config
                 .llm
                 .endpoint

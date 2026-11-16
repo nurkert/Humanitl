@@ -67,6 +67,21 @@ pub async fn run(ctx: &Context, cmd: &LlmCmd) -> Result<u8, Failure> {
     }
 }
 
+/// Was eine verdeckte Eingabe von `stdin` liest: wie sie heißt und wie man
+/// sie aus einer Pipe setzt.
+pub(crate) struct SecretPrompt {
+    /// Der Name in Aufforderung und Absage, etwa `access key`.
+    pub what: &'static str,
+    /// Der Befehl im Vorschlag der Absage.
+    pub fix: &'static str,
+}
+
+/// Die Eingabe von `llm key set`.
+const LLM_KEY: SecretPrompt = SecretPrompt {
+    what: "access key",
+    fix: "printf '%s' \"$KEY\" | humanitl llm key set",
+};
+
 /// Die größte Eingabe, die `llm key set` liest. Ein Schlüssel hat höchstens
 /// [`humanitl_config::secret::MAX_KEY_BYTES`]; was darüber geht, lehnt der
 /// Daemon ab, und mehr muss nicht im Speicher stehen.
@@ -83,7 +98,10 @@ async fn key(ctx: &Context, server: Option<&str>, cmd: &KeyCmd) -> Result<u8, Fa
     let op = match cmd {
         KeyCmd::Status => v1::llm_key_request::Op::Status(v1::llm_key_request::Status {}),
         KeyCmd::Set => {
-            let Some(key) = read_key_interruptible().await.map_err(Failure::new)? else {
+            let Some(key) = read_key_interruptible(&LLM_KEY)
+                .await
+                .map_err(Failure::new)?
+            else {
                 // `Ctrl+C` an der verdeckten Eingabe: Das Terminal ist schon
                 // zurückgegeben, gesendet wird nichts.
                 return Ok(EXIT_INTERRUPTED);
@@ -182,7 +200,9 @@ const EXIT_INTERRUPTED: u8 = 130;
 /// # Errors
 ///
 /// Wie [`read_key`].
-async fn read_key_interruptible() -> Result<Option<String>, humanitl_core::Diagnostic> {
+pub(crate) async fn read_key_interruptible(
+    prompt: &'static SecretPrompt,
+) -> Result<Option<String>, humanitl_core::Diagnostic> {
     // **Erst der Empfänger, dann die verdeckte Eingabe.** Ein Strom, der vor
     // dem Faden steht, puffert ein `SIGINT`, das eintrifft, bevor `select!`
     // zum ersten Mal wartet; `tokio::signal::ctrl_c()` meldete sich erst
@@ -192,7 +212,7 @@ async fn read_key_interruptible() -> Result<Option<String>, humanitl_core::Diagn
         tokio::signal::unix::signal(tokio::signal::unix::SignalKind::interrupt()).ok();
     let (tx, rx) = tokio::sync::oneshot::channel();
     std::thread::spawn(move || {
-        let _ignored = tx.send(read_key());
+        let _ignored = tx.send(read_key(prompt));
     });
     let wait_interrupt = async {
         match interrupt.as_mut() {
@@ -223,7 +243,7 @@ async fn read_key_interruptible() -> Result<Option<String>, humanitl_core::Diagn
 /// # Errors
 ///
 /// `CONFIG_020`, wenn sich `stdin` nicht lesen lässt.
-fn read_key() -> Result<String, humanitl_core::Diagnostic> {
+fn read_key(prompt: &SecretPrompt) -> Result<String, humanitl_core::Diagnostic> {
     use std::io::Read as _;
 
     let refused = |why: String| {
@@ -231,15 +251,13 @@ fn read_key() -> Result<String, humanitl_core::Diagnostic> {
             humanitl_core::diagnostics::codes::CONFIG_020,
             humanitl_core::Severity::Error,
         )
-        .why(format!("the access key was not stored: {why}"))
-        .fix(humanitl_core::FixAction::CopyCommand(
-            "printf '%s' \"$KEY\" | humanitl llm key set".to_owned(),
-        ))
+        .why(format!("the {} was not stored: {why}", prompt.what))
+        .fix(humanitl_core::FixAction::CopyCommand(prompt.fix.to_owned()))
         .build()
     };
     let hidden = crate::tty::NoEcho::enter();
     if hidden.is_some() {
-        eprint!("access key (input hidden): ");
+        eprint!("{} (input hidden): ", prompt.what);
     }
     let mut text = String::new();
     let read = if hidden.is_some() {

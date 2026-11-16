@@ -89,7 +89,12 @@ class RecordedDecision {
 
 /// [DaemonClient] without a daemon.
 class FakeDaemonClient
-    with FakeUpdates, FakeIntercept, FakeSandboxBackends, FakeImagePull
+    with
+        FakeUpdates,
+        FakeIntercept,
+        FakeSandboxBackends,
+        FakeImagePull,
+        FakeEgress
     implements DaemonClient {
   /// Creates a fake that answers `GetInfo` with [info] (or [defaultInfo]),
   /// or throws [infoFailure] when given, and replays [script] (or
@@ -5936,4 +5941,87 @@ mixin FakeImagePull {
       );
     }
   }
+}
+
+// ---------------------------------------------------------------------------
+// Egress (HUM-511)
+// ---------------------------------------------------------------------------
+// Ein Mixin am Ende der Datei, damit dieser Abschnitt die Klasse oben nur in
+// ihrer Kopfzeile berührt. Wie der Rust-Fake geht der Fake direkt hinaus und
+// hat keinen Schlüsselbund; ein Test spielt mit [egressStatus], was er will.
+
+/// The scriptable `Egress` half of [FakeDaemonClient].
+mixin FakeEgress {
+  /// What `Egress(status)` answers. A test sets it to play a configured
+  /// proxy.
+  EgressStatus egressStatus = EgressStatus.none;
+
+  /// What `Egress(check)` answers when set; without, the check answers like
+  /// a daemon without `egress.proxy`, with `PROXY_017` first.
+  EgressStatus? egressCheckResult;
+
+  /// Thrown as a [DaemonException] by `Egress` when set.
+  Diagnostic? egressFailure;
+
+  /// Every operation asked for, in order, for tests.
+  final List<EgressOp> egressCalls = <EgressOp>[];
+
+  /// `Egress`. The credentials go nowhere: the fake only notes that some
+  /// were set, and never keeps them.
+  Future<EgressStatus> egress(EgressOp op, {String credentials = ''}) async {
+    egressCalls.add(op);
+    if (egressFailure case final Diagnostic failure) {
+      throw DaemonException(failure);
+    }
+    switch (op) {
+      case EgressOp.status:
+        return egressStatus;
+      case EgressOp.check:
+        return egressCheckResult ??
+            EgressStatus(
+              configured: egressStatus.configured,
+              active: egressStatus.active,
+              proxyCa: egressStatus.proxyCa,
+              authSet: egressStatus.authSet,
+              authRef: egressStatus.authRef,
+              checkTarget: 'example.com:443',
+              diagnostics: const <Diagnostic>[
+                Diagnostic(
+                  code: 'PROXY_017',
+                  severity: Severity.error,
+                  why:
+                      'egress.proxy is empty, so there is no decision proxy '
+                      'to check; requests leave directly',
+                ),
+              ],
+            );
+      case EgressOp.setAuth:
+        if (!credentials.contains(':') || credentials.startsWith(':')) {
+          throw const DaemonException(
+            Diagnostic(
+              code: 'CONFIG_020',
+              severity: Severity.error,
+              why:
+                  'the proxy credentials were not stored: they need the form '
+                  'USER:PASSWORD',
+            ),
+          );
+        }
+        return egressStatus = _withAuth(
+          set: true,
+          ref: 'secret-service:humanitl/egress-proxy',
+        );
+      case EgressOp.removeAuth:
+        return egressStatus = _withAuth(set: false, ref: '');
+    }
+  }
+
+  EgressStatus _withAuth({required bool set, required String ref}) =>
+      EgressStatus(
+        configured: egressStatus.configured,
+        active: egressStatus.active,
+        proxyCa: egressStatus.proxyCa,
+        authSet: set,
+        authRef: ref,
+      );
 }

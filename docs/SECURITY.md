@@ -1354,6 +1354,37 @@ The suggestion `LIMIT_001` offers at a block is an `ask` rule with `stream: true
 With the hard block on, `stream: true` never applies and `LIMIT_001` suggests raising the cap
 instead.
 
+### A decision proxy behind Humanitl (HUM-511)
+
+Off by default. With `egress.proxy = "http://HOST:PORT"` every request of the agent that Humanitl
+allows leaves through an intercepting proxy of the person's choice (ADR-0022): `https` as a
+`CONNECT` tunnel in which Humanitl speaks TLS again with the target's name and checks the
+certificate against `egress.proxy_ca` and the usual anchors, `http` as a request in absolute form.
+Nothing else changes about the decision: rules, holds, the hard block on verified secrets and the
+recording all happen in Humanitl first, and a `block` never reaches that proxy.
+
+- *Content.* That proxy sees the decrypted traffic, including secrets Humanitl did not block. The
+  trust boundary for content moves to it; the isolation does not, because the daemon opens the
+  connection on the host and the sandbox has no route to it.
+- *No fallback.* If the proxy cannot be reached, refuses the tunnel, wants credentials (`407`) or
+  presents a certificate its CA did not sign, the request fails with `502` and a finding
+  (`PROXY_012` to `PROXY_015`); a setting that cannot be used fails every request (`PROXY_017`).
+  Nothing leaves directly instead.
+- *Its CA.* `egress.proxy_ca` is trusted only on the way through `egress.proxy`, in a TLS
+  configuration of its own; the direct connections never see it.
+- *Who resolves.* `egress.proxy_resolve = "proxy"` (default of the opt-in): Humanitl resolves
+  nothing, sends `CONNECT host:port`, and refuses private address literals and names that are
+  local by definition before forwarding (`PROXY_008`, `PROXY_016`); the local names are refused with
+  `"humanitl"` too, before any resolution; a public name that resolves to
+  a private address is the proxy's to refuse. `"humanitl"`: Humanitl resolves after its decision,
+  checks the address (ADR-0006) and sends `CONNECT IP:PORT`; the query leaves before the proxy
+  decides.
+- *Settings.* All `egress.*` keys are closed to project profiles; the credentials (`USER:PASSWORD`
+  for `Proxy-Authorization: Basic`, split at the first colon, so the password may carry blanks)
+  live in the keyring (`humanitl egress auth set`), or in the `0600` fallback file when the keyring
+  does not answer (`CONFIG_019`), never in `config.toml`. The daemon's own requests (model search, update check) stay direct; `humanitl
+  doctor` and the isolation panel say which way out is in use. Effective after a daemon restart.
+
 ### Pausing intercept
 
 Since HUM-407 a person can pause intercepting: from the header pill of the app, after a question
@@ -1782,6 +1813,7 @@ passthrough or the audit chain gets a line here and in the change history of
 | 0.1.x | Linux, Podman: an image as the root of the sandbox, pinned by digest and checked before every start (`SANDBOX_043`), never pulled by a start; `humanitl sandbox image pull` pulls on request, directly and not through the proxy, and says so first; project, door, CA, shim and session files come from the host, and ESC-2 checks the CA by device and inode (HUM-439, [section 13](#an-image-as-the-root-hum-439), K-28). |
 | 0.1.x | Linux: Podman admitted at the plain level (`podman/crun`) after `escape-tests-podman` was green on `main`; a person chooses it with `sandbox.backend = "podman"` or `--backend podman`, `auto` stays bubblewrap, and the kernel level (backend `qemu`, ADR-0021) stays refused with `SANDBOX_048` until HUM-449 (HUM-448, [section 13](#13-linux-podman), K-27). |
 | 0.1.x | Linux: the kernel level (backend `qemu`, ADR-0021) admitted after `kvm-tests` and `escape-tests-qemu` were green on `main` with the disposable sandbox in the guest (HUM-446) and the probes with root in the guest (HUM-445), in ten consecutive runs in which both jobs ran (43624997550, 43630993303, 43638237420, 43641769840, 43646599744, 43648968241, 43656202366, 43661904978, 43669712307 and 43673927540); a person chooses it with `sandbox.backend = "qemu"` or `--backend qemu`, `auto` stays bubblewrap, and a missing prerequisite refuses the start with `SANDBOX_045` (HUM-449, [section 14](#14-linux-qemu-micro-vm-kernel-level), K-30 to K-34). |
+| 0.1.x | A decision proxy of the person behind Humanitl (`egress.proxy`, off by default): allowed requests leave only through it, re-encrypted against its CA, which is trusted on that way only; no direct fallback; who resolves is `egress.proxy_resolve` (`proxy` refuses local names and private literals first, `humanitl` resolves and checks every address); keys closed to project profiles, credentials in the keyring or the `0600` fallback file, never in `config.toml` (HUM-511, [section 6](#a-decision-proxy-behind-humanitl-hum-511), K-35). |
 
 ## 12. macOS: Seatbelt instead of bubblewrap
 

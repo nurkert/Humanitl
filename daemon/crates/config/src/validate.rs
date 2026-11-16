@@ -21,8 +21,8 @@ use humanitl_core::shell::shell_path;
 use humanitl_core::{Diagnostic, FixAction, Severity};
 
 use crate::model::{
-    AgentRef, AuditConfig, Config, DetachKeys, FindingsConfig, Limits, LlmConfig, PodmanRootfs,
-    RecorderConfig, ResolverConfig, SandboxRef, TerminalConfig,
+    AgentRef, AuditConfig, Config, DetachKeys, EgressConfig, FindingsConfig, Limits, LlmConfig,
+    PodmanRootfs, RecorderConfig, ResolverConfig, SandboxRef, TerminalConfig,
 };
 use crate::schema;
 
@@ -357,6 +357,90 @@ fn resolver_is_well_formed(resolver: &ResolverConfig) -> Result<(), Diagnostic> 
         }
     }
     Ok(())
+}
+
+/// Der Entscheidungs-Proxy (ADR-0022, HUM-511): `http://HOST:PORT` ohne
+/// Zugangsdaten, Pfad oder Anfrage, die CA als absoluter Pfad, der Verweis
+/// auf die Zugangsdaten in der Form von `llm.api_key_ref`, und eine Frist für
+/// den Kopf der Antwort zwischen einer Sekunde und einem Tag.
+///
+/// Zugangsdaten in der Adresse werden abgelehnt, nicht überlesen: Sie stünden
+/// im Klartext in `config.toml` und in jeder Ausgabe von `humanitl config
+/// get`; ihr Ort ist der Schlüsselbund (`egress.proxy_auth_ref`).
+fn egress_is_well_formed(egress: &EgressConfig) -> Result<(), Diagnostic> {
+    if let Some(proxy) = &egress.proxy {
+        // Zugangsdaten zuerst: Jeder Befund danach zeigt die Adresse, und
+        // ein Passwort darin stünde sonst im Klartext in der Meldung, im
+        // Log und in der Oberfläche. Auch die gezeigte Adresse trägt sie nie.
+        if !proxy.username().is_empty() || proxy.password().is_some() {
+            return Err(out_of_range(
+                "egress.proxy",
+                "a URL with user name or password",
+                "http://HOST:PORT without credentials; store them with `humanitl egress auth \
+                 set`, which sets egress.proxy_auth_ref",
+            ));
+        }
+        let shown = format!("{:?}", without_credentials(proxy).as_str());
+        if proxy.scheme() != "http" {
+            return Err(out_of_range(
+                "egress.proxy",
+                &shown,
+                "a URL http://HOST:PORT; the connection to the decision proxy itself is plain \
+                 http, TLS to it is not supported yet",
+            ));
+        }
+        if proxy.host_str().is_none_or(str::is_empty) {
+            return Err(out_of_range(
+                "egress.proxy",
+                &shown,
+                "a URL http://HOST:PORT",
+            ));
+        }
+        if !matches!(proxy.path(), "" | "/")
+            || proxy.query().is_some()
+            || proxy.fragment().is_some()
+        {
+            return Err(out_of_range(
+                "egress.proxy",
+                &shown,
+                "http://HOST:PORT without a path, query or fragment",
+            ));
+        }
+    }
+    if let Some(ca) = &egress.proxy_ca
+        && !ca.is_absolute()
+    {
+        return Err(out_of_range(
+            "egress.proxy_ca",
+            &format!("{:?}", ca.display().to_string()),
+            "an absolute path to a PEM file",
+        ));
+    }
+    if let Some(reference) = &egress.proxy_auth_ref
+        && crate::secret::KeyRef::parse(reference).is_none()
+    {
+        return Err(out_of_range(
+            "egress.proxy_auth_ref",
+            &format!("{reference:?}"),
+            "secret-service:humanitl/NAME, keychain:humanitl/NAME or file:NAME, NAME of 1 to 32 \
+             characters a-z, 0-9, - and _",
+        ));
+    }
+    between(
+        "egress.proxy_response_timeout_secs",
+        egress.proxy_response_timeout_secs,
+        1,
+        DAY,
+    )
+}
+
+/// `url` ohne Nutzername und Passwort, für jede Stelle, die die Adresse
+/// zeigt.
+fn without_credentials(url: &url::Url) -> url::Url {
+    let mut shown = url.clone();
+    let _ = shown.set_username("");
+    let _ = shown.set_password(None);
+    shown
 }
 
 /// Die Sandbox: ein Profilname ohne Pfad, ein Arbeitsverzeichnis, das es gibt.
@@ -746,6 +830,7 @@ impl Config {
         recorder_is_well_formed(&self.recorder, &self.limits)?;
         audit_is_well_formed(&self.audit)?;
         resolver_is_well_formed(&self.resolver)?;
+        egress_is_well_formed(&self.egress)?;
         at_least(
             "pseudonyms.max_response_bytes",
             self.pseudonyms.max_response_bytes,
@@ -784,6 +869,67 @@ mod tests {
     #[test]
     fn the_defaults_are_valid() {
         assert!(Config::default().validate().is_ok());
+    }
+
+    #[test]
+    fn the_decision_proxy_is_plain_http_without_credentials() {
+        // HUM-511: `egress.proxy` ist `http://HOST:PORT`; Zugangsdaten,
+        // Pfad, TLS zum Proxy und ein relativer CA-Pfad werden abgelehnt.
+        let mut config = Config::default();
+        config.egress.proxy = Some(url::Url::parse("http://127.0.0.1:8080").unwrap());
+        config.egress.proxy_ca = Some(PathBuf::from("/home/u/.mitmproxy/mitmproxy-ca-cert.pem"));
+        config.egress.proxy_auth_ref = Some("secret-service:humanitl/egress-proxy".to_owned());
+        assert!(config.validate().is_ok());
+
+        // Zugangsdaten in der Adresse erscheinen in keinem Befund, gleich
+        // welcher Fehler sonst noch darin steckt.
+        for leaking in [
+            "https://alice:secret@proxy:3128",
+            "http://alice:secret@proxy:3128/path?q=1",
+            "socks5://alice:secret@proxy:1080",
+            "http://alice@proxy:3128",
+            "http://:secret@proxy:3128",
+        ] {
+            let mut bad = config.clone();
+            bad.egress.proxy = Some(url::Url::parse(leaking).unwrap());
+            let diagnostic = bad.validate().unwrap_err();
+            let shown = format!("{diagnostic:?}");
+            assert!(
+                !shown.contains("secret") && !shown.contains("alice"),
+                "{leaking}: {shown}"
+            );
+            assert!(
+                diagnostic.why.contains("user name or password"),
+                "{leaking}"
+            );
+        }
+        for refused in [
+            "https://127.0.0.1:8080",
+            "http://user:pass@127.0.0.1:8080",
+            "http://127.0.0.1:8080/path",
+            "socks5://127.0.0.1:1080",
+        ] {
+            let mut bad = config.clone();
+            bad.egress.proxy = Some(url::Url::parse(refused).unwrap());
+            let why = why_of(&bad);
+            assert!(why.contains("egress.proxy"), "{refused}: {why}");
+            assert!(
+                !why.contains("pass@"),
+                "the password must not be echoed: {why}"
+            );
+        }
+
+        let mut relative = config.clone();
+        relative.egress.proxy_ca = Some(PathBuf::from("mitmproxy-ca-cert.pem"));
+        assert!(why_of(&relative).contains("egress.proxy_ca"));
+
+        let mut reference = config.clone();
+        reference.egress.proxy_auth_ref = Some("user:pass".to_owned());
+        assert!(why_of(&reference).contains("egress.proxy_auth_ref"));
+
+        let mut zero = config;
+        zero.egress.proxy_response_timeout_secs = 0;
+        assert!(why_of(&zero).contains("egress.proxy_response_timeout_secs"));
     }
 
     #[test]

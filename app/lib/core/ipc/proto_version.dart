@@ -125,8 +125,11 @@ abstract final class ProtoVersion {
   /// SANDBOX_043 card sends the plan of the snapshots, with the chosen
   /// backend, as `ImagePull.plan` (HUM-500). The number covers 39 as well,
   /// which was not raised here on its own.
+  /// Raised to 41 with the decision proxy behind Humanitl: the settings
+  /// section "Decision proxy" reads and writes through `Egress`, and the
+  /// isolation tab reads `SandboxEvent.Status.egress` (HUM-511).
   /// Raising the number without a reader would claim otherwise.
-  static const int minor = 40;
+  static const int minor = 41;
 
   /// `major.minor` as text.
   static const String text = '$major.$minor';

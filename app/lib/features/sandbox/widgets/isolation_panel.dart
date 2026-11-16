@@ -117,6 +117,10 @@ class IsolationPanel extends StatelessWidget {
             endpoint: status.llmEndpoint,
             unreachable: status.llmDiagnostic,
           ),
+          // Der Weg hinaus, den der Daemon nimmt (HUM-511); ein Daemon vor
+          // 1.41 sagt nichts darüber, dann fehlt die Zeile.
+          if (status.egress case final EgressRoute egress)
+            _EgressLine(route: egress),
           RefusalsSection(status: status),
           SizedBox(height: tokens.spacing.x3),
           const HHairline(),
@@ -379,6 +383,56 @@ class _ExceptionLine extends StatelessWidget {
             ),
           ),
       ],
+    );
+  }
+}
+
+/// The way out of the agent's traffic (HUM-511): direct, or through the
+/// decision proxy, and who resolves the names.
+///
+/// A filled amber dot when a second proxy stands behind Humanitl, because it
+/// sees the decrypted traffic; a hollow grey one when requests leave
+/// directly, the ordinary case.
+class _EgressLine extends StatelessWidget {
+  const _EgressLine({required this.route});
+
+  final EgressRoute route;
+
+  @override
+  Widget build(BuildContext context) {
+    final HTokens tokens = HTheme.of(context);
+    final AppLocalizations l10n = context.l10n;
+    final bool through = !route.isDirect;
+    final String text = !through
+        ? l10n.isolationEgressDirect
+        : route.proxyResolves
+        ? l10n.isolationEgressThroughProxyResolves(route.proxy)
+        : l10n.isolationEgressThroughHumanitlResolves(route.proxy);
+    return Padding(
+      padding: EdgeInsets.only(top: tokens.spacing.x2),
+      child: Row(
+        crossAxisAlignment: CrossAxisAlignment.start,
+        children: <Widget>[
+          Padding(
+            padding: EdgeInsets.only(top: tokens.spacing.x1),
+            child: _Dot(
+              key: const Key('sandbox-isolation-egress-dot'),
+              color: through ? tokens.colors.warning : tokens.colors.fg2,
+              filled: through,
+            ),
+          ),
+          SizedBox(width: tokens.spacing.x2),
+          Expanded(
+            child: Text(
+              text,
+              key: const Key('sandbox-isolation-egress'),
+              style: tokens.typography.ui13.tinted(
+                through ? tokens.colors.warningText : tokens.colors.fg2,
+              ),
+            ),
+          ),
+        ],
+      ),
     );
   }
 }

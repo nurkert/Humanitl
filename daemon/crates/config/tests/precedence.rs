@@ -286,6 +286,15 @@ const GROUP_OVERRIDES: &[GroupOverride] = &[
         after_higher: "true",
     },
     GroupOverride {
+        group: "egress",
+        path: "egress.proxy_resolve",
+        lower: "\"humanitl\"",
+        higher: "proxy",
+        read: |config| config.egress.proxy_resolve.as_str().to_owned(),
+        after_lower: "humanitl",
+        after_higher: "proxy",
+    },
+    GroupOverride {
         group: "update",
         path: "update.check",
         lower: "false",

@@ -22,6 +22,7 @@ pub mod changes;
 pub mod config;
 pub mod daemon;
 pub mod doctor;
+pub mod egress;
 pub mod exec;
 pub mod flows;
 pub mod go;

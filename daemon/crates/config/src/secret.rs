@@ -212,6 +212,51 @@ impl ApiKey {
         Self::new(crate::pasted::strip_paste_debris(text))
     }
 
+    /// Zugangsdaten `NUTZER:PASSWORT` eines Entscheidungs-Proxys
+    /// (`egress.proxy_auth_ref`, HUM-511), aus dem Text, den ein Mensch
+    /// eingegeben oder eingefügt hat.
+    ///
+    /// Wie bei [`ApiKey::from_pasted`] fallen Leerraum außen und
+    /// Anführungszeichen weg. Anders als ein Schlüssel hat ein Passwort keine
+    /// Mindestlänge: Es geht nur als `Proxy-Authorization` an diesen Proxy,
+    /// nie in eine Anfrage an ein Ziel, und muss deshalb nicht aus der
+    /// Aufzeichnung gehalten werden.
+    ///
+    /// # Errors
+    ///
+    /// `CONFIG_020`, wenn der Text leer ist, keinen Doppelpunkt nach einem
+    /// Namen trägt, länger als [`MAX_KEY_BYTES`] ist, der Name Leerraum
+    /// trägt oder irgendwo ein Steuerzeichen steht. Ein Passwort mit
+    /// Leerzeichen ist erlaubt.
+    pub fn credentials(text: &str) -> Result<Self, Diagnostic> {
+        let text = crate::pasted::strip_paste_debris(text);
+        let refuse = |why: &str| {
+            Diagnostic::builder(CONFIG_020, Severity::Error)
+                .why(format!("the proxy credentials were not stored: {why}"))
+                .build()
+        };
+        // Geteilt am ersten Doppelpunkt (RFC 7617): Der Name trägt keinen,
+        // das Passwort darf einen und Leerzeichen tragen. Leerraum außen fällt
+        // schon beim Einfügen weg.
+        let Some((user, _password)) = text.split_once(':').filter(|(user, _)| !user.is_empty())
+        else {
+            return Err(refuse("they need the form USER:PASSWORD"));
+        };
+        if text.len() > MAX_KEY_BYTES {
+            return Err(refuse(&format!(
+                "they are {} bytes long, and at most {MAX_KEY_BYTES} are allowed",
+                text.len()
+            )));
+        }
+        if user.chars().any(char::is_whitespace) {
+            return Err(refuse("the user name contains white space"));
+        }
+        if text.chars().any(char::is_control) {
+            return Err(refuse("they contain a control character"));
+        }
+        Ok(Self(Zeroizing::new(text.to_owned())))
+    }
+
     /// Der Schlüssel als Text, für die eine Stelle, die ihn braucht.
     #[must_use]
     pub fn expose(&self) -> &str {
@@ -224,6 +269,10 @@ impl fmt::Debug for ApiKey {
         write!(f, "ApiKey({MASK})")
     }
 }
+
+/// Wie der Text aus dem Speicher zu einem [`ApiKey`] wird: als Schlüssel
+/// oder als Zugangsdaten eines Proxys.
+type ParseKey = fn(&str) -> Result<ApiKey, Diagnostic>;
 
 /// Wo ein Zugangsschlüssel liegt.
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
@@ -477,10 +526,31 @@ impl KeyStore {
     /// `LLM_009`, wenn der Speicher keinen Schlüssel dazu herausgibt, mit dem
     /// Grund und dem Befehl, der ihn neu hinterlegt.
     pub fn lookup(&self, key_ref: &KeyRef) -> Result<ApiKey, Diagnostic> {
+        self.lookup_as(key_ref, ApiKey::from_pasted)
+    }
+
+    /// Holt Zugangsdaten `NUTZER:PASSWORT`, auf die `key_ref` zeigt
+    /// (`egress.proxy_auth_ref`, HUM-511).
+    ///
+    /// Derselbe Weg wie [`KeyStore::lookup`], nur mit der Prüfung von
+    /// [`ApiKey::credentials`] statt der eines Schlüssels: Ein Passwort darf
+    /// kürzer sein als ein Schlüssel, weil es nie in eine Anfrage an ein Ziel
+    /// geht und deshalb nicht aus der Aufzeichnung gehalten werden muss.
+    ///
+    /// # Errors
+    ///
+    /// Wie [`KeyStore::lookup`]; der Text nennt `llm.api_key_ref`, darum
+    /// ersetzt der Aufrufer ihn durch einen Befund, der den richtigen
+    /// Schlüssel nennt.
+    pub fn lookup_credentials(&self, key_ref: &KeyRef) -> Result<ApiKey, Diagnostic> {
+        self.lookup_as(key_ref, ApiKey::credentials)
+    }
+
+    fn lookup_as(&self, key_ref: &KeyRef, parse: ParseKey) -> Result<ApiKey, Diagnostic> {
         match key_ref.store() {
-            StoreKind::SecretService => self.lookup_secret_service(key_ref),
-            StoreKind::Keychain => self.lookup_keychain(key_ref),
-            StoreKind::File => self.lookup_file(key_ref),
+            StoreKind::SecretService => self.lookup_secret_service(key_ref, parse),
+            StoreKind::Keychain => self.lookup_keychain(key_ref, parse),
+            StoreKind::File => self.lookup_file(key_ref, parse),
         }
     }
 
@@ -630,7 +700,11 @@ impl KeyStore {
         }
     }
 
-    fn lookup_secret_service(&self, key_ref: &KeyRef) -> Result<ApiKey, Diagnostic> {
+    fn lookup_secret_service(
+        &self,
+        key_ref: &KeyRef,
+        parse: ParseKey,
+    ) -> Result<ApiKey, Diagnostic> {
         let Some(tool) = &self.secret_tool else {
             // Unter macOS gibt es nichts zu installieren: Der Verweis stammt
             // von einer Linux-Maschine, und das Setzen legt ihn neu an.
@@ -663,10 +737,10 @@ impl KeyStore {
                 Some(set_again()),
             ));
         }
-        key_from_output(key_ref, &output)
+        key_from_output(key_ref, &output, parse)
     }
 
-    fn lookup_keychain(&self, key_ref: &KeyRef) -> Result<ApiKey, Diagnostic> {
+    fn lookup_keychain(&self, key_ref: &KeyRef, parse: ParseKey) -> Result<ApiKey, Diagnostic> {
         if self.keychain_tool.is_none() {
             let why = if self.system == StoreKind::Keychain {
                 "/usr/bin/security cannot be used here, so the macOS Keychain cannot be asked"
@@ -695,7 +769,7 @@ impl KeyStore {
                 Some(set_again()),
             ));
         }
-        key_from_output(key_ref, &output)
+        key_from_output(key_ref, &output, parse)
     }
 
     /// `security find-generic-password` für den Eintrag `name`. Die Antwort
@@ -802,7 +876,7 @@ impl KeyStore {
         }
     }
 
-    fn lookup_file(&self, key_ref: &KeyRef) -> Result<ApiKey, Diagnostic> {
+    fn lookup_file(&self, key_ref: &KeyRef, parse: ParseKey) -> Result<ApiKey, Diagnostic> {
         let path = self.file_path(key_ref.name());
         let mut file = OpenOptions::new()
             .read(true)
@@ -865,7 +939,7 @@ impl KeyStore {
         let text = std::str::from_utf8(&bytes).map_err(|_not_text| {
             unavailable(key_ref, "the key file is not text", Some(set_again()))
         })?;
-        ApiKey::from_pasted(text).map_err(|_refused| {
+        parse(text).map_err(|_refused| {
             unavailable(
                 key_ref,
                 &format!("{} does not hold a usable key", path.display()),
@@ -1010,7 +1084,11 @@ fn keychain_add_line(name: &str, key: &ApiKey) -> Result<Zeroizing<String>, Stri
 }
 
 /// Der Schlüssel aus der Antwort eines Werkzeugs.
-fn key_from_output(key_ref: &KeyRef, output: &ToolOutput) -> Result<ApiKey, Diagnostic> {
+fn key_from_output(
+    key_ref: &KeyRef,
+    output: &ToolOutput,
+    parse: ParseKey,
+) -> Result<ApiKey, Diagnostic> {
     // Gelesen wird an Ort und Stelle: `stdout` wird beim Fallenlassen
     // überschrieben, eine Kopie als `String` würde es nicht.
     let text = std::str::from_utf8(&output.stdout).map_err(|_not_text| {
@@ -1021,7 +1099,7 @@ fn key_from_output(key_ref: &KeyRef, output: &ToolOutput) -> Result<ApiKey, Diag
     // (`ApiKey::new`). Ein Eintrag, den eine ältere Fassung samt
     // Anführungszeichen abgelegt hat, wirkt trotzdem: dieselbe Bereinigung
     // wie beim Setzen (HUM-283).
-    ApiKey::from_pasted(text).map_err(|_refused| {
+    parse(text).map_err(|_refused| {
         unavailable(
             key_ref,
             "the keyring entry is not a usable key",
@@ -1281,6 +1359,49 @@ mod tests {
         assert_eq!(keychain, KeyRef::keychain("llm").unwrap());
         assert_eq!(keychain.store().as_str(), "keychain");
         assert_eq!(keychain.to_string(), "keychain:humanitl/llm");
+    }
+
+    #[test]
+    fn proxy_credentials_are_user_colon_password_of_any_length() {
+        // HUM-511: kein Mindestmaß wie beim Schlüssel, aber die Form
+        // NUTZER:PASSWORT, ohne Leerraum.
+        assert_eq!(ApiKey::credentials("u:p").unwrap().expose(), "u:p");
+        assert_eq!(ApiKey::credentials(" \"u:p\"\n").unwrap().expose(), "u:p");
+        assert_eq!(
+            ApiKey::credentials("alice:a pass:word").unwrap().expose(),
+            "alice:a pass:word",
+            "a password may carry blanks and colons"
+        );
+        for refused in ["", "user", ":pass", "u s:p", "u:p\tq", "u:p\u{7}"] {
+            let diagnostic = ApiKey::credentials(refused).unwrap_err();
+            assert_eq!(diagnostic.code, CONFIG_020, "{refused:?}");
+        }
+        assert!(ApiKey::new("u:p").is_err(), "a key keeps its minimum");
+    }
+
+    #[test]
+    fn short_proxy_credentials_come_back_from_the_file_and_the_keyring() {
+        let dir = tempfile::tempdir().unwrap();
+        let credentials = ApiKey::credentials("alice:pw").unwrap();
+        let file = store_in(dir.path(), Some(broken_tool(dir.path())));
+        let stored = file.store_named("egress-proxy", &credentials).unwrap();
+        assert_eq!(stored.key_ref, KeyRef::file("egress-proxy").unwrap());
+        assert_eq!(
+            file.lookup_credentials(&stored.key_ref).unwrap().expose(),
+            "alice:pw"
+        );
+        // Über den Weg eines Schlüssels sind sie zu kurz.
+        assert!(file.lookup(&stored.key_ref).is_err());
+
+        let keyring = store_in(dir.path(), Some(fake_tool(dir.path())));
+        let stored = keyring.store_named("egress-proxy", &credentials).unwrap();
+        assert_eq!(
+            keyring
+                .lookup_credentials(&stored.key_ref)
+                .unwrap()
+                .expose(),
+            "alice:pw"
+        );
     }
 
     #[test]

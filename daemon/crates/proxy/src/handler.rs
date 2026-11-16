@@ -28,7 +28,7 @@ use std::time::{Duration, SystemTime};
 use bytes::Bytes;
 use humanitl_config::{HoldConfig, Limits, RecorderConfig};
 use humanitl_core::diagnostics::codes::{
-    FINDINGS_003, LIMIT_005, PROXY_003, PROXY_005, PROXY_008, PROXY_011,
+    FINDINGS_003, LIMIT_005, PROXY_003, PROXY_005, PROXY_008, PROXY_011, PROXY_016,
 };
 use humanitl_core::{
     Action, AnswerRefused, Authority, BlockReason, BodyRef, Decision, DecisionSource, Diagnostic,
@@ -1725,6 +1725,20 @@ impl FlowHandler {
             }
             Err(failure) => {
                 let error = failure.error;
+                // Der Befund des Wegs, etwa eines Entscheidungs-Proxys, der
+                // `407` sagt, geht ungekürzt an den Fluss (HUM-511).
+                // Ein Befund des Wegs, der die Frist schon beschreibt
+                // (`PROXY_019`), ersetzt `LIMIT_004` unten: Der riete zu
+                // `limits.header_timeout_secs`, das über den Proxy nicht gilt.
+                let described = failure.diagnostic.is_some();
+                if let Some(diagnostic) = failure.diagnostic {
+                    self.publish_diagnostic(flow.id, *diagnostic);
+                }
+                // Ein lokaler Name vor dem Entscheidungs-Proxy: der Befund mit
+                // der Regel, die genau dieses Ziel öffnet (ADR-0022).
+                if failure.local_name {
+                    self.publish_diagnostic(flow.id, local_name_refused(&flow.request));
+                }
                 // Ein Ziel mit einem Zertifikat einer unbekannten Stelle: Der
                 // Mensch erfährt, welche Stelle fehlt und wie sie dazukommt
                 // (HUM-257). Der Agent bekommt weiter nur `upstream_tls`.
@@ -1759,6 +1773,7 @@ impl FlowHandler {
                     );
                 }
                 if matches!(error, UpstreamError::Timeout)
+                    && !described
                     && let Some(watch) = watch.as_ref()
                     && let Some(stall) = watch.stalled()
                 {
@@ -2236,6 +2251,28 @@ pub enum NoRule {
     /// unbekannten Methode trifft überhaupt keine Regel, die vorgeschlagene
     /// also auch nicht.
     UnknownMethod,
+}
+
+/// `PROXY_016`: ein per Definition lokaler Name, den Humanitl hinter einem
+/// Entscheidungs-Proxy nicht weitergibt, gleich wer auflöst (ADR-0022,
+/// HUM-511).
+///
+/// Der Vorschlag ist dieselbe Regel wie bei einer privaten Adresse
+/// ([`private_address_rule`]): `ask` mit `allow_private` für genau dieses
+/// Ziel.
+#[must_use]
+pub fn local_name_refused(request: &HttpRequest) -> Diagnostic {
+    let mut diagnostic = Diagnostic::builder(PROXY_016, Severity::Error).why(format!(
+        "{host} is a name that is local by definition; behind the decision proxy it would \
+         reach the services or the network of the machine where it is resolved or connected \
+         to. Humanitl refused it before any resolution and before forwarding; no rule opens \
+         this target.",
+        host = request.authority.host.display(),
+    ));
+    if let Ok(rule) = private_address_rule(request) {
+        diagnostic = diagnostic.fix(FixAction::AddRule(Box::new(rule)));
+    }
+    diagnostic.build()
 }
 
 /// Der Befund zu einem Ziel, dessen Zertifikat von einer unbekannten Stelle

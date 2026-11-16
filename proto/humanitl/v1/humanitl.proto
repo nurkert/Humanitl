@@ -98,6 +98,14 @@ service Humanitl {
   // Daemon vor Minor 34 kennt den Aufruf nicht (`UNIMPLEMENTED`), einer vor
   // Minor 38 nimmt `Empty` und antwortet immer wie ohne Plan.
   rpc SandboxBackends(SandboxBackendsRequest) returns (SandboxBackendList);
+  // Der Entscheidungs-Proxy des Nutzers hinter Humanitl (HUM-511,
+  // ADR-0022): Stand, Verbindung pruefen, Zugangsdaten setzen oder
+  // entfernen. `CheckConnection` baut ueber `egress.proxy`, wie die Konfiguration
+  // jetzt auf der Platte steht, einen Tunnel zu einem festen Ziel und den
+  // TLS-Handschlag darin auf; eine Anfrage sendet er nicht, damit dort
+  // niemand entscheiden muss. Keine Antwort traegt die Zugangsdaten. Ein
+  // Daemon vor Minor 41 kennt den Aufruf nicht (`UNIMPLEMENTED`).
+  rpc Egress(EgressRequest) returns (EgressStatus);
 }
 
 // ---------- Info ----------
@@ -1542,6 +1550,11 @@ message SandboxEvent {
     // diesem Plan bekaeme. `UNSPECIFIED` im Schnappschuss eines Befunds, in
     // dem keine Wahl zustande kam, und bei einem Daemon vor Minor 34.
     IsolationLevel isolation_level = 21;
+    // Der Weg hinaus, den der laufende Daemon fuer den Verkehr des Agenten
+    // nimmt (HUM-511): direkt, oder ueber den Entscheidungs-Proxy aus
+    // `egress.proxy`, wie er beim Start des Daemons galt. Fehlt bei einem
+    // Daemon vor Minor 41.
+    EgressRoute egress = 22;
   }
 
   // Eine Zeile aus dem Log der Sandbox.
@@ -1549,6 +1562,67 @@ message SandboxEvent {
     google.protobuf.Timestamp at = 1;
     string line = 2;
   }
+}
+
+// ---------- Entscheidungs-Proxy (HUM-511) ----------
+
+// Der Weg hinaus fuer den Verkehr des Agenten (ADR-0022).
+message EgressRoute {
+  // `host:port` des Entscheidungs-Proxys; leer heisst direkt.
+  string proxy = 1;
+  // Wer den Namen des Ziels aufloest: `proxy` oder `humanitl`
+  // (`egress.proxy_resolve`); ohne Proxy immer `humanitl`.
+  string resolve = 2;
+}
+
+// Auftrag an `Egress`. Genau eine Operation.
+message EgressRequest {
+  // Nur den Stand lesen.
+  message Status {}
+  // Tunnel und TLS-Handschlag zum festen Ziel ueber `egress.proxy`.
+  // `CheckConnection` und nicht `Check`: Der Dart-Generator benennt ein
+  // Feld `check` um, weil jede Nachricht schon eine Methode `check()` hat.
+  message CheckConnection {}
+  // Zugangsdaten `NUTZER:PASSWORT` im Schluesselbund ablegen und
+  // `egress.proxy_auth_ref` darauf richten. Sie stehen danach nie in
+  // `config.toml`, in keiner Antwort, in keinem Log.
+  message SetAuth {
+    string credentials = 1;
+  }
+  // Die Zugangsdaten entfernen und `egress.proxy_auth_ref` herausnehmen.
+  message RemoveAuth {}
+  oneof op {
+    Status status = 1;
+    CheckConnection check_connection = 2;
+    SetAuth set_auth = 3;
+    RemoveAuth remove_auth = 4;
+  }
+}
+
+// Der Stand des Entscheidungs-Proxys, ohne Zugangsdaten.
+message EgressStatus {
+  // Die Einstellungen, wie `config.toml` sie jetzt sagt; `proxy` als
+  // `host:port`, leer ohne `egress.proxy`.
+  EgressRoute configured = 1;
+  // `egress.proxy_ca`; leer ohne.
+  string proxy_ca = 2;
+  // Wahr, wenn `egress.proxy_auth_ref` gesetzt ist und der Speicher die
+  // Zugangsdaten haelt.
+  bool auth_set = 3;
+  // `egress.proxy_auth_ref`, etwa `secret-service:humanitl/egress-proxy`;
+  // leer ohne.
+  string auth_ref = 4;
+  // Der Weg, den der laufende Daemon seit seinem Start nimmt. Weicht er von
+  // `configured` ab, gilt die Datei erst nach einem Neustart.
+  EgressRoute active = 5;
+  // Nur nach `Check`: das feste Ziel, `example.com:443`.
+  string check_target = 6;
+  // Nur nach `Check`: wahr, wenn Tunnel und TLS-Handschlag standen.
+  bool reachable = 7;
+  // Was dazu zu sagen ist: der Befund des Checks (`PROXY_012` bis
+  // `PROXY_017`), der Rueckfall der Zugangsdaten auf die Datei
+  // (`CONFIG_019`), oder Zugangsdaten, die der Speicher nicht haelt.
+  repeated Diagnostic diagnostics = 8;
 }
 
 // ---------- Sandbox-Backends (HUM-432) ----------

@@ -24,6 +24,7 @@ Eine RPC ohne CLI-Zeile und ohne Ausnahme bricht den CI-Job
 | `Humanitl.Decide` | `humanitl flows decide` | `features/intercept/widgets/action_bar` |
 | `Humanitl.DiscoverLlm` | `humanitl llm discover` | `features/setup/widgets/llm_discover_sheet` |
 | `Humanitl.Doctor` | `humanitl doctor` | `features/setup/widgets/doctor_list` |
+| `Humanitl.Egress` | `humanitl egress auth remove`<br>`humanitl egress auth set`<br>`humanitl egress check`<br>`humanitl egress status` | fehlt |
 | `Humanitl.Exec` | `humanitl sandbox exec` | `features/sandbox/widgets/terminal_tabs` |
 | `Humanitl.GetBody` | `humanitl flows show --body` | `features/history/history_detail` |
 | `Humanitl.GetConfig` | Ausnahme | `features/settings/settings_overlay` |
@@ -45,6 +46,7 @@ Eine RPC ohne CLI-Zeile und ohne Ausnahme bricht den CI-Job
 
 ## UI-Lücken
 
+- `Humanitl.Egress`
 - `Humanitl.GetSessionSummary`
 - `Humanitl.SandboxBackends`
 

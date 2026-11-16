@@ -64,7 +64,25 @@ abstract final class FormKeys {
     sandboxMode,
     updateCheck,
     sandboxBackend,
+    egressProxy,
+    egressProxyCa,
+    egressProxyResolve,
   ];
+
+  /// The decision proxy behind Humanitl, `http://HOST:PORT`; empty means
+  /// none (HUM-511, ADR-0022). Effective after a daemon restart.
+  static const String egressProxy = 'egress.proxy';
+
+  /// The absolute path of the PEM with the decision proxy's CA (HUM-511).
+  static const String egressProxyCa = 'egress.proxy_ca';
+
+  /// Who resolves the target's name behind the decision proxy: `proxy` (the
+  /// default) or `humanitl` (HUM-511).
+  static const String egressProxyResolve = 'egress.proxy_resolve';
+
+  /// The reference to the decision proxy's credentials. Not in [all]: the
+  /// form sets it only through `Egress`, never through `SetConfig`.
+  static const String egressProxyAuthRef = 'egress.proxy_auth_ref';
 
   /// Whether the daemon asks GitHub once a day, at most, for a newer release
   /// (HUM-382). Default true.
@@ -102,7 +120,11 @@ abstract final class FormKeys {
   /// one of them can open the sheet at that field (HUM-275). A key outside
   /// this set keeps the badge that names it. [sandboxWorkDir] is in the set,
   /// but its fix stays with the folder chooser of the screen (HUM-262).
-  static const Set<String> shownInSheet = <String>{...all, llmApiKeyRef};
+  static const Set<String> shownInSheet = <String>{
+    ...all,
+    llmApiKeyRef,
+    egressProxyAuthRef,
+  };
 }
 
 /// The effective configuration, mirror of `ConfigSnapshot` (HUM-069).
@@ -213,6 +235,15 @@ final class ConfigValues {
 
   /// `llm.endpoint`, empty when unset.
   String get llmEndpoint => _text(FormKeys.llmEndpoint, '');
+
+  /// `egress.proxy`, empty when unset (HUM-511).
+  String get egressProxy => _text(FormKeys.egressProxy, '');
+
+  /// `egress.proxy_ca`, empty when unset (HUM-511).
+  String get egressProxyCa => _text(FormKeys.egressProxyCa, '');
+
+  /// `egress.proxy_resolve`, default `proxy` (HUM-511).
+  String get egressProxyResolve => _text(FormKeys.egressProxyResolve, 'proxy');
 
   /// `llm.models`, empty when unset.
   List<String> get llmModels => switch (at(FormKeys.llmModels)) {

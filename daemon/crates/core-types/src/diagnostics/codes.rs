@@ -106,7 +106,8 @@ pub static AREAS: &[AreaInfo] = &[
         prefix: "PROXY",
         first: 1,
         last: 19,
-        note: "Anfragen, Caps, Protokoll, 010-011 Grenzen der Verbindung (HUM-120)",
+        note: "Anfragen, Caps, Protokoll, 010-011 Grenzen der Verbindung (HUM-120), \
+               012-019 Entscheidungs-Proxy hinter Humanitl (HUM-511)",
     },
     AreaInfo {
         area: "tls",
@@ -1840,6 +1841,55 @@ registry! {
     SANDBOX_052 => "sandbox", "Kernel level limits cannot be enforced", "#sandbox_052",
         "The unit of a kernel-level session binds at most a fixed amount of memory and a fixed number of processes and threads (`MemoryMax`, `MemorySwapMax`, `TasksMax`), and the cgroup v2 controllers `memory` and `pids` are not delegated to the user's service manager, its cgroup cannot be read, or the running unit's cgroup does not carry the planned `memory.max`, `memory.swap.max` and `pids.max` (a slice in between withholds a controller). systemd would ignore the limits without saying so; a session without its limits does not start, and the agent never runs.",
         "`CopyCommand` with the systemd drop-in that delegates `cpu`, `cpuset`, `io`, `memory` and `pids` to user sessions, then a new login.";
+    // HUM-511: the decision proxy of the user behind Humanitl (ADR-0022).
+    /// The daemon could not reach the decision proxy named in `egress.proxy`:
+    /// the TCP connection failed or timed out. Nothing left directly
+    /// instead; the agent gets `502` (HUM-511).
+    PROXY_012 => "proxy", "Decision proxy unreachable", "#proxy_012",
+        "`egress.proxy` is set, so every allowed request of the agent leaves through that proxy, and the daemon could not open a connection to it within `limits.connect_timeout_secs`. The request did not go out directly instead; the agent got `502`.",
+        "`CopyCommand` with `humanitl egress check` once the proxy runs; or `ChangeSetting` on `egress.proxy` with the address it listens on, or empty to leave without it.";
+    /// The decision proxy answered the `CONNECT` for a target with a status
+    /// other than `200` (and other than `407`), or with something that is
+    /// no HTTP answer (HUM-511).
+    PROXY_013 => "proxy", "Decision proxy refused the tunnel", "#proxy_013",
+        "Humanitl asked the decision proxy for a tunnel to the target with `CONNECT`, and the proxy answered with another status than `200`, or not with HTTP at all. The sentence names the status; the agent got `502`.",
+        "No automatic fix; the sentence names the target and the status. `humanitl egress check` repeats the question.";
+    /// The decision proxy demands credentials: `407` on a `CONNECT` or on a
+    /// plain `http` request (HUM-511).
+    PROXY_014 => "proxy", "Decision proxy wants credentials", "#proxy_014",
+        "The decision proxy answered `407 Proxy Authentication Required`. Either `egress.proxy_auth_ref` is empty, or the credentials it names are not the ones the proxy expects. The agent got `502`; it never sees the `407`.",
+        "`CopyCommand` with `humanitl egress auth set`, which stores `USER:PASSWORD` in the keyring and sets `egress.proxy_auth_ref`.";
+    /// The certificate presented through the decision proxy is not signed by
+    /// the CA in `egress.proxy_ca` (nor by the anchors of
+    /// `tls.trust_system_store`) (HUM-511).
+    PROXY_015 => "proxy", "Certificate does not match the decision proxy CA", "#proxy_015",
+        "Through the tunnel of the decision proxy, Humanitl speaks TLS with the name of the target and checks the certificate against the CA in `egress.proxy_ca` and the usual anchors. The certificate came from neither: `egress.proxy_ca` is empty or names another CA than the one the proxy signs with. That CA is trusted only on this way, never on a direct connection.",
+        "`ChangeSetting` on `egress.proxy_ca` with the PEM file of the proxy's CA, for mitmproxy the absolute path of `~/.mitmproxy/mitmproxy-ca-cert.pem`.";
+    /// Behind a decision proxy Humanitl refuses names that are local by
+    /// definition before any resolution and before the proxy sees them,
+    /// with either value of `egress.proxy_resolve` (HUM-511, ADR-0022).
+    PROXY_016 => "proxy", "Local name refused before the decision proxy", "#proxy_016",
+        "Behind a decision proxy, names that are local by definition (`localhost`, `*.localhost`, `*.local`, `*.internal`, `*.home.arpa`, a name without a dot such as `metadata`) mean the machine where they are resolved or connected to: its own services, its network or the metadata service of a cloud. Humanitl refuses them before any resolution and before forwarding, with either value of `egress.proxy_resolve`, as it refuses private address literals (`PROXY_008`). The agent got `502`.",
+        "`AddRule` with `allow_private` for exactly this host, if the agent should reach it.";
+    /// The settings of the decision proxy cannot be used: the CA file in
+    /// `egress.proxy_ca` is unreadable or holds no certificate, or the
+    /// credentials named in `egress.proxy_auth_ref` are not available. Every
+    /// request of the agent fails with this finding instead of leaving
+    /// without the CA or the credentials (HUM-511).
+    PROXY_017 => "proxy", "Decision proxy settings unusable", "#proxy_017",
+        "`egress.proxy` is set, and a setting it needs cannot be used: `egress.proxy_ca` cannot be read or holds no certificate, or the keyring does not hand out the credentials `egress.proxy_auth_ref` names. The daemon read them at its start; every allowed request fails with this finding and nothing leaves directly.",
+        "`ChangeSetting` on the named key, or `CopyCommand` with `humanitl egress auth set`; then restart the daemon (`humanitl daemon restart`).";
+    /// The TLS handshake through the decision proxy's tunnel failed for
+    /// another reason than an unknown CA (a certificate for another name, a
+    /// broken handshake) or did not finish in time (HUM-511).
+    PROXY_018 => "proxy", "TLS through the decision proxy failed", "#proxy_018",
+        "Through the tunnel of the decision proxy, Humanitl speaks TLS with the name of the target. The handshake failed for another reason than an unknown CA, such as a certificate that names another host, or it did not finish within `limits.header_timeout_secs`. The sentence names the proxy, the target and the reason; the agent got `502`.",
+        "`CopyCommand` with `humanitl egress check`, and check that the proxy intercepts this host with a certificate for its name.";
+    /// Through the decision proxy, the head of the answer did not arrive
+    /// within `egress.proxy_response_timeout_secs` (HUM-511).
+    PROXY_019 => "proxy", "Decision proxy answered too late", "#proxy_019",
+        "The request went through the decision proxy, and the head of its answer did not arrive within `egress.proxy_response_timeout_secs`, also after a streamed upload. A person deciding at the proxy may need longer. The agent got `502`.",
+        "`ChangeSetting` on `egress.proxy_response_timeout_secs` with a longer wait.";
 }
 
 /// Sucht einen Code im Register.

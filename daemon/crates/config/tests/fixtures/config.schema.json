@@ -147,6 +147,79 @@
       "x-project-scope": "denied",
       "x-tier": "advanced"
     },
+    "egress": {
+      "additionalProperties": false,
+      "default": {
+        "proxy": null,
+        "proxy_auth_ref": null,
+        "proxy_ca": null,
+        "proxy_resolve": "proxy",
+        "proxy_response_timeout_secs": 300
+      },
+      "description": "Ein Entscheidungs-Proxy des Nutzers hinter Humanitl (ADR-0022, HUM-511).",
+      "properties": {
+        "proxy": {
+          "default": null,
+          "description": "Adresse eines Entscheidungs-Proxys des Nutzers als `http://HOST:PORT` (etwa mitmproxy). Gesetzt verlässt jede erlaubte Anfrage des Agenten den Daemon über diesen Proxy; `https` geht als `CONNECT`-Tunnel, in dem Humanitl TLS neu aufbaut, `http` als Anfrage in absoluter Form. Anfragen des Daemons selbst (Suche nach Modellservern, Update-Prüfung) bleiben direkt. Die Prüfung auf private Adressen gilt dem Ziel, nie diesem Proxy; er darf auf `127.0.0.1` laufen. Leer heißt: kein zweiter Proxy, nichts ändert sich. Wirkt nach dem Neustart des Daemons.",
+          "type": [
+            "string",
+            "null"
+          ],
+          "x-project-scope": "denied",
+          "x-tier": "advanced"
+        },
+        "proxy_auth_ref": {
+          "default": null,
+          "description": "Verweis auf die Zugangsdaten des Entscheidungs-Proxys als `NUTZER:PASSWORT` (geteilt am ersten Doppelpunkt; das Passwort darf Leerzeichen tragen) im Schlüsselbund oder, wenn er nicht antwortet, in einer Datei mit `0600` (`CONFIG_019`), nie die Daten selbst: `secret-service:humanitl/egress-proxy`, unter macOS `keychain:humanitl/egress-proxy`, oder `file:egress-proxy`. Gesetzt wird er mit `humanitl egress auth set` oder in den Einstellungen; der Daemon schickt sie als `Proxy-Authorization: Basic` nur an diesen Proxy. Leer heißt: ohne Anmeldung.",
+          "type": [
+            "string",
+            "null"
+          ],
+          "x-project-scope": "denied",
+          "x-tier": "advanced"
+        },
+        "proxy_ca": {
+          "default": null,
+          "description": "Absoluter Pfad der PEM-Datei mit der CA des Entscheidungs-Proxys, bei mitmproxy `~/.mitmproxy/mitmproxy-ca-cert.pem` (ausgeschrieben, ohne `~`). Ihr wird nur auf dem Weg über `egress.proxy` vertraut, zusätzlich zu den Ankern aus `tls.trust_system_store`, nie auf einer direkten Verbindung. Wirkt nach dem Neustart des Daemons.",
+          "type": [
+            "string",
+            "null"
+          ],
+          "x-project-scope": "denied",
+          "x-tier": "advanced"
+        },
+        "proxy_resolve": {
+          "default": "proxy",
+          "description": "Wer den Namen des Ziels auflöst, wenn `egress.proxy` gesetzt ist. `proxy` (Vorgabe): Humanitl löst nichts auf und schickt `CONNECT host:port`, der Entscheidungs-Proxy löst nach seiner Entscheidung auf; Humanitl lehnt vorher nur private IP-Literale und lokale Namen ab (`localhost`, `*.localhost`, `*.local`, `*.internal`, `*.home.arpa` und jeden Namen ohne Punkt, etwa `metadata`), und das bei beiden Werten, bevor irgendetwas aufgelöst wird. Ein öffentlicher Name, der auf eine private Adresse zeigt, ist dann Sache des Entscheidungs-Proxys. `humanitl`: Humanitl löst nach seiner Entscheidung auf, prüft die Adresse wie ohne zweiten Proxy und schickt `CONNECT IP:PORT`; die DNS-Anfrage verlässt den Rechner dann, bevor der Entscheidungs-Proxy entschieden hat.",
+          "oneOf": [
+            {
+              "const": "proxy",
+              "description": "Der Entscheidungs-Proxy, nach seiner Entscheidung; Humanitl schickt den\nNamen.",
+              "type": "string"
+            },
+            {
+              "const": "humanitl",
+              "description": "Humanitl, nach seiner eigenen Entscheidung; es schickt die geprüfte\nAdresse.",
+              "type": "string"
+            }
+          ],
+          "x-project-scope": "denied",
+          "x-tier": "advanced"
+        },
+        "proxy_response_timeout_secs": {
+          "default": 300,
+          "description": "Sekunden, die der Daemon über `egress.proxy` auf den Kopf der Antwort wartet, auch nach einem gestreamten Upload, weil dort ein Mensch entscheiden kann. `CONNECT` und der TLS-Handschlag behalten `limits.connect_timeout_secs` und `limits.header_timeout_secs`. Läuft die Frist ab, bekommt der Agent `502`.",
+          "format": "uint64",
+          "minimum": 0,
+          "type": "integer",
+          "x-project-scope": "denied",
+          "x-tier": "advanced"
+        }
+      },
+      "type": "object",
+      "x-project-scope": "denied",
+      "x-tier": "advanced"
+    },
     "experimental": {
       "additionalProperties": false,
       "default": {

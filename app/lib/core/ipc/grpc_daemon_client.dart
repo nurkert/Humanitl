@@ -667,6 +667,25 @@ class GrpcDaemonClient implements DaemonClient {
   }
 
   @override
+  Future<EgressStatus> egress(EgressOp op, {String credentials = ''}) async {
+    final pb.EgressRequest request = pb.EgressRequest();
+    switch (op) {
+      case EgressOp.status:
+        request.status = pb.EgressRequest_Status();
+      case EgressOp.check:
+        request.checkConnection = pb.EgressRequest_CheckConnection();
+      case EgressOp.setAuth:
+        request.setAuth = pb.EgressRequest_SetAuth()..credentials = credentials;
+      case EgressOp.removeAuth:
+        request.removeAuth = pb.EgressRequest_RemoveAuth();
+    }
+    final pb.EgressStatus status = await _unary(
+      (CallOptions options) => _stub.egress(request, options: options),
+    );
+    return status.toDomain();
+  }
+
+  @override
   Future<SandboxBackendList> sandboxBackends({String? backend}) async {
     // Immer mit Plan, demselben wie für den Schnappschuss (HUM-440): Der
     // Daemon misst dann an der Konfiguration eines Starts dieser App, samt

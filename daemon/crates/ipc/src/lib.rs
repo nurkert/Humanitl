@@ -51,7 +51,11 @@ pub const PROTO_MAJOR: u32 = 1;
 /// Minor-Version des Vertrags. Steigt bei jeder additiven Änderung
 /// (`Info.proto_minor`).
 ///
-/// `40` seit dem Backend der Sitzung beim Ziehen (HUM-500):
+/// `41` seit dem Entscheidungs-Proxy hinter Humanitl (HUM-511): die RPC
+/// `Egress` mit `EgressRequest` und `EgressStatus` (Stand, Prüfung der
+/// Verbindung, Zugangsdaten) und `SandboxEvent.Status.egress`, der Weg
+/// hinaus des laufenden Daemons.
+/// `40` war das Backend der Sitzung beim Ziehen (HUM-500):
 /// `SandboxRequest.ImagePull.plan` trägt den Plan des Starts, für den gezogen
 /// wird, und das Ziehen nimmt das Backend, das ein Start mit diesem Plan
 /// bekäme, samt `Plan.backend`; ohne Plan wie bisher die Einstellung.
@@ -223,7 +227,7 @@ pub const PROTO_MAJOR: u32 = 1;
 /// Spiegelung in `app/lib/core/ipc/proto_version.dart` darf nachziehen: eine
 /// abweichende Minor ist verabredetermaßen kein Grund, die Verbindung
 /// abzulehnen (`docs/PROTOCOL.md`).
-pub const PROTO_MINOR: u32 = 40;
+pub const PROTO_MINOR: u32 = 41;
 
 /// Metadata-Schlüssel für das Session-Token aus
 /// `$XDG_RUNTIME_DIR/humanitl/token` (CONVENTIONS.md 3.6).
@@ -255,6 +259,7 @@ pub mod convert;
 mod deadline;
 pub mod disposable;
 pub mod domains;
+pub mod egress;
 pub mod exec;
 pub mod fake;
 mod image_pulls;
