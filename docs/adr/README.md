@@ -64,6 +64,7 @@ Rules:
 | [0019](0019-seatbelt-on-macos.md) | Seatbelt is the sandbox on macOS, a Linux VM comes later | Accepted | `sandbox-exec` with a generated SBPL profile per session; the three guarantees restated for macOS and measured by the same shim. |
 | [0020](0020-podman-sandbox-backend.md) | Podman as a selectable second sandbox backend on Linux | Accepted | One `SandboxBackend` made neutral, Podman behind it with a shared-kernel level (`crun`), the kernel level moved to ADR-0021; `sandbox.backend` per user, a raise-only `sandbox.min_isolation` per project. |
 | [0021](0021-qemu-microvm-kernel-level.md) | The kernel level runs as a QEMU micro-VM from Debian packages | Accepted | Backend `qemu` instead of the runtime `krun`: QEMU `-M microvm`, virtiofsd and vhost-device-vsock, each in a bwrap jail inside a hardened user unit; exactly one vsock port reaches the proxy. |
+| [0022](0022-decision-proxy-behind-humanitl.md) | A decision proxy of the user's choice can stand behind Humanitl | Proposed | Egress adapter `HttpProxy` (ADR-0017) with `CONNECT` to the address Humanitl resolved and checked, TLS opened in Humanitl and again in that proxy; `hold.ask_mode = "upstream"` forwards requests without a rule instead of holding them. |
 
 ## Cross-references
 
