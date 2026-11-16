@@ -118,6 +118,8 @@ Diagnose-Codes, hier nur geplant (registriert vom genannten Issue in `codes.rs` 
 | HUM-511 | Egress: der Adapter `HttpProxy` zu einem Entscheidungs-Proxy des Nutzers | M | ADR-0022 |
 | HUM-512 | `hold.ask_mode = "upstream"`: Anfragen ohne Regel entscheidet der Proxy dahinter | M | HUM-511 |
 | HUM-513 | Entscheidungs-Proxy: Anleitung für mitmproxy, Ende-zu-Ende-Test | S | HUM-512 |
+| HUM-514 | Agent-Adapter Claude Code, mit Hinweis auf den Abfluss über die Inferenz | M | HUM-037 |
+| HUM-515 | Agent-Adapter Codex, mit Hinweis auf den Abfluss über die Inferenz | M | HUM-514 |
 
 ## HUM-428 · Port neutral: `PlanRequest`, `LaunchOptions`, `IsolationLevel`, Enum `Backend` statt `PlatformBackend`
 
@@ -3165,4 +3167,72 @@ ADR-0022, Abschnitt Folgen.
 
 ### Akzeptanzkriterien
 1. Die Anleitung führt mit Belegen zu einem laufenden Aufbau mit mitmproxy.
+
+---
+
+## HUM-514 · Agent-Adapter Claude Code, mit Hinweis auf den Abfluss über die Inferenz
+
+### Kontext
+Wunsch des Owners vom 2026-11-16 (BACKLOG Abschnitt 9, Punkte 8, 9 und die
+Marktanalyse vom 2026-11-14): Claude Code soll in der Sandbox laufen wie
+OpenCode und pi. Der Owner sagt dazu: Mit einem Cloud-Agenten fließen über
+die Inferenz auf jeden Fall Daten ab, denn Prompts, Dateiinhalte und
+Werkzeugausgaben gehen an den Anbieter. Wer das weiß, soll trotzdem den
+Vorteil einer schnellen, einfachen, sauberen Sandbox von Humanitl nutzen
+können.
+
+### Spezifikation
+1. Adapter nach HUM-037 (`AgentAdapter`): Profil, Standardregeln (der
+   API-Host des Anbieters freigegeben, sonst nichts), Env-Kit (Proxy, CA
+   der Sandbox so, wie Node sie liest, Basis-URL), Erkennung des Programms.
+   Jede Angabe über Claude Code (Variablennamen wie `ANTHROPIC_BASE_URL`,
+   `NODE_EXTRA_CA_CERTS`, `HTTPS_PROXY`, Anmeldung, Konfigurationsordner)
+   vor dem Bau an der offiziellen Dokumentation prüfen und im Code
+   verlinken.
+2. Zugangsdaten über den Schlüsselbund wie bei `llm.servers`, nie als
+   Argument; die Anmeldedaten des Hosts (`~/.claude`) werden nicht in die
+   Sandbox gereicht, außer der Nutzer gibt sie ausdrücklich frei.
+3. **Hinweis auf den Abfluss über die Inferenz**, sachlich und ohne Angst
+   zu machen: Was der Agent liest, geht als Teil seiner Anfragen an den
+   Anbieter des Modells; Humanitl isoliert das System und hält alles andere
+   an, die Inferenz selbst aber ist gewollt freigegeben. Der Hinweis steht
+   beim Wählen des Agenten (App und CLI), einmal beim ersten Start mit
+   diesem Agenten (bestätigt, danach still) und in `humanitl doctor`; er
+   blockiert nichts. Texte über ARB.
+4. In der Moduszeile ein kurzer Vermerk, dass die Inferenz in die Cloud
+   geht.
+5. Doku: `docs/SECURITY.md` und `docs/THREAT-MODEL.md` (en und de) nennen
+   den Fall; die Sicherheitsaussage in `README.md` bleibt wahr, weil die
+   Inferenz eine Freigabe ist.
+
+### Tests
+- Adapter-Tests wie für OpenCode und pi; ein Ende-zu-Ende-Lauf in der CI
+  mit einem Stellvertreter-Endpunkt (keine echte Anmeldung).
+- Der Hinweis erscheint beim ersten Start und danach nicht mehr; er
+  erscheint nicht für einen lokalen Endpunkt.
+- Mutationen: Anmeldedaten des Hosts in der Sandbox, Hinweis fehlt.
+
+### Akzeptanzkriterien
+1. `humanitl go` mit Claude Code führt bis zu dessen Prompt in der
+   Wegwerf-Sitzung.
+2. Niemand nutzt einen Cloud-Agenten in Humanitl, ohne den Hinweis gesehen
+   zu haben.
+
+---
+
+## HUM-515 · Agent-Adapter Codex, mit Hinweis auf den Abfluss über die Inferenz
+
+### Kontext
+Wie HUM-514, für die Codex CLI von OpenAI.
+
+### Spezifikation
+1. Adapter wie HUM-514; die Angaben über Codex (Basis-URL, CA, eigene
+   Sandbox von Codex, die in Humanitl abgeschaltet oder neutral bleiben
+   muss, damit sie nicht mit bwrap kollidiert) an der offiziellen
+   Dokumentation prüfen und verlinken.
+2. Derselbe Hinweis wie in HUM-514, aus demselben Code, nicht kopiert.
+
+### Akzeptanzkriterien
+1. `humanitl go` mit Codex führt bis zu dessen Prompt.
+2. Der Hinweis gilt wie in HUM-514.
 
