@@ -61,11 +61,51 @@ const SYMLINK_HEADERS: [&str; 3] = ["PATH", "TARGET", "LEAVES PROJECT"];
 /// `DAEMON_001`, wenn kein Daemon antwortet, `IPC_005`, wenn die Kennung keine
 /// ist, `RECORDER_001`, wenn dieser Daemon ohne Aufzeichnung läuft, und
 /// `SANDBOX_027`, wenn es zu dem Lauf keine Zusammenfassung gibt.
-pub async fn run(ctx: &Context, cmd: &SessionsCmd) -> Result<u8, Failure> {
-    let client = ctx.connect().await?;
+pub async fn run(ctx: &Context, cmd: Option<&SessionsCmd>) -> Result<u8, Failure> {
     match cmd {
-        SessionsCmd::Summary { id } => summary(ctx, client, id).await,
+        Some(SessionsCmd::Summary { id }) => summary(ctx, ctx.connect().await?, id).await,
+        None => current(ctx).await,
     }
+}
+
+/// `sessions` ohne Unterkommando: Sitzung, Zustand und Moduszeile (HUM-512).
+///
+/// Aus derselben Momentaufnahme wie `humanitl sandbox plan`, also mit den
+/// Flags eines Starts hier (`--profile`, `--ask`, `--llm`); läuft eine
+/// Sandbox, ist es ihre Sitzung.
+async fn current(ctx: &Context) -> Result<u8, Failure> {
+    let (status, minor) = crate::cmd::plan::snapshot(ctx).await?;
+    let state = v1::SandboxState::try_from(status.state).map_or("unknown", |state| match state {
+        v1::SandboxState::Starting => "starting",
+        v1::SandboxState::Running => "running",
+        v1::SandboxState::Stopping => "stopping",
+        v1::SandboxState::Stopped => "stopped",
+        v1::SandboxState::Failed => "failed",
+        v1::SandboxState::Unspecified => "unknown",
+    });
+    if ctx.render.is_json() {
+        ctx.render.value(&json!({
+            "session_id": status.session_id,
+            "sandbox_id": clean(&status.sandbox_id),
+            "state": state,
+            "ask_mode": status.ask_mode,
+            "egress": status.egress.as_ref().map(|route| json!({
+                "proxy": route.proxy,
+                "resolve": route.resolve,
+            })),
+        }));
+        return Ok(EXIT_OK);
+    }
+    let sandbox = if status.sandbox_id.is_empty() {
+        String::new()
+    } else {
+        format!(", sandbox {}", clean(&status.sandbox_id))
+    };
+    ctx.render
+        .line(&format!("session {} ({state}{sandbox})", status.session_id));
+    ctx.render
+        .line(&crate::cmd::plan::decided_by_line(&status, minor));
+    Ok(EXIT_OK)
 }
 
 /// `sessions summary ID`.

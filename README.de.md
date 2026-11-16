@@ -35,7 +35,12 @@ Body gezeigt und erst nach deiner Freigabe weitergeleitet. Ohne Halt gehen nur A
 bewusst pausieren, in der Kopfleiste oder mit `humanitl intercept pause`: Bis du wieder einschaltest,
 eine neue Sitzung startest oder den Daemon neu startest, gehen Anfragen, die sonst auf dich warten
 würden, sofort hinaus, jede als `paused` aufgezeichnet, unter einem laufenden Absperrband; Block-Regeln
-und die Sandbox bleiben, und nichts in der Sandbox kann die Pause setzen. Alles wird aufgezeichnet, außer
+und die Sandbox bleiben, und nichts in der Sandbox kann die Pause setzen. Wenn du es wählst, entscheidet
+statt dir ein abfangender Proxy deiner Wahl hinter Humanitl (`egress.proxy` mit
+`hold.ask_mode = "upstream"`, ab Werk aus): Eine Anfrage, die keine Regel entscheidet, geht ohne Halt
+an ihn, und er sieht den entschlüsselten Verkehr; Block-Regeln halten eine Anfrage weiter vorher an
+(die erklärte Durchleitung zum Sprachmodell ist vor ihnen per Regel erlaubt und geht ebenfalls über ihn),
+und jede Anfrage bleibt freigegeben durch eine Regel, durch dich oder durch diesen Proxy. Alles wird aufgezeichnet, außer
 während eines Ausfalls der Aufzeichnung (Platte voll, Datenbank gesperrt); dann läuft der Verkehr
 weiter, und die App sagt es an jeder Karte.
 

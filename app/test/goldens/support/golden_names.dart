@@ -115,4 +115,8 @@ const List<String> goldenNames = <String>[
   // egress_golden_test.dart (HUM-511)
   'settings_egress',
   'isolation_egress',
+  // upstream_golden_test.dart (HUM-512)
+  'settings_ask_mode_upstream',
+  'settings_ask_mode_no_proxy',
+  'isolation_ask_mode_upstream',
 ];

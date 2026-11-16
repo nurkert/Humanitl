@@ -1798,6 +1798,21 @@ object. The other keys are set like every key, for example
 `humanitl config set egress.proxy http://127.0.0.1:8080` and
 `humanitl config set egress.proxy_ca /home/you/.mitmproxy/mitmproxy-ca-cert.pem`.
 
+With `humanitl config set hold.ask_mode upstream` (or `--ask upstream` for one run) that proxy also
+decides every request no rule decides, instead of a person here (HUM-512): such a request is not
+held but forwarded, a `block` rule still stops it first, and a `redact` rule still waits here. The
+configuration refuses the mode without `egress.proxy` (`CONFIG_003`), and a start refuses it while
+the running daemon still goes direct; restart the daemon after setting `egress.proxy`.
+
+## `humanitl sessions`
+
+`humanitl sessions` without a subcommand prints the running session, or the one a start here would
+get with the same flags as `humanitl run` (`--profile`, `--ask`, `--llm`), its state and its mode
+line: who decides a request without a rule. With `hold.ask_mode = "upstream"` the line reads
+`without a rule: decided by HOST:PORT` and says who resolves names and what follows from that
+(HUM-512); `humanitl sandbox plan` prints the same line. `--json` prints `session_id`, `state`,
+`ask_mode` and `egress`. `humanitl sessions summary ID` shows what a sandbox run left in the project.
+
 ## The global switches
 
 Five switches apply to every subcommand, because `clap` carries them as

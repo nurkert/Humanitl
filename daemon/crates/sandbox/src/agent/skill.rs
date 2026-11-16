@@ -50,6 +50,7 @@
 //! | Ein Werkzeug, das früher aufgibt, beendet die Anfrage, eine neue wartet von vorn | `ClientTimeout` in `HoldQueue::hold`, die Karte verlässt die Warteschlange (HUM-308) |
 //! | `curl` ohne `--max-time` wartet von selbst | `curl` hat keine eigene Gesamtfrist (HUM-308) |
 //! | Ohne Frage: nichts wartet, abgelehnt `403`, alles andere sofort `504` | `ask_mode = none` setzt die Frist auf null; `Matched { Block }` bleibt `403` |
+//! | Mit `upstream`: wartet bis `{timeout}`s, dann `502` mit `upstream_timeout`; ein weiterer Proxy antwortet, seine Ablehnung beginnt nicht unbedingt mit `Blocked by Humanitl.`, sein `403` heißt nicht erlaubt (HUM-512) | `DecisionSource::Upstream` in `AskPipeline`; `egress.proxy_response_timeout_secs`, `UpstreamError::Timeout`; die Antwort des Entscheidungs-Proxys geht unverändert an den Agenten |
 //! | Nach einem `504` einmal Zugang mit `POST /ask` beantragen und später einmal wiederholen, in beiden Ask-Modi gleich | Ein neuer Flow wird nach den dann geltenden Regeln entschieden |
 //!
 //! Die Frist, die der Text für `curl --max-time` vorschlägt, ist
@@ -415,7 +416,7 @@ mod tests {
         for (language, template) in [(Language::En, TEMPLATE_EN), (Language::De, TEMPLATE_DE)] {
             let (_, variants) = split_variants_with(template, true);
             let names: Vec<&str> = variants.iter().map(|(name, _)| name.as_str()).collect();
-            assert_eq!(names, vec!["ui", "none"], "{language:?}");
+            assert_eq!(names, vec!["ui", "none", "upstream"], "{language:?}");
             for (name, text) in &variants {
                 assert!(
                     text.starts_with("## "),

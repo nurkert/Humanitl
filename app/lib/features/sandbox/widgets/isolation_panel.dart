@@ -121,6 +121,13 @@ class IsolationPanel extends StatelessWidget {
           // 1.41 sagt nichts darüber, dann fehlt die Zeile.
           if (status.egress case final EgressRoute egress)
             _EgressLine(route: egress),
+          // Wer eine Anfrage ohne Regel entscheidet (HUM-512); ein Daemon
+          // vor 1.42 sagt es nicht, dann fehlt die Zeile.
+          if (status.askMode case final String askMode)
+            _AskModeLine(
+              askMode: askMode,
+              route: status.egress ?? EgressRoute.direct,
+            ),
           RefusalsSection(status: status),
           SizedBox(height: tokens.spacing.x3),
           const HHairline(),
@@ -428,6 +435,63 @@ class _EgressLine extends StatelessWidget {
               key: const Key('sandbox-isolation-egress'),
               style: tokens.typography.ui13.tinted(
                 through ? tokens.colors.warningText : tokens.colors.fg2,
+              ),
+            ),
+          ),
+        ],
+      ),
+    );
+  }
+}
+
+/// The mode line (HUM-512): who decides a request without a rule.
+///
+/// With `upstream` it names the decision proxy, who resolves and what
+/// follows from that, under a filled amber dot like the egress line above:
+/// the decision has left Humanitl. Every other mode is a grey sentence
+/// under a hollow dot.
+class _AskModeLine extends StatelessWidget {
+  const _AskModeLine({required this.askMode, required this.route});
+
+  final String askMode;
+  final EgressRoute route;
+
+  @override
+  Widget build(BuildContext context) {
+    final HTokens tokens = HTheme.of(context);
+    final AppLocalizations l10n = context.l10n;
+    final bool upstream = askMode == 'upstream';
+    final String text = switch (askMode) {
+      'terminal' => l10n.isolationAskModeTerminal,
+      'none' => l10n.isolationAskModeNone,
+      // Kein Proxy aktiv: Der Start lehnt ab (`CONFIG_003`), bis der
+      // Dienst neu startet; „entscheidet ." wäre eine leere Behauptung.
+      'upstream' when route.isDirect => l10n.isolationAskModeUpstreamNotActive,
+      'upstream' when route.proxyResolves =>
+        l10n.isolationAskModeUpstreamProxyResolves(route.proxy),
+      'upstream' => l10n.isolationAskModeUpstreamHumanitlResolves(route.proxy),
+      _ => l10n.isolationAskModeUi,
+    };
+    return Padding(
+      padding: EdgeInsets.only(top: tokens.spacing.x2),
+      child: Row(
+        crossAxisAlignment: CrossAxisAlignment.start,
+        children: <Widget>[
+          Padding(
+            padding: EdgeInsets.only(top: tokens.spacing.x1),
+            child: _Dot(
+              key: const Key('sandbox-isolation-ask-mode-dot'),
+              color: upstream ? tokens.colors.warning : tokens.colors.fg2,
+              filled: upstream,
+            ),
+          ),
+          SizedBox(width: tokens.spacing.x2),
+          Expanded(
+            child: Text(
+              text,
+              key: const Key('sandbox-isolation-ask-mode'),
+              style: tokens.typography.ui13.tinted(
+                upstream ? tokens.colors.warningText : tokens.colors.fg2,
               ),
             ),
           ),

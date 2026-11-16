@@ -25,3 +25,5 @@ One rule permits model calls to {llm_host}, on its paths only; they never wait h
 Requests here have high, variable latency; one that no rule permits or refuses yet can wait up to {timeout}s, then `504`: no permission granted in time. Normal here, not an outage: keep waiting, tool timeouts above {timeout}s, no retry loops or parallel duplicates, no switching tools or mirrors, never assume the network is down. A tool that gives up sooner withdraws the request; `curl` waits.
 <!-- ask_mode: none -->
 Only what the rules permit goes through, at once; nothing waits: refused requests get `403`, any other `504`: not permitted, not an outage. Tell the user what was not reachable and which rule is missing.
+<!-- ask_mode: upstream -->
+Requests here have high, variable latency; one that no rule permits or refuses yet can wait up to {timeout}s, then `502`. Its answer may not read `Blocked by Humanitl.`; a `403` is final all the same. Normal here, not an outage: keep waiting, tool timeouts above {timeout}s, no retry loops or parallel duplicates, no switching tools or mirrors, never assume the network is down. A tool that gives up sooner withdraws the request; `curl` waits.

@@ -302,7 +302,7 @@
       "properties": {
         "ask_mode": {
           "default": "ui",
-          "description": "Wo gefragt wird: in der Oberfläche, im Terminal oder gar nicht.",
+          "description": "Wo gefragt wird: in der Oberfläche, im Terminal, gar nicht, oder `upstream`: Eine Anfrage ohne Regel oder mit `ask` wird nicht gehalten, sondern geht an den Entscheidungs-Proxy aus `egress.proxy`, der dort entscheidet (nur mit `egress.proxy`). `block` bleibt endgültig, `redact` hält weiter hier.",
           "oneOf": [
             {
               "const": "ui",
@@ -317,6 +317,11 @@
             {
               "const": "none",
               "description": "Es wird nicht gefragt; jede Anfrage ohne Regel läuft in die Zeitüberschreitung.",
+              "type": "string"
+            },
+            {
+              "const": "upstream",
+              "description": "Hier wird nicht gefragt; eine Anfrage ohne Regel oder mit `ask` geht an\nden Entscheidungs-Proxy aus `egress.proxy`, der dort entscheidet\n(ADR-0022, HUM-512). Nur gültig mit `egress.proxy`.",
               "type": "string"
             }
           ],

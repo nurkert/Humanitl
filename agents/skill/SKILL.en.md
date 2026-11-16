@@ -67,3 +67,12 @@ Network requests here have high and variable latency. A request that no rule per
 ## Requests do not wait here
 
 Only what the rules of this environment permit goes through, at once; nothing waits: a refused request gets `403` at once, any other `504` (`reason: timeout`). A `504` means not permitted, not an outage and not a slow network; sending the same request again at once gives the same answer. If the task still needs a destination that ended in `504`, request access once with `POST /ask` and send the request once more later. Tell the user which host and path were not reachable. A slow answer to a permitted request comes from the server, not from Humanitl.
+<!-- ask_mode: upstream -->
+## High latency is normal here
+
+Network requests here have high and variable latency. A request that no rule permits or refuses yet can wait up to {timeout}s; if no answer arrived by then, it ends with `502` (`reason: upstream_timeout`). Such a request is answered by a further proxy behind Humanitl: its answer, a refusal too, need not start with `Blocked by Humanitl.`, and a `403` from it means not permitted, like one from Humanitl. A request that a rule permits takes as long as the server needs; one that a rule refuses ends at once with `403`. While a request waits, no response arrives. That is normal for this environment, not an outage.
+
+- Keep waiting. Use generous timeouts above {timeout}s: `curl --max-time {max_time}`, and the same for the timeout of the tool call that runs it. `curl` without `--max-time` waits on its own.
+- A tool that gives up sooner, such as a fetch tool with a fixed short limit, closes the connection and ends the request; a new request starts the wait again. For a request that may take long, use `curl`.
+- Send each request once. Do not retry in a loop, do not run the same request twice in parallel, and do not switch to another tool or mirror to get around the latency: each of these is one more request that waits as long.
+- Do not conclude that the network is down because a request takes long. If the task still needs a destination that was refused, request access once with `POST /ask` and send the request once more later.

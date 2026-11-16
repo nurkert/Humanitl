@@ -61,13 +61,15 @@ Ports (verbindliche Liste, vollständig für den MVP):
 Received ──analyze──▶ Analyzed ──evaluate──▶ Held ──decide──▶ Decided ──▶ Forwarded ──▶ Responded ──▶ Recorded
                           │                    │                 ▲
                           │ (rule: allow)      │ (timeout)       │
-                          └────────────────────┴─────────────────┘
-                          (rule: block) ──────────────────────────▶ Decided(Block) ──▶ Recorded
+                          ├────────────────────┴─────────────────┘
+                          ├─ (ask_mode upstream: no rule or ask) ───▶ Decided(Forward) ──▶ Forwarded
+                          └─ (rule: block) ─────────────────────────▶ Decided(Block) ──▶ Recorded
 ```
 
 - Die Zustandsmaschine ist ein `enum` mit einer Methode `on(self, &FlowEvent) -> Result<Self, InvalidTransition>`. Einen anderen Weg, den Zustand zu ändern, gibt es nicht. Ungültige Übergänge sind Bugs und werden im Test vollständig aufgezählt.
 - Der Proxy-Handler *treibt* die Zustandsmaschine an; er *besitzt* sie nicht. Er ruft `on` auf, veröffentlicht das Ereignis und wartet, wo nötig, auf die Entscheidung. So bleibt der Handler dünn und die Logik ohne Netzwerk testbar.
 - Zeitüberschreitungen sind Ereignisse (`TimedOut`), keine Sonderpfade.
+- Mit `hold.ask_mode = "upstream"` (ADR-0022, HUM-512) wird ein Flow, den keine Regel entscheidet oder eine `ask`-Regel trifft, nicht gehalten: `Analyzed ──decide──▶ Decided(Forward)` mit der Entscheidungsquelle `upstream`, dann `Forwarded` über den Entscheidungs-Proxy hinter Humanitl, der dort entscheidet. `Decided(Forward)` ist `Decided(Allow)` aus der Quelle `upstream`, nur aus `Analyzed` und nur unbearbeitet; eine `block`-Regel bleibt endgültig, `redact` geht weiter nach `Held`, und die harte Sperre für bestätigte Geheimnisse macht aus der Weitergabe ein `Decided(Block)` des Systems. Der Tabellentest zählt den Übergang mit jedem anderen Paar auf.
 
 ## 3b. Parität von Oberfläche und CLI
 

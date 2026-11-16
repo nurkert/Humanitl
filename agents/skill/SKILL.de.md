@@ -60,3 +60,12 @@ Netzwerkanfragen haben hier hohe und schwankende Latenz. Eine Anfrage, die noch 
 ## Anfragen warten hier nicht
 
 Nur was die Regeln dieser Umgebung erlauben, geht durch, sofort; nichts wartet: eine abgelehnte Anfrage bekommt sofort `403`, jede andere `504` (`reason: timeout`). Ein `504` heißt: nicht erlaubt, kein Ausfall und kein langsames Netz; dieselbe Anfrage gleich noch einmal bekommt dieselbe Antwort. Braucht die Aufgabe ein Ziel, das mit `504` endete, noch, beantrage einmal Zugang mit `POST /ask` und sende die Anfrage später noch einmal. Sag dem Nutzer, welcher Host und Pfad nicht erreichbar waren. Eine langsame Antwort auf eine erlaubte Anfrage kommt vom Server, nicht von Humanitl.
+<!-- ask_mode: upstream -->
+## Hohe Latenz ist hier normal
+
+Netzwerkanfragen haben hier hohe und schwankende Latenz. Eine Anfrage, die noch keine Regel erlaubt oder ablehnt, kann bis zu {timeout}s warten; ist bis dahin keine Antwort da, endet sie mit `502` (`reason: upstream_timeout`). Eine solche Anfrage beantwortet ein weiterer Proxy hinter Humanitl: Seine Antwort, auch eine Ablehnung, beginnt nicht unbedingt mit `Blocked by Humanitl.`, und ein `403` von ihm heißt wie eines von Humanitl: nicht erlaubt. Eine Anfrage, die eine Regel erlaubt, dauert so lange, wie der Server braucht; eine, die eine Regel ablehnt, endet sofort mit `403`. Solange eine Anfrage wartet, kommt keine Antwort. Das ist in dieser Umgebung normal, kein Ausfall.
+
+- Weiter warten. Großzügige Fristen über {timeout}s setzen: `curl --max-time {max_time}`, und ebenso für die Frist des Tool-Aufrufs, der ihn ausführt. `curl` ohne `--max-time` wartet von selbst.
+- Ein Tool, das früher aufgibt, etwa ein Abruf-Tool mit fester kurzer Grenze, schließt die Verbindung und beendet die Anfrage; eine neue Anfrage beginnt das Warten von vorn. Für eine Anfrage, die lange dauern kann, nimm `curl`.
+- Sende jede Anfrage einmal. Nicht in einer Schleife wiederholen, nicht dieselbe Anfrage zweimal parallel starten und nicht zu einem anderen Tool oder Spiegel wechseln, um der Latenz auszuweichen: jedes davon ist eine Anfrage mehr, die ebenso lange wartet.
+- Schließe nicht auf ein ausgefallenes Netz, weil eine Anfrage lange dauert. Braucht die Aufgabe ein Ziel, das abgelehnt wurde, noch, beantrage einmal Zugang mit `POST /ask` und sende die Anfrage später noch einmal.

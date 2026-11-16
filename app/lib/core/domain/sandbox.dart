@@ -334,6 +334,12 @@ abstract class SandboxStatus with _$SandboxStatus {
     /// decision proxy of `egress.proxy`. Null from a daemon before contract
     /// 1.41.
     EgressRoute? egress,
+
+    /// Who decides a request without a rule, mirror of
+    /// `SandboxEvent.Status.ask_mode` (HUM-512): `ui`, `terminal`, `none` or
+    /// `upstream`, the last meaning the decision proxy of [egress]. Null from
+    /// a daemon before contract 1.42 and in the snapshot of a finding.
+    String? askMode,
   }) = _SandboxStatus;
 
   const SandboxStatus._();

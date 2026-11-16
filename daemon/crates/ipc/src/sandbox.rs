@@ -86,7 +86,7 @@ use std::sync::{Arc, Mutex, PoisonError, RwLock};
 use std::time::{Duration, Instant, SystemTime};
 
 use humanitl_config::secret::{KeyRef, KeyStore};
-use humanitl_config::{Config, SandboxMode, WorkMode};
+use humanitl_config::{AskMode, Config, SandboxMode, WorkMode};
 use humanitl_core::diagnostics::codes;
 use humanitl_core::ids::{SandboxId, SessionId};
 use humanitl_core::{Diagnostic, FixAction, FlowEvent, Severity};
@@ -2138,6 +2138,14 @@ impl Inner {
             llm_server: non_empty(&start.llm_server),
         };
         let resolved = self.resolver.resolve(&request)?;
+        // `upstream` reicht jede Anfrage ohne Regel an den Entscheidungs-
+        // Proxy weiter (HUM-512). Die Prüfung beim Laden kennt nur
+        // `egress.proxy` in `config.toml`; geht der laufende Daemon noch
+        // direkt hinaus (die Einstellung wirkt erst nach seinem Neustart),
+        // verließe eine solche Anfrage den Rechner ohne jede Entscheidung.
+        if resolved.config.hold.ask_mode == AskMode::Upstream && self.egress.proxy.is_empty() {
+            return Err(upstream_without_active_proxy());
+        }
         let mut diagnostics = resolved.diagnostics.clone();
 
         if let Some(store) = self.rules.as_ref() {
@@ -3395,6 +3403,9 @@ impl Inner {
                 .as_ref()
                 .map(crate::convert::diagnostic_to_proto),
             llm_server: crate::convert::session_server_to_proto(&self.paths, &config.llm),
+            // Wer eine Anfrage ohne Regel entscheidet (HUM-512), aus derselben
+            // Konfiguration wie der Rest dieser Momentaufnahme.
+            ask_mode: ask_mode_name(config.hold.ask_mode).to_owned(),
         })
     }
 
@@ -3477,6 +3488,9 @@ impl Inner {
             sandbox_mode: String::new(),
             sandbox_mode_notice: None,
             llm_server: crate::convert::session_server_to_proto(&self.paths, &config.llm),
+            // Leer im Schnappschuss eines Befunds (HUM-512): Welche Sitzung
+            // gemeint war, ist hier nicht sicher.
+            ask_mode: String::new(),
         }
     }
 
@@ -3959,7 +3973,7 @@ impl Inner {
             .with_host_path(self.paths.env().non_empty("PATH").map(OsString::from))
             .with_host_home(self.paths.env().non_empty("HOME").map(PathBuf::from))
             .with_language(config.ui.language)
-            .with_hold(config.hold.clone())
+            .with_hold(config.hold.for_agent(&config.egress))
             .with_briefing(config.agent.briefing.clone())
             .with_pi_web_access(config.agent.pi.web_access)
             .with_home(
@@ -4699,6 +4713,26 @@ fn leaving_daemon() -> Diagnostic {
              would not get an orderly end. Start it again once the daemon runs."
                 .to_owned(),
         )
+        .build()
+}
+
+/// `CONFIG_003`: `hold.ask_mode = "upstream"`, aber der laufende Daemon geht
+/// direkt hinaus (HUM-512).
+///
+/// `egress.proxy` steht womöglich schon in `config.toml`, wirkt aber erst nach
+/// dem Neustart des Daemons (HUM-511). Bis dahin gibt es keinen Proxy, der
+/// entscheiden könnte; der Start verweigert, statt Anfragen ohne Regel
+/// unentschieden hinauszulassen.
+fn upstream_without_active_proxy() -> Diagnostic {
+    Diagnostic::builder(codes::CONFIG_003, Severity::Blocking)
+        .why(
+            "hold.ask_mode = \"upstream\" hands every request without a rule to the decision \
+             proxy, but the running daemon still sends requests directly; egress.proxy takes \
+             effect only after the daemon restarts",
+        )
+        .fix(FixAction::CopyCommand(
+            humanitl_core::diagnostics::RESTART_DAEMON_COMMAND.to_owned(),
+        ))
         .build()
 }
 

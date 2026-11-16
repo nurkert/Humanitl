@@ -359,7 +359,9 @@ class HistoryRow extends ConsumerWidget {
     debugHistoryRowBuilds++;
     final AppLocalizations l10n = context.l10n;
     final HFlowState state = historyVisualState(flow);
-    final String stateLabel = l10n.flowStateLabel(state);
+    final String stateLabel = historyForwarded(flow)
+        ? historyForwardedLabel(l10n, flow)
+        : l10n.flowStateLabel(state);
     final bool selected = ref.watch(
       historySelectionProvider.select((FlowId? id) => id == flow.id),
     );
@@ -558,6 +560,7 @@ class _Cell extends StatelessWidget {
         HistoryDecider.meta => l10n.historyDeciderMeta,
         HistoryDecider.client => l10n.historyDeciderClient,
         HistoryDecider.paused => l10n.historyDeciderPaused,
+        HistoryDecider.upstream => l10n.historyDeciderUpstream,
       };
 
   Widget _text(HTokens tokens, String value, TextStyle style, Color color) =>

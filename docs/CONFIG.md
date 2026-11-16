@@ -143,7 +143,7 @@ Wie lange und auf welchem Weg gefragt wird, bevor eine Anfrage weiterläuft.
 
 | Schlüssel | Typ | Vorgabe | Stufe | Projekt | Wirkung | Beschreibung |
 |---|---|---|---|---|---|---|
-| `hold.ask_mode` | ui \| terminal \| none | `"ui"` | advanced | denied | ja | Wo gefragt wird: in der Oberfläche, im Terminal oder gar nicht. |
+| `hold.ask_mode` | ui \| terminal \| none \| upstream | `"ui"` | advanced | denied | ja | Wo gefragt wird: in der Oberfläche, im Terminal, gar nicht, oder `upstream`: Eine Anfrage ohne Regel oder mit `ask` wird nicht gehalten, sondern geht an den Entscheidungs-Proxy aus `egress.proxy`, der dort entscheidet (nur mit `egress.proxy`). `block` bleibt endgültig, `redact` hält weiter hier. |
 | `hold.hard_block_checksum_secrets` | boolean | `false` | advanced | denied | ja | Lässt Anfragen mit prüfsummen-sicheren Geheimnissen nur bearbeitet hinaus; keine Regel und keine Freigabe sendet sie unverändert. |
 | `hold.timeout_secs` | integer | `300` | basic | allowed | ja | Sekunden, die eine angehaltene Anfrage auf eine Entscheidung wartet, bevor sie als Zeitüberschreitung endet. |
 

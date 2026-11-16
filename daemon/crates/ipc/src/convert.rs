@@ -688,6 +688,7 @@ pub const fn source_to_proto(source: DecisionSource) -> v1::DecisionSource {
         DecisionSource::Passthrough => v1::DecisionSource::Passthrough,
         DecisionSource::System => v1::DecisionSource::System,
         DecisionSource::Paused => v1::DecisionSource::Paused,
+        DecisionSource::Upstream => v1::DecisionSource::Upstream,
     }
 }
 
@@ -2068,6 +2069,9 @@ pub fn recorded_summary_to_proto(row: &RecordedSummary) -> v1::FlowSummary {
             // Die Pause steht in ihrer eigenen Spalte (HUM-407); ohne sie
             // sähe die Zeile aus wie die Freigabe eines Menschen.
             _ if row.paused => v1::DecisionSource::Paused as i32,
+            // Ebenso der Entscheidungs-Proxy (HUM-512): ohne die Spalte
+            // `upstream` hieße die Zeile „ein Mensch hat hier erlaubt".
+            _ if row.upstream => v1::DecisionSource::Upstream as i32,
             "timed_out" => v1::DecisionSource::Timeout as i32,
             _ if row.rule_id.is_some() => v1::DecisionSource::Rule as i32,
             _ => v1::DecisionSource::Unspecified as i32,
@@ -2810,6 +2814,7 @@ mod tests {
             decision_note: None,
             unresolved_findings: None,
             paused: false,
+            upstream: false,
         }
     }
 
@@ -2830,6 +2835,26 @@ mod tests {
         assert_eq!(
             plain.decision_source,
             v1::DecisionSource::Unspecified as i32
+        );
+    }
+
+    /// Eine Anfrage, die der Entscheidungs-Proxy entschied, bleibt nach dem
+    /// Neuladen eine solche: `upstream` wird zur Herkunft `UPSTREAM`, der
+    /// Status ist der seiner Antwort (HUM-512).
+    #[test]
+    fn an_upstream_row_keeps_its_source_and_the_status_of_the_proxy() {
+        let row = RecordedSummary {
+            upstream: true,
+            held_ms: None,
+            status: Some(403),
+            ..recorded_row()
+        };
+        let proto = recorded_summary_to_proto(&row);
+        assert_eq!(proto.decision_source, v1::DecisionSource::Upstream as i32);
+        assert_eq!(proto.status, 403);
+        assert_eq!(
+            super::source_to_proto(humanitl_core::DecisionSource::Upstream),
+            v1::DecisionSource::Upstream
         );
     }
 

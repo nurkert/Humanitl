@@ -31,6 +31,7 @@
 
 pub mod clients;
 pub mod dns;
+pub mod stand_in;
 pub mod upstream;
 
 use std::net::{IpAddr, Ipv4Addr, SocketAddr};
@@ -314,6 +315,9 @@ pub struct ProxyBuilder {
     restart: Option<(PathBuf, SessionId)>,
     /// Ein Egress statt des direkten, hinter dem Zähler (HUM-511).
     egress: Option<Arc<dyn Egress>>,
+    /// `hold.ask_mode` der Sitzung, für Halte-Pipeline, Handler und
+    /// Meta-Endpunkt (HUM-512).
+    ask_mode: humanitl_config::AskMode,
 }
 
 impl Default for ProxyBuilder {
@@ -343,6 +347,7 @@ impl Default for ProxyBuilder {
             recording: false,
             restart: None,
             egress: None,
+            ask_mode: humanitl_config::AskMode::Ui,
         }
     }
 }
@@ -454,6 +459,13 @@ impl ProxyBuilder {
     /// (HUM-511); der Zähler bleibt davor.
     pub fn egress(mut self, egress: Arc<dyn Egress>) -> Self {
         self.egress = Some(egress);
+        self
+    }
+
+    /// `hold.ask_mode` der Sitzung (HUM-512); `upstream` reicht, was sonst
+    /// wartete, an den Egress weiter.
+    pub fn ask_mode(mut self, mode: humanitl_config::AskMode) -> Self {
+        self.ask_mode = mode;
         self
     }
 
@@ -593,7 +605,7 @@ impl ProxyBuilder {
                 Arc::new(
                     SessionSettings::new(SessionState {
                         hold_timeout: timeout,
-                        ..SessionState::for_config(humanitl_config::AskMode::Ui, 30, None)
+                        ..SessionState::for_config(self.ask_mode, 30, None)
                     })
                     .with_pause(Arc::clone(&pause)),
                 ),
@@ -694,7 +706,7 @@ impl ProxyBuilder {
         let meta = self.meta.then(|| {
             Arc::new(MetaEndpoint::new(
                 MetaStatus::new(
-                    humanitl_config::AskMode::Ui,
+                    self.ask_mode,
                     match self.pipe {
                         Pipe::Ask(timeout) => timeout,
                         Pipe::Passthrough | Pipe::Custom(_) => Duration::ZERO,
@@ -715,11 +727,12 @@ impl ProxyBuilder {
                 meta,
                 settings: Some(Arc::new(
                     SessionSettings::new(
-                        SessionState::for_config(humanitl_config::AskMode::Ui, 30, None)
-                            .with_llm_alias(&humanitl_config::LlmConfig {
+                        SessionState::for_config(self.ask_mode, 30, None).with_llm_alias(
+                            &humanitl_config::LlmConfig {
                                 endpoint: self.llm_endpoint.clone(),
                                 ..humanitl_config::LlmConfig::default()
-                            }),
+                            },
+                        ),
                     )
                     .with_pause(Arc::clone(&pause)),
                 )),

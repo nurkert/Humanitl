@@ -984,6 +984,14 @@ fn outcome_name(summary: &v1::FlowSummary) -> &'static str {
     {
         return "passthrough";
     }
+    // Der Entscheidungs-Proxy entschied (HUM-512): Humanitl hat
+    // weitergereicht, nicht erlaubt; was dort entschieden wurde, steht in
+    // STATUS.
+    if summary.decision_source == v1::DecisionSource::Upstream as i32
+        && summary.decision == v1::DecisionKind::Allow as i32
+    {
+        return "forward";
+    }
     decision_name(summary.decision)
 }
 
@@ -1499,8 +1507,18 @@ mod tests {
         let refused = v1::FlowSummary {
             decision: v1::DecisionKind::Block as i32,
             block_reason: v1::BlockReason::Secret as i32,
-            ..model
+            ..model.clone()
         };
         assert_eq!(outcome_name(&refused), "block");
+
+        // HUM-512: what the decision proxy decided is no allow here.
+        let forwarded = v1::FlowSummary {
+            decision: v1::DecisionKind::Allow as i32,
+            decision_source: v1::DecisionSource::Upstream as i32,
+            status: 403,
+            passthrough: false,
+            ..model
+        };
+        assert_eq!(outcome_name(&forwarded), "forward");
     }
 }

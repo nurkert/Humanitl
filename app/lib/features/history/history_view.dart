@@ -8,6 +8,7 @@ library;
 import '../../core/domain/domain.dart';
 import '../../core/ui/flow_visual_state.dart';
 import '../../core/ui/ui.dart';
+import '../../l10n/l10n.dart';
 
 /// The code the recorder raises for a filter it cannot read.
 ///
@@ -95,6 +96,21 @@ HFlowState historyDecisionLabelState(DecisionKind decision) =>
       DecisionKind.timedOut => HFlowState.timedOut,
     };
 
+/// Whether [flow] was forwarded to the decision proxy behind Humanitl
+/// (`hold.ask_mode = "upstream"`, HUM-512).
+///
+/// Its decision is an `allow` only in the sense of "handed on": what the
+/// proxy decided, only its status says, so no label calls it allowed.
+bool historyForwarded(Flow flow) =>
+    flow.decisionSource == DecisionSource.upstream &&
+    flow.decision == DecisionKind.allow;
+
+/// The word for a forwarded flow, with the proxy's status once it answered.
+String historyForwardedLabel(AppLocalizations l10n, Flow flow) =>
+    flow.status > 0
+    ? l10n.historyDecisionForwardedStatus(flow.status)
+    : l10n.historyDecisionForwarded;
+
 /// What decided the flow, as the short word the rule column prints.
 enum HistoryDecider {
   /// Nothing did: the proxy answered the request itself (HUM-103).
@@ -127,9 +143,14 @@ enum HistoryDecider {
   /// Nobody did: intercepting was paused, and the request passed instead of
   /// being held (HUM-407). Not [manual]: no person allowed it.
   paused,
+
+  /// The decision proxy behind Humanitl decided (HUM-512). Not [manual]:
+  /// nobody here allowed it, and its answer, the status, is all Humanitl
+  /// knows of that decision.
+  upstream,
 }
 
-/// Which of the eight words the rule column shows for [flow].
+/// Which of the nine words the rule column shows for [flow].
 HistoryDecider historyDecider(Flow flow) {
   if (flow.meta) {
     return HistoryDecider.meta;
@@ -142,6 +163,9 @@ HistoryDecider historyDecider(Flow flow) {
   }
   if (flow.decisionSource == DecisionSource.paused) {
     return HistoryDecider.paused;
+  }
+  if (flow.decisionSource == DecisionSource.upstream) {
+    return HistoryDecider.upstream;
   }
   if (flow.decision == DecisionKind.timedOut ||
       flow.decisionSource == DecisionSource.timeout) {

@@ -303,8 +303,8 @@ impl FlowPage {
 
 /// Eine Zeile der Flow-Liste: alle Spalten von `flows`, kein Body.
 ///
-/// Vier Wahrheitswerte, weil die Tabelle vier unabhängige Spalten führt
-/// (`passthrough`, `edited`, `meta`, `paused`); die Zeile bildet sie ab, wie
+/// Fünf Wahrheitswerte, weil die Tabelle fünf unabhängige Spalten führt
+/// (`passthrough`, `edited`, `meta`, `paused`, `upstream`); die Zeile bildet sie ab, wie
 /// sie gespeichert sind, statt sie in einen Zustand zu pressen, den die
 /// Datenbank nicht kennt.
 #[allow(clippy::struct_excessive_bools)]
@@ -408,6 +408,12 @@ pub struct FlowSummary {
     /// Entscheidung ist `allow`, und ohne diese Spalte hieße sie nach einem
     /// Neustart „ein Mensch hat erlaubt".
     pub paused: bool,
+    /// Wahr für eine Anfrage, die der Entscheidungs-Proxy hinter Humanitl
+    /// entschied (`hold.ask_mode = "upstream"`, HUM-512).
+    ///
+    /// `decision` ist dann `allow` im Sinn von „weitergereicht"; was der
+    /// Proxy entschied, sagt nur `status`, der Status seiner Antwort.
+    pub upstream: bool,
 }
 
 /// Eine aufgezeichnete Nachricht: Kopfzeilen plus Verweis auf den Body.

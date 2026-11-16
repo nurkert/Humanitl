@@ -56,13 +56,15 @@ Ports (binding list, complete for the MVP):
 Received ──analyze──▶ Analyzed ──evaluate──▶ Held ──decide──▶ Decided ──▶ Forwarded ──▶ Responded ──▶ Recorded
                           │                    │                 ▲
                           │ (rule: allow)      │ (timeout)       │
-                          └────────────────────┴─────────────────┘
-                          (rule: block) ──────────────────────────▶ Decided(Block) ──▶ Recorded
+                          ├────────────────────┴─────────────────┘
+                          ├─ (ask_mode upstream: no rule or ask) ───▶ Decided(Forward) ──▶ Forwarded
+                          └─ (rule: block) ─────────────────────────▶ Decided(Block) ──▶ Recorded
 ```
 
 - The state machine is an `enum` with a method `on(self, &FlowEvent) -> Result<Self, InvalidTransition>`. There is no other way to change the state. Invalid transitions are bugs and are enumerated completely in the test.
 - The proxy handler *drives* the state machine; it does not *own* it. It calls `on`, publishes the event and, where needed, waits for the decision. This keeps the handler thin and the logic testable without a network.
 - Timeouts are events (`TimedOut`), not special paths.
+- With `hold.ask_mode = "upstream"` (ADR-0022, HUM-512) a flow that no rule decides, or an `ask` rule matches, is not held: `Analyzed ──decide──▶ Decided(Forward)` with the decision source `upstream`, then `Forwarded` through the decision proxy behind Humanitl, which decides there. `Decided(Forward)` is `Decided(Allow)` from the source `upstream`, valid only from `Analyzed` and only unedited; a `block` rule stays final, `redact` still goes to `Held`, and the hard block on verified secrets turns the forward into `Decided(Block)` of the system. The transition table test lists it with every other pair.
 
 ## 3b. Parity of UI and CLI
 

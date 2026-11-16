@@ -36,7 +36,14 @@ Two kinds of traffic go without a hold: requests an `allow` rule matches, and th
 passthrough to your language model. You can also pause intercepting on purpose, from the header or
 with `humanitl intercept pause`: until you resume, start a new session or restart the daemon,
 requests that would wait for you go out at once, each recorded as `paused`, under a running caution
-tape; block rules and the sandbox stay, and nothing inside the sandbox can set the pause. Everything is recorded, except during a recording outage (disk
+tape; block rules and the sandbox stay, and nothing inside the sandbox can set the pause. If you
+choose it, an intercepting proxy of your own behind Humanitl decides instead of you here
+(`egress.proxy` with `hold.ask_mode = "upstream"`, off by default): a request no rule decides goes
+to it unheld, and it sees the decrypted traffic; block rules still stop a request before it (the
+declared passthrough to your language model is allowed by rule ahead of them and leaves through it
+too), and
+every request stays approved by a rule, by you, or by that proxy
+([details](docs/SECURITY.md#the-proxy-behind-decides-holdask_mode--upstream-hum-512)). Everything is recorded, except during a recording outage (disk
 full, database locked): then traffic continues unrecorded and the app says so on every card.
 
 ### In three steps

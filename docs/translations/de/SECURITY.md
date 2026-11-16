@@ -1427,6 +1427,55 @@ der Daemon selbst, und ohne das Token nimmt der Dienst keinen Aufruf an.
 deflate, brotli), der Chunked-Decoder, der YAML-Parser für Regeln, die Filtersprache für Flows und
 der Audit-Verifizierer.
 
+### Ein Entscheidungs-Proxy hinter Humanitl (HUM-511, HUM-512)
+
+Ab Werk aus. Mit `egress.proxy = "http://HOST:PORT"` verlässt jede Anfrage des Agenten, die
+Humanitl erlaubt, den Rechner über einen abfangenden Proxy deiner Wahl (ADR-0022): `https` als
+`CONNECT`-Tunnel, in dem Humanitl erneut TLS mit dem Namen des Ziels spricht und das Zertifikat gegen
+`egress.proxy_ca` prüft, `http` als Anfrage in absoluter Form. Regeln, Halt, die harte Sperre für
+bestätigte Geheimnisse und die Aufzeichnung geschehen zuerst in Humanitl, und ein `block` erreicht
+diesen Proxy nie. Er sieht den entschlüsselten Verkehr, auch Geheimnisse, die Humanitl nicht
+gesperrt hat; die Vertrauensgrenze für Inhalte wandert zu ihm, die Isolierung nicht, denn die
+Verbindung zu ihm baut der Daemon auf dem Host auf, und die Sandbox hat keinen Weg dorthin. Ist er
+nicht erreichbar oder passt sein Zertifikat nicht, scheitert die Anfrage mit einem Befund
+(`PROXY_012` bis `PROXY_019`); direkt geht nichts hinaus. Seine CA gilt nur auf diesem Weg. Mit
+`egress.proxy_resolve = "proxy"` (Vorgabe) löst Humanitl nichts auf und lehnt nur private
+IP-Literale und lokale Namen ab; ein öffentlicher Name, der auf eine private Adresse zeigt, ist dann
+Sache des Proxys. Mit `"humanitl"` prüft Humanitl jede Adresse, und die DNS-Anfrage geht hinaus,
+bevor der Proxy entschieden hat.
+
+**Der Proxy dahinter entscheidet (`hold.ask_mode = "upstream"`, HUM-512).** Ein zweites Opt-in auf
+dem ersten: Eine Anfrage ohne Regel oder mit `ask` wird nicht in Humanitl gehalten, sondern an den
+Proxy weitergeleitet, und dort entscheidet ein Mensch mit dem Werkzeug, das er kennt. Aus „jede
+ausgehende Anfrage wartet in Humanitl auf einen Menschen" wird „jede ausgehende Anfrage ist
+freigegeben durch eine Regel, einen Menschen oder den Entscheidungs-Proxy deiner Wahl".
+
+- *Nur mit einem Proxy, der benutzt wird.* Ohne `egress.proxy` lehnt das Laden den Modus ab
+  (`CONFIG_003`), und ein Start lehnt ihn ab, solange der laufende Daemon noch direkt hinausgeht
+  (die Einstellung wirkt erst nach dem Neustart). Keine Anfrage ohne Regel geht unentschieden
+  hinaus.
+- *Erst die Regeln.* `block` bleibt endgültig und erreicht den Proxy nie; `allow` und die
+  Durchreiche zum Sprachmodell gehen ebenfalls über ihn, ohne Halt. Eine Ausnahme von „erst die
+  Sperre" gilt in jedem Fragemodus: Die erklärte Durchreiche zum Sprachmodell ist ein
+  mitgeliefertes `allow`, das vor den eigenen Block-Regeln rangiert; eine Anfrage, die sie trifft,
+  geht auch unter einem `block "**"` über den Proxy hinaus, aufgezeichnet als `passthrough`, nie
+  als `upstream`. `redact` hält weiter in Humanitl, außer das Abfangen ist pausiert (dann geht sie
+  sofort hinaus, als `paused` aufgezeichnet, wie alles, was warten würde). Die harte Sperre (`hold.hard_block_checksum_secrets`) gilt auch für die Weitergabe:
+  Eine solche Anfrage sperrt das System (`403`, Grund `secret`), und der Proxy sieht kein Byte davon.
+- *Inhalt.* Der Proxy sieht den entschlüsselten Verkehr, auch die Durchreiche zum Sprachmodell, und
+  entscheidet jetzt auch darüber; die Vertrauensgrenze für Inhalte wandert zu ihm, die Isolierung
+  nicht.
+- *Wer auflöst.* Mit `"proxy"` ist ein öffentlicher Name, der auf `127.0.0.1`, das LAN oder eine
+  Metadaten-Adresse zeigt, vom Proxy abzulehnen; mitmproxy hat keine solche Sperre. Mit
+  `"humanitl"` ist die Prüfung ganz, aber der Name geht als DNS-Anfrage hinaus, bevor dort
+  entschieden ist (ADR-0006 gilt im Opt-in nur zur Hälfte). Die Moduszeile jeder Sitzung und
+  `humanitl sessions` sagen, was gilt.
+- *Was Humanitl aufzeichnet.* Die Quelle `upstream` (im Audit `decision: forward`,
+  `decided_by: upstream`) und den Status der Antwort des Proxys in `flow.responded`; Humanitl
+  behauptet keine Freigabe und keine Sperre, die es nicht gesehen hat. Der Agent bekommt die
+  Antwort des Proxys unverändert, auch ein `403`; nach `egress.proxy_response_timeout_secs` ein
+  `502`.
+
 ## 7. Die Regel-Engine
 
 Regeln sind eine geordnete Liste; die erste passende gewinnt; die Vorgabe ist `ask`.

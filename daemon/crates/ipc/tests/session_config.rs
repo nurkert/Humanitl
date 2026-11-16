@@ -504,6 +504,66 @@ async fn an_ask_mode_that_is_not_one_stops_the_start() {
     assert!(codes(&seen).contains(&"CONFIG_003".to_owned()), "{seen:?}");
 }
 
+/// `upstream` ohne `egress.proxy`: Das Laden verweigert, und der Start mit
+/// ihm (HUM-512). Die Sitzung behält ihren Frage-Modus.
+#[tokio::test(flavor = "multi_thread")]
+async fn the_upstream_ask_mode_without_a_decision_proxy_stops_the_start() {
+    let fixture = Fixture::new();
+
+    let seen = fixture
+        .run(v1::sandbox_request::Start {
+            ask_mode: "upstream".to_owned(),
+            ..v1::sandbox_request::Start::default()
+        })
+        .await;
+
+    assert!(codes(&seen).contains(&"CONFIG_003".to_owned()), "{seen:?}");
+    assert_eq!(fixture.settings.get().ask_mode, AskMode::Ui);
+}
+
+/// `upstream` mit `egress.proxy` in `config.toml`, aber einem Daemon, der
+/// noch direkt hinausgeht (die Einstellung wirkt erst nach dem Neustart):
+/// Der Start verweigert, statt Anfragen ohne Regel unentschieden
+/// hinauszulassen, und der Befund nennt den Neustart (HUM-512).
+#[tokio::test(flavor = "multi_thread")]
+async fn the_upstream_ask_mode_needs_the_proxy_the_daemon_really_uses() {
+    let fixture = Fixture::live();
+    fixture.user_config("[egress]\nproxy = \"http://127.0.0.1:8080\"\n");
+
+    let seen = fixture
+        .run(v1::sandbox_request::Start {
+            ask_mode: "upstream".to_owned(),
+            ..v1::sandbox_request::Start::default()
+        })
+        .await;
+
+    let refusal = seen
+        .iter()
+        .find_map(|event| match &event.event {
+            Some(v1::sandbox_event::Event::Diagnostic(diagnostic))
+                if diagnostic.code == "CONFIG_003" =>
+            {
+                Some(diagnostic.clone())
+            }
+            _ => None,
+        })
+        .unwrap_or_else(|| panic!("no CONFIG_003 in {seen:?}"));
+    assert!(
+        refusal.why.contains("still sends requests directly"),
+        "{refusal:?}"
+    );
+    assert_eq!(fixture.settings.get().ask_mode, AskMode::Ui);
+}
+
+/// Die Momentaufnahme nennt den Frage-Modus für die Moduszeile (HUM-512).
+#[tokio::test(flavor = "multi_thread")]
+async fn the_snapshot_names_the_ask_mode() {
+    let fixture = Fixture::live();
+    assert_eq!(fixture.plan("").await.ask_mode, "ui");
+    fixture.user_config("[hold]\nask_mode = \"none\"\n");
+    assert_eq!(fixture.plan("").await.ask_mode, "none");
+}
+
 /// Eine Profilregel kann sich den Rang der Durchreiche nicht selbst ausstellen.
 ///
 /// Das ist der Fund des zweiten Reviews, als Test. `set_bundled` stempelt auf
