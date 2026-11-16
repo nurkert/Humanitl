@@ -118,8 +118,9 @@ Diagnose-Codes, hier nur geplant (registriert vom genannten Issue in `codes.rs` 
 | HUM-511 | Egress: der Adapter `HttpProxy` zu einem Entscheidungs-Proxy des Nutzers | M | ADR-0022 |
 | HUM-512 | `hold.ask_mode = "upstream"`: Anfragen ohne Regel entscheidet der Proxy dahinter | M | HUM-511 |
 | HUM-513 | Entscheidungs-Proxy: Anleitung für mitmproxy, Ende-zu-Ende-Test | S | HUM-512 |
-| HUM-514 | Agent-Adapter Claude Code, mit Hinweis auf den Abfluss über die Inferenz | M | HUM-037 |
-| HUM-515 | Agent-Adapter Codex, mit Hinweis auf den Abfluss über die Inferenz | M | HUM-514 |
+| HUM-516 | Cloud-Agenten: gemeinsamer Hinweis auf den Abfluss über die Inferenz | S | HUM-037 |
+| HUM-514 | Agent-Adapter Claude Code | M | HUM-516 |
+| HUM-515 | Agent-Adapter Codex | M | HUM-516 |
 
 ## HUM-428 · Port neutral: `PlanRequest`, `LaunchOptions`, `IsolationLevel`, Enum `Backend` statt `PlatformBackend`
 
@@ -3170,69 +3171,169 @@ ADR-0022, Abschnitt Folgen.
 
 ---
 
-## HUM-514 · Agent-Adapter Claude Code, mit Hinweis auf den Abfluss über die Inferenz
+## HUM-516 · Cloud-Agenten: gemeinsamer Hinweis auf den Abfluss über die Inferenz
 
 ### Kontext
-Wunsch des Owners vom 2026-11-16 (BACKLOG Abschnitt 9, Punkte 8, 9 und die
-Marktanalyse vom 2026-11-14): Claude Code soll in der Sandbox laufen wie
-OpenCode und pi. Der Owner sagt dazu: Mit einem Cloud-Agenten fließen über
-die Inferenz auf jeden Fall Daten ab, denn Prompts, Dateiinhalte und
-Werkzeugausgaben gehen an den Anbieter. Wer das weiß, soll trotzdem den
+Wunsch des Owners vom 2026-11-16: Claude Code und Codex sollen in Humanitl
+laufen (HUM-514, HUM-515). Mit einem Cloud-Modell fließen über die Inferenz
+auf jeden Fall Daten ab: Prompts, gelesene Dateien und Werkzeugausgaben gehen
+als Teil der Anfragen an den Anbieter. Wer das weiß, soll trotzdem den
 Vorteil einer schnellen, einfachen, sauberen Sandbox von Humanitl nutzen
-können.
+können. Der Hinweis ist ein eigenes Issue, weil beide Adapter (und jeder
+spätere, auch OpenCode und pi mit einem Cloud-Endpunkt) denselben brauchen.
 
 ### Spezifikation
-1. Adapter nach HUM-037 (`AgentAdapter`): Profil, Standardregeln (der
-   API-Host des Anbieters freigegeben, sonst nichts), Env-Kit (Proxy, CA
-   der Sandbox so, wie Node sie liest, Basis-URL), Erkennung des Programms.
-   Jede Angabe über Claude Code (Variablennamen wie `ANTHROPIC_BASE_URL`,
-   `NODE_EXTRA_CA_CERTS`, `HTTPS_PROXY`, Anmeldung, Konfigurationsordner)
-   vor dem Bau an der offiziellen Dokumentation prüfen und im Code
-   verlinken.
-2. Zugangsdaten über den Schlüsselbund wie bei `llm.servers`, nie als
-   Argument; die Anmeldedaten des Hosts (`~/.claude`) werden nicht in die
-   Sandbox gereicht, außer der Nutzer gibt sie ausdrücklich frei.
-3. **Hinweis auf den Abfluss über die Inferenz**, sachlich und ohne Angst
-   zu machen: Was der Agent liest, geht als Teil seiner Anfragen an den
-   Anbieter des Modells; Humanitl isoliert das System und hält alles andere
-   an, die Inferenz selbst aber ist gewollt freigegeben. Der Hinweis steht
-   beim Wählen des Agenten (App und CLI), einmal beim ersten Start mit
-   diesem Agenten (bestätigt, danach still) und in `humanitl doctor`; er
-   blockiert nichts. Texte über ARB.
-4. In der Moduszeile ein kurzer Vermerk, dass die Inferenz in die Cloud
-   geht.
-5. Doku: `docs/SECURITY.md` und `docs/THREAT-MODEL.md` (en und de) nennen
-   den Fall; die Sicherheitsaussage in `README.md` bleibt wahr, weil die
-   Inferenz eine Freigabe ist.
+1. Eine Eigenschaft des Adapters bzw. des Endpunkts: „Inferenz geht an
+   einen Anbieter außerhalb dieses Rechners" (Cloud), abgeleitet aus dem
+   Host des Modell-Endpunkts; ein Endpunkt auf `localhost`, im LAN oder in
+   `llm.servers` als lokal markiert gilt nicht als Cloud.
+2. Text, sachlich und ohne Angst zu machen (en Quelle, de Übersetzung, über
+   ARB und als Diagnostic-Hinweis für die CLI): Was der Agent liest, geht
+   als Teil seiner Anfragen an den Anbieter des Modells. Humanitl isoliert
+   das System und hält jede andere Verbindung an; die Inferenz selbst ist
+   bewusst freigegeben.
+3. Wo er steht:
+   - beim Wählen des Agenten oder Endpunkts in App und CLI (Einrichtung,
+     Einstellungen, `humanitl config set agent.*`), einmal;
+   - beim ersten Start mit dieser Kombination aus Agent und Anbieter, mit
+     Bestätigung (App: Dialog; CLI: Frage im Terminal; mit `--yes` oder
+     ohne Terminal genügt eine Zeile auf stderr); danach still;
+   - dauerhaft als **orangefarbenes Tag oben in der Sitzung** (Kopfzeile
+     der Sitzung in der App, neben Backend und Isolationsstufe), etwa
+     „Cloud-Inferenz: Daten gehen an api.anthropic.com"; Farbe aus dem
+     Warn-Token des Designsystems (Orange, nicht Rot: Rot bleibt Fehlern und
+     Sperren vorbehalten); Tooltip bzw. Klick zeigt den ganzen Text aus
+     Punkt 2. In der CLI dieselbe Aussage in der Statuszeile bzw. beim Start
+     von `humanitl go` und `run` in Orange (ohne Farbe bei `NO_COLOR`);
+   - als Zeile in `humanitl doctor`.
+   Er blockiert nichts.
+4. Die Bestätigung wird je Agent und Anbieter im Zustand des Daemons
+   gespeichert, über RPC gelesen und gesetzt (ADR-018), nicht in der App.
+5. `docs/SECURITY.md` und `docs/THREAT-MODEL.md` (en und de) nennen den
+   Fall; die Sicherheitsaussage in `README.md` bleibt wahr, weil die
+   Inferenz eine Freigabe ist, und sagt es, falls nötig, ausdrücklich.
 
 ### Tests
-- Adapter-Tests wie für OpenCode und pi; ein Ende-zu-Ende-Lauf in der CI
-  mit einem Stellvertreter-Endpunkt (keine echte Anmeldung).
-- Der Hinweis erscheint beim ersten Start und danach nicht mehr; er
-  erscheint nicht für einen lokalen Endpunkt.
-- Mutationen: Anmeldedaten des Hosts in der Sandbox, Hinweis fehlt.
+- Hinweis beim ersten Start, danach nicht mehr; nicht für einen lokalen
+  Endpunkt; erneut für einen anderen Anbieter.
+- CLI ohne Terminal: Zeile auf stderr, kein Warten.
+- Widget-Test und Golden: das Tag steht oben in der Sitzung, in der
+  Warnfarbe, mit dem Namen des Anbieters; ohne Cloud-Endpunkt kein Tag.
+- Mutationen: Hinweis fehlt für Cloud, Hinweis für lokal.
 
 ### Akzeptanzkriterien
-1. `humanitl go` mit Claude Code führt bis zu dessen Prompt in der
-   Wegwerf-Sitzung.
-2. Niemand nutzt einen Cloud-Agenten in Humanitl, ohne den Hinweis gesehen
-   zu haben.
+1. Niemand nutzt einen Cloud-Agenten in Humanitl, ohne den Hinweis gesehen
+   zu haben; niemand wird durch ihn aufgehalten, der ihn bestätigt hat.
 
 ---
 
-## HUM-515 · Agent-Adapter Codex, mit Hinweis auf den Abfluss über die Inferenz
+## HUM-514 · Agent-Adapter Claude Code
 
 ### Kontext
-Wie HUM-514, für die Codex CLI von OpenAI.
+Wunsch des Owners (BACKLOG Abschnitt 9, Punkte 8 und 9, Marktanalyse vom
+2026-11-14). Claude Code soll in der Sandbox laufen wie OpenCode und pi, auch
+mit `humanitl go`. Angaben unten geprüft am 2026-11-16 an der offiziellen
+Dokumentation; vor dem Bau erneut prüfen, weil sie sich schnell ändert:
+code.claude.com/docs/en/network-config, /settings, /env-vars.
 
 ### Spezifikation
-1. Adapter wie HUM-514; die Angaben über Codex (Basis-URL, CA, eigene
-   Sandbox von Codex, die in Humanitl abgeschaltet oder neutral bleiben
-   muss, damit sie nicht mit bwrap kollidiert) an der offiziellen
-   Dokumentation prüfen und verlinken.
-2. Derselbe Hinweis wie in HUM-514, aus demselben Code, nicht kopiert.
+1. Adapter nach HUM-037 wie `opencode.rs` und `pi.rs`: Erkennung des
+   Programms (`claude`, nativer Installer oder npm), Profil, Standardregeln,
+   Env-Kit, Briefing.
+2. **Netz und CA** (Doku „Enterprise network configuration"):
+   - `HTTPS_PROXY` auf den Proxy der Sandbox; Claude Code liest die
+     Standard-Proxyvariablen und unterstützt kein SOCKS.
+   - Die CA der Sandbox über `NODE_EXTRA_CA_CERTS`. Claude Code vertraut
+     standardmäßig seinen gebündelten Mozilla-Wurzeln und dem Speicher des
+     Systems (`CLAUDE_CODE_CERT_STORE`, Vorgabe `bundled,system`); die
+     Variable fügt unsere CA hinzu. Test, dass die Warnung „ignored all of
+     the NODE_EXTRA_CA_CERTS file" nicht erscheint.
+   - `CLAUDE_CODE_DISABLE_NONESSENTIAL_TRAFFIC=1` als Vorgabe: schaltet
+     Auto-Updates, Telemetrie, Fehlerberichte und `/feedback` ab. Jeder
+     Wert außer leer schaltet ab, auch `0`.
+3. **Standardregeln:** `api.anthropic.com` erlaubt (Modell, auch die
+   Domain-Prüfung von WebFetch, Feature-Flags). Alles andere läuft in den
+   Halt wie bei jedem Agenten. Für die Anmeldung über claude.ai braucht
+   es `claude.ai`, `platform.claude.com` und gegebenenfalls
+   `sso.claude.com`; diese nicht freigeben, sondern beim ersten Mal halten,
+   damit der Nutzer sieht, was passiert.
+4. **Zugangsdaten**, nie als Argument, nie in einer Datei im Projekt:
+   - API-Schlüssel aus dem Schlüsselbund wie `llm.servers`
+     (`secret-service:humanitl/anthropic`), in die Sandbox als
+     `ANTHROPIC_API_KEY` (Doku: Header `X-Api-Key`; im interaktiven Modus
+     fragt Claude Code einmal, ob der Schlüssel das Abo ersetzt).
+   - Ein Gateway oder eigener Endpunkt über `ANTHROPIC_BASE_URL` und
+     `ANTHROPIC_AUTH_TOKEN` (Bearer), wenn `llm.endpoint` gesetzt ist.
+   - Die Anmeldung des Hosts (`~/.claude`, `~/.claude.json`) wird nicht
+     eingebunden. Der Agent bekommt ein eigenes `CLAUDE_CONFIG_DIR` in der
+     Sandbox (je Wegwerf-Sitzung frisch, sonst persistent je Projekt unter
+     `$XDG_DATA_HOME/humanitl`). Eine Anmeldung mit Abo geschieht dann in
+     der Sandbox über den gehaltenen Login-Fluss; ein ausdrückliches
+     Einbinden der Host-Anmeldung ist ein eigener Schalter mit Hinweis, nicht
+     Teil dieses Issues.
+5. Die eigene Sandbox von Claude Code bleibt, wie sie ist (sie schadet in
+   unserer nicht); im Briefing steht, dass die äußere Grenze Humanitl ist.
+6. Hinweis auf die Inferenz aus HUM-516.
+
+### Tests
+- Adapter-Tests wie für OpenCode und pi (Env-Kit, Dateien, Argumente).
+- Ende-zu-Ende-Lauf in der CI mit einem Stellvertreter-Endpunkt über
+  `ANTHROPIC_BASE_URL` (keine echte Anmeldung, kein echter Schlüssel), wenn
+  sich `claude` dafür im Runner installieren lässt; sonst ein Lauf mit einem
+  Stellvertreter-Programm, das die Umgebung prüft.
+- Nichts aus `~/.claude` des Hosts ist in der Sandbox sichtbar.
+- Mutationen: Host-Anmeldung eingebunden, CA fehlt, Schlüssel als Argument.
 
 ### Akzeptanzkriterien
-1. `humanitl go` mit Codex führt bis zu dessen Prompt.
-2. Der Hinweis gilt wie in HUM-514.
+1. `humanitl go` mit Claude Code führt bis zu dessen Prompt in der
+   Wegwerf-Sitzung, mit API-Schlüssel aus dem Schlüsselbund.
+2. Die Anmeldedaten des Hosts erreichen die Sandbox nicht.
+
+---
+
+## HUM-515 · Agent-Adapter Codex
+
+### Kontext
+Wie HUM-514, für die Codex CLI von OpenAI. Angaben geprüft am 2026-11-16 an
+der offiziellen Dokumentation (learn.chatgpt.com/docs/config-file/
+config-reference und /environment-variables, früher
+developers.openai.com/codex); vor dem Bau erneut prüfen.
+
+### Spezifikation
+1. Adapter nach HUM-037 wie HUM-514, aus denselben Bausteinen (kein
+   kopierter Adapter).
+2. **CA:** `CODEX_CA_CERTIFICATE` auf die CA der Sandbox (Vorrang vor
+   `SSL_CERT_FILE`, das die Doku als Rückfall nennt). Wie Codex einen
+   HTTP-Proxy liest (`HTTPS_PROXY`), steht nicht auf diesen Seiten: vor dem
+   Bau an der Doku oder am Quelltext (github.com/openai/codex) belegen.
+3. **Eigene Sandbox von Codex:** `sandbox_mode` kennt `read-only`,
+   `workspace-write` und `danger-full-access`. Ob seine Linux-Sandbox in
+   unserer bwrap-Sandbox startet (verschachtelte Namensräume, seccomp), ist
+   zu prüfen; startet sie nicht, setzt der Adapter `danger-full-access`,
+   weil Humanitl die äußere Grenze ist, und das Briefing sagt es. Diese Wahl
+   steht im Issue-Status mit Beleg.
+4. **Zustand und Zugangsdaten:** `CODEX_HOME` auf einen Ordner in der
+   Sandbox (Vorgabe von Codex `~/.codex`, der des Hosts wird nicht
+   eingebunden). API-Schlüssel aus dem Schlüsselbund; für einen
+   nicht-interaktiven Lauf nennt die Doku `CODEX_API_KEY`, für einen
+   Anbieter die Variable aus `model_providers.<id>.env_key`.
+   `cli_auth_credentials_store = "ephemeral"` oder `"file"` im
+   Sandbox-Ordner, nie der Schlüsselbund des Hosts.
+5. **Nebenverkehr aus:** `check_for_update_on_startup = false`,
+   `analytics.enabled = false`, `feedback.enabled = false` in der
+   `config.toml` unter `CODEX_HOME`.
+6. Eigener Endpunkt über `model_providers.<id>.base_url` bzw.
+   `openai_base_url`, wenn `llm.endpoint` gesetzt ist.
+7. Hinweis auf die Inferenz aus HUM-516.
+
+### Tests
+- Adapter-Tests (Env-Kit, `config.toml` unter `CODEX_HOME`).
+- Ende-zu-Ende-Lauf wie in HUM-514 mit Stellvertreter-Endpunkt.
+- Nichts aus `~/.codex` des Hosts ist in der Sandbox sichtbar.
+- Mutationen: Host-`CODEX_HOME`, CA fehlt, Update-Prüfung an.
+
+### Akzeptanzkriterien
+1. `humanitl go` mit Codex führt bis zu dessen Prompt in der
+   Wegwerf-Sitzung.
+2. Die Anmeldedaten des Hosts erreichen die Sandbox nicht.
 
