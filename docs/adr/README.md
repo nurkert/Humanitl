@@ -65,6 +65,7 @@ Rules:
 | [0020](0020-podman-sandbox-backend.md) | Podman as a selectable second sandbox backend on Linux | Accepted | One `SandboxBackend` made neutral, Podman behind it with a shared-kernel level (`crun`), the kernel level moved to ADR-0021; `sandbox.backend` per user, a raise-only `sandbox.min_isolation` per project. |
 | [0021](0021-qemu-microvm-kernel-level.md) | The kernel level runs as a QEMU micro-VM from Debian packages | Accepted | Backend `qemu` instead of the runtime `krun`: QEMU `-M microvm`, virtiofsd and vhost-device-vsock, each in a bwrap jail inside a hardened user unit; exactly one vsock port reaches the proxy. |
 | [0022](0022-decision-proxy-behind-humanitl.md) | A decision proxy of the user's choice can stand behind Humanitl | Proposed | Egress adapter `HttpProxy` (ADR-0017) with `CONNECT` to the address Humanitl resolved and checked, TLS opened in Humanitl and again in that proxy; `hold.ask_mode = "upstream"` forwards requests without a rule instead of holding them. |
+| [0023](0023-agent-depot.md) | Agent depot: an agent installed and logged in once, inside Humanitl only | Proposed | Optional store per agent under the daemon's data directory (`agents.source = "depot"`, default `"host"`); program read-only and configuration as a discarded copy in every session, only the checked credential file flows back into the depot; install and login run in a sandbox. |
 
 ## Cross-references
 
@@ -83,6 +84,7 @@ Where one decision refines or corrects another:
 | ADR-0019 | ADR-0002, ADR-0015 | The second adapter of `SandboxBackend` that ADR-0015 announced; on macOS it takes the place of bwrap from ADR-0002. |
 | ADR-0020 | ADR-0002, ADR-0010, ADR-0015 | Podman instead of Docker as the second Linux backend; amends all three (addenda of HUM-434 and HUM-441). |
 | ADR-0021 | ADR-0020, ADR-0002, ADR-0010, ADR-0015 | Replaces the kernel level of ADR-0020 (Podman with `krun`) by an adapter of its own; the plain level stays as it is. Amends ADR-0002, ADR-0010 and ADR-0015 once the level is admitted (addenda of HUM-447). |
+| ADR-0023 | ADR-0018, ADR-0015 | The depot is controlled only through RPCs (ADR-0018) and mounted through the neutral `LaunchPlan`; no new port (ADR-0015). |
 | ADR-0011 | ADR-0007 | Governs the two storage locations for rules (saved and session). |
 | ADR-0012 | ADR-0010 | `FixAction::InstallService` is the mechanism behind the one-click installation. |
 

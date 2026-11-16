@@ -628,6 +628,7 @@ Definition of Done für jedes Issue: Tests auf der passenden Ebene, neue Fehlerp
    - Audit und Aufzeichnung: was der zweite Proxy entschieden hat, kommt ins Audit von Humanitl.
    - Zugangsdaten des zweiten Proxys als Verweis in den Schlüsselbund wie `llm.api_key_ref`.
    - Die Verbindung zum zweiten Proxy baut der Daemon auf dem Host auf, nie die Sandbox; die drei Garantien bleiben unberührt.
+23. **Agent-Depot (Wunsch des Nutzers vom 2026-11-16).** Agenten wie Claude Code, Codex oder `agy` sollen nicht auf dem Host installiert werden müssen. Ein Depot je Agent unter dem Datenordner des Daemons hält Programm, Konfiguration und Anmeldung; Installation und Anmeldung laufen einmal in einer Humanitl-Sandbox, jede spätere Sandbox nimmt alles von dort. Wahlweise je Agent (`agents.source`, Vorgabe `host`), jederzeit zurück, Daten bis `agents remove`; die Firmen-Vorgabedatei (Punkt 21) darf `depot` festlegen. In der Sitzung ist das Programm nur lesbar und die Konfiguration eine schreibbare Kopie, die mit der Sitzung verworfen wird; zurück ins Depot kommt nur die geprüfte Zugangsdatei. Entscheidung in [ADR-0023](docs/adr/0023-agent-depot.md), Issues HUM-518 bis HUM-523 in `backlog/sprint-7.md`.
 
 ---
 
