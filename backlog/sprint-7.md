@@ -3248,6 +3248,33 @@ ADR-0022, Abschnitt Folgen.
 ### Akzeptanzkriterien
 1. Die Anleitung führt mit Belegen zu einem laufenden Aufbau mit mitmproxy.
 
+### Stand nach der Umsetzung (2026-11-16)
+
+Anleitung `docs/guides/decision-proxy-mitmproxy.md` mit deutscher
+Übersetzung: zwei CAs, `egress.proxy`, `egress.proxy_ca`, beide Werte von
+`egress.proxy_resolve`, `hold.ask_mode = "upstream"`, Schritte über CLI,
+`config.toml` und App, was der Agent sieht, Grenzen aus SECURITY, Rückweg.
+Jede Aussage zu mitmproxy mit Beleg aus docs.mitmproxy.org; mit mitmproxy
+12.3.1 in einer Wegwerf-Umgebung real geprüft (nicht gegen einen echten
+humanitld). Gemessen: Mit den Vorgaben (`connection_strategy=eager`)
+verbindet sich mitmproxy schon im TLS-Handschlag mit dem Ziel, also vor der
+Entscheidung; die Anleitung startet mitmproxy deshalb mit
+`connection_strategy=lazy` und `upstream_cert=false` und sagt beides. Ein
+Kill auf eine angehaltene Anfrage lässt die Verbindung in 12.3.1 offen, der
+Agent sieht `502` erst nach der Frist; für sofortige Ablehnung empfiehlt
+die Anleitung `block_list`. Ende-zu-Ende-Test
+`daemon/crates/proxy/tests/decision_proxy_end_to_end.rs` (5 Tests) mit
+einem Stellvertreter, der jedes `CONNECT` annimmt, das Blatt auf den
+SNI-Namen ausstellt und je Anfrage entscheidet: `CONNECT IP` mit SNI,
+`CONNECT host`, Ablehnung `403`, Kill `502`, Block-Regel erreicht ihn nie.
+ADR-0022 auf Accepted, die überholte verworfene Alternative zur
+Namensauflösung im zweiten Proxy richtiggestellt.
+
+Review: Codex ein blocking (Anleitung versprach Auflösung erst nach der
+Entscheidung, mitmproxy verbindet mit Vorgaben aber vorher), übernommen
+und real nachgemessen. Sonnet als Ersatz für Antigravity keine Befunde.
+Burp folgt als eigenes Issue mit einem Probelauf des Eigentümers.
+
 ---
 
 ## HUM-516 · Cloud-Agenten: gemeinsamer Hinweis auf den Abfluss über die Inferenz

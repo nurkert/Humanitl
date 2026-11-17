@@ -5,19 +5,40 @@
 //! ankommt (Anfragezeile, `Host`, `Proxy-Authorization`, SNI), und
 //! beantwortet die Anfragen selbst, durch den Tunnel mit einem Blatt aus
 //! seiner eigenen CA, so wie mitmproxy es tut. Er steht hier und nicht in
-//! einer Testdatei, weil sowohl der Egress (`decision_proxy.rs`) als auch der
-//! Frage-Modus `upstream` (`upstream_ask_mode.rs`) ihn brauchen.
+//! einer Testdatei, weil der Egress (`decision_proxy.rs`), der Frage-Modus
+//! `upstream` (`upstream_ask_mode.rs`) und der Ende-zu-Ende-Test
+//! (`decision_proxy_end_to_end.rs`) ihn brauchen.
+//!
+//! Mit [`StandIn::start_intercepting`] (HUM-513) benimmt er sich wie
+//! mitmproxy im regulären Modus: Das Blatt im Tunnel stellt er auf den Namen
+//! aus SNI aus (ohne SNI auf das Ziel der `CONNECT`-Zeile), er entscheidet
+//! jede Anfrage im Tunnel wie ein Mensch mit einem Abfangfilter (weiter,
+//! `403` wie `block_list`, Verbindung kappen wie „kill"), und eine
+//! weitergelassene Anfrage schickt er an das Ziel der `CONNECT`-Zeile, mit
+//! TLS gegen den Namen aus SNI und einer CA, der er vertraut (bei mitmproxy
+//! `ssl_verify_upstream_trusted_ca`).
+//!
+//! Er bildet mitmproxy mit `connection_strategy=lazy` und
+//! `upstream_cert=false` nach, so wie `docs/guides/decision-proxy-mitmproxy.md`
+//! ihn startet: Zum Ziel verbindet er erst, wenn die Entscheidung „weiter"
+//! lautet. Mit den Vorgaben von mitmproxy (`eager`, `upstream_cert=true`)
+//! entstünde die Verbindung zum Ziel schon während des TLS-Handschlags, vor
+//! jeder Entscheidung; das bildet der Stellvertreter nicht ab.
 
+use std::collections::HashMap;
 use std::net::{IpAddr, Ipv4Addr, SocketAddr};
 use std::path::{Path, PathBuf};
 use std::sync::{Arc, Mutex};
 use std::time::Duration;
 
 use humanitl_config::{Config, ProxyResolve};
-use rustls::ServerConfig;
+use humanitl_proxy::roots_from_pem;
+use rustls::pki_types::ServerName;
+use rustls::{ClientConfig, RootCertStore, ServerConfig};
 use tokio::io::{AsyncRead, AsyncReadExt as _, AsyncWrite, AsyncWriteExt as _};
 use tokio::net::{TcpListener, TcpStream};
 use tokio::task::JoinHandle;
+use tokio_rustls::TlsConnector;
 
 use super::ForeignCa;
 
@@ -82,6 +103,78 @@ pub struct Seen {
     pub inner_auth: Vec<String>,
     /// Wie viele Bytes Rumpf jede Anfrage in absoluter Form trug.
     pub body_bytes: Vec<usize>,
+    /// Wohin eine weitergelassene Anfrage ging, als Ziel der
+    /// `CONNECT`-Zeile ([`StandIn::start_intercepting`]).
+    pub dialed: Vec<String>,
+}
+
+/// Was der Mensch am abfangenden Stellvertreter mit einer Anfrage tut.
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+pub enum Verdict {
+    /// Weiter zum Ziel, wie „resume" in mitmproxy.
+    Resume,
+    /// Eine eigene Antwort mit diesem Status, wie `block_list` in mitmproxy.
+    Refuse(u16),
+    /// Verbindung schließen ohne Antwort, wie „kill" oder `block_list` mit
+    /// `444`.
+    Kill,
+}
+
+/// Wie der abfangende Stellvertreter entscheidet und wohin er weiterleitet.
+#[derive(Clone)]
+pub struct Intercept {
+    /// Wo das Ziel einer `CONNECT`-Zeile wirklich lauscht: Der Test hat
+    /// kein Internet, der Stellvertreter wählt an dessen Stelle diese
+    /// Adresse. Ein Ziel, das hier fehlt, ist nicht erreichbar.
+    pub network: HashMap<String, SocketAddr>,
+    /// Die Wurzeln, mit denen er das Zertifikat des Ziels prüft.
+    pub upstream_roots: Vec<rustls::pki_types::CertificateDer<'static>>,
+    /// Die Entscheidung über die erste Zeile der Anfrage im Tunnel.
+    pub decide: fn(&str) -> Verdict,
+}
+
+impl Intercept {
+    /// Ein Ziel unter beiden Namen, die in einer `CONNECT`-Zeile stehen
+    /// können: dem Namen und der Adresse, die Humanitl dafür auflöst.
+    pub fn reaching(
+        target: SocketAddr,
+        target_ca: &ForeignCa,
+        decide: fn(&str) -> Verdict,
+    ) -> Self {
+        let network = HashMap::from([
+            (format!("{HOST}:443"), target),
+            (format!("{PUBLIC}:443"), target),
+        ]);
+        Self {
+            network,
+            upstream_roots: roots_from_pem(target_ca.pem().as_bytes()),
+            decide,
+        }
+    }
+
+    fn client_config(&self) -> Arc<ClientConfig> {
+        let mut roots = RootCertStore::empty();
+        for root in &self.upstream_roots {
+            roots.add(root.clone()).unwrap();
+        }
+        let mut config =
+            ClientConfig::builder_with_provider(Arc::new(rustls::crypto::ring::default_provider()))
+                .with_safe_default_protocol_versions()
+                .unwrap()
+                .with_root_certificates(roots)
+                .with_no_client_auth();
+        config.alpn_protocols = vec![b"http/1.1".to_vec()];
+        Arc::new(config)
+    }
+}
+
+/// Woher das Blatt im Tunnel kommt.
+#[derive(Clone)]
+enum Leaf {
+    /// Ein festes Blatt für einen Namen.
+    Fixed(Arc<ServerConfig>),
+    /// Ein Blatt für den Namen aus SNI, mit Abfangen und Weiterleiten.
+    Intercepting(Arc<ForeignCa>, Arc<Intercept>),
 }
 
 /// Der Stellvertreter-Proxy.
@@ -104,7 +197,21 @@ impl StandIn {
 
     /// Wie [`StandIn::start`], mit einem Blatt für `name`.
     pub async fn start_for(ca: &ForeignCa, name: &str, behaviour: Behaviour) -> Self {
-        let tls = Arc::new(ca.server_config(name));
+        Self::listen(Leaf::Fixed(Arc::new(ca.server_config(name))), behaviour).await
+    }
+
+    /// Der Stellvertreter wie mitmproxy im regulären Modus (HUM-513): Blatt
+    /// für den Namen aus SNI, Entscheidung je Anfrage, Weiterleiten an das
+    /// Ziel der `CONNECT`-Zeile. `CONNECT` öffnet er immer.
+    pub async fn start_intercepting(ca: Arc<ForeignCa>, intercept: Intercept) -> Self {
+        Self::listen(
+            Leaf::Intercepting(ca, Arc::new(intercept)),
+            Behaviour::default(),
+        )
+        .await
+    }
+
+    async fn listen(tls: Leaf, behaviour: Behaviour) -> Self {
         let listener = TcpListener::bind("127.0.0.1:0").await.unwrap();
         let addr = listener.local_addr().unwrap();
         let seen = Arc::new(Mutex::new(Seen::default()));
@@ -112,7 +219,7 @@ impl StandIn {
             let seen = Arc::clone(&seen);
             tokio::spawn(async move {
                 while let Ok((tcp, _peer)) = listener.accept().await {
-                    let tls = Arc::clone(&tls);
+                    let tls = tls.clone();
                     let seen = Arc::clone(&seen);
                     tokio::spawn(serve(tcp, tls, behaviour, seen));
                 }
@@ -126,12 +233,7 @@ impl StandIn {
     }
 }
 
-async fn serve(
-    mut tcp: TcpStream,
-    tls: Arc<ServerConfig>,
-    behaviour: Behaviour,
-    seen: Arc<Mutex<Seen>>,
-) {
+async fn serve(mut tcp: TcpStream, tls: Leaf, behaviour: Behaviour, seen: Arc<Mutex<Seen>>) {
     let Some(head) = read_head(&mut tcp).await else {
         return;
     };
@@ -192,8 +294,25 @@ async fn serve(
         .server_name()
         .unwrap_or_default()
         .to_owned();
-    seen.lock().unwrap().sni.push(sni);
-    let Ok(mut stream) = start.into_stream(tls).await else {
+    seen.lock().unwrap().sni.push(sni.clone());
+    let (config, intercept) = match tls {
+        Leaf::Fixed(config) => (config, None),
+        Leaf::Intercepting(ca, intercept) => {
+            // Wie mitmproxy: Das Blatt trägt den Namen aus SNI; ohne SNI
+            // bleibt nur das Ziel der `CONNECT`-Zeile, oft eine Adresse.
+            let target = line.split(' ').nth(1).unwrap_or_default();
+            let name = if sni.is_empty() {
+                target.rsplit_once(':').map_or(target, |(host, _)| host)
+            } else {
+                &sni
+            };
+            (
+                Arc::new(ca.server_config(name)),
+                Some((intercept, target.to_owned(), name.to_owned())),
+            )
+        }
+    };
+    let Ok(mut stream) = start.into_stream(config).await else {
         return;
     };
     let Some(inner) = read_head(&mut stream).await else {
@@ -202,9 +321,32 @@ async fn serve(
     let (line, host, auth) = parse_head(&inner);
     {
         let mut seen = seen.lock().unwrap();
-        seen.inner_lines.push(line);
+        seen.inner_lines.push(line.clone());
         seen.inner_hosts.push(host);
         seen.inner_auth.push(auth);
+    }
+    if let Some((intercept, target, name)) = intercept {
+        let mut body = vec![0_u8; content_length(&inner)];
+        if stream.read_exact(&mut body).await.is_err() {
+            return;
+        }
+        let answer = match (intercept.decide)(&line) {
+            Verdict::Kill => return,
+            Verdict::Refuse(status) => format!(
+                "HTTP/1.1 {status} Stand-in\r\nContent-Length: 7\r\nConnection: close\r\n\r\nrefused"
+            )
+            .into_bytes(),
+            Verdict::Resume => {
+                seen.lock().unwrap().dialed.push(target.clone());
+                let Some(answer) = relay(&intercept, &target, &name, &inner, &body).await else {
+                    return;
+                };
+                answer
+            }
+        };
+        let _ = stream.write_all(&answer).await;
+        let _ = stream.shutdown().await;
+        return;
     }
     tokio::time::sleep(behaviour.head_delay).await;
     let status = behaviour.tunnel_status;
@@ -217,6 +359,44 @@ async fn serve(
         )
         .await;
     let _ = stream.shutdown().await;
+}
+
+/// Schickt die Anfrage an das Ziel `target` der `CONNECT`-Zeile, mit TLS
+/// gegen `name`, und liefert die ganze Antwort. `Connection: close` statt
+/// eines vorhandenen `Connection`, damit das Ende der Antwort das Ende der
+/// Verbindung ist.
+async fn relay(
+    intercept: &Intercept,
+    target: &str,
+    name: &str,
+    head: &str,
+    body: &[u8],
+) -> Option<Vec<u8>> {
+    let addr = intercept.network.get(target)?;
+    let tcp = TcpStream::connect(addr).await.ok()?;
+    let server_name = ServerName::try_from(name.to_owned()).ok()?;
+    let mut tls = TlsConnector::from(intercept.client_config())
+        .connect(server_name, tcp)
+        .await
+        .ok()?;
+    let mut request = head
+        .trim_end_matches("\r\n")
+        .split("\r\n")
+        .filter(|line| {
+            !line
+                .split_once(':')
+                .is_some_and(|(field, _)| field.trim().eq_ignore_ascii_case("connection"))
+        })
+        .collect::<Vec<_>>()
+        .join("\r\n");
+    request.push_str("\r\nConnection: close\r\n\r\n");
+    tls.write_all(request.as_bytes()).await.ok()?;
+    tls.write_all(body).await.ok()?;
+    let mut answer = Vec::new();
+    // Ein Server darf ohne `close_notify` schließen; was bis dahin kam,
+    // ist die Antwort.
+    let _ = tls.read_to_end(&mut answer).await;
+    (!answer.is_empty()).then_some(answer)
 }
 
 pub async fn read_head<S: AsyncRead + AsyncWrite + Unpin>(stream: &mut S) -> Option<String> {

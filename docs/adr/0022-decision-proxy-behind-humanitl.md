@@ -2,7 +2,7 @@
 
 Applies to: Humanitl 0.1
 
-Status: Proposed
+Status: Accepted
 Date: 2026-11-16
 
 ## Context
@@ -136,10 +136,15 @@ weakening below, exists only after an explicit opt-in by the user.
   no secret detection, no recording of content. Humanitl would shrink to a
   host filter, and secrets would leave unseen. Kept out; a per-rule `via:`
   that tunnels a single host can come later as its own decision.
-- **Let the second proxy resolve the name (`CONNECT host:port`).** Simpler,
-  but `localhost`, the LAN and the cloud metadata address would be reachable
-  for the agent through the second proxy, and DNS could answer differently
-  for the two hops. Violates ADR-0006.
+- **Let the second proxy resolve the name without any check in Humanitl.**
+  First rejected outright, because `localhost`, the LAN and the cloud
+  metadata address would be reachable for the agent through the second proxy
+  and DNS could answer differently for the two hops (ADR-0006). On the
+  owner's objection it came back in a narrower form and is now the default
+  `proxy_resolve = "proxy"`: Humanitl still refuses local names and private
+  literals before the proxy, and the remaining limit (the second proxy may
+  resolve a public name to a private address) is stated in Consequences and
+  in `docs/SECURITY.md`. Only the unchecked form stays rejected.
 - **Configure through `HTTPS_PROXY` in the environment of the daemon.** Same
   reasons as in ADR-0017: invisible, not controllable, a systemd detail.
 - **Keep holding in Humanitl and also forward.** Two people would decide the
