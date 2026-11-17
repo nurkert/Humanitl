@@ -300,6 +300,7 @@ fn a_disposable_sandbox_is_refused_with_its_reason_and_auto_runs_direct() {
         session_env: Vec::new(),
         command: vec!["true".into()],
         files: Vec::new(),
+        agent_depot: crate::agent::depot::DepotSession::default(),
         agent_program: None,
     };
     let options = crate::launcher::LaunchOptions {
@@ -418,6 +419,7 @@ mod planned {
                 session_env: vec![("HUMANITL_SESSION".to_owned(), "probe".to_owned())],
                 command: command.iter().map(OsString::from).collect(),
                 files: Vec::new(),
+                agent_depot: crate::agent::depot::DepotSession::default(),
                 agent_program: None,
             }
         }
@@ -2742,4 +2744,151 @@ mod live {
             "a guarantee held without a report: {checks:?}"
         );
     }
+}
+
+/// HUM-518, review: the engine mounts by path, so with an agent of the depot
+/// in play a moved bind whose given source leads through a symbolic link is
+/// refused, and one without a link passes. Mutation proof: without
+/// `refuse_linked_moves` the linked source is accepted and this turns red.
+#[test]
+fn a_moved_bind_through_a_link_is_refused_when_the_depot_plays() {
+    use humanitl_config::WorkMode;
+
+    let dir = tempfile::tempdir().unwrap();
+    let work = dir.path().join("work");
+    let real = dir.path().join("tests");
+    std::fs::create_dir_all(&work).unwrap();
+    std::fs::create_dir_all(&real).unwrap();
+    let link = dir.path().join("tests-link");
+    std::os::unix::fs::symlink(&real, &link).unwrap();
+    // A profile without system binds: the bundled one binds places that
+    // exist only on Linux (`/etc/alternatives`).
+    let profile = SandboxProfile::parse("version = 1\nname = \"x\"\n", Path::new("<t>"))
+        .expect("a minimal profile");
+    let session = SessionContext {
+        session: SessionId::nil(),
+        work_src: work,
+        work_mode: WorkMode::Rw,
+        proxy_socket_src: "/nonexistent/proxy.sock".into(),
+        ca_cert_src: "/nonexistent/ca.crt".into(),
+        ca_bundle_src: "/nonexistent/ca-bundle.crt".into(),
+        shim_src: "/nonexistent/shim".into(),
+        session_env: Vec::new(),
+        command: vec!["true".into()],
+        files: Vec::new(),
+        agent_depot: crate::agent::depot::DepotSession {
+            reserved: vec![crate::agent::depot::ReservedAgent {
+                agent: "claude".to_owned(),
+                program: "claude".to_owned(),
+                host_installs: vec![dir.path().join("elsewhere")],
+                locked_by: None,
+            }],
+            ..crate::agent::depot::DepotSession::default()
+        },
+        agent_program: None,
+    };
+    let policy = crate::MountPolicy::new("/nonexistent-hum518-home");
+    for (source, refused) in [(link, true), (real, false)] {
+        let options = crate::launcher::LaunchOptions {
+            session_ro: vec![(source.clone(), PathBuf::from("/tests/escape"))],
+            ..crate::launcher::LaunchOptions::default()
+        };
+        let Ok(pinned) =
+            PinnedMounts::open(&policy, &PlanRequest::new(&profile, &session, &options))
+        else {
+            panic!("{} pins", source.display());
+        };
+        let result = refuse_linked_moves(&session, &profile, pinned).map(drop);
+        assert_eq!(result.is_err(), refused, "{}", source.display());
+    }
+}
+
+/// HUM-518: a profile bind (`mounts.extra_ro`) through a link is refused like
+/// a session bind; a linked project folder is not, its resolved place is
+/// checked by the guard. Mutation proof: without the profile binds in
+/// `refuse_linked_moves` the first case is accepted and this turns red.
+#[test]
+fn a_profile_bind_through_a_link_is_refused_and_a_linked_project_is_not() {
+    use humanitl_config::WorkMode;
+
+    let dir = tempfile::tempdir().unwrap();
+    let real_work = dir.path().join("work");
+    let tools = dir.path().join("tools");
+    std::fs::create_dir_all(&real_work).unwrap();
+    std::fs::create_dir_all(&tools).unwrap();
+    let linked_tools = dir.path().join("tools-link");
+    let linked_work = dir.path().join("work-link");
+    std::os::unix::fs::symlink(&tools, &linked_tools).unwrap();
+    std::os::unix::fs::symlink(&real_work, &linked_work).unwrap();
+    let base = SandboxProfile::parse("version = 1\nname = \"x\"\n", Path::new("<t>"))
+        .expect("a minimal profile");
+    let session = SessionContext {
+        session: SessionId::nil(),
+        work_src: linked_work,
+        work_mode: WorkMode::Rw,
+        proxy_socket_src: "/nonexistent/proxy.sock".into(),
+        ca_cert_src: "/nonexistent/ca.crt".into(),
+        ca_bundle_src: "/nonexistent/ca-bundle.crt".into(),
+        shim_src: "/nonexistent/shim".into(),
+        session_env: Vec::new(),
+        command: vec!["true".into()],
+        files: Vec::new(),
+        agent_depot: crate::agent::depot::DepotSession {
+            reserved: vec![crate::agent::depot::ReservedAgent {
+                agent: "claude".to_owned(),
+                program: "claude".to_owned(),
+                host_installs: vec![dir.path().join("elsewhere")],
+                locked_by: None,
+            }],
+            ..crate::agent::depot::DepotSession::default()
+        },
+        agent_program: None,
+    };
+    let policy = crate::MountPolicy::new("/nonexistent-hum518-home");
+    let options = crate::launcher::LaunchOptions::default();
+    for (extra, refused) in [(linked_tools, true), (tools, false)] {
+        let mut profile = base.clone();
+        profile.mounts.extra_ro = vec![extra.clone()];
+        let Ok(pinned) =
+            PinnedMounts::open(&policy, &PlanRequest::new(&profile, &session, &options))
+        else {
+            panic!("{} pins", extra.display());
+        };
+        let result = refuse_linked_moves(&session, &profile, pinned).map(drop);
+        assert_eq!(result.is_err(), refused, "{}", extra.display());
+    }
+}
+
+/// HUM-518, CI on macOS: only a symbolic link owned by a user makes a moved
+/// bind unsafe under the engine's path window; a system link owned by root
+/// (`/var` and `/tmp` on macOS) is accepted. On Linux the test plays root
+/// through the predicate: the same user link passes when its owner counts
+/// as the system, and is refused otherwise. Mutation proof: ignoring the
+/// owner turns the first assertion red.
+#[test]
+fn only_a_link_of_a_user_counts_and_a_system_link_passes() {
+    let dir = tempfile::tempdir().unwrap();
+    // Aufgelöst, denn auf macOS liegt das Temp-Verzeichnis hinter dem
+    // System-Link `/var`; der Test soll nur die eigenen Links sehen.
+    let base = dir.path().canonicalize().unwrap();
+    let real = base.join("real");
+    std::fs::create_dir_all(&real).unwrap();
+    let link = base.join("link");
+    std::os::unix::fs::symlink(&real, &link).unwrap();
+    let me = rustix::process::getuid().as_raw();
+    let given = link.join("sub");
+    std::fs::create_dir_all(real.join("sub")).unwrap();
+    assert_eq!(link_not_of_root(&given, &|uid| uid == me), None);
+    let found = link_not_of_root(&given, &|uid| uid == 0);
+    assert!(
+        found
+            .as_deref()
+            .is_some_and(|found| found.ends_with("link")),
+        "{found:?}"
+    );
+    assert_eq!(link_not_of_root(&real, &|uid| uid == 0), None);
+    // A chain of links counts every step.
+    let chain = base.join("chain");
+    std::os::unix::fs::symlink(&link, &chain).unwrap();
+    assert!(link_not_of_root(&chain, &|uid| uid == 0).is_some());
 }

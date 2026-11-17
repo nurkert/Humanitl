@@ -27,6 +27,7 @@
 
 pub mod briefing;
 pub mod cloud;
+pub mod depot;
 pub mod locate;
 pub mod opencode;
 pub mod opencode_models;
@@ -820,6 +821,17 @@ pub trait AgentAdapter: Send + Sync {
     /// die Frage nach einer Entscheidung nicht zu sehen
     /// (`backlog/CONVENTIONS.md` 4.10, HUM-067).
     fn is_fullscreen_tui(&self) -> bool;
+
+    /// What this agent declares for running from the depot (ADR-0023,
+    /// HUM-518): the program's name in a version directory, the variable of
+    /// its configuration directory, the switch against self-update. `None`
+    /// knows only the source `host`; `depot` is then `AGENT_015`.
+    ///
+    /// The declarations live as data in [`depot::recipe::KNOWN`]; an adapter
+    /// overrides this only for what cannot be data.
+    fn depot_recipe(&self) -> Option<depot::DepotRecipe> {
+        depot::recipe::known(self.id()).and_then(|agent| agent.recipe)
+    }
 }
 
 /// Wahr, wenn dieses Kommando der Agent dieser Konfiguration ist.

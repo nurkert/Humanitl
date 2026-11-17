@@ -203,6 +203,9 @@ struct Setup {
     /// ([`humanitl_ipc::sandbox::env_origins`]); danach hält `sandbox argv`
     /// Werte zurück (HUM-450).
     env_origin: BTreeMap<String, v1::ValueOrigin>,
+    /// Der Arbeitsordner des Agent-Depots eines Starts (HUM-518); er geht
+    /// beim Start an die Sandbox und sonst mit diesem Wert.
+    depot_scratch: Option<humanitl_sandbox::agent::depot::Scratch>,
     /// Hält die Platzhalter am Leben, solange die Sandbox läuft.
     _wiring: Wiring,
 }
@@ -394,6 +397,9 @@ async fn start(
     })?;
 
     let handle = Arc::new(setup.backend.launch(&plan).map_err(Failure::new)?);
+    if let Some(scratch) = setup.depot_scratch.take() {
+        scratch.hand_to(&handle);
+    }
     ctx.render
         .detail(&format!("sandbox {} pid {}", handle.id, handle.pid));
     if let Some(throwaway) = throwaway.as_mut() {
@@ -825,6 +831,9 @@ fn check(ctx: &Context) -> Result<u8, Failure> {
     ));
 
     let handle = backend.launch(&plan).map_err(Failure::new)?;
+    if let Some(scratch) = setup.depot_scratch.take() {
+        scratch.hand_to(&handle);
+    }
     let results = backend.isolation_check(&handle);
     handle.kill();
     let _ = handle.wait();
@@ -1133,11 +1142,11 @@ fn prepare(
     // Weg ohne Daemon bleibt bei der alten Regel: Er ist der der Escape-Suiten,
     // die genau die Sandbox ohne Agentendateien prüfen, und er startet am
     // geerbten Terminal, nie an einem eigenen Pseudoterminal.
-    let agent =
+    let mut agent =
         if command.is_empty() || humanitl_sandbox::agent::command_is_the_agent(config, command) {
             agent_contribution(ctx, config, &wiring, id, &work_src, &profile, command)?
         } else {
-            AgentContribution::default()
+            caller_contribution(ctx, config, &wiring, id, command)?
         };
     // Dieselbe Herkunftstabelle wie im Daemon (HUM-450), bevor der Beitrag
     // des Adapters in `session_env` aufgeht.
@@ -1177,14 +1186,16 @@ fn prepare(
         session_env,
         // A bound program rewrote the adapter's command; the caller's own
         // words would name the host path the sandbox does not have.
-        command: if agent.program.is_some() {
+        command: if agent.program.is_some() || agent.depot.mount.is_some() {
             agent.command
         } else {
             agent_command(config, command, &agent.command)
         },
         files: agent.files,
         agent_program: agent.program,
+        agent_depot: agent.depot,
     };
+    let depot_scratch = agent.scratch.take();
 
     // Welches Backend, entscheidet `sandbox.backend` mit der Untergrenze und
     // dem Sandbox-Profil (HUM-431), für Vorschau und Start gleich; nie ein
@@ -1217,6 +1228,7 @@ fn prepare(
             ..LaunchOptions::default()
         },
         env_origin,
+        depot_scratch,
         _wiring: wiring,
     })
 }
@@ -1234,6 +1246,10 @@ struct AgentContribution {
     env: Vec<(String, String)>,
     /// Die Dateien, die vor dem `exec` in der Sandbox liegen müssen.
     files: Vec<SandboxFile>,
+    /// Was die Sitzung vom Agent-Depot bekommt (HUM-518).
+    depot: humanitl_sandbox::agent::depot::DepotSession,
+    /// Der Arbeitsordner des Depots eines Starts.
+    scratch: Option<humanitl_sandbox::agent::depot::Scratch>,
 }
 
 /// Fragt den Adapter aus `agent.adapter` nach Umgebung und Dateien.
@@ -1374,17 +1390,84 @@ fn agent_contribution(
         ctx.render.note(diagnostic_block(&diagnostic).trim_end());
     }
 
-    let mut command = adapter.command(&agent_ctx);
-    let program = humanitl_sandbox::agent::bind_agent_program(&agent_ctx, &mut command);
+    // Das Agent-Depot vor jeder Suche auf dem Host (HUM-518): Ein Agent,
+    // der aus dem Depot kommt, wird auf dem Host weder gesucht noch gebunden.
+    let depot = plan_depot(
+        ctx,
+        config,
+        wiring,
+        session,
+        &adapter.command(&agent_ctx),
+        agent_ctx.agent_command_from_caller,
+    )?;
+    let mut command = depot.command;
+    let program = if depot.host_bind {
+        humanitl_sandbox::agent::bind_agent_program(&agent_ctx, &mut command)
+    } else {
+        None
+    };
     if cfg!(target_os = "macos") {
         command = adapter.on_shared_loopback(command);
+    }
+    for warning in &depot.warnings {
+        ctx.render.note(diagnostic_block(warning).trim_end());
     }
     Ok(AgentContribution {
         command,
         program,
         env: adapter.env(&agent_ctx),
         files: adapter.files(&agent_ctx).map_err(Failure::new)?,
+        depot: depot.session,
+        scratch: depot.scratch,
     })
+}
+
+/// Ein Kommando des Aufrufers, das nicht der Agent ist: ohne Beitrag des
+/// Adapters, aber nie am Depot vorbei (HUM-518). `sandbox run --
+/// /usr/local/bin/claude` geht durch denselben Wächter wie jeder Start.
+fn caller_contribution(
+    ctx: &Context,
+    config: &Config,
+    wiring: &Wiring,
+    session: SessionId,
+    command: &[OsString],
+) -> Result<AgentContribution, Failure> {
+    let depot = plan_depot(ctx, config, wiring, session, command, true)?;
+    Ok(AgentContribution {
+        command: depot.command,
+        depot: depot.session,
+        scratch: depot.scratch,
+        ..AgentContribution::default()
+    })
+}
+
+/// Das Agent-Depot dieser Sitzung (HUM-518), wie im Daemon: dieselbe
+/// Planung, dieselbe Sperre, und die Vorschau legt keinen Arbeitsordner an.
+fn plan_depot(
+    ctx: &Context,
+    config: &Config,
+    wiring: &Wiring,
+    session: SessionId,
+    command: &[OsString],
+    from_caller: bool,
+) -> Result<humanitl_sandbox::agent::depot::DepotPlan, Failure> {
+    use humanitl_sandbox::agent::depot::{DepotInput, Purpose, plan_session};
+    // Das Depot des Menschen, auch unter den Platzhaltern von `sandbox check`.
+    plan_session(&DepotInput {
+        config,
+        lock: &ctx.source_lock,
+        paths: &ctx.paths,
+        session,
+        adapter: &config.agent.adapter,
+        command,
+        from_caller,
+        purpose: if matches!(wiring, Wiring::Preview) {
+            Purpose::Preview
+        } else {
+            Purpose::Start
+        },
+    })
+    .map_err(Failure::new)
 }
 
 /// Der Befehl in der Sandbox: der von der Kommandozeile, sonst der des
@@ -1633,6 +1716,95 @@ fn shim_path(wiring: &Wiring) -> Result<PathBuf, Failure> {
 #[cfg(test)]
 mod tests {
     #![allow(clippy::unwrap_used, clippy::expect_used, clippy::panic)]
+
+    /// The start path of the CLI without a daemon (HUM-518): the same depot
+    /// planning and the same guard as the daemon. A host program of a depot
+    /// agent is `AGENT_017`; the bare name starts the depot program.
+    #[test]
+    fn the_local_start_path_follows_the_depot() {
+        use std::os::unix::fs::PermissionsExt as _;
+
+        let root = tempfile::tempdir().unwrap();
+        let home = root.path().join("home");
+        let env = humanitl_config::Env::from_pairs([
+            ("HOME", home.display().to_string()),
+            (
+                "XDG_CONFIG_HOME",
+                home.join(".config").display().to_string(),
+            ),
+            (
+                "XDG_DATA_HOME",
+                root.path().join("data").display().to_string(),
+            ),
+            (
+                "XDG_RUNTIME_DIR",
+                root.path().join("run").display().to_string(),
+            ),
+            ("PATH", "/usr/bin:/bin".to_owned()),
+        ]);
+        let paths = humanitl_config::Paths::new(env.clone());
+        let profiles = paths.profiles_dir().join("sandbox");
+        std::fs::create_dir_all(&profiles).unwrap();
+        std::fs::copy(
+            std::path::Path::new(env!("CARGO_MANIFEST_DIR"))
+                .join("../../../profiles/sandbox/default.toml"),
+            profiles.join("default.toml"),
+        )
+        .unwrap();
+        std::fs::write(paths.config_path(), "[agents]\nsource = \"depot\"\n").unwrap();
+        let depot = paths.agents_dir().join("claude");
+        let version = depot.join("program/1.0.0");
+        for dir in [
+            paths.agents_dir(),
+            depot.clone(),
+            depot.join("program"),
+            version.clone(),
+        ] {
+            std::fs::create_dir_all(&dir).unwrap();
+            std::fs::set_permissions(&dir, std::fs::Permissions::from_mode(0o700)).unwrap();
+        }
+        std::fs::write(version.join("manifest.json"), r#"{"version":"1.0.0"}"#).unwrap();
+        std::fs::set_permissions(
+            version.join("manifest.json"),
+            std::fs::Permissions::from_mode(0o600),
+        )
+        .unwrap();
+        std::os::unix::fs::symlink("program/1.0.0", depot.join("current")).unwrap();
+        let ctx = crate::cmd::Context {
+            paths,
+            env,
+            cwd: root.path().to_path_buf(),
+            cli_config: Vec::new(),
+            config_file: None,
+            profile: None,
+            profile_means: crate::cmd::ProfileMeaning::Sandbox,
+            render: crate::render::Renderer::new(false, 0, true),
+            source_lock: humanitl_config::agents::SourceLock::none(),
+        };
+        let resolved = ctx.config().unwrap();
+        let words = |command: &[&str]| -> Vec<std::ffi::OsString> {
+            command.iter().map(std::ffi::OsString::from).collect()
+        };
+        for command in [&["/usr/local/bin/claude"][..], &["codex"][..]] {
+            let setup =
+                super::prepare(&ctx, &resolved, super::Wiring::Preview, &words(command)).unwrap();
+            let refused =
+                humanitl_sandbox::agent::depot::guard::check(&setup.request()).unwrap_err();
+            assert_eq!(refused.code.as_str(), "AGENT_017", "{command:?}");
+        }
+        let setup = super::prepare(
+            &ctx,
+            &resolved,
+            super::Wiring::Preview,
+            &words(&["claude", "-p"]),
+        )
+        .unwrap();
+        humanitl_sandbox::agent::depot::guard::check(&setup.request()).unwrap();
+        assert_eq!(
+            setup.session.command,
+            words(&["/run/humanitl/agent/claude", "-p"])
+        );
+    }
 
     /// `sandbox run` lehnt einen unbekannten Server ab und jede
     /// Konfiguration, deren Durchreiche nicht die des Daemons ist (HUM-400).

@@ -742,6 +742,52 @@ impl BwrapBackend {
         crate::platform::sealed_memfd(name, content).map_err(placeholder_diagnostic)
     }
 
+    /// Was die Zeile vom Agent-Depot braucht (HUM-518): die geöffneten
+    /// Quellen der Einhängung und die Masken über Host-Installationen,
+    /// einmal bestimmt, mit einem eigenen leeren memfd je Datei.
+    ///
+    /// # Errors
+    ///
+    /// `SANDBOX_011`, wenn sich ein memfd nicht anlegen lässt.
+    fn depot_inputs(
+        &self,
+        session: &SessionContext,
+        pinned: &PinnedMounts,
+    ) -> Result<(crate::bwrap_args::DepotInputs, Vec<OwnedFd>), Diagnostic> {
+        let masks = session.agent_depot.masks();
+        let fds = masks
+            .iter()
+            .filter(|mask| !mask.dir)
+            .map(|_| Self::sealed_memfd(MASK_MEMFD_NAME, b""))
+            .collect::<Result<Vec<OwnedFd>, Diagnostic>>()?;
+        let inputs = crate::bwrap_args::DepotInputs {
+            program: pinned.depot.as_ref().map(|(dir, _)| self.source_fd(dir)),
+            scratch: pinned
+                .depot
+                .as_ref()
+                .map(|(_, scratch)| self.source_fd(scratch)),
+            masks: Some(masks),
+            mask_fds: fds.iter().map(AsRawFd::as_raw_fd).collect(),
+        };
+        Ok((inputs, fds))
+    }
+
+    /// Die drei Identitätsdateien als versiegelte memfds: `passwd`, `group`,
+    /// `hosts`.
+    fn identity_memfds(
+        profile: &SandboxProfile,
+    ) -> Result<(OwnedFd, OwnedFd, OwnedFd), Diagnostic> {
+        let identity = profile.identity_files(
+            rustix::process::getuid().as_raw(),
+            rustix::process::getgid().as_raw(),
+        );
+        Ok((
+            Self::sealed_memfd("humanitl-passwd", identity.passwd.as_bytes())?,
+            Self::sealed_memfd("humanitl-group", identity.group.as_bytes())?,
+            Self::sealed_memfd("humanitl-hosts", identity.hosts.as_bytes())?,
+        ))
+    }
+
     fn already_launched(plan: &LaunchPlan) -> Diagnostic {
         Diagnostic::builder(SANDBOX_012, Severity::Blocking)
             .why(format!(
@@ -889,6 +935,8 @@ impl SandboxBackend for BwrapBackend {
             session,
             options,
         } = *request;
+        // The one guard of the agent depot, before anything else (HUM-518).
+        crate::agent::depot::guard::check(request)?;
         let policy = MountPolicy::from_paths(&self.paths);
         profile.validate_with(&policy)?;
         self.check_profile_version(profile)?;
@@ -912,13 +960,7 @@ impl SandboxBackend for BwrapBackend {
         // Adapter-Dateien und zuletzt die geöffneten Verzeichnisse (HUM-263).
         let (report_reader, report_writer) = Self::inherited_pipe("report")?;
         let (status_reader, status_writer) = Self::inherited_pipe("status")?;
-        let identity = profile.identity_files(
-            rustix::process::getuid().as_raw(),
-            rustix::process::getgid().as_raw(),
-        );
-        let passwd = Self::sealed_memfd("humanitl-passwd", identity.passwd.as_bytes())?;
-        let group = Self::sealed_memfd("humanitl-group", identity.group.as_bytes())?;
-        let hosts = Self::sealed_memfd("humanitl-hosts", identity.hosts.as_bytes())?;
+        let (passwd, group, hosts) = Self::identity_memfds(profile)?;
         let mut warnings = profile.unmask_diagnostics();
         // Über den Deskriptor, nicht über den Pfad: Gerendert werden Masken
         // für das Verzeichnis, das eingehängt wird.
@@ -934,6 +976,7 @@ impl SandboxBackend for BwrapBackend {
             .collect::<Result<Vec<OwnedFd>, Diagnostic>>()?;
 
         let (agent_fds, agent_files) = Self::agent_file_fds(session)?;
+        let (depot, host_mask_fds) = self.depot_inputs(session, &pinned)?;
         let (work_dir, read_only, writable) = pinned.sources(self);
         let door = ShimDoor::new(options.stdio, Self::shell_door(options)?);
 
@@ -958,6 +1001,7 @@ impl SandboxBackend for BwrapBackend {
             control_stream_fd: door.control_stream_fd,
             overlay: options.overlay().cloned(),
             pins_fd: None,
+            depot,
         };
         let env = profile.effective_env(session, inputs.report_fd);
         let (line, pins) = crate::bwrap_mounts::line_with_pins(profile, session, &pinned, inputs)?;
@@ -965,7 +1009,7 @@ impl SandboxBackend for BwrapBackend {
         argv.extend(line.args);
 
         let mut inherit = vec![report_writer, status_writer, passwd, group, hosts];
-        inherit.extend(masks.into_iter().chain(agent_fds));
+        inherit.extend(masks.into_iter().chain(agent_fds).chain(host_mask_fds));
         inherit.extend(pinned.into_fds());
         inherit.extend(door.shim_end.into_iter().chain([pins]));
         let fds = inherit
@@ -1463,6 +1507,9 @@ pub(crate) struct PinnedMounts {
     pub(crate) session: Vec<(PinnedSource, PathBuf)>,
     /// The agent program, opened and checked once (HUM-278).
     pub(crate) agent: Option<PinnedSource>,
+    /// The depot's version directory and the session's scratch (HUM-518),
+    /// opened once; the version directory checked entry by entry.
+    pub(crate) depot: Option<(PinnedSource, PinnedSource)>,
     /// Die Einträge aus `mounts.ro`, geöffnet und am Ort ihres Deskriptors
     /// geprüft (HUM-437). Eingehängt werden sie weiter über den Pfad; Gerät
     /// und Inode der Mounttabelle kommen aus diesen Deskriptoren, so dass ein
@@ -1565,14 +1612,87 @@ impl PinnedMounts {
                 })
             })
             .transpose()?;
-        Ok(Self {
+        let depot = session
+            .agent_depot
+            .mount
+            .as_ref()
+            .map(Self::open_depot)
+            .transpose()?;
+        let pinned = Self {
             agent,
+            depot,
             work,
             read_only: Self::open_list(policy, &profile.mounts.extra_ro, "mounts.extra_ro")?,
             writable: Self::open_list(policy, &profile.mounts.extra_rw, "mounts.extra_rw")?,
             session: session_binds,
             profile_ro: Self::open_list(policy, &profile.mounts.ro, "mounts.ro")?,
-        })
+        };
+        pinned.check_depot(request)?;
+        Ok(pinned)
+    }
+
+    /// The depot's mount kind (HUM-518): the version directory, opened once
+    /// and checked through its descriptor with the trust rules of
+    /// `locate.rs`, every entry; the scratch, opened once. Neither passes the
+    /// mount denylist, which protects the data and runtime directories they
+    /// lie in: both are the daemon's own, like the agent program.
+    fn open_depot(
+        mount: &crate::agent::depot::DepotMount,
+    ) -> Result<(PinnedSource, PinnedSource), Diagnostic> {
+        let program = Self::pin_depot(&mount.agent, &mount.program_dir)?;
+        crate::agent::depot::tree::check_version_dir(
+            &mount.agent,
+            &program.check_path(),
+            &mount.program_dir,
+            &crate::agent::locate::Trust::of_this_process(),
+        )?;
+        let scratch = Self::pin_depot(&mount.agent, &mount.scratch)?;
+        Ok((program, scratch))
+    }
+
+    fn pin_depot(agent: &str, dir: &Path) -> Result<PinnedSource, Diagnostic> {
+        let pinned = PinnedSource::open(dir, SourceKind::Directory)
+            .map_err(|why| crate::agent::depot::store::unusable(agent, dir, &why))?;
+        Ok(pinned)
+    }
+
+    /// Rule 5 of the depot's guard on what was opened (HUM-518): the place
+    /// of every opened source that goes to another path, read from its
+    /// descriptor, never is, holds or lies inside a host install of a depot
+    /// agent. The guard checked the paths before; a link swapped since then
+    /// stops here, before anything is mounted.
+    ///
+    /// # Errors
+    ///
+    /// `AGENT_017` from [`crate::agent::depot::guard::check_pinned`].
+    fn check_depot(&self, request: &PlanRequest<'_>) -> Result<(), Diagnostic> {
+        let PlanRequest {
+            profile, session, ..
+        } = *request;
+        let depot = &session.agent_depot;
+        if depot.reserved.is_empty() {
+            return Ok(());
+        }
+        let check = crate::agent::depot::guard::check_pinned;
+        check(
+            depot,
+            self.work.resolved(),
+            &profile.mounts.work.dst,
+            &session.work_src,
+        )?;
+        for (pinned, dst) in &self.session {
+            check(depot, pinned.resolved(), dst, dst)?;
+        }
+        let same_path = self
+            .read_only
+            .iter()
+            .zip(&profile.mounts.extra_ro)
+            .chain(self.writable.iter().zip(&profile.mounts.extra_rw))
+            .chain(self.profile_ro.iter().zip(&profile.mounts.ro));
+        for (pinned, path) in same_path {
+            check(depot, pinned.resolved(), path, path)?;
+        }
+        Ok(())
     }
 
     fn open_list(
@@ -1616,6 +1736,11 @@ impl PinnedMounts {
             .chain(self.writable)
             .chain(self.session.into_iter().map(|(pinned, _)| pinned))
             .chain(self.agent)
+            .chain(
+                self.depot
+                    .into_iter()
+                    .flat_map(|(program, scratch)| [program, scratch]),
+            )
             .map(PinnedSource::into_fd)
     }
 }
@@ -2456,6 +2581,7 @@ mod tests {
             session_env: Vec::new(),
             command: vec!["true".into()],
             files: Vec::new(),
+            agent_depot: crate::agent::depot::DepotSession::default(),
             agent_program: None,
         };
         (profile, context)

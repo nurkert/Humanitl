@@ -47,6 +47,9 @@ const DENIED_BY_CONVENTION: &[&str] = &[
     "agent.adapter",
     "agent.command",
     "agent.pi.web_access",
+    // HUM-518: Ein Projekt, das die Quelle eines Agenten umstellt, holte ihn
+    // vom Host statt aus dem Depot oder umgekehrt.
+    "agents.*",
     "hold.ask_mode",
     "hold.hard_block_checksum_secrets",
     "findings.enabled",
@@ -573,6 +576,30 @@ fn a_cloned_project_cannot_choose_the_backend_or_tune_podman() {
     for path in engine.into_iter().chain(kernel_level) {
         let field = schema::field(path).expect("a leaf");
         lines.push(format!("{path} = {}", sample_literal(field)));
+    }
+    for line in lines {
+        let scratch = Scratch::new();
+        let profile = scratch.project_profile(&line);
+        let diagnostic = expect_err(&Sources {
+            profile_project: Some(profile.clone()),
+            ..Sources::empty()
+        });
+        let key = line.split(' ').next().expect("a key");
+        assert_denied(&diagnostic, key, &profile);
+    }
+}
+
+/// Ein geklontes Projekt wählt nicht, woher ein Agent kommt (ADR-0023,
+/// HUM-518): weder `agents.source` noch eine Zeile `agents.<id>.*`.
+#[test]
+fn a_cloned_project_cannot_choose_where_an_agent_comes_from() {
+    let mut lines = vec![
+        "agents.source = \"host\"".to_owned(),
+        "agents.source = \"depot\"".to_owned(),
+    ];
+    for agent in humanitl_config::agents::KNOWN_AGENTS {
+        lines.push(format!("agents.{agent}.source = \"host\""));
+        lines.push(format!("agents.{agent}.credential_writeback = false"));
     }
     for line in lines {
         let scratch = Scratch::new();

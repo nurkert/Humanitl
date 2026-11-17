@@ -127,6 +127,7 @@ fn start(backend: &Backend, shim: &Path, scratch: &Scratch) -> Result<ProbeOutco
         session_env: vec![("HUMANITL_SESSION".to_owned(), "doctor-probe".to_owned())],
         command: vec![OsString::from("true")],
         files: Vec::new(),
+        agent_depot: crate::agent::depot::DepotSession::default(),
         agent_program: None,
     };
     let options = LaunchOptions {

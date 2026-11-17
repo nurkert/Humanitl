@@ -15,6 +15,7 @@
 //! Datei des Menschen, und der Weg dorthin führt nicht durch einen Dienst, der
 //! gerade nicht laufen muss (HUM-070).
 
+pub mod agents;
 pub mod attach;
 pub mod audit;
 pub mod backends;
@@ -149,6 +150,9 @@ pub struct Context {
     pub profile_means: ProfileMeaning,
     /// Wie ausgegeben wird.
     pub render: Renderer,
+    /// Die Sperre der Quelle der Agenten durch eine Firmenvorgabe (HUM-518);
+    /// [`humanitl_config::agents::SourceLock::of_policy`], Tests setzen eine.
+    pub source_lock: humanitl_config::agents::SourceLock,
 }
 
 /// Was `--profile` benennt.
@@ -180,6 +184,7 @@ impl Context {
         let env = Env::from_process();
         let paths = Paths::new(env.clone());
         let cwd = std::env::current_dir().unwrap_or_else(|_| PathBuf::from("."));
+        let source_lock = humanitl_config::agents::SourceLock::of_policy(&paths);
         Self {
             env,
             paths,
@@ -189,6 +194,7 @@ impl Context {
             profile,
             profile_means,
             render,
+            source_lock,
         }
     }
 
@@ -267,7 +273,15 @@ impl Context {
     /// Profil oder ein Flag nicht stimmt.
     pub fn config(&self) -> Result<Resolved, Failure> {
         let sources = self.sources(&self.cli_pairs()).map_err(Failure::new)?;
-        Ok(self.report(humanitl_config::load(&sources).map_err(Failure::new)?))
+        let mut resolved = humanitl_config::load(&sources).map_err(Failure::new)?;
+        // `depot` für einen Agenten ohne Rezept: ein Hinweis beim Laden
+        // (HUM-518).
+        resolved
+            .diagnostics
+            .extend(humanitl_sandbox::agent::depot::load_notices(
+                &resolved.config,
+            ));
+        Ok(self.report(resolved))
     }
 
     /// Die Quellen, aus denen die Konfiguration dieses Aufrufs entsteht: die
@@ -602,6 +616,7 @@ mod tests {
                 profile: None,
                 profile_means: super::ProfileMeaning::Session,
                 render: crate::render::Renderer::new(false, 0, true),
+                source_lock: humanitl_config::agents::SourceLock::none(),
             }
         };
         let picked = |ctx: &super::Context| ctx.work_dir(&ctx.config().expect("resolves"));

@@ -95,6 +95,24 @@ Welcher Agent in der Sandbox läuft.
 | `agent.command` | list of string, optional | `-` | expert | denied | ja | Ersetzt die Kommandozeile des Adapters vollständig. Leer bedeutet: die des Adapters. |
 | `agent.pi.web_access` | auto \| on \| off | `"auto"` | advanced | denied | ja | Lädt die pi-Erweiterung `pi-web-access` (Websuche und Abruf von Seiten), wenn sie global installiert ist (`sudo npm install -g --ignore-scripts pi-web-access`). `auto` lädt sie, wenn die Sandbox sie findet, `on` ebenso und meldet `AGENT_007`, wenn sie fehlt, `off` lädt sie nie. Jede Anfrage der Erweiterung geht wie jede andere durch den Proxy. Im Projekt-Profil gesperrt: fremden Code in den Agenten zu laden, entscheidet der Nutzer. |
 
+### `agents`
+
+Woher die Agenten kommen: vom Host oder aus dem Depot des Daemons (ADR-0023). Nicht zu verwechseln mit `agent`, das den Adapter einer Sitzung wählt.
+
+| Schlüssel | Typ | Vorgabe | Stufe | Projekt | Wirkung | Beschreibung |
+|---|---|---|---|---|---|---|
+| `agents.agy.credential_writeback` | boolean | `true` | expert | denied | offen (HUM-520) | Ob eine Sitzung die geprüfte Zugangsdatei des Agenten ins Depot zurückschreiben darf, damit eine erneuerte Anmeldung die Sitzung überdauert. Wirkt ab dem Wächter für das Zurückschreiben (HUM-520); bis dahin bleibt nichts einer Sitzung im Depot. Im Projekt-Profil gesperrt. |
+| `agents.agy.source` | host \| depot \| null | `-` | advanced | denied | ja | Woher dieser Agent kommt, `host` oder `depot`; ungesetzt gilt `agents.source`. Zurück auf `host` behält das Depot, bis `humanitl agents remove` es entfernt. Im Projekt-Profil gesperrt. |
+| `agents.claude.credential_writeback` | boolean | `true` | expert | denied | offen (HUM-520) | Ob eine Sitzung die geprüfte Zugangsdatei des Agenten ins Depot zurückschreiben darf, damit eine erneuerte Anmeldung die Sitzung überdauert. Wirkt ab dem Wächter für das Zurückschreiben (HUM-520); bis dahin bleibt nichts einer Sitzung im Depot. Im Projekt-Profil gesperrt. |
+| `agents.claude.source` | host \| depot \| null | `-` | advanced | denied | ja | Woher dieser Agent kommt, `host` oder `depot`; ungesetzt gilt `agents.source`. Zurück auf `host` behält das Depot, bis `humanitl agents remove` es entfernt. Im Projekt-Profil gesperrt. |
+| `agents.codex.credential_writeback` | boolean | `true` | expert | denied | offen (HUM-520) | Ob eine Sitzung die geprüfte Zugangsdatei des Agenten ins Depot zurückschreiben darf, damit eine erneuerte Anmeldung die Sitzung überdauert. Wirkt ab dem Wächter für das Zurückschreiben (HUM-520); bis dahin bleibt nichts einer Sitzung im Depot. Im Projekt-Profil gesperrt. |
+| `agents.codex.source` | host \| depot \| null | `-` | advanced | denied | ja | Woher dieser Agent kommt, `host` oder `depot`; ungesetzt gilt `agents.source`. Zurück auf `host` behält das Depot, bis `humanitl agents remove` es entfernt. Im Projekt-Profil gesperrt. |
+| `agents.opencode.credential_writeback` | boolean | `true` | expert | denied | offen (HUM-520) | Ob eine Sitzung die geprüfte Zugangsdatei des Agenten ins Depot zurückschreiben darf, damit eine erneuerte Anmeldung die Sitzung überdauert. Wirkt ab dem Wächter für das Zurückschreiben (HUM-520); bis dahin bleibt nichts einer Sitzung im Depot. Im Projekt-Profil gesperrt. |
+| `agents.opencode.source` | host \| depot \| null | `-` | advanced | denied | ja | Woher dieser Agent kommt, `host` oder `depot`; ungesetzt gilt `agents.source`. Zurück auf `host` behält das Depot, bis `humanitl agents remove` es entfernt. Im Projekt-Profil gesperrt. |
+| `agents.pi.credential_writeback` | boolean | `true` | expert | denied | offen (HUM-520) | Ob eine Sitzung die geprüfte Zugangsdatei des Agenten ins Depot zurückschreiben darf, damit eine erneuerte Anmeldung die Sitzung überdauert. Wirkt ab dem Wächter für das Zurückschreiben (HUM-520); bis dahin bleibt nichts einer Sitzung im Depot. Im Projekt-Profil gesperrt. |
+| `agents.pi.source` | host \| depot \| null | `-` | advanced | denied | ja | Woher dieser Agent kommt, `host` oder `depot`; ungesetzt gilt `agents.source`. Zurück auf `host` behält das Depot, bis `humanitl agents remove` es entfernt. Im Projekt-Profil gesperrt. |
+| `agents.source` | host \| depot | `"host"` | advanced | denied | ja | Woher die Agenten kommen, für jeden, der unter `agents.<id>.source` nichts sagt: `host` (Vorgabe) sucht das Programm auf dem Rechner, `depot` nimmt Programm, Konfiguration und Anmeldung aus dem Depot unter dem Datenordner des Daemons (`humanitl agents status`). Im Projekt-Profil gesperrt. |
+
 ### `audit`
 
 Die Audit-Kette: Anker, Synchronisation, Aufbewahrung.

@@ -749,6 +749,11 @@ pub struct SessionContext {
     /// [`crate::agent::AGENT_PROGRAM_DIR`]. `None` when the command is found
     /// inside as it is.
     pub agent_program: Option<crate::agent::AgentProgram>,
+    /// What the session gets from the agent depot (ADR-0023, HUM-518): the
+    /// agents whose host programs it must not start, and the read-only
+    /// version directory and writable scratch of its depot agent. Empty
+    /// without any agent on `depot`; then nothing changes.
+    pub agent_depot: crate::agent::depot::DepotSession,
 }
 
 /// Ein Eintrag der Denylist.

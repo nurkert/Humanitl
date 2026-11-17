@@ -895,6 +895,32 @@ impl DaemonApi for FakeDaemon {
             None => Err(crate::egress::no_operation()),
         }
     }
+
+    /// Das Agent-Depot (HUM-518): Der Fake hat keines und keine Sperre;
+    /// `status` nennt jeden bekannten Agenten mit der Quelle `host`, Quelle
+    /// setzen und Entfernen gehen an keine Datei (`IPC_006`).
+    async fn agents(&self, request: v1::AgentsRequest) -> Result<v1::AgentsStatus, Diagnostic> {
+        match request.op {
+            Some(v1::agents_request::Op::Status(_)) => {
+                let paths = humanitl_config::Paths::new(humanitl_config::Env::from_pairs([(
+                    "XDG_DATA_HOME",
+                    "/nonexistent-humanitl-fake",
+                )]));
+                Ok(crate::agents::status(
+                    &paths,
+                    &humanitl_config::Config::default(),
+                    &humanitl_config::agents::SourceLock::none(),
+                    None,
+                ))
+            }
+            Some(_) => Err(Diagnostic::builder(codes::IPC_006, Severity::Error)
+                .why("the fake daemon has no agent depot to change".to_owned())
+                .build()),
+            None => Err(Diagnostic::builder(codes::CONFIG_003, Severity::Error)
+                .why("the request names no operation".to_owned())
+                .build()),
+        }
+    }
 }
 
 impl FakeDaemon {
@@ -1550,7 +1576,7 @@ impl FakeDaemon {
         // Prüfung der Konfiguration sie sieht wie beim echten Dienst.
         let form: Vec<(String, String)> = overrides
             .iter()
-            .filter(|(key, _)| crate::config_rpc::FORM_KEYS.contains(&key.as_str()))
+            .filter(|(key, _)| crate::config_rpc::is_form_key(key))
             .map(|(key, value)| (key.clone(), value.clone()))
             .collect();
         let mut resolved = load(&Sources::empty().with_cli(form))?;

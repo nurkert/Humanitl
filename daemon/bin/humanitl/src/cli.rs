@@ -213,6 +213,44 @@ pub enum Cmd {
         #[command(subcommand)]
         cmd: EgressCmd,
     },
+
+    /// The agent depot: where each agent comes from (host or depot), its
+    /// installed version and login; set the source, remove a depot.
+    Agents {
+        /// Was mit dem Depot geschehen soll.
+        #[command(subcommand)]
+        cmd: AgentsCmd,
+    },
+}
+
+/// Die Unterkommandos von `humanitl agents` (HUM-518, ADR-0023).
+#[derive(Debug, Subcommand)]
+pub enum AgentsCmd {
+    /// Show every agent, or one: its source with origin or company lock, the
+    /// installed version and signature, whether it is logged in, its size.
+    /// Nothing from the depot is started for this.
+    Status {
+        /// Only this agent, such as `claude`.
+        agent: Option<String>,
+    },
+    /// Set where an agent comes from: `host` or `depot`
+    /// (`agents.<id>.source`). Switching back to `host` keeps the depot.
+    Source {
+        /// The agent, such as `claude`.
+        agent: String,
+        /// `host` or `depot`.
+        #[arg(value_parser = ["host", "depot"])]
+        source: String,
+    },
+    /// Remove the depot of an agent with its program, configuration and
+    /// login; refused while a session uses it. The source stays as it is.
+    Remove {
+        /// The agent, such as `claude`.
+        agent: String,
+        /// Do not ask.
+        #[arg(long)]
+        yes: bool,
+    },
 }
 
 /// Die Unterkommandos von `humanitl egress` (HUM-511).

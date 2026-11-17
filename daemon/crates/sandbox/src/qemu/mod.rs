@@ -566,6 +566,43 @@ fn refuse_writable_extensions(profile: &SandboxProfile) -> Result<(), Diagnostic
         .build())
 }
 
+/// The kernel level does not carry the agent depot yet (HUM-518): its guest
+/// root is read-only and the project is its one writable share, so the
+/// session's scratch would need a share of its own, and a mask over a host
+/// install a mount the guest plan does not know. Refused rather than started
+/// without the depot's mount or masks.
+fn refuse_depot(session: &SessionContext) -> Result<(), Diagnostic> {
+    let depot = &session.agent_depot;
+    let masks = depot.masks();
+    if depot.mount.is_none() && masks.is_empty() {
+        return Ok(());
+    }
+    let what = depot.mount.as_ref().map_or_else(
+        || {
+            format!(
+                "the host install at {} of an agent whose source is the depot would need a mask",
+                masks
+                    .first()
+                    .map(|mask| mask.listed.display().to_string())
+                    .unwrap_or_default()
+            )
+        },
+        |mount| format!("the session takes {} from the depot", mount.agent),
+    );
+    Err(Diagnostic::builder(
+        humanitl_core::diagnostics::codes::AGENT_015,
+        Severity::Blocking,
+    )
+    .why(format!(
+        "{what}, and the kernel level cannot bind the depot or mask a host install yet"
+    ))
+    .fix(FixAction::ChangeSetting {
+        key: "sandbox.backend".to_owned(),
+        value: "auto".to_owned(),
+    })
+    .build())
+}
+
 /// `SANDBOX_011` mit `why`.
 fn setup_failed(why: String) -> Diagnostic {
     Diagnostic::builder(SANDBOX_011, Severity::Blocking)
@@ -1030,6 +1067,9 @@ impl SandboxBackend for VmBackend {
             session,
             options,
         } = *request;
+        // The one guard of the agent depot, before anything else (HUM-518).
+        crate::agent::depot::guard::check(request)?;
+        refuse_depot(session)?;
         self.within_host(HostResources::probe())?;
         let layer = match &options.disposable {
             None => None,

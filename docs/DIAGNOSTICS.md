@@ -31,7 +31,7 @@ Entfernen eines Codes.
 | doctor | `DOCTOR` | 001 | 019 | Selbsttest der Installation |
 | cli | `CLI` | 001 | 009 | Kommandozeile und ihre Vorbedingungen |
 | ui | `UI` | 001 | 009 | Oberflaeche und was ihr die Arbeitsumgebung verweigert |
-| agent | `AGENT` | 001 | 009 | Agent-Adapter: Startkommando, Vorlagen, Vorprüfung vor dem Start |
+| agent | `AGENT` | 001 | 029 | 001-007 Agent-Adapter: Startkommando, Vorlagen, Vorprüfung vor dem Start; 008-029 Agent-Depot (ADR-0023, HUM-518 bis HUM-520) |
 | edit | `EDIT` | 001 | 009 | Die bearbeitete Anfrage einer `AllowEdited`-Entscheidung (HUM-047) |
 | hold | `HOLD` | 001 | 009 | Was eine Freigabe verweigert, obwohl ein Mensch sie wollte: 004 ein bestätigtes Geheimnis unter `hold.hard_block_checksum_secrets` (HUM-049); 001-003 sind nicht vergeben |
 | update | `UPDATE` | 001 | 009 | Updates of Humanitl itself (HUM-382): asking GitHub for the latest release, the signed manifest, the download and the exchange of the app bundle |
@@ -1617,6 +1617,62 @@ pi web extension not installed
 **Auslöser.** `agent.pi.web_access` is `on`, and no directory the sandbox reaches holds the package `pi-web-access`. pi starts without `web_search` and `fetch_content`.
 
 **Fix.** `CopyCommand` with `sudo npm install -g --ignore-scripts pi-web-access`, which puts the package under `/usr/local`, where the sandbox sees it read-only.
+
+#### AGENT_008
+
+Agent not installed in the depot
+
+**Auslöser.** The source of this agent is the depot, and the depot holds no installed version of it: there is no `current` link, or the version it names has no directory or no `manifest.json`. A session never falls back to a program on the host.
+
+**Fix.** `CopyCommand` with `humanitl agents install <id>` (HUM-519); or, without a company lock, `CopyCommand` with `humanitl agents source <id> host`.
+
+#### AGENT_009
+
+Agent in the depot not logged in
+
+**Auslöser.** The depot of this agent holds an installed version and no stored login. The agent starts and asks for a login itself; a login made in a session is discarded with the session until the login run exists.
+
+**Fix.** `CopyCommand` with `humanitl agents login <id>` (HUM-520).
+
+#### AGENT_010
+
+Agent source fixed by a company policy
+
+**Auslöser.** A company policy fixes the source of this agent to the depot. Starting it from the host and setting its source back to `host` are refused, on every way: a start, `humanitl agents source`, `humanitl config set`, the settings of the app and `ChangeSetting`. A policy may only name the depot; one that names the host is refused itself.
+
+**Fix.** None. The policy decides; ask whoever manages it.
+
+#### AGENT_013
+
+Agent depot unusable
+
+**Auslöser.** The daemon checks the depot each time it opens it: owner (this user or root), no write permission for other users, no symbolic link out of the depot, in a version directory only regular files, directories and relative links inside it, a readable `manifest.json`, and at most 64 MiB of configuration and credentials to copy into a session. The sentence names the first path that failed.
+
+**Fix.** `CopyCommand` with `humanitl agents remove <id>` and a new install, or with `chmod go-w` on the named path when only its mode is wrong.
+
+#### AGENT_015
+
+Adapter or backend without depot support
+
+**Auslöser.** The source of this agent is the depot, and either its adapter declares no depot recipe yet, or the chosen sandbox backend cannot bind the depot into a session. The setting is valid and kept; loading the configuration says so as a notice, and a start stops here.
+
+**Fix.** `CopyCommand` with `humanitl agents source <id> host` when no company policy fixes the source; or `ChangeSetting` on `sandbox.backend` = `auto` when the backend is the reason.
+
+#### AGENT_017
+
+Command names a host program of a depot agent
+
+**Auslöser.** The source of this agent is the depot, or a company policy fixes it there, and the command of the session names a program of the host: a path on the host, a wrapper or a symbolic link whose target an adapter recognises as its agent, or a bind of such a program. A command may add arguments and may name the depot program by its bare name (`claude --model x`); nothing else of that agent starts.
+
+**Fix.** `ChangeSetting` on `agent.command` with the bare program name, or `CopyCommand` with `humanitl run -- <name>`; without a company policy also `CopyCommand` with `humanitl agents source <id> host`.
+
+#### AGENT_018
+
+Agent depot in use
+
+**Auslöser.** The running session took this agent from the depot; its program directory and its configuration are bound into the sandbox. The depot is removed only when no session uses it.
+
+**Fix.** `CopyCommand` with `humanitl sandbox stop`, then remove again.
 
 ### Bereich edit
 

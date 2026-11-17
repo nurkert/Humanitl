@@ -223,6 +223,9 @@ impl DoctorSetup {
             self.paths.env(),
             &[],
         ) {
+            // `depot` für einen Agenten ohne Rezept: ein Hinweis beim Laden
+            // (HUM-518).
+            let notices = humanitl_sandbox::agent::depot::load_notices(&now.config);
             self.adapter = now.config.agent.adapter;
             self.agent_command = now
                 .config
@@ -231,6 +234,7 @@ impl DoctorSetup {
                 .and_then(|words| words.into_iter().next());
             self.llm_endpoint = now.config.llm.endpoint.as_ref().map(ToString::to_string);
             self.load_diagnostics = now.diagnostics;
+            self.load_diagnostics.extend(notices);
         }
         self
     }
@@ -354,6 +358,15 @@ impl IpcServer {
     pub fn with_key_store(mut self, keys: KeyStore) -> Self {
         self.keys = Some(keys);
         self
+    }
+
+    /// Die Sperre der Quelle der Agenten (HUM-518): die des Dienstes der
+    /// Sandbox, sonst die der Vorgabe an diesen Pfaden.
+    fn source_lock(&self) -> humanitl_config::agents::SourceLock {
+        self.sandbox.as_ref().map_or_else(
+            || humanitl_config::agents::SourceLock::of_policy(&self.doctor.paths),
+            SandboxService::source_lock,
+        )
     }
 
     /// Der Speicher des Zugangsschlüssels, gesetzt oder aus den Pfaden.
@@ -1964,8 +1977,9 @@ impl v1::humanitl_server::Humanitl for IpcServer {
             expected_server,
         } = request.into_inner();
         let paths = self.doctor.paths.clone();
+        let lock = self.source_lock();
         let snapshot = tokio::task::spawn_blocking(move || {
-            config_rpc::set_expecting(&paths, &key, &value, &expected_server)
+            config_rpc::set_locked(&paths, &key, &value, &expected_server, &lock)
         })
         .await
         .map_err(|error| diagnostic_to_status(&unfinished("SetConfig", &error)))?
@@ -2016,6 +2030,7 @@ impl v1::humanitl_server::Humanitl for IpcServer {
         let deadline = crate::deadline::search_deadline(request.metadata(), Instant::now());
         let probe = request.into_inner().probe;
         let setup = self.doctor.clone();
+        let lock = self.source_lock();
         let searches = self.searches.clone();
         let socket = setup.paths.daemon_socket();
         let daemon = humanitl_sandbox::doctor::DaemonFacts::NotTried {
@@ -2067,6 +2082,11 @@ impl v1::humanitl_server::Humanitl for IpcServer {
                     .map(|config| config.egress)
                     .unwrap_or_default();
                 crate::egress::insert_doctor_line(&mut report, &egress);
+                // Je Agent aus dem Depot eine Zeile (HUM-518): Version und
+                // Anmeldung aus dem Depot, nie aus einem Start des Programms.
+                if let Ok(config) = crate::agents::configured(&setup.paths) {
+                    crate::agents::insert_doctor_lines(&mut report, &setup.paths, &config, &lock);
+                }
                 // Wohin die Inferenz des Agenten geht (HUM-516), aus der
                 // Konfiguration ohne Projekt, wie sie jetzt auf der Platte
                 // steht.
@@ -2289,6 +2309,25 @@ impl v1::humanitl_server::Humanitl for IpcServer {
                     .insert(0, convert::diagnostic_to_proto(&diagnostic)),
             }
         }
+        Ok(Response::new(status))
+    }
+
+    /// Das Agent-Depot (HUM-518, [`crate::agents`]): Stand, Quelle setzen,
+    /// Depot entfernen. Nichts davon startet ein Programm aus dem Depot.
+    async fn agents(
+        &self,
+        request: Request<v1::AgentsRequest>,
+    ) -> Result<Response<v1::AgentsStatus>, Status> {
+        let op = request.into_inner().op;
+        let paths = self.doctor.paths.clone();
+        let lock = self.source_lock();
+        let in_use = self.sandbox.as_ref().and_then(SandboxService::depot_in_use);
+        let status = tokio::task::spawn_blocking(move || {
+            crate::agents::answer(&paths, &lock, in_use.as_deref(), op)
+        })
+        .await
+        .map_err(|error| diagnostic_to_status(&unfinished("Agents", &error)))?
+        .map_err(|diagnostic| diagnostic_to_status(&diagnostic))?;
         Ok(Response::new(status))
     }
 

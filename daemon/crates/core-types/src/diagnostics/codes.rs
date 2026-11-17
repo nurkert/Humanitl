@@ -199,8 +199,9 @@ pub static AREAS: &[AreaInfo] = &[
         area: "agent",
         prefix: "AGENT",
         first: 1,
-        last: 9,
-        note: "Agent-Adapter: Startkommando, Vorlagen, Vorprüfung vor dem Start",
+        last: 29,
+        note: "001-007 Agent-Adapter: Startkommando, Vorlagen, Vorprüfung vor dem Start; \
+               008-029 Agent-Depot (ADR-0023, HUM-518 bis HUM-520)",
     },
     AreaInfo {
         area: "edit",
@@ -1913,6 +1914,64 @@ registry! {
     LLM_011 => "llm", "Cloud inference not confirmed", "#llm_011",
         "The agent of this start would send its inference to a provider outside this machine (`LLM_010`), this combination of agent and provider was never confirmed, and the start request neither confirms it (`Start.acknowledge_cloud_inference`) nor says that the notice was shown (`Start.cloud_notice_shown`). Nothing started.",
         "`CopyCommand` with `humanitl run --yes`, which confirms and starts; in the app the start asks once. A client of its own shows the notice and sets one of the two fields.";
+
+    // HUM-518: the agent depot (ADR-0023). AGENT_011, AGENT_012, AGENT_014
+    // and AGENT_016 belong to HUM-519 and HUM-520.
+    /// The agent's source is `depot` (by `agents.source`, `agents.<id>.source`
+    /// or a company lock), and the depot of this agent holds no installed
+    /// version: no `current` link, or one whose version directory or
+    /// `manifest.json` is missing. Blocking: the start never falls back to a
+    /// program of the host (HUM-518).
+    AGENT_008 => "agent", "Agent not installed in the depot", "#agent_008",
+        "The source of this agent is the depot, and the depot holds no installed version of it: there is no `current` link, or the version it names has no directory or no `manifest.json`. A session never falls back to a program on the host.",
+        "`CopyCommand` with `humanitl agents install <id>` (HUM-519); or, without a company lock, `CopyCommand` with `humanitl agents source <id> host`.";
+    /// The depot holds the agent but no login for it: `credentials/` holds no
+    /// credential file. A warning, the agent asks for a login itself; the
+    /// login inside a sandbox comes with HUM-520 (HUM-518).
+    AGENT_009 => "agent", "Agent in the depot not logged in", "#agent_009",
+        "The depot of this agent holds an installed version and no stored login. The agent starts and asks for a login itself; a login made in a session is discarded with the session until the login run exists.",
+        "`CopyCommand` with `humanitl agents login <id>` (HUM-520).";
+    /// The source of the agent is fixed to `depot` by a company policy, and
+    /// something asked for `host`: a start with a program of the host, or a
+    /// write of `agents.source` or `agents.<id>.source` with `host`, through
+    /// `humanitl agents source`, `humanitl config set`, the settings of the
+    /// app or `ChangeSetting`. The `why` names the policy as the source; there
+    /// is deliberately no fix that goes around it (HUM-518).
+    AGENT_010 => "agent", "Agent source fixed by a company policy", "#agent_010",
+        "A company policy fixes the source of this agent to the depot. Starting it from the host and setting its source back to `host` are refused, on every way: a start, `humanitl agents source`, `humanitl config set`, the settings of the app and `ChangeSetting`. A policy may only name the depot; one that names the host is refused itself.",
+        "None. The policy decides; ask whoever manages it.";
+    /// The depot of the agent cannot be used: a directory or file of it is
+    /// owned by another user, writable by others, a symbolic link leads out of
+    /// the depot, a version directory holds something else than regular files,
+    /// directories and relative links inside it, `manifest.json` cannot be
+    /// read, or the copy for the session would exceed its cap of 64 MiB
+    /// (HUM-518).
+    AGENT_013 => "agent", "Agent depot unusable", "#agent_013",
+        "The daemon checks the depot each time it opens it: owner (this user or root), no write permission for other users, no symbolic link out of the depot, in a version directory only regular files, directories and relative links inside it, a readable `manifest.json`, and at most 64 MiB of configuration and credentials to copy into a session. The sentence names the first path that failed.",
+        "`CopyCommand` with `humanitl agents remove <id>` and a new install, or with `chmod go-w` on the named path when only its mode is wrong.";
+    /// The source of the agent is `depot`, and the adapter or the sandbox
+    /// backend cannot carry it: the adapter declares no depot recipe (the
+    /// program's name in the depot, its configuration directory), or the
+    /// backend has no way to bind the depot into the session yet (the kernel
+    /// level, HUM-518).
+    AGENT_015 => "agent", "Adapter or backend without depot support", "#agent_015",
+        "The source of this agent is the depot, and either its adapter declares no depot recipe yet, or the chosen sandbox backend cannot bind the depot into a session. The setting is valid and kept; loading the configuration says so as a notice, and a start stops here.",
+        "`CopyCommand` with `humanitl agents source <id> host` when no company policy fixes the source; or `ChangeSetting` on `sandbox.backend` = `auto` when the backend is the reason.";
+    /// The command of the session names a program of the host although the
+    /// source of that agent is `depot`, or a company policy fixes it: a host
+    /// path, a wrapper or a symbolic link to a program an adapter recognises
+    /// as its agent (`claude`, `codex`, `agy`, ...), or a bind of such a
+    /// program. One guard checks the final plan request in the sandbox crate
+    /// before any backend plans, for every start path (HUM-518).
+    AGENT_017 => "agent", "Command names a host program of a depot agent", "#agent_017",
+        "The source of this agent is the depot, or a company policy fixes it there, and the command of the session names a program of the host: a path on the host, a wrapper or a symbolic link whose target an adapter recognises as its agent, or a bind of such a program. A command may add arguments and may name the depot program by its bare name (`claude --model x`); nothing else of that agent starts.",
+        "`ChangeSetting` on `agent.command` with the bare program name, or `CopyCommand` with `humanitl run -- <name>`; without a company policy also `CopyCommand` with `humanitl agents source <id> host`.";
+    /// `humanitl agents remove` while the running session has this depot
+    /// bound: removing it would take program and configuration from under
+    /// the agent (HUM-518).
+    AGENT_018 => "agent", "Agent depot in use", "#agent_018",
+        "The running session took this agent from the depot; its program directory and its configuration are bound into the sandbox. The depot is removed only when no session uses it.",
+        "`CopyCommand` with `humanitl sandbox stop`, then remove again.";
 }
 
 /// Sucht einen Code im Register.

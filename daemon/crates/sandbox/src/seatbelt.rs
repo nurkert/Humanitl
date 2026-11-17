@@ -336,6 +336,11 @@ pub struct SeatbeltPolicy {
     pub door: PathBuf,
     /// Der Loopback-Port der Sitzung.
     pub port: u16,
+    /// Host-Installationen eines Depot-Agenten (HUM-518), wie das Rezept sie
+    /// nennt und aufgelöst: Seatbelt kennt keine Einhängungen, die Masken
+    /// sind Verbote für `file-read*` und `process-exec` hinter der Regel, die
+    /// das Lesen außerhalb der privaten Bäume erlaubt.
+    pub agent_masks: Vec<PathBuf>,
     /// Der zweite Port der Sitzung: Hier darf ein Agent seinen eigenen lokalen
     /// Server betreiben (HUM-365). Unter Linux hat er dafür ein ganzes eigenes
     /// Loopback; hier ist Loopback geteilt, und das Profil nennt deshalb genau
@@ -479,6 +484,16 @@ impl SeatbeltPolicy {
 
     /// Die Verbote am Ende des Profils; die letzte passende Regel gewinnt.
     fn render_denials(&self, out: &mut String) {
+        // In SBPL the last matching rule wins: these come after
+        // `(allow file-read*)` and `(allow process-exec)` above (HUM-518).
+        if !self.agent_masks.is_empty() {
+            out.push_str(";; Host installs of agents from the depot: neither read nor started.\n");
+            out.push_str("(deny file-read* process-exec");
+            for path in &self.agent_masks {
+                let _ = write!(out, " (subpath {})", quote_path(path));
+            }
+            out.push_str(")\n");
+        }
         if !self.masked.is_empty() {
             out.push_str(";; Masks of the profile: neither read nor written.\n");
             out.push_str("(deny file-read* file-write*");
@@ -503,6 +518,20 @@ impl SeatbeltPolicy {
             out.push_str(")\n");
         }
     }
+}
+
+/// The paths of host installs of depot agents that exist on this machine,
+/// as listed and resolved (HUM-518).
+fn depot_masks(session: &SessionContext) -> Vec<PathBuf> {
+    let mut paths: Vec<PathBuf> = session
+        .agent_depot
+        .masks()
+        .into_iter()
+        .flat_map(|mask| [mask.listed, mask.target])
+        .collect();
+    paths.sort();
+    paths.dedup();
+    paths
 }
 
 /// Ein SBPL-Zeichenkettenliteral.
@@ -660,7 +689,7 @@ impl SeatbeltBackend {
 
     /// Die Abbildung der Sitzung samt den nur lesbaren Orten.
     fn session_map(
-        options: &LaunchOptions,
+        request: &PlanRequest<'_>,
         layout: &SessionLayout,
         work: &Path,
         door: &Path,
@@ -668,7 +697,31 @@ impl SeatbeltBackend {
     ) -> PathMap {
         layout
             .path_map(work, door, shim)
-            .with_entries(Self::bind_entries(options))
+            .with_entries(Self::bind_entries(request.options))
+            .with_entries(Self::depot_entries(request.session))
+    }
+
+    /// The depot's two places as entries of the map (HUM-518): the program
+    /// directory at its resolved version, the configuration at the scratch.
+    fn depot_entries(session: &SessionContext) -> Vec<(String, PathBuf)> {
+        session
+            .agent_depot
+            .mount
+            .iter()
+            .flat_map(|mount| {
+                [
+                    (
+                        crate::agent::AGENT_PROGRAM_DIR.to_owned(),
+                        mount.program_dir.canonicalize().ok(),
+                    ),
+                    (
+                        crate::agent::depot::DEPOT_CONFIG_DST.to_owned(),
+                        mount.scratch.canonicalize().ok(),
+                    ),
+                ]
+            })
+            .filter_map(|(dst, src)| Some((dst, src?)))
+            .collect()
     }
 
     /// Die nur lesbaren Orte als Einträge der Abbildung, ihr Ziel auf den
@@ -828,6 +881,12 @@ impl SeatbeltBackend {
         if disposable {
             read_only.append(&mut writable);
         }
+        // Das Agent-Depot (HUM-518): der Versionsordner nur `file-read*`,
+        // der Arbeitsordner der Sitzung lesbar und beschreibbar.
+        if let Some(mount) = &session.agent_depot.mount {
+            read_only.extend(mount.program_dir.canonicalize().ok());
+            writable.extend(mount.scratch.canonicalize().ok());
+        }
         // Die Ordner zwischen Projekt und Maske dürfen weder umbenannt noch
         // gelöscht werden: Sonst zöge `mv .git .gitx` die Maske von
         // `.git/hooks` ab, und `mv .gitx .git` brächte den Inhalt zurück
@@ -869,6 +928,7 @@ impl SeatbeltBackend {
             door: door.to_path_buf(),
             port: ports.0,
             agent_port: ports.1,
+            agent_masks: depot_masks(session),
         }
     }
 }
@@ -1330,6 +1390,8 @@ impl SandboxBackend for SeatbeltBackend {
             session,
             options,
         } = *request;
+        // The one guard of the agent depot, before anything else (HUM-518).
+        crate::agent::depot::guard::check(request)?;
         crate::launcher::refuse_stream("sandbox-exec", options)?;
         let project = self.check(request)?;
         let work = Self::work_of(options, &project)?;
@@ -1338,7 +1400,7 @@ impl SandboxBackend for SeatbeltBackend {
         // liegt das Laufzeitverzeichnis hinter dem Verweis `/var`.
         let door = canonical(&session.proxy_socket_src)?;
         let shim = canonical(&session.shim_src)?;
-        let map = Self::session_map(options, &layout, &work, &door, &shim);
+        let map = Self::session_map(request, &layout, &work, &door, &shim);
         let mut warnings = profile.unmask_diagnostics();
         let protected = place_files(session, &map, &layout.home(), &mut warnings)?;
         let files = place_agent(session, &map, &shim)?;
@@ -1489,7 +1551,7 @@ fn session_env(
             .join(":")
     });
     let path = session_search_path(configured.as_deref());
-    let path = if session.agent_program.is_some() {
+    let path = if session.agent_program.is_some() || session.agent_depot.mount.is_some() {
         format!("{agent_dir}:{path}")
     } else {
         path
@@ -1609,6 +1671,7 @@ mod tests {
             door: PathBuf::from("/private/var/folders/x/T/humanitl-501/proxy/proxy.sock"),
             port: 41_234,
             agent_port: 41_235,
+            agent_masks: vec![],
         }
     }
 
@@ -1867,6 +1930,7 @@ mod tests {
             session_env,
             command: vec!["true".into()],
             files: Vec::new(),
+            agent_depot: crate::agent::depot::DepotSession::default(),
             agent_program: agent.then(|| {
                 crate::agent::AgentProgram::new(
                     PathBuf::from("/Users/me/.opencode/bin/opencode"),

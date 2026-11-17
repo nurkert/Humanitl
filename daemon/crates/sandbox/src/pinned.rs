@@ -46,6 +46,8 @@ pub(crate) enum SourceKind {
 pub(crate) struct PinnedSource {
     fd: OwnedFd,
     resolved: PathBuf,
+    /// The path as it was given, before resolving (HUM-518).
+    given: PathBuf,
 }
 
 impl PinnedSource {
@@ -106,7 +108,16 @@ impl PinnedSource {
                 resolved.display()
             ));
         }
-        Ok(Self { fd, resolved })
+        Ok(Self {
+            fd,
+            resolved,
+            given: path.to_path_buf(),
+        })
+    }
+
+    /// Der Pfad, wie er gegeben wurde, vor dem Auflösen (HUM-518).
+    pub(crate) fn given(&self) -> &Path {
+        &self.given
     }
 
     /// Der Ort des geöffneten Objekts, wie `/proc/self/fd/N` ihn nennt; der

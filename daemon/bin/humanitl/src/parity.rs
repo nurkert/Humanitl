@@ -28,6 +28,9 @@
 
 /// Paare aus RPC-Name (`Service.Methode`) und Unterkommando samt Schalter.
 pub static PARITY: &[(&str, &str)] = &[
+    ("Humanitl.Agents", "agents remove"),
+    ("Humanitl.Agents", "agents source"),
+    ("Humanitl.Agents", "agents status"),
     ("Humanitl.Audit", "audit export"),
     ("Humanitl.Audit", "audit verify"),
     ("Humanitl.Decide", "flows decide"),

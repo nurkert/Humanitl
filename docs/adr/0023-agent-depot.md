@@ -320,6 +320,26 @@ today.
 - `agy` starts with API-key support only, until its storage without a
   keyring is verified.
 
+## Adding an agent to the depot
+
+Every part of the depot (the core, the guard `AGENT_017`, the masks, the `Agents` RPC, the CLI
+and later the app section) iterates over the registered agents and names none itself (HUM-518).
+An agent joins in two places:
+
+1. one `KnownAgent` in `daemon/crates/sandbox/src/agent/depot/recipe.rs` (`KNOWN`): identifier,
+   display name, program name, its host install locations to mask (always, recipe or not), and,
+   once every value is sourced from the vendor's documentation, its `DepotRecipe` (program inside
+   the version directory, configuration variable, self-update switch, credential file, install
+   hosts for HUM-519, login flow for HUM-520); without a recipe `depot` answers `AGENT_015`;
+2. one line in the macro `known_agents!` in `daemon/crates/config/src/agents.rs`, which gives the
+   identifier, the field `agents.<id>` and its branch of `AgentsConfig::settings`.
+
+The schema snapshot, `docs/CONFIG.md` and the reader register then name the new keys, and their
+tests say so. A test walks every registered entry and holds the invariants (install locations
+named and absolute, a plain program name, a credential file inside the configuration copy, the
+same identifiers in both places), so a new entry is checked without a new test. What cannot be
+data stays in the agent's adapter (`AgentAdapter::depot_recipe` may override the table).
+
 ## Affected issues
 
 `HUM-518` (depot core, configuration, policy lock, RPC, CLI status, source

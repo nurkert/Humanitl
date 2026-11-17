@@ -1587,6 +1587,15 @@ const EXPECTED_RPCS: &[(&str, &str, &str, bool, bool)] = &[
         false,
         false,
     ),
+    // Das Agent-Depot (HUM-518): Stand, Quelle setzen, Depot entfernen;
+    // keine Antwort startet etwas aus dem Depot.
+    (
+        "Agents",
+        ".humanitl.v1.AgentsRequest",
+        ".humanitl.v1.AgentsStatus",
+        false,
+        false,
+    ),
 ];
 
 #[test]

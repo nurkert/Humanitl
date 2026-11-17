@@ -625,6 +625,7 @@ impl Harness {
                 std::ffi::OsString::from(command),
             ],
             files,
+            agent_depot: crate::agent::depot::DepotSession::default(),
             agent_program: None,
         }
     }

@@ -91,6 +91,10 @@ step, is described in [`docs/cli.md`](../cli.md); which RPC each subcommand serv
 - [`humanitl egress auth`](#humanitl-egress-auth) Store or remove the credentials of the decision proxy
 - [`humanitl egress auth set`](#humanitl-egress-auth-set) Store USER:PASSWORD in the system keyring and set `egress.proxy_auth_ref`. Read from stdin, never from the command line; at a terminal the input is hidden
 - [`humanitl egress auth remove`](#humanitl-egress-auth-remove) Remove the credentials and `egress.proxy_auth_ref`
+- [`humanitl agents`](#humanitl-agents) The agent depot: where each agent comes from (host or depot), its installed version and login; set the source, remove a depot
+- [`humanitl agents status`](#humanitl-agents-status) Show every agent, or one: its source with origin or company lock, the installed version and signature, whether it is logged in, its size. Nothing from the depot is started for this
+- [`humanitl agents source`](#humanitl-agents-source) Set where an agent comes from: `host` or `depot` (`agents.<id>.source`). Switching back to `host` keeps the depot
+- [`humanitl agents remove`](#humanitl-agents-remove) Remove the depot of an agent with its program, configuration and login; refused while a session uses it. The source stays as it is
 
 ## Configuration flags
 
@@ -106,6 +110,17 @@ below lists the flag names and their short aliases.
 | `--agent-briefing-enabled` | - | `true`, `false` | `agent.briefing.enabled` |
 | `--agent-command` | - | `LIST_OF_STRING,_OPTIONAL` | `agent.command` |
 | `--agent-pi-web-access` | - | `auto`, `on`, `off` | `agent.pi.web_access` |
+| `--agents-agy-credential-writeback` | - | `true`, `false` | `agents.agy.credential_writeback` |
+| `--agents-agy-source` | - | `host`, `depot`, `null` | `agents.agy.source` |
+| `--agents-claude-credential-writeback` | - | `true`, `false` | `agents.claude.credential_writeback` |
+| `--agents-claude-source` | - | `host`, `depot`, `null` | `agents.claude.source` |
+| `--agents-codex-credential-writeback` | - | `true`, `false` | `agents.codex.credential_writeback` |
+| `--agents-codex-source` | - | `host`, `depot`, `null` | `agents.codex.source` |
+| `--agents-opencode-credential-writeback` | - | `true`, `false` | `agents.opencode.credential_writeback` |
+| `--agents-opencode-source` | - | `host`, `depot`, `null` | `agents.opencode.source` |
+| `--agents-pi-credential-writeback` | - | `true`, `false` | `agents.pi.credential_writeback` |
+| `--agents-pi-source` | - | `host`, `depot`, `null` | `agents.pi.source` |
+| `--agents-source` | - | `host`, `depot` | `agents.source` |
 | `--audit-anchor-every` | - | `INTEGER` | `audit.anchor_every` |
 | `--audit-fsync-every` | - | `INTEGER` | `audit.fsync_every` |
 | `--audit-max-bytes` | - | `INTEGER` | `audit.max_bytes` |
@@ -201,6 +216,7 @@ Commands:
   llm        Find LLM servers in the local network
   intercept  Pause intercepting, resume it, or show whether it is paused
   egress     The decision proxy behind Humanitl (`egress.proxy`): show it, check the connection, store its credentials
+  agents     The agent depot: where each agent comes from (host or depot), its installed version and login; set the source, remove a depot
   help       Print this message or the help of the given subcommand(s)
 
 Options:
@@ -2976,6 +2992,140 @@ Usage: humanitl egress auth remove [OPTIONS]
 Options:
       --json
           Machine-readable output: one JSON value on stdout, diagnostics included
+
+      --config <PATH>
+          Read this config file instead of the one in the user's config directory
+
+  -v, --verbose...
+          Explain what is happening; repeat for more
+
+  -q, --quiet
+          Only the result, no notes
+
+      --profile <NAME>
+          Use this profile for the session; falls back to the sandbox profile of that name when no session profile exists
+
+  -h, --help
+          Print help
+```
+
+## humanitl agents
+
+```text
+The agent depot: where each agent comes from (host or depot), its installed version and login; set the source, remove a depot
+
+Usage: humanitl agents [OPTIONS] <COMMAND>
+
+Commands:
+  status  Show every agent, or one: its source with origin or company lock, the installed version and signature, whether it is logged in, its size. Nothing from the depot is started for this
+  source  Set where an agent comes from: `host` or `depot` (`agents.<id>.source`). Switching back to `host` keeps the depot
+  remove  Remove the depot of an agent with its program, configuration and login; refused while a session uses it. The source stays as it is
+  help    Print this message or the help of the given subcommand(s)
+
+Options:
+      --json
+          Machine-readable output: one JSON value on stdout, diagnostics included
+
+      --config <PATH>
+          Read this config file instead of the one in the user's config directory
+
+  -v, --verbose...
+          Explain what is happening; repeat for more
+
+  -q, --quiet
+          Only the result, no notes
+
+      --profile <NAME>
+          Use this profile for the session; falls back to the sandbox profile of that name when no session profile exists
+
+  -h, --help
+          Print help
+```
+
+## humanitl agents status
+
+```text
+Show every agent, or one: its source with origin or company lock, the installed version and signature, whether it is logged in, its size. Nothing from the depot is started for this
+
+Usage: humanitl agents status [OPTIONS] [AGENT]
+
+Arguments:
+  [AGENT]
+          Only this agent, such as `claude`
+
+Options:
+      --json
+          Machine-readable output: one JSON value on stdout, diagnostics included
+
+      --config <PATH>
+          Read this config file instead of the one in the user's config directory
+
+  -v, --verbose...
+          Explain what is happening; repeat for more
+
+  -q, --quiet
+          Only the result, no notes
+
+      --profile <NAME>
+          Use this profile for the session; falls back to the sandbox profile of that name when no session profile exists
+
+  -h, --help
+          Print help
+```
+
+## humanitl agents source
+
+```text
+Set where an agent comes from: `host` or `depot` (`agents.<id>.source`). Switching back to `host` keeps the depot
+
+Usage: humanitl agents source [OPTIONS] <AGENT> <SOURCE>
+
+Arguments:
+  <AGENT>
+          The agent, such as `claude`
+
+  <SOURCE>
+          `host` or `depot`
+
+          [possible values: host, depot]
+
+Options:
+      --json
+          Machine-readable output: one JSON value on stdout, diagnostics included
+
+      --config <PATH>
+          Read this config file instead of the one in the user's config directory
+
+  -v, --verbose...
+          Explain what is happening; repeat for more
+
+  -q, --quiet
+          Only the result, no notes
+
+      --profile <NAME>
+          Use this profile for the session; falls back to the sandbox profile of that name when no session profile exists
+
+  -h, --help
+          Print help
+```
+
+## humanitl agents remove
+
+```text
+Remove the depot of an agent with its program, configuration and login; refused while a session uses it. The source stays as it is
+
+Usage: humanitl agents remove [OPTIONS] <AGENT>
+
+Arguments:
+  <AGENT>
+          The agent, such as `claude`
+
+Options:
+      --json
+          Machine-readable output: one JSON value on stdout, diagnostics included
+
+      --yes
+          Do not ask
 
       --config <PATH>
           Read this config file instead of the one in the user's config directory

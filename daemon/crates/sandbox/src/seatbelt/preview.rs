@@ -94,7 +94,7 @@ impl SeatbeltBackend {
         };
         let door = resolved(&session.proxy_socket_src);
         let shim = resolved(&session.shim_src);
-        let map = Self::session_map(options, &layout, &work, &door, &shim);
+        let map = Self::session_map(request, &layout, &work, &door, &shim);
 
         let mut files = vec![shim.clone()];
         files.extend(
@@ -435,6 +435,7 @@ mod tests {
             session_env: Vec::new(),
             command: vec!["/work/run.sh".into(), "--flag".into()],
             files: Vec::new(),
+            agent_depot: crate::agent::depot::DepotSession::default(),
             agent_program: None,
         };
         let text = include_str!("../../../../../profiles/sandbox/default.toml");

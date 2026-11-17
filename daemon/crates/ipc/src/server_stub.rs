@@ -281,6 +281,22 @@ pub trait DaemonApi: Send + Sync + 'static {
         .why("this daemon has no egress to describe".to_owned())
         .build())
     }
+
+    /// Das Agent-Depot: Stand, Quelle setzen, Depot entfernen (HUM-518).
+    ///
+    /// Die Vorgabe antwortet `IPC_006`.
+    ///
+    /// # Errors
+    ///
+    /// [`Diagnostic`] mit `IPC_006`, oder dem Befund der Operation.
+    async fn agents(&self, _request: v1::AgentsRequest) -> Result<v1::AgentsStatus, Diagnostic> {
+        Err(Diagnostic::builder(
+            humanitl_core::diagnostics::codes::IPC_006,
+            humanitl_core::Severity::Error,
+        )
+        .why("this daemon has no agent depot".to_owned())
+        .build())
+    }
 }
 
 /// Der tonic-Dienst über einem beliebigen [`DaemonApi`].
@@ -731,6 +747,18 @@ impl<T: DaemonApi> v1::humanitl_server::Humanitl for DaemonService<T> {
         self.check_token(&request)?;
         self.api
             .egress(request.into_inner())
+            .await
+            .map(Response::new)
+            .map_err(|diagnostic| diagnostic_to_status(&diagnostic))
+    }
+
+    async fn agents(
+        &self,
+        request: Request<v1::AgentsRequest>,
+    ) -> Result<Response<v1::AgentsStatus>, Status> {
+        self.check_token(&request)?;
+        self.api
+            .agents(request.into_inner())
             .await
             .map(Response::new)
             .map_err(|diagnostic| diagnostic_to_status(&diagnostic))
