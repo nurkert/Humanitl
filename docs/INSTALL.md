@@ -101,7 +101,7 @@ the agent as well.
 `systemd-analyze --user security --offline=true` on the unit with the path of
 the package:
 
-Overall exposure level: 3.7 (systemd 262, Debian 14, 2026-09-18; limit from HUM-053: 4.0)
+Overall exposure level: 3.8 (systemd 262, Debian 14, 2026-11-17; limit from HUM-053: 4.0)
 
 The test `the_exposure_stays_at_or_below_the_documented_value` in
 `daemon/bin/humanitl/src/cmd/unit.rs` reads the value above and measures the
@@ -118,12 +118,13 @@ below.
 | `ProtectSystem=strict` | In a user unit, everything is read-only afterwards except `$HOME`, the runtime directory and the API file systems (measured, not read). |
 | `ReadWritePaths=-%h/.local/share/humanitl -%h/.config/humanitl -%t/humanitl` | The three directories of the daemon, each with `-`, because systemd does not start a unit with a missing path. |
 | `PrivateIPC=yes`, `PrivateMounts=yes`, `PrivateUsers=yes` | Own IPC and mount namespaces, only the own user visible. |
-| `ProtectClock=yes`, `ProtectControlGroups=yes`, `ProtectKernelModules=yes` | Clock, cgroups and kernel modules are none of the daemon's business. |
+| `ProtectClock=yes`, `ProtectControlGroups=yes` | Clock and cgroups are none of the daemon's business. |
 | `ProtectProc=invisible` | Processes of other users are invisible. |
 | `KeyringMode=private`, `LockPersonality=yes`, `RestrictRealtime=yes` | Standard hardening without effect on the sandbox. |
 | `RestrictFileSystems=~@privileged-api` | No file systems such as `bpf` or `debugfs`. |
 | `CapabilityBoundingSet=CAP_SYS_ADMIN` | A user service has no capabilities; the bound acts on programs with file capabilities. It must not be empty (see below). |
 | `SystemCallFilter=@system-service @mount @sandbox sethostname`, `SystemCallErrorNumber=EPERM` | `@mount`, because bubblewrap mounts and calls `pivot_root`; `@sandbox`, because the shim sets its own seccomp filter with `seccomp(2)`; `sethostname`, because bubblewrap names the UTS namespace of the sandbox `sandbox` ("Can't set hostname to sandbox" without it). The host name of the machine does not change. |
+| `SystemCallFilter=~@module` | `init_module`, `finit_module` and `delete_module` stay denied for the daemon and every child. The allow list above does not reach them either; this line says so by name (HUM-529). |
 | `RestrictAddressFamilies=AF_UNIX AF_INET AF_INET6 AF_NETLINK` | bubblewrap needs `AF_NETLINK` for `lo` in the namespace, the proxy needs IPv4 and IPv6 to reach the destination. |
 
 ### What is left out on purpose
@@ -142,6 +143,7 @@ below.
 | `UMask=0077` | Inherited by the agent: every file it creates in the project would get other permissions than without Humanitl. |
 | `ProtectHome=read-only` | A project under `$HOME` would be read-only in the sandbox; `sandbox.work_mode = rw` is the default. |
 | `ProcSubset=pid` | `humanitl doctor` reads `/proc/sys/kernel/*` and `/proc/modules`; those findings would be lost. |
+| `ProtectKernelModules=yes` | Puts a read-only tmpfs over `/usr/lib/modules` in the daemon's mount namespace. bubblewrap binds `/usr` recursively and carries that mount into the sandbox, where the shim refuses it as a mount outside the plan (`SANDBOX_049`): with Humanitl 0.4.0 no session started through the daemon. The kernel level also lost the modules of its guest kernel (`SANDBOX_045`). A user service has no `CAP_SYS_MODULE` and loads no module anyway; the module calls stay filtered (`SystemCallFilter=~@module`). Exposure 3.7 before, 3.8 without it (HUM-529). |
 | `PrivateNetwork`, `IPAddressDeny` | The proxy has to reach the destination that a person approves. |
 
 ### Projects outside `$HOME`

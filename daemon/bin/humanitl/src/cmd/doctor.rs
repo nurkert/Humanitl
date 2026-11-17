@@ -691,15 +691,29 @@ fn print(ctx: &Context, report: &v1::DoctorReport, source: Source) {
     // Block: Sie zählen nicht für Status und Exit-Code, aber wer dieses
     // Backend wählen will, muss lesen können, was ihm fehlt (HUM-436,
     // Akzeptanzkriterium 1).
+    for diagnostic in finding_blocks(report) {
+        println!();
+        print!("{}", diagnostic_block(&diagnostic));
+    }
+}
+
+/// Die Befunde der Zeilen, die nicht `ok` sind, in Reihenfolge der Ausgabe,
+/// jeder gleiche nur einmal (HUM-529). Scheitert die Suche eines Backends an
+/// einer Voraussetzung, tragen `available` und die Zeile der Voraussetzung
+/// denselben Befund; zweimal derselbe Block sagte nichts Neues.
+fn finding_blocks(report: &v1::DoctorReport) -> Vec<Diagnostic> {
+    let mut blocks: Vec<Diagnostic> = Vec::new();
     for check in shown_checks(report) {
         if check.status == v1::CheckStatus::Ok as i32 {
             continue;
         }
-        if let Some(diagnostic) = rebuilt(check) {
-            println!();
-            print!("{}", diagnostic_block(&diagnostic));
+        if let Some(diagnostic) = rebuilt(check)
+            && !blocks.contains(&diagnostic)
+        {
+            blocks.push(diagnostic);
         }
     }
+    blocks
 }
 
 /// Eine Zeile als JSON-Wert, mit ihrem Befund, wenn sie einen trägt.
@@ -820,6 +834,40 @@ mod tests {
                 diagnostic: None,
             }],
         }
+    }
+
+    /// HUM-529: Tragen `available` und die Zeile einer Voraussetzung
+    /// denselben Befund, steht sein Block einmal da; ein anderer Befund
+    /// derselben Gruppe bleibt. Mutationsbeweis: ohne die Prüfung auf
+    /// Gleiches stehen zwei Blöcke `SANDBOX_045` da, wie im Bericht des
+    /// Eigentümers zu 0.4.0.
+    #[test]
+    fn the_same_finding_of_two_lines_gets_one_block() {
+        let finding = |why: &str| v1::Diagnostic {
+            code: "SANDBOX_045".to_owned(),
+            why: why.to_owned(),
+            ..v1::Diagnostic::default()
+        };
+        let mut chosen = group("kernel-level", false, v1::CheckStatus::Warn);
+        chosen.checks[0].diagnostic = Some(finding("the modules are missing"));
+        let mut modules = chosen.checks[0].clone();
+        modules.id = "modules".to_owned();
+        let mut kernel = chosen.checks[0].clone();
+        kernel.id = "kernel".to_owned();
+        kernel.diagnostic = Some(finding("the kernel image is missing"));
+        chosen.checks.extend([modules, kernel]);
+        let report = v1::DoctorReport {
+            checks: Vec::new(),
+            backends: vec![chosen],
+        };
+        let whys: Vec<String> = super::finding_blocks(&report)
+            .into_iter()
+            .map(|diagnostic| diagnostic.why)
+            .collect();
+        assert_eq!(
+            whys,
+            ["the modules are missing", "the kernel image is missing"]
+        );
     }
 
     /// Eine rote Zeile in der Gruppe eines Backends färbt den Bericht rot und

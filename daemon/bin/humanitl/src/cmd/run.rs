@@ -603,8 +603,10 @@ async fn drive(
             moderation.output(&chunk.data);
             continue;
         }
-        if let Some(found) = handle(ctx, event, minor) {
-            failure.get_or_insert(found);
+        if let Some(found) = handle(ctx, event, minor)
+            && let Some(shown) = keep_failure(&mut failure, found)
+        {
+            ctx.render.note(&crate::render::diagnostic_block(&shown));
         }
     }
 
@@ -612,7 +614,32 @@ async fn drive(
         moderation.finish();
     }
 
-    outcome(exit.or(attach_code.map(i32::from)), failure)
+    let exit = exit.or(attach_code.map(i32::from));
+    // Mit einem Exit-Code bleibt ein Befund, der keine Garantie ist, ohne
+    // Fehlschlag; gezeigt wird er trotzdem, genau einmal.
+    if exit.is_some()
+        && let Some(kept) = failure.as_ref().filter(|kept| kept.exit != EXIT_CHECK)
+    {
+        ctx.render
+            .note(&crate::render::diagnostic_block(&kept.diagnostic));
+    }
+    outcome(exit, failure)
+}
+
+/// Merkt sich den ersten Befund der Sitzung, der den Lauf scheitern lässt;
+/// den zeigt am Ende der Aufrufer. Ein späterer, anderer Befund kommt zum
+/// Zeigen zurück, ein gleicher nicht (HUM-529): Eine Mounttabelle außerhalb
+/// des Plans kam als Ergebnis der Prüfung und noch einmal als Befund des
+/// Starts, und `humanitl go` druckte `SANDBOX_049` zweimal.
+fn keep_failure(kept: &mut Option<Failure>, found: Failure) -> Option<Diagnostic> {
+    match kept {
+        None => {
+            *kept = Some(found);
+            None
+        }
+        Some(first) if first.diagnostic == found.diagnostic => None,
+        Some(_) => Some(found.diagnostic),
+    }
 }
 
 /// Der Exit-Code der Sitzung, oder der Befund, an dem sie hängen blieb.
@@ -858,9 +885,14 @@ fn handle(ctx: &Context, event: v1::SandboxEvent, minor: u32) -> Option<Failure>
         }
         Event::Diagnostic(diagnostic) => {
             let diagnostic = from_proto(&diagnostic)?;
+            // Ein Befund, der den Lauf scheitern lässt, zeigt der Aufrufer
+            // genau einmal ([`keep_failure`]).
+            if diagnostic.severity >= Severity::Error {
+                return Some(Failure::new(diagnostic));
+            }
             ctx.render
                 .note(&crate::render::diagnostic_block(&diagnostic));
-            (diagnostic.severity >= Severity::Error).then(|| Failure::new(diagnostic))
+            None
         }
         Event::Output(chunk) => {
             write_output(&chunk);
@@ -1340,6 +1372,39 @@ mod tests {
         session_lines, signal_stops_session, start_mode, state_name,
     };
     use crate::cli::RunArgs;
+
+    /// HUM-529: Derselbe Befund aus der Prüfung und aus dem Start wird nur
+    /// einmal gezeigt; der erste bleibt der Fehlschlag, ein anderer kommt zum
+    /// Zeigen zurück. Mutationsbeweis: `keep_failure`, das jeden späteren
+    /// Befund zurückgibt, zeigt `SANDBOX_049` zweimal, wie unter 0.4.0.
+    #[test]
+    fn the_same_finding_twice_is_shown_once() {
+        use humanitl_core::diagnostics::codes::{SANDBOX_015, SANDBOX_049};
+        use humanitl_core::{Diagnostic, Severity};
+
+        use super::{EXIT_CHECK, Failure, keep_failure};
+
+        let finding = |code, why: &str| {
+            Diagnostic::builder(code, Severity::Blocking)
+                .why(why.to_owned())
+                .build()
+        };
+        let mounts = finding(SANDBOX_049, "mounts_match FAIL: extra=/usr/lib/modules");
+        let mut kept = None;
+        assert_eq!(
+            keep_failure(&mut kept, Failure::with_exit(mounts.clone(), EXIT_CHECK)),
+            None
+        );
+        assert_eq!(keep_failure(&mut kept, Failure::new(mounts.clone())), None);
+        let other = finding(SANDBOX_015, "something else");
+        assert_eq!(
+            keep_failure(&mut kept, Failure::new(other.clone())),
+            Some(other)
+        );
+        let kept = kept.expect("the first finding stays");
+        assert_eq!(kept.diagnostic, mounts);
+        assert_eq!(kept.exit, EXIT_CHECK);
+    }
     use crate::cmd::{EXIT_CHECK, EXIT_USER};
 
     /// Only a command of the caller at a terminal attaches, and neither the

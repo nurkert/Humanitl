@@ -224,3 +224,20 @@ as files because the package names differ between Fedora and openSUSE), and
 the AUR package lists `qemu-system-x86`, `virtiofsd` and `vhost-device-vsock`
 under `optdepends`. Since HUM-461 both also name Podman, so the last sentence
 of the addendum above no longer holds.
+
+## Addendum 2026-11-17: No `ProtectKernelModules` in the unit (HUM-529)
+
+Release 0.4.0 showed that the line broke every session the daemon started under
+the unit. `ProtectKernelModules=yes` puts a read-only tmpfs over
+`/usr/lib/modules` in the daemon's mount namespace; bubblewrap binds `/usr`
+recursively, the tmpfs came along into the sandbox, and the shim refused it as
+a mount outside the plan (`SANDBOX_049`). The kernel level also could not find
+the modules of its guest kernel (`SANDBOX_045`). Neither showed in CI, whose
+tests do not run under the unit; a test now starts the test binary under the
+hardening of the unit file and compares what it sees with the view outside
+(`daemon/crates/sandbox/src/qemu/kvm_tests/hardened.rs`). The line is gone: a
+user service has no `CAP_SYS_MODULE` and loads no module anyway, and
+`SystemCallFilter=~@module` keeps the three module calls denied for the daemon
+and every child. The exposure rises from 3.7 to 3.8, below the 4.0 of HUM-053.
+The measurement P8 above stays as it was taken; for Podman it changes nothing,
+because the other mount-namespace properties still break `newuidmap`.

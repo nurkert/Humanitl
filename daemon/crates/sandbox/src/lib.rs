@@ -133,6 +133,7 @@ pub mod profile;
 mod qemu;
 pub mod refusals;
 pub mod seatbelt;
+mod service_unit;
 pub mod shell;
 pub mod shim_fds;
 pub mod summary;

@@ -57,6 +57,9 @@ struct Host {
     libexec: PathBuf,
     /// Die Fassung des laufenden Kernels, wie `uname -r` sie nennt.
     release: Option<String>,
+    /// Der Weg zur heutigen Unit des Daemons, wenn eine ältere die Module
+    /// verbirgt (HUM-529, [`crate::service_unit`]).
+    service_fix: FixAction,
 }
 
 impl Host {
@@ -71,6 +74,10 @@ impl Host {
                 .ok()
                 .map(|text| text.trim().to_owned())
                 .filter(|text| !text.is_empty()),
+            service_fix: crate::service_unit::InstallKind::probe(
+                &humanitl_config::Paths::from_process(),
+            )
+            .fix(),
         }
     }
 }
@@ -164,6 +171,9 @@ const NO_ANNOUNCE_SUBMOUNTS: &str = "--no-announce-submounts";
 
 /// Die Zeile der Kernel-Konfiguration, ohne die die Stufe nicht startet.
 const VIRTIO_FS_BUILT_IN: &str = "CONFIG_VIRTIO_FS=y";
+
+/// Der Befehl, der in einen installierten Kernel neu startet (HUM-529).
+const REBOOT_COMMAND: &str = "systemctl reboot";
 
 /// So viel einer Kernel-Konfiguration wird gelesen; Debians hat rund 300 KiB.
 const MAX_CONFIG_BYTES: u64 = 8 * 1024 * 1024;
@@ -753,14 +763,84 @@ fn kernel_readable(
             )),
         ));
     }
-    Err(missing(
+    if config.kernel.is_some() {
+        return Err(missing(
+            &format!(
+                "a kernel image, and sandbox.qemu.kernel names {shown}, where there is no file; \
+                 name an existing image there, or leave it empty for the running kernel's"
+            ),
+            FixAction::ChangeSetting {
+                key: "sandbox.qemu.kernel".to_owned(),
+                value: String::new(),
+            },
+        ));
+    }
+    let others = other_kernels(&host.boot, host.release.as_deref());
+    Err(not_installed(
         &format!("a kernel image, and there is no file at {shown}"),
-        FixAction::CopyCommand(Package::Kernel.install(manager).to_owned()),
+        "images",
+        &others,
+        manager,
     ))
+}
+
+/// Die Fassungen der anderen Kernel-Abbilder unter `boot`
+/// (`vmlinuz-<release>`), sortiert, ohne `running`.
+fn other_kernels(boot: &Path, running: Option<&str>) -> Vec<String> {
+    let Ok(entries) = std::fs::read_dir(boot) else {
+        return Vec::new();
+    };
+    let mut releases: Vec<String> = entries
+        .filter_map(Result::ok)
+        .filter_map(|entry| entry.file_name().into_string().ok())
+        .filter_map(|name| name.strip_prefix("vmlinuz-").map(str::to_owned))
+        .filter(|release| {
+            !release.is_empty()
+                && Some(release.as_str()) != running
+                && !release.contains(char::is_control)
+        })
+        .collect();
+    releases.sort();
+    releases
+}
+
+/// `SANDBOX_045` für ein Stück des laufenden Kernels, das fehlt
+/// (HUM-529). Liegen `what` anderer Kernel daneben (`others`), hat meist ein
+/// Upgrade das Paket des laufenden entfernt: Dann hilft ein Neustart in einen
+/// installierten Kernel, und der Befehl, der das Paket installiert, täte
+/// nichts. Sonst fehlt der Kernel und das Paket bringt ihn.
+fn not_installed(
+    what_missing: &str,
+    what: &str,
+    others: &[String],
+    manager: PackageManager,
+) -> Diagnostic {
+    if others.is_empty() {
+        return missing(
+            what_missing,
+            FixAction::CopyCommand(Package::Kernel.install(manager).to_owned()),
+        );
+    }
+    missing(
+        &format!(
+            "{what_missing}. The {what} of {} are installed, so an upgrade most likely removed \
+             the package of the running kernel; installing the kernel package again changes \
+             nothing while this one runs. Restart the computer into an installed kernel",
+            others.join(", ")
+        ),
+        FixAction::CopyCommand(REBOOT_COMMAND.to_owned()),
+    )
 }
 
 /// Das Verzeichnis der Module des Kernels: aus `sandbox.qemu.modules`, sonst
 /// das des laufenden Kernels unter `/usr/lib/modules`.
+///
+/// Der Befund unterscheidet, was ein Mensch dagegen tun kann (HUM-529):
+/// Verborgen ist das Verzeichnis, wenn der Blick mit einem anderen Fehler als
+/// „gibt es nicht" endet, etwa `EACCES` unter einer Unit mit
+/// `ProtectKernelModules` (Humanitl 0.4.0); fehlt es, aber Module anderer
+/// Kernel liegen daneben, hat meist ein Upgrade das Paket des laufenden
+/// entfernt ([`not_installed`]).
 fn modules_present(
     host: &Host,
     config: &QemuConfig,
@@ -771,16 +851,75 @@ fn modules_present(
         (None, Some(release)) => host.modules_root.join(release),
         (None, None) => return Err(release_unknown("sandbox.qemu.modules")),
     };
-    if dir.is_dir() {
-        return Ok(dir);
+    let shown = dir.display();
+    let setting = || FixAction::ChangeSetting {
+        key: "sandbox.qemu.modules".to_owned(),
+        value: String::new(),
+    };
+    match std::fs::metadata(&dir) {
+        Ok(meta) if meta.is_dir() => Ok(dir),
+        Ok(_) if config.modules.is_some() => Err(missing(
+            &format!(
+                "the module directory of the kernel, and sandbox.qemu.modules names {shown}, \
+                 which is not a directory"
+            ),
+            setting(),
+        )),
+        Ok(_) => Err(missing(
+            &format!("the module directory of the running kernel, and {shown} is not a directory"),
+            FixAction::CopyCommand(Package::Kernel.install(manager).to_owned()),
+        )),
+        Err(err) if err.kind() != std::io::ErrorKind::NotFound => Err(missing(
+            &format!(
+                "the module directory of the kernel, and {shown} is hidden from the daemon \
+                 ({err}). A service unit with ProtectKernelModules hides it, as the unit of \
+                 Humanitl 0.4.0 did; the current unit leaves it visible: {}",
+                crate::service_unit::BOTH_WAYS
+            ),
+            host.service_fix.clone(),
+        )),
+        Err(_) if config.modules.is_some() => Err(missing(
+            &format!(
+                "the module directory of the kernel, and sandbox.qemu.modules names {shown}, \
+                 where there is nothing; name the module directory of the kernel in \
+                 sandbox.qemu.modules, or leave sandbox.qemu.kernel and sandbox.qemu.modules \
+                 empty for the running kernel's"
+            ),
+            setting(),
+        )),
+        Err(_) => {
+            let others = other_module_dirs(&host.modules_root, host.release.as_deref());
+            Err(not_installed(
+                &format!(
+                    "the module directory of the running kernel, and there is no directory at \
+                     {shown}"
+                ),
+                "modules",
+                &others,
+                manager,
+            ))
+        }
     }
-    Err(missing(
-        &format!(
-            "the module directory of the kernel, and there is no directory at {}",
-            dir.display()
-        ),
-        FixAction::CopyCommand(Package::Kernel.install(manager).to_owned()),
-    ))
+}
+
+/// Die anderen Verzeichnisse unter `root` ohne `running`: die Module
+/// anderer Kernel, sortiert, ohne Verweise und versteckte Namen.
+fn other_module_dirs(root: &Path, running: Option<&str>) -> Vec<String> {
+    let Ok(entries) = std::fs::read_dir(root) else {
+        return Vec::new();
+    };
+    let mut names: Vec<String> = entries
+        .filter_map(Result::ok)
+        .filter(|entry| entry.file_type().is_ok_and(|kind| kind.is_dir()))
+        .filter_map(|entry| entry.file_name().into_string().ok())
+        .filter(|name| {
+            !name.starts_with('.')
+                && Some(name.as_str()) != running
+                && !name.contains(char::is_control)
+        })
+        .collect();
+    names.sort();
+    names
 }
 
 /// Die Fassung des laufenden Kernels ist unbekannt, und `key` ist leer.
@@ -824,6 +963,7 @@ mod tests {
                 modules_root: dir.path().join("modules"),
                 libexec: dir.path().join("libexec"),
                 release: Some(RELEASE.to_owned()),
+                service_fix: FixAction::InstallService,
             };
             std::fs::write(&host.kvm, "").expect("kvm");
             std::fs::create_dir_all(&host.boot).expect("boot");
@@ -1008,6 +1148,108 @@ mod tests {
             })
             .expect("the configured kernel has virtiofs built in");
         assert_eq!(config_beside(Path::new("/k/bzImage")), None);
+    }
+
+    fn modules_line(fixture: &Fixture, config: &QemuConfig) -> Result<String, Diagnostic> {
+        each_on(&fixture.host, &fixture.env, config, PackageManager::Apt)
+            .into_iter()
+            .find(|(which, _)| *which == Prerequisite::Modules)
+            .map(|(_, line)| line)
+            .expect("a line for the modules")
+    }
+
+    /// HUM-529: Ein Verzeichnis, das der Blick nicht erreicht (hier: ein
+    /// Elternverzeichnis ohne Suchrecht, wie `ProtectKernelModules` es unter
+    /// der Unit von 0.4.0 machte), heißt verborgen, nie „gibt es nicht", und
+    /// der Weg ist die Unit, die Humanitl schreibt, kein Paket. Als Root gilt
+    /// kein Suchrecht, dort sagt der Test nichts.
+    #[test]
+    fn a_hidden_module_directory_is_named_hidden_and_not_missing() {
+        use std::os::unix::fs::PermissionsExt as _;
+        if rustix::process::geteuid().is_root() {
+            eprintln!("skipped: root searches every directory");
+            return;
+        }
+        let mut fixture = Fixture::complete();
+        let root = fixture.host.modules_root.clone();
+        std::fs::set_permissions(&root, std::fs::Permissions::from_mode(0o000)).unwrap();
+        let line = modules_line(&fixture, &QemuConfig::default());
+        // Mit dem Paket ist der Weg dessen Update und ein Neustart des
+        // Dienstes (`crate::service_unit`).
+        fixture.host.service_fix =
+            FixAction::CopyCommand(crate::service_unit::RESTART_COMMAND.to_owned());
+        let packaged = modules_line(&fixture, &QemuConfig::default());
+        std::fs::set_permissions(&root, std::fs::Permissions::from_mode(0o755)).unwrap();
+        assert_eq!(
+            command(&packaged.expect_err("hidden as well")),
+            crate::service_unit::RESTART_COMMAND
+        );
+        let hidden = line.expect_err("the daemon cannot see it");
+        for way in ["humanitl daemon install", "systemctl --user daemon-reload"] {
+            assert!(hidden.why.contains(way), "{way}: {}", hidden.why);
+        }
+        assert!(
+            hidden.why.contains("hidden from the daemon"),
+            "{}",
+            hidden.why
+        );
+        assert!(
+            !hidden.why.contains("there is no directory"),
+            "{}",
+            hidden.why
+        );
+        assert_eq!(hidden.fix, Some(FixAction::InstallService));
+    }
+
+    /// HUM-529: Fehlen die Module des laufenden Kernels, aber andere sind
+    /// installiert, hat ein Upgrade das Paket entfernt; der Weg ist ein
+    /// Neustart, nie `apt install`, das nichts täte. Dasselbe für das
+    /// Abbild unter `/boot`. Ohne einen anderen Kernel bleibt es das Paket,
+    /// und ein gesetzter Pfad zeigt auf seinen Schlüssel. Mutationsbeweis:
+    /// `not_installed` ohne den Zweig für andere Kernel wird hier rot.
+    #[test]
+    fn a_running_kernel_removed_by_an_upgrade_asks_for_a_reboot() {
+        let fixture = Fixture::complete();
+        let modules = fixture.host.modules_root.join(RELEASE);
+        std::fs::remove_dir_all(&modules).unwrap();
+        // Nur Module eines anderen Kernels, noch kein anderes Abbild.
+        std::fs::create_dir_all(fixture.host.modules_root.join("7.3.5+deb14-amd64")).unwrap();
+        std::fs::create_dir_all(fixture.host.modules_root.join(".hidden")).unwrap();
+        let err = modules_line(&fixture, &QemuConfig::default()).expect_err("removed");
+        assert_eq!(command(&err), REBOOT_COMMAND, "{}", err.why);
+        assert!(
+            err.why.contains("modules of 7.3.5+deb14-amd64 are"),
+            "{}",
+            err.why
+        );
+        assert!(
+            err.why.contains(&modules.display().to_string()),
+            "{}",
+            err.why
+        );
+
+        std::fs::remove_file(fixture.host.boot.join(format!("vmlinuz-{RELEASE}"))).unwrap();
+        let err = fixture.finding(&QemuConfig::default());
+        assert!(err.why.contains("kernel image"), "{}", err.why);
+        assert_eq!(command(&err), "sudo apt install linux-image-amd64");
+        std::fs::write(fixture.host.boot.join("vmlinuz-7.3.5+deb14-amd64"), "k").unwrap();
+        let err = fixture.finding(&QemuConfig::default());
+        assert_eq!(command(&err), REBOOT_COMMAND, "{}", err.why);
+        assert!(err.why.contains("7.3.5+deb14-amd64"), "{}", err.why);
+
+        std::fs::remove_dir_all(fixture.host.modules_root.join("7.3.5+deb14-amd64")).unwrap();
+        let err = modules_line(&fixture, &QemuConfig::default()).expect_err("no modules at all");
+        assert_eq!(command(&err), "sudo apt install linux-image-amd64");
+
+        let configured = QemuConfig {
+            modules: Some(fixture.dir.path().join("own-modules")),
+            ..QemuConfig::default()
+        };
+        let err = modules_line(&fixture, &configured).expect_err("unset");
+        assert!(matches!(
+            &err.fix,
+            Some(FixAction::ChangeSetting { key, .. }) if key == "sandbox.qemu.modules"
+        ));
     }
 
     /// Der erste fehlende Punkt wird genannt, mit dem Paket, das ihn bringt;

@@ -1652,9 +1652,10 @@ The systemd unit (`packaging/systemd/humanitld.service`) runs as a user service,
 unit, and is hardened as far as the sandbox backend allows (HUM-053): `NoNewPrivileges`,
 `PrivateTmp`, `ProtectSystem=strict` with `ReadWritePaths` for the data, config and runtime
 directories, `PrivateIPC`, `PrivateMounts`, `PrivateUsers`, `ProtectClock`,
-`ProtectControlGroups`, `ProtectKernelModules`, `ProtectProc=invisible`, `KeyringMode=private`,
+`ProtectControlGroups`, `ProtectProc=invisible`, `KeyringMode=private`,
 `LockPersonality`, `RestrictRealtime`, `RestrictFileSystems=~@privileged-api`,
-`CapabilityBoundingSet=CAP_SYS_ADMIN`, `SystemCallFilter=@system-service @mount @sandbox sethostname`
+`CapabilityBoundingSet=CAP_SYS_ADMIN`, `SystemCallFilter=@system-service @mount @sandbox sethostname`,
+`SystemCallFilter=~@module`
 and `RestrictAddressFamilies=AF_UNIX AF_INET AF_INET6 AF_NETLINK`. Every child of the daemon
 inherits these restrictions, the sandbox and the agent included; they add to the three guarantees
 and replace none of them.
@@ -1663,7 +1664,14 @@ Deliberately **not** set, each measured: `RestrictNamespaces` (the sandbox needs
 `ProtectKernelTunables`, `ProtectKernelLogs` and `ProtectHostname` (the sandbox could no longer
 mount its own `/proc`), `RestrictSUIDSGID`, `MemoryDenyWriteExecute` (inherited by the agent; node
 and every JIT runtime dies at start), `SystemCallArchitectures=native` (the shim dies when it
-checks its own filter), `PrivateDevices` (no terminal for the agent) and `ProtectHome`.
+checks its own filter), `PrivateDevices` (no terminal for the agent), `ProtectHome` and, since HUM-529,
+`ProtectKernelModules`: it put a read-only tmpfs over `/usr/lib/modules` in the daemon's mount
+namespace, bubblewrap carried that mount into every sandbox with its recursive bind of `/usr`, and
+the shim refused it as a mount outside the plan (`SANDBOX_049`); with Humanitl 0.4.0 no session
+started through the daemon, and the kernel level lost the modules of its guest kernel
+(`SANDBOX_045`). A user service has no `CAP_SYS_MODULE` and loads no module anyway;
+`SystemCallFilter=~@module` keeps `init_module`, `finit_module` and `delete_module` denied for the
+daemon and every child.
 `ProtectHome=read-only` does not fit projects under `$HOME` that are mounted writable; the daemon
 runs as the same user anyway. `ProtectSystem=strict` makes everything outside `$HOME` and the
 runtime directory read-only: a project outside `$HOME` is read-only in the sandbox until the human

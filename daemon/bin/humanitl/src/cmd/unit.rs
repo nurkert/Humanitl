@@ -911,7 +911,6 @@ mod tests {
             "PrivateUsers=yes",
             "ProtectClock=yes",
             "ProtectControlGroups=yes",
-            "ProtectKernelModules=yes",
             "ProtectProc=invisible",
             "KeyringMode=private",
             "LockPersonality=yes",
@@ -919,6 +918,7 @@ mod tests {
             "RestrictFileSystems=~@privileged-api",
             "CapabilityBoundingSet=CAP_SYS_ADMIN",
             "SystemCallFilter=@system-service @mount @sandbox sethostname",
+            "SystemCallFilter=~@module",
             "SystemCallErrorNumber=EPERM",
             "RestrictAddressFamilies=AF_UNIX AF_INET AF_INET6 AF_NETLINK",
         ] {
@@ -928,6 +928,18 @@ mod tests {
                 "{property} must stand exactly once in the unit"
             );
         }
+        // HUM-529: `ProtectKernelModules` legte ein tmpfs über
+        // `/usr/lib/modules`, das bubblewrap mit `/usr` in die Sandbox nahm
+        // (`SANDBOX_049` bei jedem Start über den Daemon), und verbarg die
+        // Module vor der Kernel-Stufe (`SANDBOX_045`). Die Aufrufe, die es
+        // sperrte, sperrt `SystemCallFilter=~@module`.
+        assert!(
+            !lines
+                .iter()
+                .any(|line| line.starts_with("ProtectKernelModules=")),
+            "ProtectKernelModules hides /usr/lib/modules behind a mount that bubblewrap \
+             carries into every sandbox (HUM-529)"
+        );
         assert!(
             !lines.iter().any(|line| line.contains("containers")),
             "the daemon's unit gives nothing to the container engine; it starts through \
@@ -1091,6 +1103,20 @@ mod tests {
             allowed.contains("sethostname"),
             "SystemCallFilter={} does not reach sethostname, and bubblewrap names the sandbox",
             words.join(" ")
+        );
+        // HUM-529: Ohne `ProtectKernelModules` sperrt der Filter die Aufrufe,
+        // die Module laden und entladen. Die Zeile der Erlaubnis erreicht
+        // keinen davon, und `~@module` steht ausdrücklich dahinter.
+        for module_call in ["init_module", "finit_module", "delete_module"] {
+            assert!(
+                !allowed.contains(module_call),
+                "SystemCallFilter={} reaches {module_call}",
+                words.join(" ")
+            );
+        }
+        assert!(
+            directives(TEMPLATE).any(|line| line == "SystemCallFilter=~@module"),
+            "the module calls are denied by name as well"
         );
     }
 
