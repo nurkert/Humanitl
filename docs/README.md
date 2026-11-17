@@ -14,6 +14,7 @@ fails when they are stale.
 | [`guides/agent-profiles.md`](guides/agent-profiles.md) | session profiles, the OpenCode adapter, writing an adapter, phone-home hosts |
 | [`guides/verify-download.md`](guides/verify-download.md) | checking a download against `SHA256SUMS`, and what that proves |
 | [`guides/decision-proxy-mitmproxy.md`](guides/decision-proxy-mitmproxy.md) | mitmproxy behind Humanitl: the two CAs, `egress.proxy`, ask mode `upstream`, deciding in mitmproxy |
+| [`guides/decision-proxy-burp.md`](guides/decision-proxy-burp.md) | Burp Suite behind Humanitl, not yet tried with a current build: exporting the CA, intercepting, what is still open |
 
 ## Reference
 
