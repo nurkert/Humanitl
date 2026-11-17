@@ -17,6 +17,64 @@ section here and list their commits instead.
 
 ## [Unreleased]
 
+## [0.4.0] - 2026-11-17
+
+A decision proxy of your own behind Humanitl, a one-command start, and a
+clear notice when a cloud model receives what the agent reads. The protocol
+and the configuration gain fields (protocol 1.43), so this is a minor
+version.
+
+### Added
+
+- `humanitl go`: one command starts a disposable session and lands in the
+  agent's terminal, with a short spinning-fist splash while the sandbox
+  starts (`terminal.splash`).
+- Decision proxy (opt-in): allowed requests can leave through an
+  intercepting proxy of your choice, such as mitmproxy, instead of going
+  direct (`egress.proxy`, `egress.proxy_ca`, `egress.proxy_auth_ref`,
+  `egress.proxy_resolve`, `egress.proxy_response_timeout_secs`). By default
+  the proxy resolves names and Humanitl sends `CONNECT host:port`, still
+  refusing local names and private addresses before the proxy;
+  `proxy_resolve = "humanitl"` resolves and checks in Humanitl first.
+  Configure it in the app (Settings › Decision proxy) or with
+  `humanitl egress status|check|auth`. Without `egress.proxy` nothing
+  changes.
+- Ask mode `upstream` (`hold.ask_mode = "upstream"`, needs `egress.proxy`):
+  a request no rule decides goes to that proxy unheld, and the proxy
+  decides. Block rules stay final, `redact` rules still hold in Humanitl,
+  and a request with a recognised secret never reaches the proxy while
+  `hold.hard_block_checksum_secrets` is on. History shows such requests as
+  "Forwarded" with the proxy's answer; `humanitl sessions` and
+  `humanitl sandbox plan` show who decides.
+- Guide: mitmproxy as the decision proxy behind Humanitl, tried with
+  mitmproxy 12.3.1
+  ([`docs/guides/decision-proxy-mitmproxy.md`](docs/guides/decision-proxy-mitmproxy.md)).
+- Cloud inference notice: when the agent's model runs at a provider outside
+  this machine, Humanitl says once per agent and provider that what the
+  agent reads goes to that provider, asks before the first start, and keeps
+  an orange tag at the top of the session, an orange line in the CLI and a
+  `humanitl doctor` row. Local endpoints get none; mark a model server as
+  local with `llm.servers.NAME.local = true`.
+
+### Changed
+
+- The security statement in the README now says that every request is
+  approved by a rule, by you, or by your decision proxy, and names the
+  limits of the proxy mode in `docs/SECURITY.md` and the threat model.
+- The recorder database gains a column for proxy decisions; it is migrated
+  on the first start.
+- The app refuses to start a session against a daemon older than this
+  version and names the restart.
+
+### Security
+
+- Website dependencies: `astro` 7.4.12 fixes GHSA-r3h5-4585-7x3w and
+  GHSA-mh32-jxcr-mh9f. humanitl.de is a static site, so neither applied to
+  it.
+- `chrono` was reported as unmaintained (RUSTSEC-2026-0543), with no known
+  vulnerability; it is accepted until 2027-01-17 while the move to `jiff`
+  is prepared.
+
 ## [0.3.0] - 2026-11-15
 
 Fixes from a review of the whole tool, most of them in the kernel level. The
