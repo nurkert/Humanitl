@@ -273,6 +273,11 @@ pub const MIGRATED_NAME: &str = "default";
 /// Die Felder eines Eintrags, die zugleich flache Schlüssel unter `llm` sind.
 pub const FIELDS: [&str; 3] = ["endpoint", "models", "api_key_ref"];
 
+/// Die Markierung eines Eintrags als Server im eigenen Netz (HUM-516). Kein
+/// flacher Schlüssel unter `llm`: Sie gehört dem Eintrag und seiner Adresse,
+/// und ein Endpunkt mit anderer Herkunft verliert sie ([`edit`]).
+pub const LOCAL: &str = "local";
+
 /// Ein Eintrag, wie er in `config.toml` steht.
 #[derive(Debug, Clone, PartialEq, Eq, Default)]
 pub struct ServerEntry {
@@ -578,6 +583,12 @@ pub fn edit(
         .unwrap_or_default()
         .to_owned();
     let origin_changed = endpoint.is_some_and(|new| !same_origin(&old_endpoint, new));
+    if origin_changed {
+        // Die Markierung als Server im eigenen Netz galt der alten Adresse;
+        // eine neue bekäme sonst still keinen Hinweis auf Cloud-Inferenz
+        // (HUM-516).
+        entry.remove(LOCAL);
+    }
     let detached = if origin_changed {
         entry
             .remove("api_key_ref")
@@ -1499,7 +1510,7 @@ impl State {
             }
             for (name, entry) in &self.servers {
                 let old = before.servers.get(name);
-                for field in FIELDS {
+                for field in FIELDS.into_iter().chain([LOCAL]) {
                     let new_value = entry.get(field);
                     if old.and_then(|old| old.get(field)) != new_value {
                         edits.push(Edit::new(
@@ -1757,6 +1768,37 @@ api_key_ref = "secret-service:humanitl/llm"
         ));
         assert!(!same_origin("https://a.example/v1", "http://a.example/v1"));
         assert!(!same_origin("not a url", "not a url"));
+    }
+
+    /// Die Markierung `local` gilt der Adresse, für die sie gesetzt wurde:
+    /// Ein Endpunkt mit anderer Herkunft verliert sie, einer mit derselben
+    /// behält sie (HUM-516).
+    #[test]
+    fn a_new_origin_drops_the_local_mark() {
+        let marked = table(
+            r#"
+[llm]
+active = "office"
+[llm.servers.office]
+endpoint = "https://llm.example.org/v1"
+local = true
+"#,
+        );
+        let same = edit(
+            &marked,
+            "office",
+            Some("https://llm.example.org/api/v1"),
+            None,
+        )
+        .unwrap();
+        let kept = apply(&marked, &same.edits);
+        assert_eq!(
+            get(&kept, "llm.servers.office.local").and_then(TomlValue::as_bool),
+            Some(true)
+        );
+        let moved = edit(&marked, "office", Some("https://api.openai.com/v1"), None).unwrap();
+        let after = apply(&marked, &moved.edits);
+        assert!(get(&after, "llm.servers.office.local").is_none());
     }
 
     /// Der aktive Eintrag geht nicht ohne Nachfolger, solange es andere gibt;

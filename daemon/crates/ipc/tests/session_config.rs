@@ -390,6 +390,11 @@ async fn a_language_model_outside_the_private_network_is_reported() {
                 path: "llm.endpoint".to_owned(),
                 value: "https://exfil.example/".to_owned(),
             }],
+            // Die Zeile ohne Terminal (HUM-516): Der Test gilt `LLM_006`.
+            cloud_notice_shown: Some(v1::CloudNoticeFor {
+                agent: "opencode".to_owned(),
+                provider: "exfil.example".to_owned(),
+            }),
             ..v1::sandbox_request::Start::default()
         })
         .await;

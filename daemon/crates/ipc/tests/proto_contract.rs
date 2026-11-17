@@ -961,6 +961,21 @@ const SANDBOX_EVENT_FIELDS: &FieldTable = &[
         ".humanitl.v1.SandboxEvent.ImagePullCancelled",
         Some("event"),
     ),
+    // HUM-516: der fünfzehnte Arm, die Antwort auf
+    // `acknowledge_cloud_inference`.
+    (
+        "cloud_inference_acknowledged",
+        15,
+        ".humanitl.v1.SandboxEvent.CloudInferenceAcknowledged",
+        Some("event"),
+    ),
+    // HUM-516: der sechzehnte Arm, die Antwort auf `check_cloud_inference`.
+    (
+        "cloud_inference_check",
+        16,
+        ".humanitl.v1.SandboxEvent.CloudInferenceCheck",
+        Some("event"),
+    ),
 ];
 
 /// `DisposableChange` vollständig (HUM-350): Die Kennung ist der Hash des
@@ -1093,6 +1108,80 @@ fn an_image_pull_keeps_its_shape() {
         humanitl_ipc::v1::MountMode::Image as i32,
         9,
         "MOUNT_MODE_IMAGE keeps its number"
+    );
+}
+
+/// Der Hinweis auf Cloud-Inferenz (HUM-516): eine Nachricht im
+/// Schnappschuss, eine Operation zum Bestätigen und ihre Antwort, alle mit
+/// Agent und Anbieter.
+#[test]
+fn the_cloud_inference_notice_keeps_its_shape() {
+    let field = named_field("SandboxEvent.Status", "cloud_inference");
+    assert_eq!(field.number(), 24);
+    assert_eq!(field.type_name(), ".humanitl.v1.CloudInference");
+    assert_eq!(
+        check_fields(
+            "CloudInference",
+            &message("CloudInference"),
+            &[
+                ("agent", 1, "string", None),
+                ("provider", 2, "string", None),
+                ("acknowledged", 3, "bool", None),
+                ("notice", 4, ".humanitl.v1.Diagnostic", None),
+            ]
+        ),
+        Ok(())
+    );
+    let op = named_field("SandboxRequest", "acknowledge_cloud_inference");
+    assert_eq!(op.number(), 13);
+    let check = named_field("SandboxRequest", "check_cloud_inference");
+    assert_eq!(check.number(), 14);
+    assert_eq!(check.type_name(), ".humanitl.v1.SandboxRequest.Start");
+    assert_eq!(
+        named_field("SandboxRequest.Start", "acknowledge_cloud_inference").number(),
+        11
+    );
+    assert_eq!(
+        named_field("SandboxRequest.Start", "cloud_notice_shown").number(),
+        12
+    );
+    for answer in ["acknowledge_cloud_inference", "cloud_notice_shown"] {
+        assert_eq!(
+            named_field("SandboxRequest.Start", answer).type_name(),
+            ".humanitl.v1.CloudNoticeFor",
+            "{answer} names what was shown"
+        );
+    }
+    assert_eq!(
+        check_fields(
+            "CloudNoticeFor",
+            &message("CloudNoticeFor"),
+            &[
+                ("agent", 1, "string", None),
+                ("provider", 2, "string", None),
+            ]
+        ),
+        Ok(())
+    );
+    let pair = &[
+        ("agent", 1, "string", None),
+        ("provider", 2, "string", None),
+    ];
+    assert_eq!(
+        check_fields(
+            "SandboxRequest.AcknowledgeCloudInference",
+            &message("SandboxRequest.AcknowledgeCloudInference"),
+            pair
+        ),
+        Ok(())
+    );
+    assert_eq!(
+        check_fields(
+            "SandboxEvent.CloudInferenceAcknowledged",
+            &message("SandboxEvent.CloudInferenceAcknowledged"),
+            pair
+        ),
+        Ok(())
     );
 }
 

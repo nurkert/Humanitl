@@ -2067,6 +2067,17 @@ impl v1::humanitl_server::Humanitl for IpcServer {
                     .map(|config| config.egress)
                     .unwrap_or_default();
                 crate::egress::insert_doctor_line(&mut report, &egress);
+                // Wohin die Inferenz des Agenten geht (HUM-516), aus der
+                // Konfiguration ohne Projekt, wie sie jetzt auf der Platte
+                // steht.
+                if let Ok(resolved) = humanitl_config::resolve(
+                    &humanitl_config::ProfileSelection::default(),
+                    None,
+                    setup.paths.env(),
+                    &[],
+                ) {
+                    crate::cloud::insert_doctor_line(&mut report, &resolved.config);
+                }
                 if let Ok(Some(groups)) = groups.join() {
                     report.backends = convert::doctor_backends_to_proto(&groups);
                 }

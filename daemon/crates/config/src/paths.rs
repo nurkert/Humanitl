@@ -134,6 +134,16 @@ impl Paths {
         self.data_dir().join("project-servers.toml")
     }
 
+    /// Die bestätigten Hinweise auf Cloud-Inferenz (HUM-516): je Agent die
+    /// Anbieter, deren Hinweis der Mensch beim ersten Start bestätigt hat.
+    ///
+    /// Im Datenverzeichnis des Daemons und nie im Projekt, aus demselben
+    /// Grund wie [`Paths::project_servers_path`].
+    #[must_use]
+    pub fn cloud_inference_path(&self) -> PathBuf {
+        self.data_dir().join("cloud-inference.toml")
+    }
+
     /// Die Datenbank der Aufzeichnung.
     #[must_use]
     pub fn db_path(&self) -> PathBuf {

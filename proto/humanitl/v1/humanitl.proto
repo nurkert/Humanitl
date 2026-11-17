@@ -1041,6 +1041,22 @@ message SandboxRequest {
     // Ziehens. Eine leere oder unlesbare Kennung ist `IPC_005`. Ein Daemon
     // vor Minor 37 antwortet mit einer Momentaufnahme wie auf `status`.
     CancelImagePull cancel_image_pull = 12;
+    // Merkt die Bestaetigung des Hinweises auf Cloud-Inferenz fuer genau
+    // diesen Agenten und Anbieter (HUM-516), im Datenverzeichnis des Daemons,
+    // nie im Projekt. Die Antwort ist genau ein
+    // `SandboxEvent.cloud_inference_acknowledged`, bei einer Kennung oder
+    // einem Host, die keine sind, ein `Diagnostic` (`CONFIG_003`). Danach
+    // traegt `Status.cloud_inference.acknowledged` fuer diese Kombination
+    // `true`, und kein Client fragt beim Start noch einmal. Ein Daemon vor
+    // Minor 43 antwortet mit einer Momentaufnahme wie auf `status`.
+    AcknowledgeCloudInference acknowledge_cloud_inference = 13;
+    // Wohin die Inferenz eines Starts mit genau diesen Angaben ginge
+    // (HUM-516), `cli_overrides` eingeschlossen, ohne dass etwas startet oder
+    // gemerkt wird. Die Antwort ist genau ein
+    // `SandboxEvent.cloud_inference_check`, bei einer Konfiguration, die
+    // sich nicht aufloesen laesst, ein `Diagnostic`. Ein Client fragt damit
+    // vor dem Start, ob er einmal nachfragen muss.
+    Start check_cloud_inference = 14;
   }
 
   // Welches Abbild gezogen wird (HUM-439).
@@ -1068,6 +1084,14 @@ message SandboxRequest {
   }
 
   // Welches Ziehen abgebrochen wird (HUM-457).
+  // Welche Kombination aus Agent und Anbieter bestaetigt ist (HUM-516).
+  message AcknowledgeCloudInference {
+    // Wie `CloudInference.agent`, etwa `opencode`.
+    string agent = 1;
+    // Wie `CloudInference.provider`, etwa `api.anthropic.com`.
+    string provider = 2;
+  }
+
   message CancelImagePull {
     // Die `ImagePull.pull_id` des Ziehens.
     string pull_id = 1;
@@ -1149,6 +1173,20 @@ message SandboxRequest {
     // startet. Ein Daemon vor Minor 28 kennt das Feld nicht und nimmt die
     // Wahl ohne ihn.
     string llm_server = 10;
+    // Der Mensch hat den Hinweis auf Cloud-Inferenz fuer genau diesen Agenten
+    // und Anbieter bestaetigt (HUM-516), so wie der Client sie gezeigt hat.
+    // Stimmen beide mit dem ueberein, was die Aufloesung dieses Starts
+    // ergibt, merkt der Daemon die Bestaetigung und startet; sonst lehnt er
+    // mit `LLM_011` und dem Anbieter ab, den der Start wirklich haette.
+    CloudNoticeFor acknowledge_cloud_inference = 11;
+    // Der Client hat den Hinweis fuer diesen Agenten und Anbieter gezeigt,
+    // ohne fragen zu koennen (HUM-516): ohne Terminal oder mit `--json` eine
+    // Zeile auf stderr. Stimmt er mit der Aufloesung ueberein, startet der
+    // Daemon und merkt nichts. Ohne passendes Feld lehnt der Daemon einen
+    // Start mit einer unbestaetigten Kombination mit `LLM_011` ab; er
+    // entscheidet an der ganz aufgeloesten Konfiguration des Starts,
+    // `cli_overrides` eingeschlossen.
+    CloudNoticeFor cloud_notice_shown = 12;
   }
 
   // Ein Konfigurationswert, den der Client fuer diese Sitzung setzt.
@@ -1398,9 +1436,26 @@ message SandboxEvent {
     ImagePulled image_pulled = 13;
     // Die Antwort auf `SandboxRequest.cancel_image_pull` (HUM-457).
     ImagePullCancelled image_pull_cancelled = 14;
+    // Die Antwort auf `SandboxRequest.acknowledge_cloud_inference` (HUM-516).
+    CloudInferenceAcknowledged cloud_inference_acknowledged = 15;
+    // Die Antwort auf `SandboxRequest.check_cloud_inference` (HUM-516).
+    CloudInferenceCheck cloud_inference_check = 16;
   }
 
   // Ob ein Abbruch ein laufendes Ziehen traf (HUM-457).
+  // Die gespeicherte Bestaetigung, in der Form, in der der Daemon sie
+  // ablegt: `provider` kanonisch, wie `CloudInference.provider`.
+  message CloudInferenceAcknowledged {
+    string agent = 1;
+    string provider = 2;
+  }
+
+  // Wohin die Inferenz des geprueften Starts ginge; `cloud_inference` fehlt,
+  // wenn sie lokal bliebe.
+  message CloudInferenceCheck {
+    CloudInference cloud_inference = 1;
+  }
+
   message ImagePullCancelled {
     // Wahr: Der Daemon hat die Engine unterbrochen, und das Ziehen ist
     // beendet. Falsch: Unterbrochen wurde nichts; es lief kein Ziehen unter
@@ -1570,6 +1625,17 @@ message SandboxEvent {
     // aus `egress`; die Oberflaeche nennt ihn und wer aufloest. Leer im
     // Schnappschuss eines Befunds und bei einem Daemon vor Minor 42.
     string ask_mode = 23;
+    // Ob der Agent dieser Sitzung seine Inferenz an einen Anbieter ausserhalb
+    // dieses Rechners schickt (HUM-516): waehrend eine Sandbox laeuft fuer
+    // ihre Konfiguration, sonst fuer die eines Starts mit diesem Plan. Fehlt,
+    // wenn der Endpunkt auf dem Loopback, im eigenen Netz oder auf einem
+    // gespeicherten Server mit `local = true` liegt, ohne Endpunkt, im
+    // Schnappschuss eines Befunds (ausser nach `LLM_011`: dann der Agent und
+    // der Anbieter, die bestaetigt werden muessen) und bei einem Daemon vor
+    // Minor 43. Die
+    // Oberflaeche zeigt es als Tag oben in der Sitzung, die Kommandozeile
+    // beim Start und in der Statuszeile.
+    CloudInference cloud_inference = 24;
   }
 
   // Eine Zeile aus dem Log der Sandbox.
@@ -1577,6 +1643,37 @@ message SandboxEvent {
     google.protobuf.Timestamp at = 1;
     string line = 2;
   }
+}
+
+// ---------- Cloud-Inferenz (HUM-516) ----------
+
+// Ein Agent, dessen Inferenz an einen Anbieter ausserhalb dieses Rechners
+// geht. Was der Agent liest, geht als Teil seiner Anfragen dorthin; Humanitl
+// isoliert das System und haelt jede andere Verbindung an, die Inferenz ist
+// bewusst freigegeben. Der Hinweis blockiert nichts.
+message CloudInference {
+  // Die Kennung des Adapters (`agent.adapter`), etwa `opencode`.
+  string agent = 1;
+  // Der Host des Anbieters in kanonischer Form, ohne Port und Pfad, etwa
+  // `api.anthropic.com`.
+  string provider = 2;
+  // Ob der Mensch den Hinweis fuer diesen Agenten und Anbieter schon einmal
+  // bestaetigt hat (`SandboxRequest.acknowledge_cloud_inference`). Falsch
+  // heisst: Ein Client fragt vor dem Start einmal nach.
+  bool acknowledged = 3;
+  // Der ganze Hinweis als `LLM_010` (Warnung), mit dem englischen Satz in
+  // `why`, fuer einen Client ohne eigenen Text.
+  Diagnostic notice = 4;
+}
+
+// Agent und Anbieter, fuer die ein Client den Hinweis auf Cloud-Inferenz
+// gezeigt oder bestaetigt hat (HUM-516). Die Antwort gilt nur fuer genau
+// diese Kombination.
+message CloudNoticeFor {
+  // Wie `CloudInference.agent`.
+  string agent = 1;
+  // Wie `CloudInference.provider`.
+  string provider = 2;
 }
 
 // ---------- Entscheidungs-Proxy (HUM-511) ----------

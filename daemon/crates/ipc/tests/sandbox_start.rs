@@ -177,6 +177,8 @@ impl Fixture {
                 // Laufzeitverzeichnis unter `/dev/shm`, eine Wegwerf-Sandbox.
                 sandbox_mode: "direct".to_owned(),
                 llm_server: String::new(),
+                acknowledge_cloud_inference: None,
+                cloud_notice_shown: None,
             })),
         }
     }

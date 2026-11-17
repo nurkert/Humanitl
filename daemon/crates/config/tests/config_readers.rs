@@ -590,7 +590,9 @@ fn the_schema_hides_no_leaf_from_the_walk() {
 /// die drei Felder, die unter `llm` als eigene Blätter mit eigener Zeile
 /// stehen, und der aktive Eintrag wird beim Laden zu ihnen; ihre Leser sind
 /// seine Leser. Ein viertes Feld hätte keinen solchen Zwilling, und dieser
-/// Test nennt es.
+/// Test nennt es. Die eine Ausnahme ist `local` (HUM-516): Die Markierung
+/// gehört dem Eintrag und seiner Adresse, nie einer flachen Ansicht, und ihr
+/// Leser ist `humanitl_config::inference::provider_outside`.
 const SERVERS_CONTAINER: &str = "llm.servers";
 
 #[test]
@@ -607,10 +609,14 @@ fn a_server_entry_carries_only_fields_that_have_a_flat_twin() {
         fields,
         humanitl_config::servers::FIELDS
             .into_iter()
+            .chain([humanitl_config::servers::LOCAL])
             .collect::<BTreeSet<_>>()
     );
     let register = register();
-    for field in fields {
+    for field in fields
+        .into_iter()
+        .filter(|field| *field != humanitl_config::servers::LOCAL)
+    {
         assert!(
             register.contains_key(format!("llm.{field}").as_str()),
             "llm.servers.*.{field} has no flat twin with a register line"

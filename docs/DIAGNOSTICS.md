@@ -20,7 +20,7 @@ Entfernen eines Codes.
 | sandbox | `SANDBOX` | 001 | 059 | 001-006 Launcher und Profil, 007 Bridge-Richtung, 010-012 Start-Fehler, 019 verweigerte Versuche ungemeldet (HUM-138), 020-025 /work-Härtung (HUM-043), 030-032 Wegwerf-Sandbox (HUM-350), 033 Vorgabe fällt auf direkt zurück (HUM-357), 034-036 und 048 Wahl des Backends, Untergrenze der Isolation und Zulassung (HUM-431, Bereich dafür bis 059 erweitert), 037-044 und 049 Podman (Sprint 7), 045-047 die Kernel-Stufe (HUM-464), 050 Dienstverwalter des Nutzers (HUM-434), 051 beschreibbare Erweiterung unter der Kernel-Stufe (HUM-466) |
 | proxy | `PROXY` | 001 | 019 | Anfragen, Caps, Protokoll, 010-011 Grenzen der Verbindung (HUM-120), 012-019 Entscheidungs-Proxy hinter Humanitl (HUM-511) |
 | tls | `TLS` | 001 | 009 | CA, Zertifikate, Handschlag |
-| llm | `LLM` | 001 | 009 | LLM-Endpunkt und seine Antworten, 009 der Zugangsschlüssel (HUM-140) |
+| llm | `LLM` | 001 | 019 | LLM-Endpunkt und seine Antworten, 009 der Zugangsschlüssel (HUM-140), 010-011 Inferenz bei einem Anbieter außerhalb dieses Rechners (HUM-516, Bereich dafür bis 019 erweitert) |
 | rules | `RULES` | 001 | 019 | 001-008 Regeldatei und Muster, 009-011 Regelspeicher (HUM-027) |
 | findings | `FINDINGS` | 001 | 009 | Detektoren für Secrets und personenbezogene Daten |
 | catalog | `CATALOG` | 001 | 009 | Gebündelter Domain-Katalog und Rangliste |
@@ -1035,6 +1035,22 @@ Zugangsschlüssel nicht verfügbar
 **Auslöser.** `llm.api_key_ref` ist gesetzt, aber der Schlüsselbund oder die Datei unter `$XDG_DATA_HOME/humanitl/keys` liefert keinen Schlüssel dazu.
 
 **Fix.** `CopyCommand`: `humanitl llm key set` hinterlegt ihn neu; bei offenen Rechten der Datei ein `chmod 600`.
+
+#### LLM_010
+
+Inference goes to a provider outside this machine
+
+**Auslöser.** The agent's model endpoint is a provider outside this machine, for example `api.anthropic.com`. Prompts, the files the agent reads and the output of its tools go to that provider as part of its requests to the model. Humanitl isolates the system and holds every other connection; the inference itself is deliberately allowed. The first start with a combination of agent and provider asks for a confirmation, kept by the daemon.
+
+**Fix.** No fix needed; to keep inference on this machine or in your network, set `llm.endpoint` to a local server, or mark a saved server of your own network with `llm.servers.NAME.local = true`.
+
+#### LLM_011
+
+Cloud inference not confirmed
+
+**Auslöser.** The agent of this start would send its inference to a provider outside this machine (`LLM_010`), this combination of agent and provider was never confirmed, and the start request neither confirms it (`Start.acknowledge_cloud_inference`) nor says that the notice was shown (`Start.cloud_notice_shown`). Nothing started.
+
+**Fix.** `CopyCommand` with `humanitl run --yes`, which confirms and starts; in the app the start asks once. A client of its own shows the notice and sets one of the two fields.
 
 ### Bereich rules
 

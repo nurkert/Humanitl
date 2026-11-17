@@ -120,8 +120,10 @@ pub static AREAS: &[AreaInfo] = &[
         area: "llm",
         prefix: "LLM",
         first: 1,
-        last: 9,
-        note: "LLM-Endpunkt und seine Antworten, 009 der Zugangsschlüssel (HUM-140)",
+        last: 19,
+        note: "LLM-Endpunkt und seine Antworten, 009 der Zugangsschlüssel (HUM-140), \
+               010-011 Inferenz bei einem Anbieter außerhalb dieses Rechners (HUM-516, \
+               Bereich dafür bis 019 erweitert)",
     },
     AreaInfo {
         area: "rules",
@@ -1890,6 +1892,27 @@ registry! {
     PROXY_019 => "proxy", "Decision proxy answered too late", "#proxy_019",
         "The request went through the decision proxy, and the head of its answer did not arrive within `egress.proxy_response_timeout_secs`, also after a streamed upload. A person deciding at the proxy may need longer. The agent got `502`.",
         "`ChangeSetting` on `egress.proxy_response_timeout_secs` with a longer wait.";
+
+    // HUM-516: inference at a provider outside this machine.
+    /// The model endpoint of the agent lies outside this machine and its
+    /// network: not on the loopback, not a private address, not a name under
+    /// `.local`, `.lan`, `.home.arpa` or `.internal`, and not a server of
+    /// `llm.servers` marked `local = true`. A notice, never blocking: what
+    /// the agent reads goes to the provider as part of its requests to the
+    /// model; Humanitl isolates the system and holds every other connection,
+    /// and the inference itself is deliberately allowed (HUM-516).
+    LLM_010 => "llm", "Inference goes to a provider outside this machine", "#llm_010",
+        "The agent's model endpoint is a provider outside this machine, for example `api.anthropic.com`. Prompts, the files the agent reads and the output of its tools go to that provider as part of its requests to the model. Humanitl isolates the system and holds every other connection; the inference itself is deliberately allowed. The first start with a combination of agent and provider asks for a confirmation, kept by the daemon.",
+        "No fix needed; to keep inference on this machine or in your network, set `llm.endpoint` to a local server, or mark a saved server of your own network with `llm.servers.NAME.local = true`.";
+    /// A start whose agent sends its inference to a provider outside this
+    /// machine, for a combination of agent and provider nobody confirmed,
+    /// and the start request carries neither the confirmation nor the word
+    /// that the client showed the notice (HUM-516). The daemon decides this
+    /// from the fully resolved configuration of the start, flags included,
+    /// so a client that skips the notice fails visibly instead of starting.
+    LLM_011 => "llm", "Cloud inference not confirmed", "#llm_011",
+        "The agent of this start would send its inference to a provider outside this machine (`LLM_010`), this combination of agent and provider was never confirmed, and the start request neither confirms it (`Start.acknowledge_cloud_inference`) nor says that the notice was shown (`Start.cloud_notice_shown`). Nothing started.",
+        "`CopyCommand` with `humanitl run --yes`, which confirms and starts; in the app the start asks once. A client of its own shows the notice and sets one of the two fields.";
 }
 
 /// Sucht einen Code im Register.

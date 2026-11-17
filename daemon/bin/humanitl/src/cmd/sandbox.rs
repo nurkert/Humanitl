@@ -115,7 +115,15 @@ pub async fn run(ctx: &Context, cmd: &SandboxCmd) -> Result<u8, Failure> {
             tests_dir,
             disposable,
             direct,
-        } => start(ctx, cmd, tests_dir.as_deref(), *disposable, *direct).await,
+            yes,
+        } => {
+            let flags = RunFlags {
+                disposable: *disposable,
+                direct: *direct,
+                yes: *yes,
+            };
+            start(ctx, cmd, tests_dir.as_deref(), flags).await
+        }
         SandboxCmd::Check => check(ctx),
         SandboxCmd::Backends => crate::cmd::backends::run(ctx).await,
         SandboxCmd::Plan => crate::cmd::plan::run(ctx).await,
@@ -294,16 +302,25 @@ fn preview_rules_json(rows: &[humanitl_sandbox::PolicyRow]) -> serde_json::Value
         .collect()
 }
 
+/// Die Schalter von `sandbox run`.
+#[derive(Debug, Clone, Copy)]
+struct RunFlags {
+    disposable: bool,
+    direct: bool,
+    /// `--yes`: den Hinweis auf Cloud-Inferenz ohne Frage bestätigen
+    /// (HUM-516).
+    yes: bool,
+}
+
 /// `sandbox run`: starten, durchreichen, mit dem Code des Befehls enden.
 async fn start(
     ctx: &Context,
     command: &[OsString],
     tests_dir: Option<&Path>,
-    disposable: bool,
-    direct: bool,
+    flags: RunFlags,
 ) -> Result<u8, Failure> {
     let resolved = ctx.config()?;
-    let disposable = throwaway_wanted(disposable, direct, resolved.config.sandbox.mode);
+    let disposable = throwaway_wanted(flags.disposable, flags.direct, resolved.config.sandbox.mode);
 
     // Schritt 1 der Spezifikation: ohne Daemon kein Lauf. Er hält den
     // Proxy-Socket und das CA-Bundle; ohne beides hätte der Agent in der
@@ -324,6 +341,17 @@ async fn start(
     // Wahl für diesen Ordner bestätigt ist.
     if let Some(refused) = humanitl_config::assign::unconfirmed(&ctx.paths, &resolved.config.llm) {
         return Err(Failure::new(refused));
+    }
+    // Derselbe Hinweis auf Cloud-Inferenz wie bei `humanitl run` (HUM-516):
+    // Dieser Befehl startet im eigenen Prozess, am Tor des Daemons vorbei,
+    // und fragt deshalb selbst; die Bestätigung merkt der Daemon.
+    let on_terminal = std::io::IsTerminal::is_terminal(&std::io::stdin())
+        && std::io::IsTerminal::is_terminal(&std::io::stderr());
+    let mode = crate::cmd::cloud::mode(flags.yes, ctx.render.is_json(), on_terminal);
+    if !crate::cmd::cloud::confirm_local(&mut client, &ctx.paths, &resolved.config, mode, true)
+        .await?
+    {
+        return Ok(crate::cmd::EXIT_USER);
     }
 
     let mut setup = prepare(ctx, &resolved, Wiring::Daemon, command)?;

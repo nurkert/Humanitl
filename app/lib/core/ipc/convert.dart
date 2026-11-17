@@ -749,6 +749,18 @@ extension SandboxStatusToDomain on pb.SandboxEvent_Status {
     llmServer: hasLlmServer() ? llmServer.toDomain() : null,
     egress: hasEgress() ? egress.toDomain() : null,
     askMode: askMode.isEmpty ? null : askMode,
+    cloudInference: hasCloudInference() ? cloudInference.toDomain() : null,
+  );
+}
+
+/// `CloudInference` to [CloudInference] (HUM-516).
+extension CloudInferenceToDomain on pb.CloudInference {
+  /// The domain form.
+  CloudInference toDomain() => CloudInference(
+    agent: agent,
+    provider: provider,
+    acknowledged: acknowledged,
+    notice: hasNotice() ? notice.toDomain() : null,
   );
 }
 

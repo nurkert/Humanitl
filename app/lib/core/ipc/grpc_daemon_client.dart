@@ -470,6 +470,15 @@ class GrpcDaemonClient implements DaemonClient {
             // The answer to `cancel_image_pull` (HUM-457); only
             // [cancelImagePull] reads it.
             break;
+          case pb.SandboxEvent_Event.cloudInferenceAcknowledged:
+            // The answer to `acknowledge_cloud_inference` (HUM-516); only
+            // [acknowledgeCloudInference] reads it.
+            break;
+          case pb.SandboxEvent_Event.cloudInferenceCheck:
+            // The answer to `check_cloud_inference` (HUM-516), which this
+            // client does not ask: its starts carry no overrides, and the
+            // snapshot names the same provider.
+            break;
           case pb.SandboxEvent_Event.notSet:
             break;
         }
@@ -1073,6 +1082,48 @@ class GrpcDaemonClient implements DaemonClient {
       _unreachable(
         'the daemon ended Sandbox(CancelImagePull) without saying whether '
         'the pull ended',
+      ),
+    );
+  }
+
+  @override
+  Future<void> acknowledgeCloudInference(String agent, String provider) async {
+    final CallOptions options = await _options(timeout: callTimeout);
+    try {
+      await for (final pb.SandboxEvent event in _stub.sandbox(
+        pb.SandboxRequest()
+          ..acknowledgeCloudInference =
+              (pb.SandboxRequest_AcknowledgeCloudInference()
+                ..agent = agent
+                ..provider = provider),
+        options: options,
+      )) {
+        switch (event.whichEvent()) {
+          case pb.SandboxEvent_Event.cloudInferenceAcknowledged:
+            return;
+          case pb.SandboxEvent_Event.diagnostic:
+            throw DaemonException(event.diagnostic.toDomain());
+          default:
+            // Ein Daemon vor Minor 43 kennt die Operation nicht und
+            // antwortet mit einer Momentaufnahme; gemerkt ist dann nichts.
+            break;
+        }
+      }
+    } on GrpcError catch (error) {
+      throw DaemonException(_translate(error));
+    } on IOException catch (error) {
+      throw DaemonException(_unreachable('$error'));
+    }
+    throw const DaemonException(
+      Diagnostic(
+        code: 'CLI_004',
+        severity: Severity.error,
+        why:
+            'the daemon does not keep the confirmation of cloud inference; it '
+            'speaks a contract before 1.43',
+        fix: FixAction.copyCommand(
+          command: 'systemctl --user restart humanitld.service',
+        ),
       ),
     );
   }

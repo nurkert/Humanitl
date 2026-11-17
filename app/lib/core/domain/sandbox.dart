@@ -10,6 +10,7 @@ library;
 
 import 'package:freezed_annotation/freezed_annotation.dart';
 
+import 'cloud_inference.dart';
 import 'diagnostic.dart';
 import 'disposable.dart';
 import 'egress.dart';
@@ -340,6 +341,13 @@ abstract class SandboxStatus with _$SandboxStatus {
     /// `upstream`, the last meaning the decision proxy of [egress]. Null from
     /// a daemon before contract 1.42 and in the snapshot of a finding.
     String? askMode,
+
+    /// Where the agent's inference goes when that is a provider outside this
+    /// machine, mirror of `SandboxEvent.Status.cloud_inference` (HUM-516):
+    /// the running session's while one runs, otherwise the one a start would
+    /// get. Null for a local endpoint, without an endpoint, in the snapshot
+    /// of a finding and from a daemon before contract 1.43.
+    CloudInference? cloudInference,
   }) = _SandboxStatus;
 
   const SandboxStatus._();

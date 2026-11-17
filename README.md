@@ -177,7 +177,7 @@ out of the sandbox:
 
 | Channel | Data can leave? | What it means |
 |---|---|---|
-| [The LLM passthrough](docs/SECURITY.md#51-the-llm-passthrough) | yes | Your language model sees every prompt the agent sends it, without a hold; that host is part of what you trust. A project can choose another of your saved model servers for its sessions, so every server you saved is. |
+| [The LLM passthrough](docs/SECURITY.md#51-the-llm-passthrough) | yes | Your language model sees every prompt the agent sends it, without a hold; that host is part of what you trust. A project can choose another of your saved model servers for its sessions, so every server you saved is. With a cloud model the host is the provider: what the agent reads goes there as part of its requests, by design and not as a leak of the sandbox; Humanitl says so in the session header, at the start and in `humanitl doctor`, and asks once per agent and provider ([cloud inference](docs/SECURITY.md#cloud-inference-hum-516)). |
 | [The project directory `/work`](docs/SECURITY.md#52-the-project-directory-work) | yes | It is writable; what the agent leaves there, a human may carry out later. Where the system allows it, the agent writes to a disposable layer by default, and only the changes you apply reach the folder; elsewhere it writes to the folder directly. |
 | [Terminal output](docs/SECURITY.md#5-declared-side-channels) | no | It comes from the agent and is filtered, not trusted. |
 | [Host names in the recording](docs/SECURITY.md#5-declared-side-channels) | no | They stand in plain text in the recording and in every export. |

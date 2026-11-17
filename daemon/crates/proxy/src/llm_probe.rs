@@ -136,8 +136,9 @@ pub fn api_key_fix() -> FixAction {
 const RESPONSE_CAP_BYTES: u64 = 1 << 20;
 
 /// Die Namensräume, die für „im eigenen Netz" stehen, ohne dass etwas
-/// aufgelöst werden müsste.
-const PRIVATE_SUFFIXES: &[&str] = &[".local", ".lan", ".home.arpa", ".internal"];
+/// aufgelöst werden müsste; eine Liste für Probe, Start und den Hinweis auf
+/// Cloud-Inferenz (HUM-516).
+const PRIVATE_SUFFIXES: &[&str] = llm_endpoint::PRIVATE_SUFFIXES;
 
 /// Welche Art von Server hinter dem Endpunkt steht.
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
@@ -824,13 +825,13 @@ impl Target {
 /// lesbare Adresse — Letzteres meldet die Konfiguration schon selbst.
 #[must_use]
 pub fn not_private_by_name(endpoint: &Url) -> Option<Diagnostic> {
-    let host = endpoint.host_str()?;
-    if let Ok(ip) = host.parse::<std::net::IpAddr>() {
-        return (!ip_is_private(ip)).then(|| not_private(endpoint));
-    }
-    let name = host.to_ascii_lowercase();
-    if name == "localhost" || PRIVATE_SUFFIXES.iter().any(|suffix| name.ends_with(suffix)) {
+    // Dieselbe Lesart wie der Hinweis auf Cloud-Inferenz (HUM-516).
+    if llm_endpoint::is_private_by_name(endpoint) {
         return None;
+    }
+    match endpoint.host()? {
+        url::Host::Ipv4(_) | url::Host::Ipv6(_) => return Some(not_private(endpoint)),
+        url::Host::Domain(_) => {}
     }
     Some(
         Diagnostic::builder(LLM_006, Severity::Info)

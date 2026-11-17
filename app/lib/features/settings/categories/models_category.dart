@@ -24,9 +24,11 @@ import 'package:flutter/widgets.dart';
 import 'package:flutter_riverpod/flutter_riverpod.dart';
 
 import '../../../core/domain/domain.dart';
+import '../../../core/ipc/cloud_inference_provider.dart';
 import '../../../core/ipc/config_providers.dart';
 import '../../../core/shortcuts/intents.dart';
 import '../../../core/shortcuts/shortcut_catalog.dart';
+import '../../../core/ui/cloud_inference_tag.dart';
 import '../../../core/ui/ui.dart';
 import '../../../l10n/l10n.dart';
 import '../registry/setting_entry.dart';
@@ -370,6 +372,13 @@ class _ModelsCategoryState extends ConsumerState<ModelsCategory> {
                           help: l10n.settingsServersIntro,
                         ),
                         SizedBox(height: tokens.spacing.x3),
+                        // Der gewählte Endpunkt führt zu einem Anbieter
+                        // außerhalb dieses Rechners (HUM-516).
+                        if (ref.watch(plannedCloudInferenceProvider).value
+                            case final CloudInference cloud) ...<Widget>[
+                          CloudInferenceNote(cloud: cloud),
+                          SizedBox(height: tokens.spacing.x3),
+                        ],
                         if (shown == null)
                           ServerEmptyState(
                             onAdd: () => _choose(serverAddRow, list),

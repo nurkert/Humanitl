@@ -224,6 +224,18 @@ keinen Server, keinen Endpunkt und keinen Schlüssel festlegen, und die Wahl ste
 Herkunft im Kopf der Sandbox, in `humanitl sandbox plan` und beim Start von `humanitl run`. Eine
 Rückfrage gibt es nicht; speichere keinen Server, den kein Repository erreichen darf.
 
+Mit einem Modell in der Cloud endet der zweite Kanal bei einem Anbieter außerhalb dieses Rechners
+(HUM-516): Die Dateien, die der Agent liest, und die Ausgaben seiner Werkzeuge reisen als Teil der
+Anfragen dorthin, so gewollt. Humanitl leitet den Fall ohne jede Auflösung aus dem Host des
+Modell-Endpunkts ab, den der Adapter nennt, und nennt ihn in der Kopfzeile der Sitzung, beim Start
+von `humanitl run` und `go`, in `humanitl doctor` und beim Wählen von Agent oder Endpunkt; der erste
+Start je Agent und Anbieter fragt einmal, der Daemon lehnt einen unbeantworteten ersten Start aus der
+ganz aufgelösten Konfiguration ab (`LLM_011`), und die Bestätigung liegt im Datenverzeichnis des Daemons,
+außerhalb jedes Projekts. Ein gespeicherter Server mit `local = true` gilt nur für seine eigene
+Herkunft als lokal. *Restrisiko:* Der Hinweis informiert und blockiert nichts; wer ihn bestätigt,
+nimmt hin, dass der Anbieter sieht, was der Agent liest. Ein öffentlicher Name, der ins eigene Netz
+zeigt, gilt als außerhalb, bis er markiert ist.
+
 ### K-03 Das Socket-Verzeichnis des Proxys
 
 Bände Humanitl das Verzeichnis ein, das den Socket enthält, wäre jede Datei, die dort später
@@ -1037,6 +1049,7 @@ Gegen diese Angreifer gibt es keine Abwehr, und Humanitl behauptet das auch nich
 | 2026-11-15 | K-30 bis K-34 `mitigated`: die Kernel-Stufe (Backend `qemu`) zugelassen, nachdem `kvm-tests` und `escape-tests-qemu` auf `main` mit HUM-446 und den Proben mit Root im Gast aus HUM-445 grün waren, in zehn Läufen hintereinander, in denen beide Jobs liefen (43624997550, 43630993303, 43638237420, 43641769840, 43646599744, 43648968241, 43656202366, 43661904978, 43669712307 und 43673927540, nach der Regel bei HUM-471); gewählt nur von einem Menschen mit `sandbox.backend = "qemu"` oder `--backend qemu`, nie von `auto`; eine fehlende Voraussetzung lehnt den Start mit `SANDBOX_045` ab | HUM-449 |
 | 2026-11-16 | K-35 neu: ein Entscheidungs-Proxy des Nutzers hinter Humanitl (`egress.proxy`, Opt-in), seine CA nur auf diesem Weg, kein direkter Rückfall, wer auflöst, wählt `egress.proxy_resolve` | HUM-511 |
 | 2026-11-16 | K-35: Mit `hold.ask_mode = "upstream"` entscheidet der Entscheidungs-Proxy Anfragen ohne Regel; nur mit einem Proxy, der benutzt wird, `block` erreicht ihn nie, `redact` und die harte Sperre bleiben in Humanitl, das Audit sagt `forward` durch `upstream` mit dem Status des Proxys | HUM-512 |
+| 2026-11-17 | K-02: Cloud-Inferenz benannt; ein Endpunkt außerhalb dieses Rechners und seines Netzes zeigt ein orangefarbenes Tag, eine Zeile beim Start und im Doctor und fragt einmal je Agent und Anbieter, bestätigt im Datenverzeichnis des Daemons; blockiert nichts | HUM-516 |
 
 Jede sicherheitsrelevante Änderung am Shim, an der Mount-Erlaubnisliste, am Filter oder an der
 Durchleitung bekommt hier eine Zeile. Schwachstellen werden gemeldet, wie in

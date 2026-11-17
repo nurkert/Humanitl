@@ -94,7 +94,8 @@ class FakeDaemonClient
         FakeIntercept,
         FakeSandboxBackends,
         FakeImagePull,
-        FakeEgress
+        FakeEgress,
+        FakeCloudInference
     implements DaemonClient {
   /// Creates a fake that answers `GetInfo` with [info] (or [defaultInfo]),
   /// or throws [infoFailure] when given, and replays [script] (or
@@ -328,6 +329,7 @@ class FakeDaemonClient
   /// Die Momentaufnahme der Sandbox (HUM-040). Sie steht hier und nicht in
   /// [state], weil sie kein Fluss ist und weil ein Test sie ohne Umweg setzen
   /// koennen soll -- etwa auf `failed` mit einem blockierenden Befund.
+  @override
   SandboxStatus sandbox = defaultSandbox_();
 
   /// Was ein Start meldet, statt zu laufen. `null` heisst: er laeuft.
@@ -1224,7 +1226,10 @@ class FakeDaemonClient
         _disposableRefusal(sandboxMode) ??
         // Wie der Daemon (HUM-405): Ein unbestätigter Server des Projekts
         // lässt nichts starten.
-        sandbox.llmServer?.unconfirmed;
+        sandbox.llmServer?.unconfirmed ??
+        // Wie das Tor des Daemons (HUM-516): eine unbestätigte
+        // Cloud-Inferenz ebenso wenig.
+        _cloudRefusal();
     if (refusal != null) {
       sandbox = sandbox.copyWith(
         state: SandboxState.failed,
@@ -6024,4 +6029,52 @@ mixin FakeEgress {
         authSet: set,
         authRef: ref,
       );
+}
+
+/// The confirmation of the notice on cloud inference (HUM-516).
+///
+/// Like the daemon: the confirmation is kept per agent and provider, and the
+/// snapshot of a start with that combination says so afterwards. The app
+/// keeps nothing of it.
+mixin FakeCloudInference {
+  /// The snapshot the fake answers with; the class holds it.
+  SandboxStatus get sandbox;
+  set sandbox(SandboxStatus value);
+
+  /// Every confirmation the fake was asked to keep, as `agent provider`.
+  final List<String> cloudAcknowledgements = <String>[];
+
+  /// When set, the next confirmation fails with this finding.
+  Diagnostic? cloudAcknowledgeFailure;
+
+  /// `Sandbox(AcknowledgeCloudInference)` (HUM-516).
+  Future<void> acknowledgeCloudInference(String agent, String provider) async {
+    if (cloudAcknowledgeFailure case final Diagnostic failure) {
+      cloudAcknowledgeFailure = null;
+      throw DaemonException(failure);
+    }
+    cloudAcknowledgements.add('$agent $provider');
+    final CloudInference? shown = sandbox.cloudInference;
+    if (shown != null && shown.agent == agent && shown.provider == provider) {
+      sandbox = sandbox.copyWith(cloudInference: shown.confirmed());
+    }
+  }
+
+  /// `LLM_011`, wie der Daemon einen Start mit unbestätigter Cloud-Inferenz
+  /// ablehnt (HUM-516); null, wenn nichts zu bestätigen ist.
+  Diagnostic? _cloudRefusal() {
+    final CloudInference? cloud = sandbox.cloudInference;
+    if (cloud == null || !cloud.needsConfirmation) {
+      return null;
+    }
+    return Diagnostic(
+      code: 'LLM_011',
+      severity: Severity.error,
+      why:
+          '${cloud.agent} would send its inference to ${cloud.provider}, '
+          'outside this machine, and this combination of agent and provider '
+          'was never confirmed; nothing started.',
+      fix: const FixAction.copyCommand(command: 'humanitl run --yes'),
+    );
+  }
 }

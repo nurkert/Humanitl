@@ -316,8 +316,23 @@ class SandboxStatusNotifier extends _$SandboxStatusNotifier {
   /// ([sandboxBackendOverride], HUM-440): only when it differs from
   /// `sandbox.backend`, as `Start.cli_overrides`.
   Future<void> start() {
-    final bool offered =
-        ref.read(daemonInfoProvider).value?.offersDisposable ?? false;
+    // Ein Daemon vor 1.43 (nach einem Update noch nicht neu gestartet) kennt
+    // weder den Hinweis auf Cloud-Inferenz noch sein Tor; gegen ihn startet
+    // die App keine Sitzung, sie sagt, wie er neu startet (HUM-516, Review).
+    final DaemonInfo? info = ref.read(daemonInfoProvider).value;
+    if (info != null && !info.knowsCloudInference) {
+      final SandboxStatus now = state.value ?? const SandboxStatus();
+      state = AsyncValue<SandboxStatus>.data(
+        now.copyWith(
+          diagnostics: <Diagnostic>[
+            ...now.diagnostics,
+            cloudInferenceDaemonTooOld(info.protoVersion),
+          ],
+        ),
+      );
+      return Future<void>.value();
+    }
+    final bool offered = info?.offersDisposable ?? false;
     final SandboxMode? choice = offered
         ? ref.read(sandboxModeChoiceProvider)
         : null;
@@ -344,10 +359,18 @@ class SandboxStatusNotifier extends _$SandboxStatusNotifier {
   /// confirmation outside the project, and the start that follows passes
   /// its check. A refusal of the confirmation stands as a finding of the
   /// start, and nothing starts.
-  Future<void> confirmServerAndStart() async {
+  ///
+  /// With [andStart] false the server is confirmed and nothing starts yet:
+  /// the notice on cloud inference asks next (HUM-516). True when the
+  /// server is confirmed (or needed no confirmation), false when the daemon
+  /// refused it.
+  Future<bool> confirmServerAndStart({bool andStart = true}) async {
     final LlmServerChoice? server = state.value?.llmServer;
     if (server == null || !server.needsConfirmation) {
-      return start();
+      if (andStart) {
+        await start();
+      }
+      return true;
     }
     try {
       await ref
@@ -362,7 +385,7 @@ class SandboxStatusNotifier extends _$SandboxStatusNotifier {
           ),
         );
       }
-      return;
+      return false;
     }
     final SandboxStatus? now = state.value;
     if (now != null) {
@@ -379,6 +402,48 @@ class SandboxStatusNotifier extends _$SandboxStatusNotifier {
             projectPath: server.projectPath,
           ),
         ),
+      );
+    }
+    if (andStart) {
+      await start();
+    }
+    return true;
+  }
+
+  /// Confirms the notice on cloud inference for this agent and provider and
+  /// starts (HUM-516).
+  ///
+  /// The answer of the one question before the first start with an agent
+  /// whose inference goes to a provider outside this machine: the daemon
+  /// keeps the confirmation per agent and provider, never the app (ADR-018),
+  /// and later starts with the same combination do not ask again. A refusal
+  /// stands as a finding, and nothing starts.
+  Future<void> confirmCloudAndStart() async {
+    final CloudInference? cloud = state.value?.cloudInference;
+    if (cloud == null || !cloud.needsConfirmation) {
+      return start();
+    }
+    try {
+      await ref
+          .read(daemonClientProvider)
+          .acknowledgeCloudInference(cloud.agent, cloud.provider);
+    } on DaemonException catch (error) {
+      final SandboxStatus? now = state.value;
+      if (now != null) {
+        state = AsyncValue<SandboxStatus>.data(
+          now.copyWith(
+            diagnostics: <Diagnostic>[...now.diagnostics, error.diagnostic],
+          ),
+        );
+      }
+      return;
+    }
+    final SandboxStatus? now = state.value;
+    if (now != null) {
+      // Bestätigt: Der Start fragt nicht noch einmal, auch wenn die neue
+      // Momentaufnahme noch unterwegs ist.
+      state = AsyncValue<SandboxStatus>.data(
+        now.copyWith(cloudInference: cloud.confirmed()),
       );
     }
     return start();
@@ -749,3 +814,18 @@ enum SandboxTab {
   /// What the daemon logged about this sandbox.
   log,
 }
+
+/// The finding of a start against a daemon before contract 1.43 (HUM-516):
+/// it cannot tell whether the session's inference leaves this machine, and
+/// it would start without the notice. The fix restarts it.
+Diagnostic cloudInferenceDaemonTooOld(String version) => Diagnostic(
+  code: 'CLI_004',
+  severity: Severity.error,
+  why:
+      'the background service speaks contract $version and cannot tell '
+      'whether the agent\'s inference leaves this machine (that needs 1.43); '
+      'restart it to start a session',
+  fix: const FixAction.copyCommand(
+    command: 'systemctl --user restart humanitld.service',
+  ),
+);

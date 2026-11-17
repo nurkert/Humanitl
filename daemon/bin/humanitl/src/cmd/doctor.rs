@@ -338,6 +338,8 @@ async fn local(
     // Dieselbe Zeile, die der Daemon schreibt (HUM-511): Sie liest nur die
     // Konfiguration.
     humanitl_ipc::egress::insert_doctor_line(&mut report, &config.egress);
+    // Ebenso die Zeile der Inferenz (HUM-516).
+    humanitl_ipc::cloud::insert_doctor_line(&mut report, config);
     report.backends = local_backends(ctx, config, probe).await;
     report
 }

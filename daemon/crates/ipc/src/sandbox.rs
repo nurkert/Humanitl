@@ -1119,6 +1119,27 @@ impl SandboxService {
                     }
                 }
             }
+            // Die Konfiguration eines Starts auflösen, ohne etwas gelten zu
+            // lassen (HUM-516): Dateien lesen, also auf einen eigenen Faden.
+            Some(Op::CheckCloudInference(start)) => {
+                tokio::task::spawn_blocking(move || {
+                    let event = match inner.check_cloud_inference(&start) {
+                        Ok(cloud_inference) => v1::SandboxEvent {
+                            event: Some(v1::sandbox_event::Event::CloudInferenceCheck(
+                                v1::sandbox_event::CloudInferenceCheck { cloud_inference },
+                            )),
+                        },
+                        Err(diagnostic) => diagnostic_event(&diagnostic),
+                    };
+                    let _ = tx.blocking_send(event);
+                });
+            }
+            // Eine Datei im Datenverzeichnis schreiben (HUM-516).
+            Some(Op::AcknowledgeCloudInference(request)) => {
+                tokio::task::spawn_blocking(move || {
+                    let _ = tx.blocking_send(crate::cloud::acknowledge(&inner.paths, &request));
+                });
+            }
             // Der Abbruch wartet auf das Ende des Ziehens, nicht auf einen
             // Faden: Das Ziehen läuft auf seinem eigenen (HUM-457).
             Some(Op::CancelImagePull(request)) => {
@@ -2072,9 +2093,21 @@ impl Inner {
             }
             Ok(Err(diagnostic)) => {
                 let _ = tx.send(diagnostic_event(&diagnostic)).await;
-                let _ = tx
-                    .send(status_event(self.failed_status(plan, &diagnostic)))
-                    .await;
+                let mut failed = self.failed_status(plan, &diagnostic);
+                // Nach `LLM_011` nennt der Schnappschuss, was zu bestätigen
+                // ist (HUM-516): Ein Client, der den Hinweis übersprungen hat,
+                // kann ihn so zeigen und es noch einmal versuchen.
+                if diagnostic.code == humanitl_core::diagnostics::codes::LLM_011 {
+                    let this = Arc::clone(self);
+                    let wish = start.clone();
+                    failed.cloud_inference = tokio::task::spawn_blocking(move || {
+                        this.check_cloud_inference(&wish).ok().flatten()
+                    })
+                    .await
+                    .ok()
+                    .flatten();
+                }
+                let _ = tx.send(status_event(failed)).await;
                 false
             }
             Err(error) => {
@@ -2116,28 +2149,38 @@ impl Inner {
         start: &v1::sandbox_request::Start,
         work_dir: Option<PathBuf>,
     ) -> Result<Vec<Diagnostic>, Diagnostic> {
-        let request = SessionRequest {
-            profile: non_empty(&start.session_profile),
-            // Das Verzeichnis ist zu diesem Zeitpunkt geprüft: `remember` hat
-            // es aufgelöst und unter demselben Schloss zurückgegeben, unter dem
-            // es abgelegt wurde. Der geprüfte Pfad reist weiter, nie der
-            // geschriebene, und nie einer, den inzwischen jemand anders
-            // hineingelegt hat.
-            work_dir,
-            work_mode: parse_work_mode(&start.work_mode),
-            ask_mode: parse_ask_mode(&start.ask_mode)?,
-            overrides: start
-                .cli_overrides
-                .iter()
-                .map(|entry| (entry.path.trim().to_owned(), entry.value.clone()))
-                .collect(),
-            // Der Server dieses Laufs (HUM-400). Was die Auflösung daraus,
-            // aus dem Projekt und den Profilen wählt, ist der Server der
-            // Sitzung: ihre Durchreiche, ihr Schlüssel, ihr Ziel der Maske.
-            // Ein Name ohne Eintrag lehnt hier ab (`CONFIG_021`).
-            llm_server: non_empty(&start.llm_server),
-        };
+        let request = session_request(start, work_dir)?;
         let resolved = self.resolver.resolve(&request)?;
+        // Geht die Inferenz an einen Anbieter außerhalb dieses Rechners, und
+        // hat niemand diese Kombination bestätigt, startet nichts, bis der
+        // Client den Hinweis gezeigt oder bestätigt hat (HUM-516). Entschieden
+        // an der ganz aufgelösten Konfiguration, `--llm URL` eingeschlossen,
+        // und vor allem, was die Sitzung gelten lässt.
+        crate::cloud::gate(&self.paths, &resolved.config, start)?;
+        self.apply_resolved(resolved)
+    }
+
+    /// `SandboxRequest.check_cloud_inference` (HUM-516): wohin die Inferenz
+    /// eines Starts mit genau diesen Angaben ginge, aus derselben Auflösung
+    /// wie [`Inner::apply_session`], ohne etwas gelten zu lassen oder zu
+    /// merken. Der Ordner ist der der Anfrage, ungeprüft: Er wählt hier nur
+    /// das Projekt-Profil; geprüft wird er beim Start.
+    fn check_cloud_inference(
+        &self,
+        start: &v1::sandbox_request::Start,
+    ) -> Result<Option<v1::CloudInference>, Diagnostic> {
+        let work_dir = non_empty(&start.work_dir).map(PathBuf::from);
+        let request = session_request(start, work_dir)?;
+        let resolved = self.resolver.resolve(&request)?;
+        Ok(crate::cloud::status(&self.paths, &resolved.config))
+    }
+
+    /// Der zweite Teil von [`Inner::apply_session`]: Regeln, Haltung und
+    /// Konfiguration der aufgelösten Sitzung gelten lassen.
+    fn apply_resolved(
+        &self,
+        resolved: humanitl_config::Resolved,
+    ) -> Result<Vec<Diagnostic>, Diagnostic> {
         // `upstream` reicht jede Anfrage ohne Regel an den Entscheidungs-
         // Proxy weiter (HUM-512). Die Prüfung beim Laden kennt nur
         // `egress.proxy` in `config.toml`; geht der laufende Daemon noch
@@ -3406,6 +3449,9 @@ impl Inner {
             // Wer eine Anfrage ohne Regel entscheidet (HUM-512), aus derselben
             // Konfiguration wie der Rest dieser Momentaufnahme.
             ask_mode: ask_mode_name(config.hold.ask_mode).to_owned(),
+            // Wohin die Inferenz geht (HUM-516), aus derselben Konfiguration
+            // wie `llm_endpoint`.
+            cloud_inference: crate::cloud::status(&self.paths, config),
         })
     }
 
@@ -3491,6 +3537,8 @@ impl Inner {
             // Leer im Schnappschuss eines Befunds (HUM-512): Welche Sitzung
             // gemeint war, ist hier nicht sicher.
             ask_mode: String::new(),
+            // Ebenso der Hinweis auf Cloud-Inferenz (HUM-516).
+            cloud_inference: None,
         }
     }
 
@@ -5091,6 +5139,39 @@ struct PinnedWork<'a> {
 }
 
 /// Der Plan, den ein Start mit sich trägt.
+/// Die Auflösung, die ein Start mit diesen Angaben verlangt: Profil der
+/// Sitzung, Ordner, Modus, Frage-Modus, Werte der Kommandozeile und Server.
+///
+/// Eine Stelle für den Start ([`Inner::apply_session`]) und die Frage nach
+/// der Cloud-Inferenz ([`Inner::check_cloud_inference`], HUM-516), damit
+/// beide dieselbe Konfiguration sehen.
+fn session_request(
+    start: &v1::sandbox_request::Start,
+    work_dir: Option<PathBuf>,
+) -> Result<SessionRequest, Diagnostic> {
+    Ok(SessionRequest {
+        profile: non_empty(&start.session_profile),
+        // Beim Start ist das Verzeichnis zu diesem Zeitpunkt geprüft:
+        // `remember` hat es aufgelöst und unter demselben Schloss
+        // zurückgegeben, unter dem es abgelegt wurde. Der geprüfte Pfad reist
+        // weiter, nie der geschriebene, und nie einer, den inzwischen jemand
+        // anders hineingelegt hat.
+        work_dir,
+        work_mode: parse_work_mode(&start.work_mode),
+        ask_mode: parse_ask_mode(&start.ask_mode)?,
+        overrides: start
+            .cli_overrides
+            .iter()
+            .map(|entry| (entry.path.trim().to_owned(), entry.value.clone()))
+            .collect(),
+        // Der Server dieses Laufs (HUM-400). Was die Auflösung daraus, aus
+        // dem Projekt und den Profilen wählt, ist der Server der Sitzung:
+        // ihre Durchreiche, ihr Schlüssel, ihr Ziel der Maske. Ein Name ohne
+        // Eintrag lehnt hier ab (`CONFIG_021`).
+        llm_server: non_empty(&start.llm_server),
+    })
+}
+
 fn plan_of(start: &v1::sandbox_request::Start) -> v1::sandbox_request::Plan {
     v1::sandbox_request::Plan {
         profile: start.profile.clone(),
@@ -5506,6 +5587,7 @@ mod tests {
                 endpoint: Some(KEYED_ENDPOINT.to_owned()),
                 models: Vec::new(),
                 api_key_ref: Some(key_ref.clone()),
+                local: false,
             },
         );
         config.llm.active = Some("cloud".to_owned());
@@ -5557,6 +5639,7 @@ mod tests {
                 endpoint: Some("http://192.168.1.20:11434".to_owned()),
                 models: Vec::new(),
                 api_key_ref: Some("file:home".to_owned()),
+                local: false,
             },
         );
         config.llm.servers.insert(
@@ -5565,6 +5648,7 @@ mod tests {
                 endpoint: Some(KEYED_ENDPOINT.to_owned()),
                 models: Vec::new(),
                 api_key_ref: Some(key_ref.clone()),
+                local: false,
             },
         );
         config.llm.active = Some("home".to_owned());
@@ -7215,6 +7299,19 @@ mod tests {
     /// A service over a live resolver: the configuration comes from
     /// `config.toml` in `home`, as in the daemon, and not from a hand-made
     /// [`Config`] (HUM-277).
+    /// A start whose client showed the notice on cloud inference without
+    /// asking (HUM-516): these tests start against endpoints outside this
+    /// machine and are about something else.
+    fn notice_shown(provider: &str) -> v1::sandbox_request::Start {
+        v1::sandbox_request::Start {
+            cloud_notice_shown: Some(v1::CloudNoticeFor {
+                agent: "opencode".to_owned(),
+                provider: provider.to_owned(),
+            }),
+            ..v1::sandbox_request::Start::default()
+        }
+    }
+
     fn live_service(
         home: &tempfile::TempDir,
         ports: SandboxPorts,
@@ -7639,7 +7736,7 @@ mod tests {
         service
             .inner
             .apply_session(
-                &v1::sandbox_request::Start::default(),
+                &notice_shown("llm.example.net"),
                 Some(home.path().join("project")),
             )
             .expect("the session resolves");
@@ -7663,6 +7760,59 @@ mod tests {
             recorder.masks().expected_at(&hash, "llm.example.net:443"),
             "the new key is masked at the new endpoint"
         );
+    }
+
+    /// `humanitl run --llm https://api.openai.com/v1` with a local saved
+    /// endpoint (HUM-516, review): the start is decided from its fully
+    /// resolved configuration, `cli_overrides` included. The check before the
+    /// start names the provider, and the start itself refuses without an
+    /// answer of the client and passes with one.
+    #[tokio::test]
+    async fn a_cloud_endpoint_from_the_command_line_meets_the_gate() {
+        let home = tempfile::TempDir::new().unwrap();
+        let (service, paths) = live_service(&home, SandboxPorts::none());
+        crate::config_rpc::set(&paths, "llm.endpoint", "http://192.168.1.20:11434/")
+            .expect("SetConfig writes");
+        let start = v1::sandbox_request::Start {
+            cli_overrides: vec![v1::sandbox_request::CliOverride {
+                path: "llm.endpoint".to_owned(),
+                value: "https://api.openai.com/v1".to_owned(),
+            }],
+            ..v1::sandbox_request::Start::default()
+        };
+        let checked = service
+            .inner
+            .check_cloud_inference(&start)
+            .expect("the start resolves")
+            .expect("the override leads outside");
+        assert_eq!(checked.provider, "api.openai.com");
+        assert!(!checked.acknowledged);
+        assert!(
+            service
+                .inner
+                .check_cloud_inference(&v1::sandbox_request::Start::default())
+                .expect("resolves")
+                .is_none(),
+            "the saved endpoint alone stays local"
+        );
+
+        let refused = service
+            .inner
+            .apply_session(&start, Some(home.path().join("project")))
+            .expect_err("nobody answered the notice");
+        assert_eq!(refused.code, humanitl_core::diagnostics::codes::LLM_011);
+
+        let shown = v1::sandbox_request::Start {
+            cloud_notice_shown: Some(v1::CloudNoticeFor {
+                agent: checked.agent.clone(),
+                provider: checked.provider.clone(),
+            }),
+            ..start
+        };
+        service
+            .inner
+            .apply_session(&shown, Some(home.path().join("project")))
+            .expect("the notice was shown");
     }
 
     /// The interleaving of the review (HUM-277): endpoint B is saved, a start
@@ -7692,7 +7842,7 @@ mod tests {
         service
             .inner
             .apply_session(
-                &v1::sandbox_request::Start::default(),
+                &notice_shown("b.example.net"),
                 Some(home.path().join("project")),
             )
             .expect("the session resolves");
@@ -7866,10 +8016,7 @@ mod tests {
         let claim = service.inner.claim_start().expect("the claim is free");
         service
             .inner
-            .apply_session(
-                &v1::sandbox_request::Start::default(),
-                Some(home.path().join("project")),
-            )
+            .apply_session(&notice_shown("home.lan"), Some(home.path().join("project")))
             .expect("the session resolves");
         crate::llm_servers::answer(
             &paths,
@@ -7933,7 +8080,7 @@ mod tests {
                     claim = inner.claim_start();
                     inner
                         .apply_session(
-                            &v1::sandbox_request::Start::default(),
+                            &notice_shown("b.example.net"),
                             Some(home.path().join("project")),
                         )
                         .expect("the session resolves");
@@ -8073,10 +8220,7 @@ mod tests {
                     .expect("SetConfig writes");
                     claim = inner.claim_start();
                     inner
-                        .apply_session(
-                            &v1::sandbox_request::Start::default(),
-                            Some(project.clone()),
-                        )
+                        .apply_session(&notice_shown("b.example.net"), Some(project.clone()))
                         .expect("the session resolves");
                 }
             });

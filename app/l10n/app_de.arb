@@ -1948,5 +1948,20 @@
   "isolationAskModeUpstreamHumanitlResolves": "Ohne Regel: entscheidet {proxy}. Hier wartet nichts außer einer Regel redact. Humanitl löst auf und prüft jede Adresse vorher; der Name geht als DNS-Frage hinaus, bevor dort entschieden ist.",
   "historyDecisionForwarded": "Weitergereicht",
   "historyDecisionForwardedStatus": "Weitergereicht, Proxy antwortete {status}",
-  "isolationAskModeUpstreamNotActive": "Ohne Regel: Der Entscheidungs-Proxy soll entscheiden, aber der Hintergrunddienst sendet noch direkt; ein Start wird deshalb abgelehnt. Starte ihn neu, um den Proxy zu nutzen."
+  "isolationAskModeUpstreamNotActive": "Ohne Regel: Der Entscheidungs-Proxy soll entscheiden, aber der Hintergrunddienst sendet noch direkt; ein Start wird deshalb abgelehnt. Starte ihn neu, um den Proxy zu nutzen.",
+  "cloudInferenceTag": "Cloud-Inferenz: {provider}",
+  "cloudInferenceTitle": "Cloud-Inferenz: Daten gehen an {provider}",
+  "cloudInferenceNotice": "Was der Agent liest, geht als Teil seiner Anfragen an das Modell an {provider}. Humanitl isoliert das System und hält jede andere Verbindung an; die Inferenz selbst ist bewusst freigegeben.",
+  "cloudInferenceClose": "Schließen",
+  "cloudInferenceConfirmTitle": "Mit Cloud-Inferenz starten?",
+  "cloudInferenceConfirmOnce": "Gefragt wird einmal je Agent und Anbieter; spätere Starts zeigen nur das Tag.",
+  "cloudInferenceConfirmCancel": "Nicht starten",
+  "cloudInferenceConfirmStart": "Bestätigen und starten",
+  "cloudInferenceConfirmAgent": "Agent",
+  "cloudInferenceConfirmProvider": "Anbieter des Modells",
+  "doctorCheckInference": "Inferenz",
+  "diagLLM010Title": "Inferenz geht an einen Anbieter außerhalb dieses Rechners",
+  "diagLLM010Why": "Was der Agent liest, geht als Teil seiner Anfragen an den Anbieter des Modells. Humanitl isoliert das System und hält jede andere Verbindung an; die Inferenz selbst ist bewusst freigegeben.",
+  "diagLLM011Title": "Cloud-Inferenz nicht bestätigt",
+  "diagLLM011Why": "Der Agent würde seine Inferenz an einen Anbieter außerhalb dieses Rechners schicken, und niemand hat diesen Agenten mit diesem Anbieter bestätigt. Nichts ist gestartet; der nächste Start fragt einmal."
 }

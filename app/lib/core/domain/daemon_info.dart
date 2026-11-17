@@ -70,6 +70,13 @@ abstract class DaemonInfo with _$DaemonInfo {
   /// (HUM-511). The settings of the decision proxy stand only then.
   bool get offersEgress => isFake || (protoMajor == 1 && protoMinor >= 41);
 
+  /// Whether the daemon decides cloud inference before a start (contract
+  /// 1.43, HUM-516): it names the provider in the snapshot and refuses an
+  /// unconfirmed start. An older one does neither, so the app starts no
+  /// session against it.
+  bool get knowsCloudInference =>
+      isFake || (protoMajor == 1 && protoMinor >= 43);
+
   /// True when a session is running.
   bool get hasSession => sessionId.isNotEmpty;
 

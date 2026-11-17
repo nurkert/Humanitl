@@ -132,8 +132,12 @@ abstract final class ProtoVersion {
   /// fourth choice, the isolation tab reads `SandboxEvent.Status.ask_mode`
   /// for the mode line, and the history names `DECISION_SOURCE_UPSTREAM`
   /// (HUM-512).
+  /// Raised to 43 with the notice on cloud inference: the sandbox header
+  /// reads `SandboxEvent.Status.cloud_inference` for its orange tag, and the
+  /// first start per agent and provider confirms through
+  /// `SandboxRequest.acknowledge_cloud_inference` (HUM-516).
   /// Raising the number without a reader would claim otherwise.
-  static const int minor = 42;
+  static const int minor = 43;
 
   /// `major.minor` as text.
   static const String text = '$major.$minor';

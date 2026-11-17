@@ -405,6 +405,10 @@ class TestDaemonClient implements DaemonClient {
   Future<ImagePullCancelAnswer> cancelImagePull(String pullId) async =>
       ImagePullCancelAnswer.notRunning;
 
+  // Kein Agent dieses Clients schickt Inferenz hinaus (HUM-516).
+  @override
+  Future<void> acknowledgeCloudInference(String agent, String provider) async {}
+
   // Der Doctor und die Endpunkt-Probe (HUM-075, HUM-044) gehören dem
   // Setup-Bildschirm. Der leere Bericht ist hier die ehrliche Antwort: nicht
   // elf grüne Zeilen, sondern gar keine, denn dieser Client hat nichts

@@ -53,6 +53,7 @@ pub mod alias;
 pub mod assign;
 pub mod edit;
 pub mod env;
+pub mod inference;
 pub mod llm_endpoint;
 pub mod load;
 pub mod model;

@@ -119,4 +119,8 @@ const List<String> goldenNames = <String>[
   'settings_ask_mode_upstream',
   'settings_ask_mode_no_proxy',
   'isolation_ask_mode_upstream',
+  // cloud_inference_golden_test.dart (HUM-516)
+  'sandbox_header_cloud',
+  'sandbox_cloud_tag_open',
+  'sandbox_cloud_confirm',
 ];

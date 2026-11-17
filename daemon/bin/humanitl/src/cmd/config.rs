@@ -423,8 +423,31 @@ async fn set(ctx: &Context, key: &str, text: &str, project: bool) -> Result<u8, 
     };
     ctx.render
         .line(&format!("{path} = {shown} ({})", scope.as_str()));
+    if let Some(notice) = cloud_notice(ctx, &path) {
+        ctx.render.note(&notice);
+    }
     ctx.render.note(&reach(ctx, &file).await);
     Ok(EXIT_OK)
+}
+
+/// Der Hinweis auf Cloud-Inferenz, einmal, wenn `config set` den Agenten
+/// oder seinen Endpunkt gewählt hat und dessen Inferenz danach an einen
+/// Anbieter außerhalb dieses Rechners geht (HUM-516).
+///
+/// Dieselbe Lesart wie der Daemon ([`humanitl_sandbox::agent::cloud`]), an
+/// der Konfiguration, die der nächste Start ohne Flags lädt. Lässt sie sich
+/// nicht laden, steht nichts da; das sagt die Gegenprobe schon selbst.
+pub(crate) fn cloud_notice(ctx: &Context, path: &str) -> Option<String> {
+    if !(path.starts_with("agent.") || path.starts_with("llm.")) {
+        return None;
+    }
+    let sources = ctx.sources(&[]).ok()?;
+    let resolved = humanitl_config::load(&sources).ok()?;
+    let cloud = humanitl_sandbox::agent::cloud::cloud_inference(&resolved.config)?;
+    Some(format!(
+        "[humanitl] {} The first start asks once to confirm.",
+        cloud.notice().why
+    ))
 }
 
 /// `sandbox.work_dir` kommt als aufgelöster Pfad in die Datei, wie bei

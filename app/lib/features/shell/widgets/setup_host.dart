@@ -22,6 +22,7 @@ import '../../../core/domain/domain.dart';
 import '../../../core/ipc/config_providers.dart';
 import '../../sandbox/providers/disposable_review.dart';
 import '../../sandbox/providers/sandbox_status_provider.dart';
+import '../../sandbox/widgets/cloud_confirm_dialog.dart';
 import '../../setup/providers/setup_provider.dart';
 import '../../setup/setup_screen.dart';
 import '../providers/connection.dart';
@@ -51,6 +52,22 @@ class SetupHost extends ConsumerStatefulWidget {
 }
 
 class _SetupHostState extends ConsumerState<SetupHost> {
+  /// True while the one confirmation of cloud inference stands over the
+  /// setup (HUM-516).
+  bool _askingCloud = false;
+
+  /// Starts through [run] and goes to the queue once a sandbox is up; a
+  /// failed start leaves the setup where it is, with the daemon's card.
+  Future<void> _startThenGo(Future<void> Function() run) async {
+    await run();
+    if (!mounted) {
+      return;
+    }
+    if (ref.read(sandboxStatusProvider).value?.isUp ?? false) {
+      ref.read(navigationProvider.notifier).go(Section.intercept);
+    }
+  }
+
   @override
   void initState() {
     super.initState();
@@ -211,7 +228,8 @@ class _SetupHostState extends ConsumerState<SetupHost> {
     final bool disposable =
         ref.watch(nextSandboxModeProvider) == SandboxMode.disposable;
     final bool startRefused = offersDisposable && review.waiting && disposable;
-    return SetupScreen(
+    final CloudInference? cloud = status.cloudInference;
+    final Widget screen = SetupScreen(
       state: state,
       daemonReconnecting: reconnecting,
       daemonAttempts: attempts,
@@ -296,17 +314,41 @@ class _SetupHostState extends ConsumerState<SetupHost> {
       // `isUp`, ob eine Sandbox läuft. Ein Fehlschlag hinterlässt entweder
       // einen Befund im Schnappschuss oder einen `AsyncError`, und beide
       // lassen `isUp` falsch.
+      //
+      // Schickt der Agent seine Inferenz zu einem Anbieter außerhalb dieses
+      // Rechners, fragt der erste Start mit dieser Kombination hier dieselbe
+      // eine Frage wie der Kopf des Sandbox-Bildschirms (HUM-516, Review);
+      // ohne sie lehnte der Daemon den Start mit `LLM_011` ab.
       onStart: state.canStart && !sandboxBusy && !startRefused
           ? () async {
-              await ref.read(sandboxStatusProvider.notifier).start();
-              if (!context.mounted) {
+              if (cloud?.needsConfirmation ?? false) {
+                setState(() => _askingCloud = true);
                 return;
               }
-              if (ref.read(sandboxStatusProvider).value?.isUp ?? false) {
-                ref.read(navigationProvider.notifier).go(Section.intercept);
-              }
+              await _startThenGo(
+                ref.read(sandboxStatusProvider.notifier).start,
+              );
             }
           : null,
+    );
+    return Stack(
+      fit: StackFit.expand,
+      children: <Widget>[
+        screen,
+        if (_askingCloud && cloud != null && cloud.needsConfirmation)
+          CloudConfirmDialog(
+            cloud: cloud,
+            onCancel: () => setState(() => _askingCloud = false),
+            onConfirm: () {
+              setState(() => _askingCloud = false);
+              unawaited(
+                _startThenGo(
+                  ref.read(sandboxStatusProvider.notifier).confirmCloudAndStart,
+                ),
+              );
+            },
+          ),
+      ],
     );
   }
 }
