@@ -17,6 +17,11 @@ section here and list their commits instead.
 
 ## [Unreleased]
 
+## [0.4.1] - 2026-11-17
+
+Sessions start again under the packaged user unit. A patch release: no
+change to the configuration, the protocol or the rule format.
+
 ### Fixed
 
 - Under the packaged user unit of 0.4.0, every session the daemon started
