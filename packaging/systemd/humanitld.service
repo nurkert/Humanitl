@@ -95,7 +95,6 @@ PrivateMounts=yes
 PrivateUsers=yes
 ProtectClock=yes
 ProtectControlGroups=yes
-ProtectKernelModules=yes
 ProtectProc=invisible
 KeyringMode=private
 LockPersonality=yes
@@ -137,6 +136,19 @@ CapabilityBoundingSet=CAP_SYS_ADMIN
 # Dienst `CAP_SYS_ADMIN` im ersten Nutzer-Namensraum, und den hat ein
 # Benutzerdienst nicht.
 SystemCallFilter=@system-service @mount @sandbox sethostname
+
+# Kein `ProtectKernelModules` (HUM-529): Ein Benutzerdienst hat kein
+# `CAP_SYS_MODULE` und lädt ohnehin kein Modul. Die Zeile verbarg nur
+# `/usr/lib/modules` hinter einem nur lesbaren tmpfs im Mount-Namensraum des
+# Daemons, und beides brach mit Humanitl 0.4.0 jeden Start über den Daemon:
+# bubblewrap bindet `/usr` rekursiv und nahm das tmpfs als Einhängung mit, die
+# nicht im Plan steht (`SANDBOX_049`), und die Kernel-Stufe fand die Module
+# des Gastkernels nicht (`SANDBOX_045`). Was die Zeile an Aufrufen sperrte,
+# sperrt diese ausdrücklich, für den Daemon und jedes Kind: `init_module`,
+# `finit_module` und `delete_module`. In der Zeile darüber stehen sie nicht,
+# gemessen am 2026-11-17 mit `systemd-analyze syscall-filter`; die Zeile hier
+# hält das fest, falls eine spätere Gruppe sie doch erlaubt.
+SystemCallFilter=~@module
 SystemCallErrorNumber=EPERM
 
 # `AF_NETLINK` steht hier, weil bubblewrap ohne diese Familie die
@@ -151,7 +163,8 @@ RestrictAddressFamilies=AF_UNIX AF_INET AF_INET6 AF_NETLINK
 # Was hier mit Absicht fehlt, jeweils gemessen (docs/INSTALL.md#hardening):
 # RestrictNamespaces (bubblewrap braucht user, mnt, pid, net, ipc, uts),
 # ProtectKernelTunables, ProtectKernelLogs und ProtectHostname (bubblewrap kann
-# danach kein eigenes /proc mehr einhängen), RestrictSUIDSGID (bubblewrap
+# danach kein eigenes /proc mehr einhängen), ProtectKernelModules (siehe oben,
+# HUM-529), RestrictSUIDSGID (bubblewrap
 # scheitert an „Can't open source /usr"), MemoryDenyWriteExecute (vererbt:
 # node und jede andere JIT-Laufzeit des Agenten stirbt beim Start),
 # CapabilityBoundingSet= (bubblewrap startet nicht), UMask (vererbt: Jede

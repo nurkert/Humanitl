@@ -36,6 +36,7 @@
 
 use std::collections::BTreeSet;
 use std::ffi::OsString;
+use std::fmt::Write as _;
 use std::fs::File;
 use std::io::{BufRead, BufReader, PipeReader, Read};
 use std::os::fd::{AsFd, AsRawFd, BorrowedFd, OwnedFd, RawFd};
@@ -1419,6 +1420,16 @@ const DOOR_CHECKS: &[&str] = &[CHECK_SINGLE_SOCKET, CHECK_BRIDGE_LISTENING];
 /// Ordner, der nicht der geprüfte ist, `SANDBOX_042`; eine Mounttabelle, die
 /// vom Plan abweicht, `SANDBOX_049`; sonst `SANDBOX_015`.
 fn door_check(report: &ReportSnapshot) -> CheckResult {
+    door_check_with(report, &unit_mask_fix)
+}
+
+/// [`door_check`] mit `unit_mask`, das zu einem Einhängepunkt außerhalb des
+/// Plans den Weg zur heutigen Unit nennt, wenn die Einhängung von der Unit
+/// des Daemons kommt ([`unit_mask_fix`]).
+fn door_check_with(
+    report: &ReportSnapshot,
+    unit_mask: &dyn Fn(&str) -> Option<FixAction>,
+) -> CheckResult {
     let mut result = check_from(
         report,
         IsolationCheck::SingleSocket,
@@ -1434,8 +1445,36 @@ fn door_check(report: &ReportSnapshot) -> CheckResult {
         None
     };
     if let (Some(code), Some(diagnostic)) = (cause, result.diagnostic.as_mut()) {
-        let mut builder = Diagnostic::builder(code, Severity::Blocking).why(diagnostic.why.clone());
-        if let Some(fix) = mount_check_fix(code) {
+        let extra = report
+            .get(CHECK_MOUNTS_MATCH)
+            .filter(|line| !line.ok)
+            .map(|line| extra_mount_points(&line.evidence))
+            .unwrap_or_default();
+        let mut why = diagnostic.why.clone();
+        let from_unit = extra.iter().find_map(|point| unit_mask(point));
+        if code == SANDBOX_049 && !extra.is_empty() {
+            let _ = write!(
+                why,
+                ". Not in the plan: {}. The sandbox takes such a mount from the mount namespace \
+                 it starts in, so another backend does not remove it",
+                extra.join(", ")
+            );
+            if from_unit.is_some() {
+                let _ = write!(
+                    why,
+                    ". It is the cover that ProtectKernelModules lays over the kernel modules in \
+                     the daemon's unit of Humanitl 0.4.0; the current unit has no such line: {}",
+                    crate::service_unit::BOTH_WAYS
+                );
+            } else {
+                why.push_str(
+                    "; find what mounts there (a property of the daemon's service unit, a \
+                     configuration of the container engine)",
+                );
+            }
+        }
+        let mut builder = Diagnostic::builder(code, Severity::Blocking).why(why);
+        if let Some(fix) = mount_check_fix(code, from_unit) {
             builder = builder.fix(fix);
         }
         *diagnostic = builder.build();
@@ -1443,18 +1482,90 @@ fn door_check(report: &ReportSnapshot) -> CheckResult {
     result
 }
 
+/// Die Einhängepunkte aus `extra=` im Beleg von `mounts_match`, in
+/// Reihenfolge. Der Shim schreibt jede Einhängung als
+/// `<punkt>:<typ>:<ro|rw>:<flags>[:…]` und trennt sie mit `,`, ohne `:` oder
+/// `,` im Punkt zu maskieren (`humanitl-shim`, `mounts.rs`). Gelesen wird
+/// deshalb nach der Form: Ein Eintrag beginnt mit `/`, ein `,` vor etwas
+/// anderem gehört noch zum Punkt davor, und der Punkt endet vor dem ersten
+/// `:<typ>:ro:` oder `:<typ>:rw:`.
+fn extra_mount_points(evidence: &str) -> Vec<String> {
+    let Some(start) = evidence.find("extra=") else {
+        return Vec::new();
+    };
+    let extra = &evidence[start + "extra=".len()..];
+    let mut entries: Vec<String> = Vec::new();
+    for part in extra.split(',') {
+        match entries.last_mut() {
+            Some(last) if !part.starts_with('/') => {
+                last.push(',');
+                last.push_str(part);
+            }
+            _ => entries.push(part.to_owned()),
+        }
+    }
+    entries
+        .iter()
+        .filter(|entry| entry.starts_with('/'))
+        .map(|entry| mount_point(entry).to_owned())
+        .collect()
+}
+
+/// Der Punkt eines Eintrags `<punkt>:<typ>:<ro|rw>:…`; ohne diese Form der
+/// ganze Eintrag.
+fn mount_point(entry: &str) -> &str {
+    for (at, _) in entry.match_indices(':') {
+        let mut rest = entry[at + 1..].splitn(3, ':');
+        let (Some(fstype), Some(mode)) = (rest.next(), rest.next()) else {
+            continue;
+        };
+        if !fstype.is_empty() && matches!(mode, "ro" | "rw") {
+            return &entry[..at];
+        }
+    }
+    entry
+}
+
+/// Wo `ProtectKernelModules` die Module verdeckt; die Unit von Humanitl
+/// 0.4.0 trug die Zeile (HUM-529).
+const MODULES_MASKS: [&str; 2] = ["/usr/lib/modules", "/lib/modules"];
+
+/// Der Weg zur heutigen Unit, wenn die Einhängung an `point` die Decke ist,
+/// die `ProtectKernelModules` in der Unit des Daemons über die Module legt:
+/// Der Punkt liegt an oder unter [`MODULES_MASKS`], der Daemon läuft als
+/// Dienst (`INVOCATION_ID`), und er sieht an der Stelle selbst ein
+/// Verzeichnis mit Modus `000`, wie systemd es dafür einhängt. Sonst keiner;
+/// dann sagt die Erklärung des Codes, woher eine solche Einhängung kommt.
+fn unit_mask_fix(point: &str) -> Option<FixAction> {
+    use std::os::unix::fs::PermissionsExt as _;
+    let under_masks = MODULES_MASKS
+        .iter()
+        .any(|mask| Path::new(point).starts_with(mask));
+    if !under_masks || std::env::var_os("INVOCATION_ID").is_none() {
+        return None;
+    }
+    // Rechte und Sonderbits leer: `000`.
+    let no_bits = |mode: u32| mode.trailing_zeros() >= 12;
+    let covered = std::fs::metadata(point)
+        .is_ok_and(|meta| meta.is_dir() && no_bits(meta.permissions().mode()));
+    covered.then(|| {
+        crate::service_unit::InstallKind::probe(&humanitl_config::Paths::from_process()).fix()
+    })
+}
+
 /// Die Behebung aus dem Register zu `SANDBOX_042` und `SANDBOX_049`: beim
 /// getauschten Ordner die Ordnerauswahl (den Ordner neu wählen, sobald er
-/// wieder der gewählte ist); bei einer Einhängung außerhalb des Plans der Weg
-/// zurück zum Backend des Systems.
-fn mount_check_fix(code: DiagnosticCode) -> Option<FixAction> {
+/// wieder der gewählte ist). Bei einer Einhängung außerhalb des Plans hilft
+/// kein anderes Backend (HUM-529): Kommt sie von der Unit des Daemons
+/// (`from_unit`, [`unit_mask_fix`]), der Weg zur heutigen Unit; sonst die
+/// Erklärung des Codes.
+fn mount_check_fix(code: DiagnosticCode, from_unit: Option<FixAction>) -> Option<FixAction> {
     if code == SANDBOX_042 {
         Some(crate::work_dir::choose_folder_fix())
     } else if code == SANDBOX_049 {
-        Some(FixAction::ChangeSetting {
-            key: "sandbox.backend".to_owned(),
-            value: crate::AUTO_BACKEND.to_owned(),
-        })
+        Some(from_unit.unwrap_or_else(|| {
+            FixAction::OpenUrl(format!("{}#sandbox_049", crate::doctor::DIAGNOSTICS_URL))
+        }))
     } else {
         None
     }
@@ -2311,6 +2422,121 @@ mod tests {
     use humanitl_config::Env;
 
     use super::{BwrapBackend, MIN_BWRAP_VERSION, Version, is_userns_failure};
+
+    /// HUM-529: Eine Einhängung außerhalb des Plans nennt der Befund mit
+    /// ihrem Punkt, und er schlägt kein anderes Backend vor. Den Weg zur
+    /// heutigen Unit nennt er nur, wenn die Einhängung von der Unit des
+    /// Daemons kommt (unter 0.4.0 die Decke aus `ProtectKernelModules` über
+    /// den Modulen); sonst zeigt er auf die Erklärung des Codes, auch für
+    /// einen Punkt unter `/usr/lib/modules`, der nicht von der Unit kommt.
+    /// Mutationsbeweis: die alte Behebung `sandbox.backend = auto` wird hier
+    /// rot.
+    #[cfg(target_os = "linux")]
+    #[test]
+    fn an_extra_mount_is_named_and_never_answered_with_another_backend() {
+        use humanitl_core::FixAction;
+
+        use crate::bridge_env::{
+            CHECK_BRIDGE_LISTENING, CHECK_MOUNTS_MATCH, CHECK_MOUNTS_PINNED, CHECK_SINGLE_SOCKET,
+            ShimCheck,
+        };
+
+        let report = |extra: &str| super::ReportSnapshot {
+            checks: [
+                (CHECK_SINGLE_SOCKET, true, "sockets=1".to_owned()),
+                (CHECK_BRIDGE_LISTENING, true, "listening".to_owned()),
+                (
+                    CHECK_MOUNTS_MATCH,
+                    false,
+                    format!("missing=none;extra={extra}"),
+                ),
+                (CHECK_MOUNTS_PINNED, true, "pins=2".to_owned()),
+            ]
+            .into_iter()
+            .map(|(name, ok, evidence)| ShimCheck {
+                name: name.to_owned(),
+                ok,
+                evidence,
+            })
+            .collect(),
+            ..super::ReportSnapshot::default()
+        };
+        let restart = FixAction::CopyCommand(crate::service_unit::RESTART_COMMAND.to_owned());
+        let from_unit = |point: &str| {
+            point
+                .starts_with("/usr/lib/modules")
+                .then(|| restart.clone())
+        };
+        let finding = |extra: &str, unit: &dyn Fn(&str) -> Option<FixAction>| {
+            let result = super::door_check_with(&report(extra), unit);
+            assert!(!result.passed);
+            result.diagnostic.expect("a finding")
+        };
+        let never = |_: &str| None;
+
+        let modules = finding("/usr/lib/modules:tmpfs:ro:nosuid+nodev+noexec", &from_unit);
+        assert_eq!(modules.code.as_str(), "SANDBOX_049");
+        assert!(
+            modules.why.contains("Not in the plan: /usr/lib/modules."),
+            "{}",
+            modules.why
+        );
+        for way in ["humanitl daemon install", "daemon-reload"] {
+            assert!(modules.why.contains(way), "{way}: {}", modules.why);
+        }
+        assert_eq!(modules.fix, Some(restart.clone()));
+
+        let not_ours = finding("/usr/lib/modules/x:tmpfs:ro:-", &never);
+        assert!(
+            matches!(&not_ours.fix, Some(FixAction::OpenUrl(url)) if url.ends_with("#sandbox_049")),
+            "{:?}",
+            not_ours.fix
+        );
+        assert!(
+            !not_ours.why.contains("ProtectKernelModules"),
+            "{}",
+            not_ours.why
+        );
+
+        let other = finding("/srv/x:tmpfs:rw:-,/opt/y:ext4:ro:-:covered", &from_unit);
+        assert!(
+            other.why.contains("Not in the plan: /srv/x, /opt/y."),
+            "{}",
+            other.why
+        );
+        assert!(
+            matches!(&other.fix, Some(FixAction::OpenUrl(url)) if url.ends_with("#sandbox_049")),
+            "{:?}",
+            other.fix
+        );
+        for diagnostic in [&modules, &not_ours, &other] {
+            assert!(
+                !matches!(&diagnostic.fix, Some(FixAction::ChangeSetting { key, .. }) if key == "sandbox.backend"),
+                "{:?}",
+                diagnostic.fix
+            );
+        }
+    }
+
+    /// Der Shim maskiert `:` und `,` in Punkten nicht; gelesen wird nach der
+    /// Form, und ein Punkt mit beiden Zeichen kommt ganz zurück.
+    #[test]
+    fn extra_mount_points_survive_colons_and_commas_in_a_path() {
+        assert_eq!(
+            super::extra_mount_points(
+                "missing=none;extra=/a:b/c,d:tmpfs:ro:nosuid,/usr/lib/modules:tmpfs:ro:-:covered"
+            ),
+            ["/a:b/c,d", "/usr/lib/modules"]
+        );
+        assert_eq!(
+            super::extra_mount_points("missing=/x:tmpfs:ro:-;extra=none"),
+            Vec::<String>::new()
+        );
+        assert_eq!(
+            super::extra_mount_points("entries=12"),
+            Vec::<String>::new()
+        );
+    }
 
     /// HUM-470: Endete das Warten auf den Bericht, weil die Sandbox endete,
     /// sagt der Befund das, mit Zeit und Status, statt eine Frist zu nennen,

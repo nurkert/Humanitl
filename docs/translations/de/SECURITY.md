@@ -1448,9 +1448,10 @@ Die systemd-Unit (`packaging/systemd/humanitld.service`) läuft als Nutzerdienst
 System-Unit, und ist gehärtet, so weit das Sandbox-Backend es zulässt (HUM-053): `NoNewPrivileges`,
 `PrivateTmp`, `ProtectSystem=strict` mit `ReadWritePaths` für die Daten-, Konfigurations- und
 Laufzeitverzeichnisse, `PrivateIPC`, `PrivateMounts`, `PrivateUsers`, `ProtectClock`,
-`ProtectControlGroups`, `ProtectKernelModules`, `ProtectProc=invisible`, `KeyringMode=private`,
+`ProtectControlGroups`, `ProtectProc=invisible`, `KeyringMode=private`,
 `LockPersonality`, `RestrictRealtime`, `RestrictFileSystems=~@privileged-api`,
-`CapabilityBoundingSet=CAP_SYS_ADMIN`, `SystemCallFilter=@system-service @mount @sandbox sethostname`
+`CapabilityBoundingSet=CAP_SYS_ADMIN`, `SystemCallFilter=@system-service @mount @sandbox sethostname`,
+`SystemCallFilter=~@module`
 und `RestrictAddressFamilies=AF_UNIX AF_INET AF_INET6 AF_NETLINK`. Jeder Kindprozess des Daemons
 erbt diese Einschränkungen, die Sandbox und der Agent eingeschlossen; sie ergänzen die drei
 Garantien und ersetzen keine davon.
@@ -1460,7 +1461,14 @@ Namespaces), `ProtectKernelTunables`, `ProtectKernelLogs` und `ProtectHostname` 
 könnte ihr eigenes `/proc` nicht mehr einhängen), `RestrictSUIDSGID`, `MemoryDenyWriteExecute`
 (vom Agenten geerbt; node und jede JIT-Laufzeit stirbt beim Start),
 `SystemCallArchitectures=native` (der Shim stirbt, wenn er seinen eigenen Filter prüft),
-`PrivateDevices` (kein Terminal für den Agenten) und `ProtectHome`.
+`PrivateDevices` (kein Terminal für den Agenten), `ProtectHome` und seit HUM-529
+`ProtectKernelModules`: Es legte im Mount-Namensraum des Daemons ein nur lesbares tmpfs über
+`/usr/lib/modules`, bubblewrap nahm diese Einhängung mit dem rekursiven Bind von `/usr` in jede
+Sandbox mit, und der Shim lehnte sie als Einhängung außerhalb des Plans ab (`SANDBOX_049`); mit
+Humanitl 0.4.0 startete keine Sitzung über den Daemon, und die Kernel-Stufe verlor die Module
+ihres Gastkernels (`SANDBOX_045`). Ein Benutzerdienst hat kein `CAP_SYS_MODULE` und lädt ohnehin
+kein Modul; `SystemCallFilter=~@module` verwehrt `init_module`, `finit_module` und
+`delete_module` dem Daemon und jedem Kind weiterhin.
 `ProtectHome=read-only` passt nicht zu Projekten unter `$HOME`, die beschreibbar eingehängt
 werden; der Daemon läuft ohnehin als derselbe Nutzer. `ProtectSystem=strict` macht alles außerhalb
 von `$HOME` und dem Laufzeitverzeichnis schreibgeschützt: Ein Projekt außerhalb von `$HOME` ist in

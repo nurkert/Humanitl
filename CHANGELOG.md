@@ -17,6 +17,28 @@ section here and list their commits instead.
 
 ## [Unreleased]
 
+### Fixed
+
+- Under the packaged user unit of 0.4.0, every session the daemon started
+  failed with `SANDBOX_049` (mount table differs from the plan), and the
+  kernel level reported its modules missing with `SANDBOX_045`. The unit's
+  `ProtectKernelModules=yes` hid `/usr/lib/modules` behind a mount that
+  bubblewrap carried into the sandbox. The unit no longer sets it; the
+  module system calls stay denied (`SystemCallFilter=~@module`).
+  `humanitl sandbox check` from a terminal was not affected (HUM-529).
+- `SANDBOX_049` names the mounts outside the plan and no longer suggests
+  `sandbox.backend = auto`, which could not help; `SANDBOX_045` suggests a
+  reboot when an upgrade removed the running kernel, instead of installing a
+  package that is already there.
+- `humanitl doctor`, `humanitl run` and `humanitl go` print a finding once,
+  not twice.
+
+Upgrading from 0.4.0: update the package, then run
+`systemctl --user daemon-reload && systemctl --user restart humanitld.service`.
+Archive and AppImage installs run `humanitl daemon install` instead. An
+override `ProtectKernelModules=no` made by hand can be removed with
+`systemctl --user revert humanitld.service`.
+
 ## [0.4.0] - 2026-11-17
 
 A decision proxy of your own behind Humanitl, a one-command start, and a

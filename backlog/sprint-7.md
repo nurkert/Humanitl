@@ -123,6 +123,7 @@ Diagnose-Codes, hier nur geplant (registriert vom genannten Issue in `codes.rs` 
 | HUM-526 | Abhängigkeiten: von `chrono` auf `jiff` | M | HUM-525 |
 | HUM-527 | Website: `astro` auf 7.4.7 oder neuer (zwei Dependabot-Meldungen) | S | – |
 | HUM-528 | Ein Installationsskript für alle Systeme unter `humanitl.de/install` | M | – |
+| HUM-529 | Kernel-Stufe startet unter der gehärteten Unit nicht (Module unsichtbar) | S | – |
 | HUM-516 | Cloud-Agenten: gemeinsamer Hinweis auf den Abfluss über die Inferenz | S | HUM-037 |
 | HUM-518 | Agent-Depot: Kern, `agents.source`, Sperre durch Firmenvorgabe, RPC und CLI `status`, `source`, `remove` | M | ADR-0023 |
 | HUM-519 | Agent-Depot: Installation und Update in einer Wartungs-Sandbox, Version angeheftet | M | HUM-518 |
@@ -4511,3 +4512,109 @@ Hinweis auf „Trotzdem öffnen" auf macOS entfällt, weil Gatekeeper eine
 notarisierte App ohne Rückfrage startet. Das wird dann ein eigenes
 Issue.
 
+## HUM-529 · Kernel-Stufe startet unter der gehärteten Unit nicht (Module unsichtbar)
+
+### Kontext
+Gefunden vom Eigentümer auf Release 0.4.0. `humanitl doctor` mit dem
+Daemon unter `packaging/systemd/humanitld.service` meldet für das Backend
+`qemu` „modules missing: SANDBOX_045 … there is no directory at
+/usr/lib/modules/7.3.4+deb14-amd64 … fix: sudo apt install
+linux-image-amd64", und das zweimal. Auf dem Rechner gibt es das
+Verzeichnis. Ursache: `ProtectKernelModules=yes` in der Unit legt im
+Mount-Namensraum des Daemons ein nur lesbares tmpfs mit Modus `000` über
+`/usr/lib/modules`; jeder Blick hinein endet mit `EACCES` (gemessen
+2026-11-17, systemd 262). Die CI fährt die KVM-Tests nicht unter der Unit
+und sah es deshalb nie.
+
+Nachgemeldet vom Eigentümer am selben Tag: Auch `humanitl go` mit bwrap
+über den Daemon scheitert, `mounts_match FAIL:
+missing=none;extra=/usr/lib/modules:tmpfs:ro:…` und `SANDBOX_049`, zweimal
+gedruckt, mit der Behebung `sandbox.backend auto`, die nichts ändert.
+bubblewrap bindet `/usr` rekursiv und nimmt das tmpfs mit in die Sandbox;
+der Shim lehnt es als Einhängung außerhalb des Plans ab. Unter der Unit
+startete damit keine Sitzung über den Daemon. `humanitl sandbox check`
+aus dem Terminal läuft nicht unter der Unit und bestand.
+
+### Spezifikation
+1. `ProtectKernelModules=yes` verlässt die Unit (`packaging/systemd/humanitld.service`;
+   `humanitl daemon install` schreibt dieselbe Vorlage über `include_str!`).
+   Begründung in der Unit, in `docs/INSTALL.md` und `docs/SECURITY.md`
+   (je de): Ein Benutzerdienst hat kein `CAP_SYS_MODULE` und lädt ohnehin
+   kein Modul; die Zeile verbarg nur das Verzeichnis und brach damit
+   bubblewrap und die Kernel-Stufe. Die Aufrufe bleiben gesperrt:
+   `SystemCallFilter=~@module` steht ausdrücklich in der Unit, und die
+   Erlaubnisliste davor erreicht `init_module`, `finit_module` und
+   `delete_module` gemessen nicht.
+2. Der erste Entwurf (Blick auf die Module über eine kurze Unit
+   `humanitl-q-*` des Dienstverwalters wie bei Podman, HUM-434) ist
+   verworfen: Er heilte nur die Kernel-Stufe, nicht die Einhängung unter
+   `/usr`, und brauchte ein Skript, das die Suche nach `overlay` doppelt.
+3. Der Befund zu den Modulen nennt den wirklichen Fall: verborgen (ein
+   anderer Fehler als „gibt es nicht", Weg `humanitl daemon install`),
+   ein gesetzter Pfad (Weg der Schlüssel), Module eines anderen Kernels
+   daneben (ein Upgrade hat das Paket des laufenden entfernt, Weg ein
+   Neustart, `systemctl reboot`, nie `apt install` eines Pakets, das schon
+   da ist), sonst das Paket. Dasselbe für das Kernel-Abbild unter `/boot`.
+4. `SANDBOX_049` nennt jeden Einhängepunkt außerhalb des Plans und schlägt
+   kein anderes Backend vor. Den Weg zur heutigen Unit nennt er nur, wenn
+   die Einhängung von der Unit kommt (Punkt an oder unter den Modulen, der
+   Daemon läuft als Dienst und sieht dort ein Verzeichnis mit Modus `000`),
+   sonst die Erklärung des Codes. Der Weg folgt der Installation: mit Paket
+   dessen Update und `systemctl --user daemon-reload && systemctl --user
+   restart humanitld.service`, ohne Paket `humanitl daemon install`; beide
+   stehen im Satz. Dasselbe für die verborgenen Module (`SANDBOX_045`). Die
+   Texte im Register folgen, `CHANGELOG.md` nennt den Fix unter
+   „Unreleased".
+5. Derselbe Befund steht in der Ausgabe nur einmal: im Doctor
+   (`available` und die Zeile der Voraussetzung) und in `humanitl run`
+   und `go` (Ergebnis der Prüfung und Befund des Starts).
+
+### Tests
+- Ein Test startet das Testprogramm als Unit `humanitl-test-hum529-*` mit
+  der Härtung aus der Unit-Datei und vergleicht innen und außen jede
+  Voraussetzung der Kernel-Stufe und jeden Einhängepunkt unter `/usr`
+  (`qemu/kvm_tests/hardened.rs`, läuft im CI-Job `kvm-tests`).
+  Mutationsbeweis: `ProtectKernelModules=yes` zurück macht ihn rot.
+- Unit-Datei: `ProtectKernelModules` fehlt, `SystemCallFilter=~@module`
+  steht da, die Erlaubnisliste erreicht keinen Aufruf für Module
+  (`systemd-analyze`), Exposure höchstens 4.0.
+- Befund der Module: verborgen, Neustart, Paket, Schlüssel; Mutationsbeweis
+  für den Neustart.
+- `SANDBOX_049` nennt die Punkte und nie `sandbox.backend`;
+  Mutationsbeweis mit der alten Behebung.
+- Doppelte Befunde in Doctor und `run`/`go` einmal; Mutationsbeweis je.
+
+### Fallstricke
+- Die Exposure steigt von 3.7 auf 3.8; die Zahl in `docs/INSTALL.md` folgt.
+- Nach dem nächsten Release muss die Unit auf dem Rechner neu sein: Das
+  Paket ersetzt `/usr/lib/systemd/user/humanitld.service`, danach
+  `systemctl --user daemon-reload` und Neustart des Dienstes; ohne Paket
+  schreibt `humanitl daemon install` die Unit neu.
+- Die Messung P8 (HUM-434) bleibt, wie sie genommen wurde; für Podman
+  ändert sich nichts, die übrigen Eigenschaften mit eigenem
+  Mount-Namensraum brechen `newuidmap` weiter.
+
+### Akzeptanzkriterien
+1. Unter der gehärteten Unit startet eine Sitzung mit bwrap über den Daemon,
+   und der Doctor meldet die Module des laufenden Kernels nicht als
+   fehlend.
+2. Die Unit lässt keine Einhängung unter `/usr` entstehen, die ein Prozess
+   ohne Unit nicht hat; die Aufrufe für Module bleiben gesperrt.
+3. Fehlen die Module wirklich, nennt der Befund einen Weg, der hilft.
+4. `SANDBOX_049` schlägt kein Backend vor, das nichts ändert, und kein
+   Befund steht doppelt da.
+
+### Stand nach der Umsetzung
+Umgesetzt wie oben, Entwurf 2 verworfen. Gemessen am 2026-11-17 auf
+Debian 14, systemd 262: unter `ProtectKernelModules=yes` endet `stat` auf
+das Verzeichnis mit „Permission denied", `/proc/self/mountinfo` zeigt
+`/usr/lib/modules`; mit der neuen Härtung sind die Module sichtbar und
+unter `/usr` liegt keine Einhängung. Exposure 3.8.
+
+
+Review: Codex und Sonnet als Ersatz für Antigravity kein blocking oder
+major. Übernommen: Lösungsweg nach Installationsart (Paket:
+`daemon-reload` und Neustart, Archiv: `humanitl daemon install`), Rat zur
+Unit nur, wenn die Einhängung wirklich von ihr kommt, richtiger Schlüssel
+`sandbox.qemu.modules`, Register und `DIAGNOSTICS.md` nachgezogen,
+robusteres Lesen der Einhängepunkte, CHANGELOG für 0.4.1.
