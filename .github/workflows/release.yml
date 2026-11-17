@@ -9,6 +9,13 @@
 #                  -> check-aur ------------+
 #                  -> check-appimage -------+
 #         -> build-macos -> check-macos ----+
+#            |               |              |
+#            v               v              |
+#   classify-macos   classify-check-macos   |
+#            |               |              |
+#            v               v              |
+#   build-macos-fallback -> check-macos-fallback
+#                     (nur ohne Runner, HUM-531)
 #
 # guard      Tag hat die Form v0.Y.Z, der Commit liegt auf `main`, und der
 #            ci.yml-Lauf dieses Commits ist mit `success` beendet. Im
@@ -36,7 +43,19 @@
 # check-macos  Ein frischer macOS-Runner haengt das .dmg ein und prueft
 #            Signatur, Architekturen, Version, den Start der App und die
 #            Seatbelt-Escape-Tests gegen die Programme im Buendel.
+#            Die Schritte beider Jobs stehen in .github/actions/macos-build
+#            und .github/actions/macos-check.
+# classify-macos, classify-check-macos  Bekam build-macos beziehungsweise
+#            check-macos keinen Runner? tools/ci/classify-runner-loss.sh
+#            liest dazu die Jobs dieses Laufs und die Annotation von GitHub
+#            ueber die Actions-API (HUM-531).
+# build-macos-fallback, check-macos-fallback  Dieselben Schritte auf
+#            macos-15-intel, nur wenn der Hauptpfad keinen Runner bekam,
+#            nie bei einem gescheiterten Schritt und nie parallel. Gleicher
+#            Artefaktname; der Rueckfall laedt mit overwrite hoch.
 # release    Tags only: GitHub release, regular (not a pre-release), latest.
+#            Verlangt jeden Job gruen und von den macOS-Pfaden genau einen
+#            Bau und genau eine Pruefung.
 #
 # Probelauf (HUM-363): Er baut und prueft alles wie ein Tag-Lauf, laedt die
 # Artefakte als Workflow-Artefakt hoch und legt kein Release an; der Job
@@ -53,6 +72,15 @@
 #                       ein Stempeln, das nichts schreibt, in check-version
 #                       auffaellt); der Commit liegt noch nicht auf main, guard
 #                       warnt deshalb nur.
+#   release-dry/hum-NNN-macos-fallback
+#                       Wie release-dry/hum-NNN, aber mit dem Schalter, der
+#                       build-macos und check-macos ueberspringt; so muss der
+#                       Rueckfall auf macos-15-intel bauen und pruefen
+#                       (HUM-531). Gepusht wird er von Hand, etwa
+#                       `git push origin <sha>:refs/heads/release-dry/hum-531-macos-fallback`.
+#                       Ein Tag und release-dry/0.Y.Z kennen den Schalter
+#                       nicht; classify-macos verweigert ihn fuer einen Tag
+#                       noch einmal.
 #   workflow_dispatch   Von Hand unter Actions mit einer eingegebenen Version;
 #                       guard warnt nur.
 #
@@ -139,6 +167,10 @@ jobs:
       # Ein Probelauf heisst anders als ein Release-Bau, damit sein Artefakt
       # nie mit einem geprueften verwechselt wird.
       artifact: ${{ steps.version.outputs.artifact }}
+      # false nur im Probelauf release-dry/hum-NNN-macos-fallback (HUM-531):
+      # Der macOS-Hauptpfad wird uebersprungen, und der Rueckfall muss bauen
+      # und pruefen. Fuer einen Tag ist es immer true.
+      macos_main: ${{ steps.version.outputs.macos_main }}
     steps:
       - name: Version from the tag, the dry-run branch or the dry-run input
         id: version
@@ -158,6 +190,7 @@ jobs:
           # naechsten Schritt (Commit nicht auf main, CI nicht gruen) ist ein
           # Fehler statt einer Warnung; so prueft der Probelauf von
           # tools/release.sh dasselbe, was der Tag-Lauf danach prueft.
+          macos_main=true
           if [[ "$EVENT" == "push" && "$REF_TYPE" == "tag" ]]; then
             candidate="${REF_NAME#v}"
             publish=true
@@ -172,12 +205,17 @@ jobs:
             if [[ "$dry" == hum-* ]]; then
               # Issue-Zweig vor dem Merge: Die Nummer ist nach dieser Pruefung
               # nur noch Ziffern; 10# nimmt fuehrende Nullen (hum-002) als
-              # Dezimalzahl.
-              if [[ ! "$dry" =~ ^hum-([0123456789]{1,6})$ ]]; then
-                echo "::error::'$REF_NAME' is not release-dry/hum-NNN"
+              # Dezimalzahl. Die Endung -macos-fallback ist der Schalter, der
+              # den macOS-Hauptpfad ueberspringt (HUM-531).
+              if [[ ! "$dry" =~ ^hum-([0123456789]{1,6})(-macos-fallback)?$ ]]; then
+                echo "::error::'$REF_NAME' is not release-dry/hum-NNN or release-dry/hum-NNN-macos-fallback"
                 exit 1
               fi
               candidate="0.0.$((10#${BASH_REMATCH[1]}))"
+              if [[ -n "${BASH_REMATCH[2]}" ]]; then
+                macos_main=false
+                echo "::notice::dry-run switch: build-macos and check-macos are skipped, the fallback on macos-15-intel builds and checks"
+              fi
               strict=false
             else
               candidate="$dry"
@@ -214,8 +252,9 @@ jobs:
             echo "strict=$strict"
             echo "sha=$SHA"
             echo "artifact=$artifact"
+            echo "macos_main=$macos_main"
           } >> "$GITHUB_OUTPUT"
-          echo "version $candidate, publish $publish, strict $strict, commit $SHA, artifact $artifact"
+          echo "version $candidate, publish $publish, strict $strict, commit $SHA, artifact $artifact, macos main path $macos_main"
 
       - uses: actions/checkout@11d5960a326750d5838078e36cf38b85af677262 # v4.4.0
         with:
@@ -602,94 +641,41 @@ jobs:
             "artefacts/dist/humanitl-${VERSION}-linux-x86_64.tar.gz" "$VERSION" \
             "artefacts/dist/humanitl_${VERSION}_amd64.deb"
 
+  # Der macOS-Teil hat zwei Pfade (HUM-531): den Hauptpfad build-macos und
+  # check-macos auf macos-15 (arm64) und den Rueckfall build-macos-fallback
+  # und check-macos-fallback auf macos-15-intel. Der Rueckfall laeuft nur,
+  # wenn GitHub dem Hauptpfad keinen Runner zuteilte (so ging es v0.4.0 am
+  # 2026-11-17, viermal), nie bei einem gescheiterten Schritt und nie
+  # parallel (Entscheidung des Inhabers vom 2026-11-17). Ob ein Job ohne
+  # Runner blieb, sagt `needs.<job>.result` nicht; das entscheiden die Jobs
+  # classify-* ueber die Actions-API mit tools/ci/classify-runner-loss.sh.
+  # Beide Pfade fuehren dieselben Schritte aus den lokalen Actions
+  # .github/actions/macos-build und .github/actions/macos-check aus, laden
+  # unter demselben Artefaktnamen hoch, und `release` nimmt das eine, das es
+  # gibt. Eine Liste in `runs-on` hiesse "alle Labels zugleich", und
+  # `timeout-minutes` zaehlt nicht die Wartezeit in der Schlange; deshalb
+  # eigene Jobs.
   build-macos:
     name: build-macos
     needs: guard
+    # Der Schalter des Probelaufs (release-dry/hum-NNN-macos-fallback)
+    # ueberspringt diesen Pfad, damit der Rueckfall sich beweisen muss. Fuer
+    # einen Tag ist macos_main immer true.
+    if: needs.guard.outputs.macos_main == 'true'
     runs-on: macos-15
     timeout-minutes: 60
-    env:
-      VERSION: ${{ needs.guard.outputs.version }}
     steps:
       - uses: actions/checkout@11d5960a326750d5838078e36cf38b85af677262 # v4.4.0
         with:
           fetch-depth: 0
-      - uses: ./.github/actions/setup-rust
+      - uses: ./.github/actions/macos-build
         with:
+          version: ${{ needs.guard.outputs.version }}
+          artifact: ${{ needs.guard.outputs.artifact }}-macos
+          require-signing: ${{ needs.guard.outputs.publish == 'true' && '1' || '0' }}
+          signing-key: ${{ secrets.HUMANITL_UPDATE_SIGNING_KEY }}
+          github-token: ${{ github.token }}
           cache-key: release-macos
-      - uses: ./.github/actions/setup-flutter
-        with:
-          protoc-plugin: "true"
-      - name: Install protoc
-        uses: arduino/setup-protoc@c65c819552d16ad3c9b72d9dfd5ba5237b9c906b # v3.0.0
-        with:
-          version: "27.x"
-          repo-token: ${{ github.token }}
-      - name: Install dmgbuild
-        # Writes the Finder layout of the disk image itself; no Finder is
-        # remote controlled on the runner. The package and its dependencies
-        # are pinned with hashes, like every action is pinned to a commit.
-        run: |
-          set -euo pipefail
-          python3 -m venv "$RUNNER_TEMP/dmg"
-          "$RUNNER_TEMP/dmg/bin/pip" install --quiet --require-hashes --no-deps \
-            -r packaging/macos/dmg/requirements.txt
-          echo "DMGBUILD=$RUNNER_TEMP/dmg/bin/dmgbuild" >> "$GITHUB_ENV"
-
-      - name: Stamp the version into this checkout
-        run: |
-          set -euo pipefail
-          ./packaging/release/stamp-version.sh "$VERSION"
-
-      - name: Build universal humanitld, humanitl and humanitl-shim
-        run: |
-          set -euo pipefail
-          ./packaging/macos/build-binaries.sh "$RUNNER_TEMP/bin"
-          ./packaging/release/check-version.sh "$VERSION" "$RUNNER_TEMP/bin"
-
-      - name: Generate the Dart code
-        run: |
-          set -euo pipefail
-          make flutter-codegen
-
-      - name: Build the macOS app
-        run: |
-          set -euo pipefail
-          build_number="$(git rev-list --count HEAD)"
-          cd app
-          flutter build macos --release --build-name "$VERSION" --build-number "$build_number"
-
-      - name: Bundle, sign ad hoc, disk image and zip
-        run: |
-          set -euo pipefail
-          ./packaging/macos/build-app.sh "$VERSION" "$RUNNER_TEMP/bin" \
-            app/build/macos/Build/Products/Release/Humanitl.app dist-macos
-          ( cd dist-macos && shasum -a 256 Humanitl-*.dmg Humanitl-*.zip > SHA256SUMS-macos )
-          {
-            echo "### Humanitl $VERSION for macOS"
-            echo
-            echo '```'
-            ls -l dist-macos
-            echo '```'
-          } >> "$GITHUB_STEP_SUMMARY"
-
-      - name: Sign the update manifest of the zip
-        # HUM-382: Die App laedt das Zip nur, wenn dieses Manifest mit dem
-        # Release-Schluessel signiert ist; min_os ist das Deployment-Target
-        # der App. Das Geheimnis sieht nur dieser Schritt.
-        env:
-          HUMANITL_UPDATE_SIGNING_KEY: ${{ secrets.HUMANITL_UPDATE_SIGNING_KEY }}
-          REQUIRE_SIGNING: ${{ needs.guard.outputs.publish == 'true' && '1' || '0' }}
-        run: |
-          set -euo pipefail
-          ./packaging/release/sign-update.sh "$VERSION" \
-            "dist-macos/Humanitl-${VERSION}-macos.zip" update-macos.json 12.0 dist-macos
-
-      - uses: actions/upload-artifact@ea165f8d65b6e75b540449e92b4886f43607fa02 # v4.6.2
-        with:
-          name: ${{ needs.guard.outputs.artifact }}-macos
-          path: dist-macos/
-          if-no-files-found: error
-          retention-days: 14
 
   check-macos:
     name: check-macos
@@ -697,87 +683,156 @@ jobs:
     # A runner that has never seen the build: the disk image is all it gets.
     runs-on: macos-15
     timeout-minutes: 30
-    env:
-      VERSION: ${{ needs.guard.outputs.version }}
     steps:
       - uses: actions/checkout@11d5960a326750d5838078e36cf38b85af677262 # v4.4.0
-      - uses: actions/download-artifact@d3f86a106a0bac45b974a628896c90dbdf5c8093 # v4.3.0
+      - uses: ./.github/actions/macos-check
         with:
-          name: ${{ needs.guard.outputs.artifact }}-macos
-          path: artefacts
-      - name: Mount the disk image and take the app out
+          version: ${{ needs.guard.outputs.version }}
+          artifact: ${{ needs.guard.outputs.artifact }}-macos
+
+  classify-macos:
+    name: classify-macos
+    needs: [guard, build-macos]
+    # always(): Ein abgebrochener build-macos nimmt sonst diesen Job mit.
+    if: always() && needs.guard.result == 'success'
+    runs-on: ubuntu-24.04
+    timeout-minutes: 10
+    permissions:
+      contents: read
+      # Die Jobs dieses Laufs und die Annotationen ihrer Check-Runs lesen.
+      actions: read
+      checks: read
+    outputs:
+      fallback: ${{ steps.classify.outputs.fallback }}
+    steps:
+      - uses: actions/checkout@11d5960a326750d5838078e36cf38b85af677262 # v4.4.0
+      - name: Did build-macos get no runner?
+        id: classify
+        env:
+          HUMANITL_CLASSIFY_RESULT: ${{ needs.build-macos.result }}
+          # Der Schalter gilt nie fuer einen Tag, auch wenn guard sich irrte.
+          HUMANITL_CLASSIFY_FORCE: ${{ needs.guard.outputs.macos_main == 'false' && github.ref_type != 'tag' }}
+          HUMANITL_CI_REPO: ${{ github.repository }}
+          HUMANITL_CI_RUN_ID: ${{ github.run_id }}
+          HUMANITL_CI_RUN_ATTEMPT: ${{ github.run_attempt }}
+          GITHUB_TOKEN: ${{ github.token }}
         run: |
           set -euo pipefail
-          cd artefacts
-          shasum -a 256 -c SHA256SUMS-macos
-          mount="$RUNNER_TEMP/dmg-mount"
-          mkdir -p "$mount" "$RUNNER_TEMP/Applications"
-          hdiutil attach -nobrowse -readonly -mountpoint "$mount" "Humanitl-$VERSION-macos.dmg"
-          test -L "$mount/Applications" || { echo "::error::the disk image has no Applications link"; exit 1; }
-          test -f "$mount/.background.tiff" -a -f "$mount/.DS_Store" || { echo "::error::the disk image has no background"; exit 1; }
-          ditto "$mount/Humanitl.app" "$RUNNER_TEMP/Applications/Humanitl.app"
-          hdiutil detach "$mount" || hdiutil detach -force "$mount"
-          echo "APP=$RUNNER_TEMP/Applications/Humanitl.app" >> "$GITHUB_ENV"
-      - name: Signature, architectures and version
+          tools/ci/classify-runner-loss.sh build-macos >> "$GITHUB_OUTPUT"
+
+  build-macos-fallback:
+    name: build-macos-fallback
+    needs: [guard, classify-macos]
+    if: always() && needs.classify-macos.outputs.fallback == 'true'
+    # Das letzte Intel-Abbild von GitHub Actions; laut runner-images und dem
+    # GitHub-Changelog vom 2025-09-19 (Schliessung von macos-13) laeuft es bis
+    # August 2027 (dort "Fall 2027"), geprueft am 2026-11-18. Danach traegt
+    # macos-26-intel oder ein anderer Pool den Rueckfall.
+    runs-on: macos-15-intel
+    timeout-minutes: 90
+    steps:
+      - uses: actions/checkout@11d5960a326750d5838078e36cf38b85af677262 # v4.4.0
+        with:
+          fetch-depth: 0
+      - uses: ./.github/actions/macos-build
+        with:
+          version: ${{ needs.guard.outputs.version }}
+          artifact: ${{ needs.guard.outputs.artifact }}-macos
+          require-signing: ${{ needs.guard.outputs.publish == 'true' && '1' || '0' }}
+          signing-key: ${{ secrets.HUMANITL_UPDATE_SIGNING_KEY }}
+          github-token: ${{ github.token }}
+          cache-key: release-macos-intel
+          overwrite: "true"
+
+  classify-check-macos:
+    name: classify-check-macos
+    needs: [guard, check-macos]
+    if: always() && needs.guard.result == 'success'
+    runs-on: ubuntu-24.04
+    timeout-minutes: 10
+    permissions:
+      contents: read
+      actions: read
+      checks: read
+    outputs:
+      fallback: ${{ steps.classify.outputs.fallback }}
+    steps:
+      - uses: actions/checkout@11d5960a326750d5838078e36cf38b85af677262 # v4.4.0
+      - name: Did check-macos get no runner?
+        id: classify
+        env:
+          HUMANITL_CLASSIFY_RESULT: ${{ needs.check-macos.result }}
+          HUMANITL_CI_REPO: ${{ github.repository }}
+          HUMANITL_CI_RUN_ID: ${{ github.run_id }}
+          HUMANITL_CI_RUN_ATTEMPT: ${{ github.run_attempt }}
+          GITHUB_TOKEN: ${{ github.token }}
         run: |
           set -euo pipefail
-          codesign --verify --deep --strict --verbose=2 "$APP"
-          for program in "$APP/Contents/MacOS/Humanitl" "$APP"/Contents/MacOS/bin/*; do
-            archs="$(lipo -archs "$program")"
-            echo "$program: $archs"
-            [[ " $archs " == *" arm64 "* && " $archs " == *" x86_64 "* ]] ||
-              { echo "::error::$program is not universal: $archs"; exit 1; }
-          done
-          ./packaging/release/check-version.sh "$VERSION" "$APP/Contents/MacOS/bin"
-          got="$(plutil -extract CFBundleShortVersionString raw "$APP/Contents/Info.plist")"
-          [[ "$got" == "$VERSION" ]] || { echo "::error::the app carries version $got"; exit 1; }
-      - name: The zip carries the same app and its notes
-        run: |
-          set -euo pipefail
-          # With plain unzip, which drops extended attributes, like many tools
-          # do: the signature must not live in them.
-          zipped="$RUNNER_TEMP/zip"
-          mkdir -p "$zipped"
-          /usr/bin/unzip -q "artefacts/Humanitl-$VERSION-macos.zip" -d "$zipped"
-          for file in Humanitl.app README.md LICENSE INSTALL.txt; do
-            test -e "$zipped/Humanitl/$file" || { echo "::error::the zip lacks Humanitl/$file"; exit 1; }
-          done
-          codesign --verify --deep --strict "$zipped/Humanitl/Humanitl.app"
-          # The same signed bundle: the code directory hash covers the
-          # executable and, through the sealed resources, every other file.
-          cdhash() { codesign -dvvv "$1" 2>&1 | sed -n 's/^CDHash=//p'; }
-          [[ "$(cdhash "$zipped/Humanitl/Humanitl.app")" == "$(cdhash "$APP")" ]] ||
-            { echo "::error::the app in the zip differs from the one in the disk image"; exit 1; }
-      - name: The app starts
-        run: |
-          set -euo pipefail
-          home="$RUNNER_TEMP/app-home"
-          mkdir -p "$home"
-          HOME="$home" "$APP/Contents/MacOS/Humanitl" > "$RUNNER_TEMP/app.log" 2>&1 &
-          pid=$!
-          sleep 10
-          if ! kill -0 "$pid" 2>/dev/null; then
-            echo "::error::the app ended within 10 s: $(tail -20 "$RUNNER_TEMP/app.log" | tr '\n' ' ')"
-            exit 1
-          fi
-          kill "$pid"
-      - name: Seatbelt escape tests against the bundled programs
-        run: |
-          set -euo pipefail
-          ./tests/escape/macos/run.sh "$APP/Contents/MacOS/bin"
+          tools/ci/classify-runner-loss.sh check-macos >> "$GITHUB_OUTPUT"
+
+  check-macos-fallback:
+    name: check-macos-fallback
+    needs: [guard, build-macos, build-macos-fallback, classify-check-macos]
+    # Prueft das Artefakt des Jobs, der gebaut hat: nach dem Rueckfall-Bau
+    # immer (check-macos ist dann uebersprungen), nach dem Hauptbau nur, wenn
+    # check-macos keinen Runner bekam.
+    if: >-
+      always() &&
+      needs.guard.result == 'success' &&
+      (needs.build-macos-fallback.result == 'success' ||
+       (needs.build-macos.result == 'success' &&
+        needs.classify-check-macos.outputs.fallback == 'true'))
+    # Wie build-macos-fallback: Intel bis August 2027, geprueft am 2026-11-18.
+    runs-on: macos-15-intel
+    timeout-minutes: 30
+    steps:
+      - uses: actions/checkout@11d5960a326750d5838078e36cf38b85af677262 # v4.4.0
+      - uses: ./.github/actions/macos-check
+        with:
+          version: ${{ needs.guard.outputs.version }}
+          artifact: ${{ needs.guard.outputs.artifact }}-macos
 
   release:
     name: release
-    needs: [guard, build, check-deb, check-rpm, check-aur, check-appimage, build-macos, check-macos]
-    # Nur ein Tag legt ein Release an. Der Probelauf endet mit check-deb,
-    # check-rpm, check-aur, check-appimage und check-macos. Die Bedingung
-    # prueft das Ereignis selbst noch einmal, damit kein Probelauf-Zweig
-    # diesen Job erreicht, selbst wenn guard einmal falsch rechnete.
+    needs:
+      - guard
+      - build
+      - check-deb
+      - check-rpm
+      - check-aur
+      - check-appimage
+      - build-macos
+      - check-macos
+      - classify-macos
+      - build-macos-fallback
+      - classify-check-macos
+      - check-macos-fallback
+    # Nur ein Tag legt ein Release an. Der Probelauf endet mit den Pruefjobs.
+    # Die Bedingung prueft das Ereignis selbst noch einmal, damit kein
+    # Probelauf-Zweig diesen Job erreicht, selbst wenn guard einmal falsch
+    # rechnete.
+    #
+    # always() (HUM-531): Ein Hauptpfad ohne Runner endet als cancelled, und
+    # ohne always() nahme er diesen Job mit, auch wenn der Rueckfall gruen
+    # ist. Deshalb steht hier ausdruecklich, was gruen sein muss: jeder Job
+    # ausser den beiden macOS-Pfaden, und von denen genau ein Bau und genau
+    # eine Pruefung (`!=` zweier Wahrheitswerte ist ein exklusives Oder).
     if: >-
+      always() &&
+      needs.guard.result == 'success' &&
       needs.guard.outputs.publish == 'true' &&
       github.event_name == 'push' &&
       github.ref_type == 'tag' &&
-      startsWith(github.ref, 'refs/tags/v0.')
+      startsWith(github.ref, 'refs/tags/v0.') &&
+      needs.build.result == 'success' &&
+      needs.check-deb.result == 'success' &&
+      needs.check-rpm.result == 'success' &&
+      needs.check-aur.result == 'success' &&
+      needs.check-appimage.result == 'success' &&
+      needs.classify-macos.result == 'success' &&
+      needs.classify-check-macos.result == 'success' &&
+      (needs.build-macos.result == 'success') != (needs.build-macos-fallback.result == 'success') &&
+      (needs.check-macos.result == 'success') != (needs.check-macos-fallback.result == 'success')
     runs-on: ubuntu-24.04
     timeout-minutes: 15
     permissions:

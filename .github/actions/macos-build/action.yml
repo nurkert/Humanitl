@@ -1,0 +1,160 @@
+# Composite action: the macOS half of a release build (HUM-326, HUM-531).
+#
+# Shared by the jobs build-macos (macos-15, arm64) and build-macos-fallback
+# (macos-15-intel) in release.yml, so both paths run exactly the same steps:
+# universal humanitld, humanitl and humanitl-shim, the Flutter app, the
+# bundle Humanitl.app signed ad hoc, the designed .dmg, the .zip and its
+# signed update manifest, uploaded as one workflow artifact.
+#
+# The caller checks out the repository first (with full history, the build
+# number counts commits); a local action cannot be used before that.
+#
+# Every action is pinned to a commit SHA; the release tag in the trailing
+# comment is documentation. Bump both together.
+name: Build the macOS release
+description: >-
+  Build the universal programs and app, bundle, sign ad hoc, make the .dmg and
+  .zip, sign the update manifest and upload everything as one artifact.
+
+inputs:
+  version:
+    description: "The release version 0.Y.Z, as checked by guard."
+    required: true
+  artifact:
+    description: "Name of the uploaded artifact. Both paths use the same one."
+    required: true
+  require-signing:
+    description: '"1" when the update manifest must be signed (a tag), "0" otherwise.'
+    required: true
+  signing-key:
+    description: "secrets.HUMANITL_UPDATE_SIGNING_KEY; only the signing step sees it."
+    required: false
+    default: ""
+  github-token:
+    description: "Token for arduino/setup-protoc, to stay under the API rate limit."
+    required: true
+  cache-key:
+    description: "Discriminator for the cargo cache; differs per runner architecture."
+    required: true
+  overwrite:
+    description: >-
+      "true" lets the upload replace an artifact of the same name. Only the
+      fallback sets it; the main path uploads last and never left one behind.
+    required: false
+    default: "false"
+
+runs:
+  using: composite
+  steps:
+    - uses: ./.github/actions/setup-rust
+      with:
+        cache-key: ${{ inputs.cache-key }}
+    - uses: ./.github/actions/setup-flutter
+      with:
+        protoc-plugin: "true"
+    - name: Install protoc
+      uses: arduino/setup-protoc@c65c819552d16ad3c9b72d9dfd5ba5237b9c906b # v3.0.0
+      with:
+        version: "27.x"
+        repo-token: ${{ inputs.github-token }}
+    - name: Toolchain versions of this runner
+      # The Intel image may carry an older Xcode than the arm64 one (HUM-531);
+      # the summary makes the two paths comparable.
+      shell: bash
+      run: |
+        set -euo pipefail
+        {
+          echo "### Toolchains on $(uname -m)"
+          echo
+          echo '```'
+          sw_vers
+          xcodebuild -version
+          flutter --version
+          rustc --version
+          echo '```'
+        } >> "$GITHUB_STEP_SUMMARY"
+    - name: Install dmgbuild
+      # Writes the Finder layout of the disk image itself; no Finder is
+      # remote controlled on the runner. The package and its dependencies
+      # are pinned with hashes, like every action is pinned to a commit.
+      shell: bash
+      run: |
+        set -euo pipefail
+        python3 -m venv "$RUNNER_TEMP/dmg"
+        "$RUNNER_TEMP/dmg/bin/pip" install --quiet --require-hashes --no-deps \
+          -r packaging/macos/dmg/requirements.txt
+        echo "DMGBUILD=$RUNNER_TEMP/dmg/bin/dmgbuild" >> "$GITHUB_ENV"
+
+    - name: Stamp the version into this checkout
+      shell: bash
+      env:
+        VERSION: ${{ inputs.version }}
+      run: |
+        set -euo pipefail
+        ./packaging/release/stamp-version.sh "$VERSION"
+
+    - name: Build universal humanitld, humanitl and humanitl-shim
+      shell: bash
+      env:
+        VERSION: ${{ inputs.version }}
+      run: |
+        set -euo pipefail
+        ./packaging/macos/build-binaries.sh "$RUNNER_TEMP/bin"
+        ./packaging/release/check-version.sh "$VERSION" "$RUNNER_TEMP/bin"
+
+    - name: Generate the Dart code
+      shell: bash
+      run: |
+        set -euo pipefail
+        make flutter-codegen
+
+    - name: Build the macOS app
+      shell: bash
+      env:
+        VERSION: ${{ inputs.version }}
+      run: |
+        set -euo pipefail
+        build_number="$(git rev-list --count HEAD)"
+        cd app
+        flutter build macos --release --build-name "$VERSION" --build-number "$build_number"
+
+    - name: Bundle, sign ad hoc, disk image and zip
+      shell: bash
+      env:
+        VERSION: ${{ inputs.version }}
+      run: |
+        set -euo pipefail
+        ./packaging/macos/build-app.sh "$VERSION" "$RUNNER_TEMP/bin" \
+          app/build/macos/Build/Products/Release/Humanitl.app dist-macos
+        ( cd dist-macos && shasum -a 256 Humanitl-*.dmg Humanitl-*.zip > SHA256SUMS-macos )
+        {
+          echo "### Humanitl $VERSION for macOS, built on $(uname -m)"
+          echo
+          echo '```'
+          ls -l dist-macos
+          echo '```'
+        } >> "$GITHUB_STEP_SUMMARY"
+
+    - name: Sign the update manifest of the zip
+      # HUM-382: Die App laedt das Zip nur, wenn dieses Manifest mit dem
+      # Release-Schluessel signiert ist; min_os ist das Deployment-Target
+      # der App. Das Geheimnis sieht nur dieser Schritt.
+      shell: bash
+      env:
+        VERSION: ${{ inputs.version }}
+        HUMANITL_UPDATE_SIGNING_KEY: ${{ inputs.signing-key }}
+        REQUIRE_SIGNING: ${{ inputs.require-signing }}
+      run: |
+        set -euo pipefail
+        ./packaging/release/sign-update.sh "$VERSION" \
+          "dist-macos/Humanitl-${VERSION}-macos.zip" update-macos.json 12.0 dist-macos
+
+    # Always the last step: a path cancelled before this one has uploaded
+    # nothing, so the fallback never meets a half artifact of the main path.
+    - uses: actions/upload-artifact@ea165f8d65b6e75b540449e92b4886f43607fa02 # v4.6.2
+      with:
+        name: ${{ inputs.artifact }}
+        path: dist-macos/
+        if-no-files-found: error
+        retention-days: 14
+        overwrite: ${{ inputs.overwrite }}

@@ -90,8 +90,25 @@ or watch the run in the Actions tab).
 - **The dry run is red.** There is no tag. If it was a fluke, re-run the failed jobs of that dry run
   in the Actions tab and run the same command again; it evaluates the new attempt. If it was a
   defect, fix it on `main` and run the same command again; it checks the new tip.
-- **The run of the tag is red although its dry run was green.** The script names that run. Open it
-  and choose "Re-run failed jobs". The tag stays where it is.
+- **The run of the tag is red although its dry run was green.** The script names that run and its
+  red jobs with their result. Open it and choose "Re-run failed jobs". The tag stays where it is.
+- **A macOS job got no runner.** GitHub sometimes assigns no macOS arm64 runner and cancels the job
+  with "The job was not acquired by Runner of type hosted even after multiple attempts" (v0.4.0
+  needed four attempts on 2026-11-17). That is not a fault in the code. `release.yml` then builds and
+  checks the same way on `macos-15-intel` by itself (`build-macos-fallback`, `check-macos-fallback`,
+  HUM-531) and publishes; the run shows red on GitHub because of the cancelled job, but the script
+  counts it as green when the fallback is green. Only when the fallback did not get through either
+  does the script say "got no macOS runner", and then:
+  1. Open the run (the script prints its link).
+  2. Top right "Re-run jobs", then "Re-run failed jobs". It starts only the red and cancelled jobs;
+     the green ones stay.
+  3. Wait until the job `release` is green.
+  4. Never move the tag.
+
+  The fallback starts only when the main path got no runner, never after a failed step and never in
+  parallel. To prove that it builds, push an issue commit as
+  `release-dry/hum-NNN-macos-fallback`: that dry run skips `build-macos` and `check-macos`, and the
+  fallback has to build and check alone. A tag and `release-dry/0.Y.Z` never carry this switch.
 - **A tag run failed for good.** Never move, delete or re-push a tag. Fix the defect on `main` and
   release the next patch version; the failed number stays without a release.
 
