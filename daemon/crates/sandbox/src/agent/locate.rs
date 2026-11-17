@@ -17,6 +17,17 @@
 //!    adds next to the shim. The adapter cannot add mounts; this bind is the
 //!    daemon's, and it is one regular file, never a directory.
 //!
+//! **A second mount kind of the daemon: a depot version directory** (ADR-0023,
+//! HUM-518). When an agent's source is the depot, nothing here searches the
+//! host for it. The daemon binds instead one resolved version directory of
+//! the depot, `program/<version>/` and never the `current` link, read-only at
+//! [`AGENT_PROGRAM_DIR`] ([`super::depot::DepotMount`]). That is a directory,
+//! and before every bind each of its entries passes the same [`Trust`] rules
+//! as the single file here: owner this user or root, no write for others, no
+//! symbolic link out of the tree (`depot::tree`). No adapter can add it
+//! either. The two kinds never meet in one session: a host bind beside a
+//! depot mount is `AGENT_017` (`depot::guard`).
+//!
 //! **Only native executables.** A script found this way is not bound: a
 //! wrapper in `~/.local/bin` typically starts a host path the sandbox does not
 //! have, and an npm entry point needs its `node_modules` next to it. Binding

@@ -82,6 +82,7 @@
 //!     command: vec!["opencode".into()],
 //!     files: Vec::new(),
 //!     agent_program: None,
+//!     agent_depot: humanitl_sandbox::agent::depot::DepotSession::default(),
 //! };
 //!
 //! // Die Vorschau: feste Deskriptornummern, alles unter /work als vorhanden.
@@ -171,9 +172,9 @@ pub use crate::bwrap::{
     USERNS_SYSCTL_COMMAND, Version, is_userns_failure,
 };
 pub use crate::bwrap_args::{
-    BwrapLine, DEFAULT_HOME, DEFAULT_USER, GROUP_DST, HOSTS_DST, IdentityFds, IdentityFiles,
-    LaunchInputs, MaskFds, PASSWD_DST, PREVIEW_AGENT_FD_FIRST, PREVIEW_MASK_FD_FIRST,
-    SANDBOX_SHELL, SourceFd, shell_line, shell_quote,
+    BwrapLine, DEFAULT_HOME, DEFAULT_USER, DepotInputs, GROUP_DST, HOSTS_DST, IdentityFds,
+    IdentityFiles, LaunchInputs, MaskFds, PASSWD_DST, PREVIEW_AGENT_FD_FIRST,
+    PREVIEW_MASK_FD_FIRST, SANDBOX_SHELL, SourceFd, shell_line, shell_quote,
 };
 pub use crate::disposable::{ApplyOptions, ApplyReport, ChangeSet, Layer, LayerChange, SizeGuard};
 pub use crate::disposable::{

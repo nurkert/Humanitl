@@ -81,6 +81,9 @@ pub struct Config {
     /// Welcher Agent in der Sandbox läuft.
     #[schemars(extend("x-tier" = "advanced", "x-project-scope" = "allowed"))]
     pub agent: AgentRef,
+    /// Woher die Agenten kommen: vom Host oder aus dem Depot des Daemons (ADR-0023). Nicht zu verwechseln mit `agent`, das den Adapter einer Sitzung wählt.
+    #[schemars(extend("x-tier" = "advanced", "x-project-scope" = "denied"))]
+    pub agents: crate::agents::AgentsConfig,
     /// Aufzeichnung der Flows.
     #[schemars(extend("x-tier" = "advanced", "x-project-scope" = "allowed"))]
     pub recorder: RecorderConfig,

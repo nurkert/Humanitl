@@ -745,6 +745,7 @@ mod tests {
             session_env: Vec::new(),
             command: vec!["true".into()],
             files: Vec::new(),
+            agent_depot: crate::agent::depot::DepotSession::default(),
             agent_program: None,
         };
         let overlay = crate::OverlayDirs {

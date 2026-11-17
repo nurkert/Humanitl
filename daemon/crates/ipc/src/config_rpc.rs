@@ -31,6 +31,7 @@
 
 use std::path::{Path, PathBuf};
 
+use humanitl_config::agents::SourceLock;
 use humanitl_config::value::{check_value, parse_value, to_toml};
 use humanitl_config::{Paths, ProfileSelection, Resolved, schema};
 use humanitl_core::diagnostics::codes::{CONFIG_003, CONFIG_014};
@@ -118,10 +119,35 @@ pub fn set_expecting(
     value: &str,
     expected_server: &str,
 ) -> Result<v1::ConfigSnapshot, Diagnostic> {
+    set_locked(
+        paths,
+        key,
+        value,
+        expected_server,
+        &SourceLock::of_policy(paths),
+    )
+}
+
+/// Wie [`set_expecting`], mit der Sperre der Quelle der Agenten, die der
+/// Daemon hält (HUM-518). Jeder Schreibweg von `agents.source` und
+/// `agents.<id>.source` endet hier oder in `humanitl config set`, und beide
+/// fragen [`humanitl_config::agents::refuse_locked_write`].
+///
+/// # Errors
+///
+/// Wie [`set_expecting`], dazu `AGENT_010` für `host` unter einer Sperre.
+pub fn set_locked(
+    paths: &Paths,
+    key: &str,
+    value: &str,
+    expected_server: &str,
+    lock: &SourceLock,
+) -> Result<v1::ConfigSnapshot, Diagnostic> {
+    humanitl_config::agents::refuse_locked_write(key, Some(value.trim()), lock)?;
     if key.starts_with(SANDBOX_ENV_PREFIX) {
         let name = accepted(key, value)?;
         humanitl_config::edit::set_sandbox_env(&paths.config_path(), name, value)?;
-    } else if FORM_KEYS.contains(&key) {
+    } else if is_form_key(key) {
         // Endpunkt und Modelle sind die Ansicht des aktiven Servers: Sie
         // ändern sich nie, während `LlmKey` einen Schlüssel ablegt (HUM-289).
         let _order = humanitl_config::servers::is_server_setting(key)
@@ -153,7 +179,7 @@ pub fn form_value(
     key: &str,
     text: &str,
 ) -> Result<(&'static schema::Field, serde_json::Value), Diagnostic> {
-    if !FORM_KEYS.contains(&key) {
+    if !is_form_key(key) {
         return Err(refused(&format!(
             "{} is not one of the settings of the form",
             shown(key)
@@ -167,6 +193,24 @@ pub fn form_value(
         known_adapter(&value)?;
     }
     Ok((field, value))
+}
+
+/// Ob `SetConfig` diesen Schlüssel schreibt: eine Einstellung aus
+/// [`FORM_KEYS`] oder eine der Quelle eines Agenten (HUM-518):
+/// `agents.source`, `agents.<id>.source`, `agents.<id>.credential_writeback`
+/// für jeden Agenten, den `agents` kennt. Die Oberfläche (HUM-521) und ein
+/// `ChangeSetting`-Fix schreiben sie hierüber.
+#[must_use]
+pub fn is_form_key(key: &str) -> bool {
+    if FORM_KEYS.contains(&key) || key == "agents.source" {
+        return true;
+    }
+    key.strip_prefix("agents.")
+        .and_then(|rest| rest.split_once('.'))
+        .is_some_and(|(agent, leaf)| {
+            humanitl_config::agents::KNOWN_AGENTS.contains(&agent)
+                && matches!(leaf, "source" | "credential_writeback")
+        })
 }
 
 /// Refuses an `agent.adapter` that names no built-in adapter (HUM-274).

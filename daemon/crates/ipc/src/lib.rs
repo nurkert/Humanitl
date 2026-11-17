@@ -51,7 +51,10 @@ pub const PROTO_MAJOR: u32 = 1;
 /// Minor-Version des Vertrags. Steigt bei jeder additiven Änderung
 /// (`Info.proto_minor`).
 ///
-/// `43` seit dem Hinweis auf Cloud-Inferenz (HUM-516):
+/// `44` seit dem Agent-Depot (HUM-518): die RPC `Agents` mit
+/// `AgentsRequest` (Stand, Quelle setzen, Depot entfernen) und
+/// `AgentsStatus` je bekanntem Agenten.
+/// `43` war der Hinweis auf Cloud-Inferenz (HUM-516):
 /// `SandboxEvent.Status.cloud_inference` mit Agent, Anbieter und Bestätigung,
 /// die Operation `SandboxRequest.acknowledge_cloud_inference` und ihre
 /// Antwort `SandboxEvent.cloud_inference_acknowledged`.
@@ -235,7 +238,7 @@ pub const PROTO_MAJOR: u32 = 1;
 /// Spiegelung in `app/lib/core/ipc/proto_version.dart` darf nachziehen: eine
 /// abweichende Minor ist verabredetermaßen kein Grund, die Verbindung
 /// abzulehnen (`docs/PROTOCOL.md`).
-pub const PROTO_MINOR: u32 = 43;
+pub const PROTO_MINOR: u32 = 44;
 
 /// Metadata-Schlüssel für das Session-Token aus
 /// `$XDG_RUNTIME_DIR/humanitl/token` (CONVENTIONS.md 3.6).
@@ -258,6 +261,7 @@ pub mod v1 {
     include!(concat!(env!("OUT_DIR"), "/humanitl.v1.rs"));
 }
 
+pub mod agents;
 pub mod audit;
 pub mod auth;
 pub mod body;

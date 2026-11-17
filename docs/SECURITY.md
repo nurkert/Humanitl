@@ -104,6 +104,57 @@ does not review the package, so a malicious version can do inside the sandbox wh
 agent could do there. `agent.pi.web_access = off` keeps it out, and a project profile cannot
 switch it.
 
+### The agent depot (HUM-518, ADR-0023)
+
+By default the agent comes from the host: the adapter finds its program on the daemon's `PATH` or in
+the user's bin directories, and the daemon binds that one native file read-only (HUM-278). With
+`agents.source = "depot"` or `agents.<id>.source = "depot"` (both closed to project profiles), and
+always when a company policy locks the source to the depot, the agent comes from the **agent
+depot** instead: a store per agent under the daemon's data directory
+(`$XDG_DATA_HOME/humanitl/agents/<id>/`, directories `0700`, files `0600` or `0700`, owned by the
+daemon's user), which the daemon checks each time it opens it (owner, modes, no symbolic link out of
+it; `AGENT_013` otherwise). Nothing from the depot ever runs on the host: status, doctor and
+preflight read the version from `manifest.json` and start nothing.
+
+**Mounts.** A session of a depot agent gets two mounts of the daemon, which no adapter can add:
+the resolved version directory `program/<version>/`, never the `current` link, read-only at
+`/run/humanitl/agent/`, each of its entries checked with the trust rules of `locate.rs` right before
+the bind (owner, no write for others, no symbolic link out of the tree); and a scratch copy of the
+depot's `config/` and credential file under the session's runtime directory (at most 64 MiB),
+writable at `/run/humanitl/agent-config`, deleted when the session ends and, after a crash, on the
+next start. Nothing a session writes stays in the depot; the guarded write-back of the credential
+file follows with HUM-520. The kernel level does not carry the depot yet and refuses such a session
+with `AGENT_015`.
+
+**One guard.** Every backend's plan first checks the final command and binds of the session: a
+host path, a wrapper or a symbolic link to a program an adapter recognises as a depot agent, or a
+host bind of such a program, is `AGENT_017`; the bare name starts the depot program. A bind that
+puts a host place under another path (`--tests-dir`, a session bind, the project at `/work`) may
+not be, hold or lie inside such a host install; the backend checks this again on the descriptor it
+opened, so a symbolic link swapped after the guard reaches no mount. A depot reservation per agent
+(`agents/<id>.lock`) is held from the start until the sandbox, under Podman its container, is gone;
+`humanitl agents remove` waits for none and refuses (`AGENT_018`). *Limit under Podman:* the
+engine mounts by path. With a depot agent in play, a session bind (`--tests-dir`) or an extension of the
+profile (`mounts.extra_ro`, `mounts.extra_rw`) whose source leads through a symbolic link owned by
+a user, not by root, is refused (system links such as `/var` and `/tmp` on macOS stay allowed and
+are checked on their resolved place); the project directory and the profile's system binds (`mounts.ro`, such as the link
+`/etc/localtime`) may be links and are checked on their resolved places.
+For every bind, between the check and the engine's mount a part of the path could still be
+replaced by someone who can write its parent directory.
+
+**Masks.** A launch check cannot stop a shell, and the default profile binds the host's `/usr`
+read-only. With `depot`, and always under the lock, the launcher therefore covers every host install
+location the agent's recipe lists (for Claude Code `/usr/bin/claude`, `/usr/local/bin/claude`,
+`/usr/lib/node_modules/@anthropic-ai/claude-code`) with an empty read-only mount under Linux, **only
+where the location exists on the host** (a missing one is skipped: there is nothing to reach, and no
+mount point can be created under the read-only `/usr`). Seatbelt on macOS has no mounts: there the
+masks are explicit deny rules for `file-read*` and `process-exec` on the same paths, placed after
+the rule that allows reads outside the private trees, because in SBPL the last matching rule wins.
+
+**Limit of the lock.** The lock keeps Humanitl from starting or exposing a host agent. It is no
+defence against a user who deliberately copies an agent binary to a path no recipe lists: on their
+own machine the user controls that, and the company policy does not claim otherwise.
+
 ### Trusted computing base
 
 The trusted computing base is the set of components whose failure voids the guarantees. It is
@@ -1880,6 +1931,7 @@ passthrough or the audit chain gets a line here and in the change history of
 | 0.1.x | The decision proxy decides requests without a rule (`hold.ask_mode = "upstream"`, off by default, only with a proxy the running daemon uses): `block` stays final and never reaches it (the declared LLM passthrough ranks ahead of block rules and does, as any allow), `redact` (unless intercepting is paused) and the hard block on verified secrets stay in Humanitl, the flow is recorded as forwarded with the proxy's status, never as an allow (HUM-512, [section 6](#the-proxy-behind-decides-holdask_mode--upstream-hum-512), K-35). |
 | 0.1.x | Cloud inference is named: when the agent's model endpoint lies outside this machine and its network, the session header carries an orange tag with the provider, `humanitl run` and `go` print it at every start, `humanitl doctor` has the line `inference`, and the first start per agent and provider asks once; the confirmation lives in the daemon's data directory, never in the project or the app; nothing is blocked (HUM-516, [section 5.1](#cloud-inference-hum-516), K-02). |
 | 0.1.x | A decision proxy of the person behind Humanitl (`egress.proxy`, off by default): allowed requests leave only through it, re-encrypted against its CA, which is trusted on that way only; no direct fallback; who resolves is `egress.proxy_resolve` (`proxy` refuses local names and private literals first, `humanitl` resolves and checks every address); keys closed to project profiles, credentials in the keyring or the `0600` fallback file, never in `config.toml` (HUM-511, [section 6](#a-decision-proxy-behind-humanitl-hum-511), K-35). |
+| 0.1.x | The agent depot (`agents.source`, off by default): a depot agent's resolved version directory read-only at `/run/humanitl/agent/`, each entry trust-checked before the bind; its configuration as a writable scratch copy deleted with the session; one guard on every backend's plan refuses a host program of a depot agent (`AGENT_017`); host install locations of depot agents masked (empty read-only mounts under Linux only where they exist, `file-read*` and `process-exec` deny rules under Seatbelt); a company lock may only name the depot (`AGENT_010`) (HUM-518). |
 
 ## 12. macOS: Seatbelt instead of bubblewrap
 

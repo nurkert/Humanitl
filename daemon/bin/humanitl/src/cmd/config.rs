@@ -372,6 +372,11 @@ async fn set(ctx: &Context, key: &str, text: &str, project: bool) -> Result<u8, 
     }
     let value = parse_value(field, text).map_err(Failure::new)?;
     check_value(field, &value).map_err(Failure::new)?;
+    // Eine Firmenvorgabe, die die Quelle eines Agenten auf das Depot sperrt,
+    // gilt für jeden Schreibweg gleich (HUM-518); dieselbe Prüfung wie
+    // `SetConfig` und `humanitl agents source`.
+    humanitl_config::agents::refuse_locked_write(&path, value.as_str(), &ctx.source_lock)
+        .map_err(Failure::new)?;
     let value = resolved_work_dir(&path, value);
     let toml_value = to_toml(field, &value).map_err(Failure::new)?;
 
@@ -1387,6 +1392,50 @@ mod tests {
     }
 
     /// Wie ein volles `TMPDIR`: Die Datei entsteht, der Inhalt nicht.
+    /// `humanitl config set` under a company lock (HUM-518): `host` for one
+    /// agent and for all is refused with `AGENT_010` and the file stays as it
+    /// was; `depot` is written. Mutation proof: the lock checked only in
+    /// `agents source` turns this red.
+    #[tokio::test]
+    async fn config_set_refuses_host_under_the_lock_and_leaves_the_file() {
+        let root = tempfile::tempdir().unwrap();
+        let home = root.path().join("home");
+        std::fs::create_dir_all(home.join(".config/humanitl")).unwrap();
+        let env = Env::from_pairs([
+            ("HOME", home.to_str().unwrap()),
+            ("XDG_CONFIG_HOME", home.join(".config").to_str().unwrap()),
+            ("XDG_RUNTIME_DIR", root.path().join("run").to_str().unwrap()),
+        ]);
+        let ctx = crate::cmd::Context {
+            paths: humanitl_config::Paths::new(env.clone()),
+            env,
+            cwd: root.path().to_path_buf(),
+            cli_config: Vec::new(),
+            config_file: None,
+            profile: None,
+            profile_means: crate::cmd::ProfileMeaning::Session,
+            render: crate::render::Renderer::new(false, 0, true),
+            source_lock: humanitl_config::agents::SourceLock::none()
+                .lock(
+                    humanitl_config::agents::LockScope::All,
+                    humanitl_config::agents::AgentSource::Depot,
+                    "/etc/humanitl/policy.toml",
+                )
+                .unwrap(),
+        };
+        let file = ctx.paths.config_path();
+        std::fs::write(&file, "# mine\n").unwrap();
+        for key in ["agents.claude.source", "agents.source"] {
+            let refused = super::set(&ctx, key, "host", false).await.unwrap_err();
+            assert_eq!(refused.diagnostic.code.as_str(), "AGENT_010", "{key}");
+            assert_eq!(std::fs::read_to_string(&file).unwrap(), "# mine\n");
+        }
+        super::set(&ctx, "agents.claude.source", "depot", false)
+            .await
+            .unwrap();
+        assert!(std::fs::read_to_string(&file).unwrap().contains("depot"));
+    }
+
     fn full_disk(path: &std::path::Path, _text: &str) -> std::io::Result<()> {
         std::fs::write(path, "")?;
         Err(std::io::Error::from_raw_os_error(28))
@@ -1414,6 +1463,7 @@ mod tests {
             profile: None,
             profile_means: crate::cmd::ProfileMeaning::Session,
             render: crate::render::Renderer::new(false, 0, true),
+            source_lock: humanitl_config::agents::SourceLock::none(),
         };
         let file = match scope {
             super::Scope::Global => ctx.paths.config_path(),

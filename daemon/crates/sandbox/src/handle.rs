@@ -254,8 +254,12 @@ pub struct StatusSnapshot {
 #[derive(Debug, Default)]
 pub(crate) struct Shared {
     exit: Mutex<Option<ExitStatus>>,
-    /// Was mit dem Ende der Sandbox verschwindet (HUM-368).
-    session_dir: Mutex<Option<PathBuf>>,
+    /// Was mit dem Ende der Sandbox verschwindet (HUM-368): das Verzeichnis
+    /// der Sitzung und seit HUM-518 der Arbeitsordner des Agent-Depots.
+    session_dir: Mutex<Vec<PathBuf>>,
+    /// Descriptors that live as long as the sandbox: the reservation of an
+    /// agent depot (HUM-518).
+    held: Mutex<Vec<std::os::fd::OwnedFd>>,
     exited: Condvar,
     report: Mutex<ReportSnapshot>,
     report_changed: Condvar,
@@ -443,12 +447,13 @@ impl Shared {
         if ended {
             self.remove_session_dir(dir);
         } else {
-            *lock(&self.session_dir) = Some(dir);
+            lock(&self.session_dir).push(dir);
             // Das Ende kann zwischen beiden Blicken gekommen sein.
-            if lock(&self.exit).is_some()
-                && let Some(dir) = lock(&self.session_dir).take()
-            {
-                self.remove_session_dir(dir);
+            if lock(&self.exit).is_some() {
+                let dirs = std::mem::take(&mut *lock(&self.session_dir));
+                for dir in dirs {
+                    self.remove_session_dir(dir);
+                }
             }
         }
     }
@@ -470,7 +475,8 @@ impl Shared {
         // Container binnen `KILL_GRACE`, auch wenn niemand mehr `kill` ruft.
         self.close_lifeline();
         // Vor dem Status: Wer auf ihn wartet, beendet womöglich gleich den Prozess.
-        if let Some(dir) = lock(&self.session_dir).take() {
+        let dirs = std::mem::take(&mut *lock(&self.session_dir));
+        for dir in dirs {
             self.remove_session_dir(dir);
         }
         *lock(&self.exit) = Some(status);
@@ -478,6 +484,22 @@ impl Shared {
         // Ohne angeforderten Stopp gehört der beendete Container niemandem
         // mehr: `--rm` lag beim Client. Er wird jetzt entfernt (HUM-452).
         self.remove_after_exit();
+        self.release_held_if_settled();
+    }
+
+    /// Gibt die gehaltenen Deskriptoren frei (HUM-518: die Reservierung des
+    /// Agent-Depots), sobald die Sandbox wirklich weg ist: der Prozess zu
+    /// Ende und, unter einer Container-Engine, der Container entfernt. Endet
+    /// nur der Client, während der Container noch entfernt wird, bleibt die
+    /// Reservierung; ein gescheitertes Entfernen hält sie, bis ein Stopp es
+    /// schafft oder das Handle verschwindet.
+    fn release_held_if_settled(&self) {
+        // One lock at a time: `wait_removal` takes `removal` before `exit`.
+        let removed = matches!(*lock(&self.removal), Removal::None | Removal::Done);
+        let ended = lock(&self.exit).is_some();
+        if removed && ended {
+            drop(std::mem::take(&mut *lock(&self.held)));
+        }
     }
 
     /// Merkt den Container vor, der nach dem Ende seines Clients entfernt
@@ -536,6 +558,19 @@ impl Shared {
         }
         *lock(&self.removal) = state;
         self.removal_changed.notify_all();
+        self.release_held_if_settled();
+    }
+
+    /// Ein Stopp hat den Container über die Engine beendet und entfernt.
+    fn finish_stop(&self) {
+        {
+            let mut removal = lock(&self.removal);
+            if matches!(*removal, Removal::ByStop) {
+                *removal = Removal::Done;
+            }
+        }
+        self.removal_changed.notify_all();
+        self.release_held_if_settled();
     }
 
     /// Übernimmt das Entfernen für einen Stopp. `true`: Der Stopp beendet und
@@ -994,6 +1029,13 @@ impl SandboxHandle {
         self.shared.remove_at_exit(dir);
     }
 
+    /// Keeps `fd` open until the sandbox ends (HUM-518: the reservation of
+    /// an agent depot); after the end it is closed at once.
+    pub fn hold_until_exit(&self, fd: std::os::fd::OwnedFd) {
+        lock(&self.shared.held).push(fd);
+        self.shared.release_held_if_settled();
+    }
+
     pub(crate) fn new(id: SandboxId, pid: u32, argv_display: String, shared: Arc<Shared>) -> Self {
         Self {
             id,
@@ -1168,10 +1210,11 @@ impl SandboxHandle {
         // Das Ende des Clients sagt nichts über den Container (HUM-292 P7):
         // Er wird über die Engine beendet und entfernt, gleich wie der Client
         // endete. Einen, den es nicht mehr gibt, nimmt die Engine stumm hin.
-        if let Teardown::Container(stop) = &self.teardown
-            && let Some(warning) = stop.send(Signal::KILL)
-        {
-            lock(&self.shared.teardown_warnings).push(warning);
+        if let Teardown::Container(stop) = &self.teardown {
+            match stop.send(Signal::KILL) {
+                Some(warning) => lock(&self.shared.teardown_warnings).push(warning),
+                None => self.shared.finish_stop(),
+            }
         }
         termination
     }
@@ -2279,5 +2322,31 @@ mod tests {
         let removals = seen.lines().filter(|line| line.starts_with("rm ")).count();
         assert_eq!(removals, 1, "{seen}");
         assert!(handle.take_teardown_warnings().is_empty());
+    }
+
+    /// HUM-518: the depot's reservation stays while a container is still
+    /// being removed after its client ended, and goes when the removal is
+    /// done. Mutation proof: releasing at the client's end turns this red.
+    #[test]
+    fn the_depot_reservation_outlives_the_client_until_the_container_is_gone() {
+        use std::os::unix::process::ExitStatusExt as _;
+
+        use super::{Arc, ExitStatus, Removal, Shared, lock};
+        let dir = tempfile::tempdir().unwrap();
+        let depot = crate::agent::depot::Depot::at(
+            dir.path().join("agents/claude"),
+            "claude",
+            rustix::process::getuid().as_raw(),
+        );
+        std::fs::create_dir_all(depot.root()).unwrap();
+        let shared = Arc::new(Shared::default());
+        *lock(&shared.removal) = Removal::AfterExit;
+        lock(&shared.held).push(depot.reserve_for_session().unwrap().into_fd());
+        shared.set_exit(ExitStatus::from_raw(0));
+        assert!(depot.in_use(), "the container is still being removed");
+        assert_eq!(depot.remove().unwrap_err().code.as_str(), "AGENT_018");
+        shared.finish_removal(None);
+        assert!(!depot.in_use());
+        depot.remove().unwrap();
     }
 }

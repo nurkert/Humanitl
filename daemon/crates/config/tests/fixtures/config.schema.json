@@ -96,6 +96,236 @@
       "x-project-scope": "allowed",
       "x-tier": "advanced"
     },
+    "agents": {
+      "additionalProperties": false,
+      "default": {
+        "agy": {
+          "credential_writeback": true,
+          "source": null
+        },
+        "claude": {
+          "credential_writeback": true,
+          "source": null
+        },
+        "codex": {
+          "credential_writeback": true,
+          "source": null
+        },
+        "opencode": {
+          "credential_writeback": true,
+          "source": null
+        },
+        "pi": {
+          "credential_writeback": true,
+          "source": null
+        },
+        "source": "host"
+      },
+      "description": "Woher die Agenten kommen: vom Host oder aus dem Depot des Daemons (ADR-0023). Nicht zu verwechseln mit `agent`, das den Adapter einer Sitzung wählt.",
+      "properties": {
+        "agy": {
+          "additionalProperties": false,
+          "default": {
+            "credential_writeback": true,
+            "source": null
+          },
+          "description": "Die Antigravity CLI (`agy`).",
+          "properties": {
+            "credential_writeback": {
+              "default": true,
+              "description": "Ob eine Sitzung die geprüfte Zugangsdatei des Agenten ins Depot zurückschreiben darf, damit eine erneuerte Anmeldung die Sitzung überdauert. Wirkt ab dem Wächter für das Zurückschreiben (HUM-520); bis dahin bleibt nichts einer Sitzung im Depot. Im Projekt-Profil gesperrt.",
+              "type": "boolean",
+              "x-pending-issue": "HUM-520",
+              "x-project-scope": "denied",
+              "x-tier": "expert"
+            },
+            "source": {
+              "default": null,
+              "description": "Woher dieser Agent kommt, `host` oder `depot`; ungesetzt gilt `agents.source`. Zurück auf `host` behält das Depot, bis `humanitl agents remove` es entfernt. Im Projekt-Profil gesperrt.",
+              "enum": [
+                "host",
+                "depot",
+                null
+              ],
+              "type": [
+                "string",
+                "null"
+              ],
+              "x-project-scope": "denied",
+              "x-tier": "advanced"
+            }
+          },
+          "type": "object",
+          "x-project-scope": "denied",
+          "x-tier": "advanced"
+        },
+        "claude": {
+          "additionalProperties": false,
+          "default": {
+            "credential_writeback": true,
+            "source": null
+          },
+          "description": "Claude Code.",
+          "properties": {
+            "credential_writeback": {
+              "default": true,
+              "description": "Ob eine Sitzung die geprüfte Zugangsdatei des Agenten ins Depot zurückschreiben darf, damit eine erneuerte Anmeldung die Sitzung überdauert. Wirkt ab dem Wächter für das Zurückschreiben (HUM-520); bis dahin bleibt nichts einer Sitzung im Depot. Im Projekt-Profil gesperrt.",
+              "type": "boolean",
+              "x-pending-issue": "HUM-520",
+              "x-project-scope": "denied",
+              "x-tier": "expert"
+            },
+            "source": {
+              "default": null,
+              "description": "Woher dieser Agent kommt, `host` oder `depot`; ungesetzt gilt `agents.source`. Zurück auf `host` behält das Depot, bis `humanitl agents remove` es entfernt. Im Projekt-Profil gesperrt.",
+              "enum": [
+                "host",
+                "depot",
+                null
+              ],
+              "type": [
+                "string",
+                "null"
+              ],
+              "x-project-scope": "denied",
+              "x-tier": "advanced"
+            }
+          },
+          "type": "object",
+          "x-project-scope": "denied",
+          "x-tier": "advanced"
+        },
+        "codex": {
+          "additionalProperties": false,
+          "default": {
+            "credential_writeback": true,
+            "source": null
+          },
+          "description": "Codex.",
+          "properties": {
+            "credential_writeback": {
+              "default": true,
+              "description": "Ob eine Sitzung die geprüfte Zugangsdatei des Agenten ins Depot zurückschreiben darf, damit eine erneuerte Anmeldung die Sitzung überdauert. Wirkt ab dem Wächter für das Zurückschreiben (HUM-520); bis dahin bleibt nichts einer Sitzung im Depot. Im Projekt-Profil gesperrt.",
+              "type": "boolean",
+              "x-pending-issue": "HUM-520",
+              "x-project-scope": "denied",
+              "x-tier": "expert"
+            },
+            "source": {
+              "default": null,
+              "description": "Woher dieser Agent kommt, `host` oder `depot`; ungesetzt gilt `agents.source`. Zurück auf `host` behält das Depot, bis `humanitl agents remove` es entfernt. Im Projekt-Profil gesperrt.",
+              "enum": [
+                "host",
+                "depot",
+                null
+              ],
+              "type": [
+                "string",
+                "null"
+              ],
+              "x-project-scope": "denied",
+              "x-tier": "advanced"
+            }
+          },
+          "type": "object",
+          "x-project-scope": "denied",
+          "x-tier": "advanced"
+        },
+        "opencode": {
+          "additionalProperties": false,
+          "default": {
+            "credential_writeback": true,
+            "source": null
+          },
+          "description": "`OpenCode`.",
+          "properties": {
+            "credential_writeback": {
+              "default": true,
+              "description": "Ob eine Sitzung die geprüfte Zugangsdatei des Agenten ins Depot zurückschreiben darf, damit eine erneuerte Anmeldung die Sitzung überdauert. Wirkt ab dem Wächter für das Zurückschreiben (HUM-520); bis dahin bleibt nichts einer Sitzung im Depot. Im Projekt-Profil gesperrt.",
+              "type": "boolean",
+              "x-pending-issue": "HUM-520",
+              "x-project-scope": "denied",
+              "x-tier": "expert"
+            },
+            "source": {
+              "default": null,
+              "description": "Woher dieser Agent kommt, `host` oder `depot`; ungesetzt gilt `agents.source`. Zurück auf `host` behält das Depot, bis `humanitl agents remove` es entfernt. Im Projekt-Profil gesperrt.",
+              "enum": [
+                "host",
+                "depot",
+                null
+              ],
+              "type": [
+                "string",
+                "null"
+              ],
+              "x-project-scope": "denied",
+              "x-tier": "advanced"
+            }
+          },
+          "type": "object",
+          "x-project-scope": "denied",
+          "x-tier": "advanced"
+        },
+        "pi": {
+          "additionalProperties": false,
+          "default": {
+            "credential_writeback": true,
+            "source": null
+          },
+          "description": "pi.",
+          "properties": {
+            "credential_writeback": {
+              "default": true,
+              "description": "Ob eine Sitzung die geprüfte Zugangsdatei des Agenten ins Depot zurückschreiben darf, damit eine erneuerte Anmeldung die Sitzung überdauert. Wirkt ab dem Wächter für das Zurückschreiben (HUM-520); bis dahin bleibt nichts einer Sitzung im Depot. Im Projekt-Profil gesperrt.",
+              "type": "boolean",
+              "x-pending-issue": "HUM-520",
+              "x-project-scope": "denied",
+              "x-tier": "expert"
+            },
+            "source": {
+              "default": null,
+              "description": "Woher dieser Agent kommt, `host` oder `depot`; ungesetzt gilt `agents.source`. Zurück auf `host` behält das Depot, bis `humanitl agents remove` es entfernt. Im Projekt-Profil gesperrt.",
+              "enum": [
+                "host",
+                "depot",
+                null
+              ],
+              "type": [
+                "string",
+                "null"
+              ],
+              "x-project-scope": "denied",
+              "x-tier": "advanced"
+            }
+          },
+          "type": "object",
+          "x-project-scope": "denied",
+          "x-tier": "advanced"
+        },
+        "source": {
+          "default": "host",
+          "description": "Woher die Agenten kommen, für jeden, der unter `agents.<id>.source` nichts sagt: `host` (Vorgabe) sucht das Programm auf dem Rechner, `depot` nimmt Programm, Konfiguration und Anmeldung aus dem Depot unter dem Datenordner des Daemons (`humanitl agents status`). Im Projekt-Profil gesperrt.",
+          "oneOf": [
+            {
+              "const": "host",
+              "description": "Vom Host, wie vor dem Depot: Der Adapter sucht das Programm im `PATH`\nund in den Programmordnern des Nutzers (HUM-278).",
+              "type": "string"
+            },
+            {
+              "const": "depot",
+              "description": "Aus dem Depot des Daemons; nichts davon läuft je außerhalb einer\nSandbox.",
+              "type": "string"
+            }
+          ],
+          "x-project-scope": "denied",
+          "x-tier": "advanced"
+        }
+      },
+      "type": "object",
+      "x-project-scope": "denied",
+      "x-tier": "advanced"
+    },
     "audit": {
       "additionalProperties": false,
       "default": {

@@ -1963,5 +1963,19 @@
   "diagLLM010Title": "Inferenz geht an einen Anbieter außerhalb dieses Rechners",
   "diagLLM010Why": "Was der Agent liest, geht als Teil seiner Anfragen an den Anbieter des Modells. Humanitl isoliert das System und hält jede andere Verbindung an; die Inferenz selbst ist bewusst freigegeben.",
   "diagLLM011Title": "Cloud-Inferenz nicht bestätigt",
-  "diagLLM011Why": "Der Agent würde seine Inferenz an einen Anbieter außerhalb dieses Rechners schicken, und niemand hat diesen Agenten mit diesem Anbieter bestätigt. Nichts ist gestartet; der nächste Start fragt einmal."
+  "diagLLM011Why": "Der Agent würde seine Inferenz an einen Anbieter außerhalb dieses Rechners schicken, und niemand hat diesen Agenten mit diesem Anbieter bestätigt. Nichts ist gestartet; der nächste Start fragt einmal.",
+  "diagAGENT008Title": "Agent nicht im Depot installiert",
+  "diagAGENT008Why": "Die Quelle dieses Agenten ist das Depot, und dort liegt keine installierte Version. Statt dessen startet nichts von deinem Rechner.",
+  "diagAGENT009Title": "Agent im Depot nicht angemeldet",
+  "diagAGENT009Why": "Das Depot hält diesen Agenten, aber keine Anmeldung dafür. Der Agent startet und fragt nach einer Anmeldung.",
+  "diagAGENT010Title": "Quelle des Agenten von deiner Firma festgelegt",
+  "diagAGENT010Why": "Eine Vorgabe deiner Firma legt fest, dass dieser Agent aus dem Depot kommt. Ein Start vom Rechner und das Zurückstellen der Quelle werden abgelehnt.",
+  "diagAGENT013Title": "Agent-Depot unbrauchbar",
+  "diagAGENT013Why": "Das Agent-Depot hat eine Prüfung nicht bestanden: Ein Eintrag gehört einem anderen Nutzer, andere dürfen hineinschreiben, ein Verweis führt hinaus, oder seine Konfiguration ist zu groß für die Kopie in die Sitzung.",
+  "diagAGENT015Title": "Agent oder Sandbox ohne Depot",
+  "diagAGENT015Why": "Die Quelle dieses Agenten ist das Depot, und entweder bringt sein Adapter noch kein Rezept dafür mit, oder die gewählte Sandbox kann das Depot noch nicht nutzen.",
+  "diagAGENT017Title": "Kommando nennt einen Agenten deines Rechners",
+  "diagAGENT017Why": "Die Quelle dieses Agenten ist das Depot, und das Kommando oder ein Ordner der Sitzung nennt den Agenten, der auf deinem Rechner installiert ist. Starten darf nur der Agent aus dem Depot.",
+  "diagAGENT018Title": "Agent-Depot in Gebrauch",
+  "diagAGENT018Why": "Eine laufende Sitzung nutzt das Depot dieses Agenten, deshalb wird es nicht entfernt. Beende zuerst die Sitzung."
 }

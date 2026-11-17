@@ -457,6 +457,13 @@ pub(crate) fn pins_of(
     if let (Some(source), Some(dst)) = (pinned.agent.as_ref(), agent) {
         pins.push(opened(source, dst)?);
     }
+    if let Some((program, scratch)) = &pinned.depot {
+        pins.push(opened(program, Path::new(crate::agent::AGENT_PROGRAM_DIR))?);
+        pins.push(opened(
+            scratch,
+            Path::new(crate::agent::depot::DEPOT_CONFIG_DST),
+        )?);
+    }
     Ok(pins)
 }
 
@@ -663,6 +670,7 @@ mod tests {
             writable: Vec::new(),
             session: Vec::new(),
             agent: None,
+            depot: None,
             profile_ro: vec![open(&tools, SourceKind::DirectoryOrFile)],
         };
         let checked = id_of_path(&tools).unwrap();

@@ -451,6 +451,17 @@ impl PodmanBackend {
     /// Lehnt ab, was diese Stufe nicht kann: ein Abbild als Wurzel ohne
     /// Verweis und die Wegwerf-Sandbox (HUM-438, [`disposable_unsupported`]).
     /// Nie still etwas anderes.
+    /// Die Masken über Host-Installationen eines Depot-Agenten (HUM-518):
+    /// unter der Wurzel des Rechners wie unter bwrap, unter einem Abbild
+    /// keine, denn dessen `/usr` ist nicht das des Rechners.
+    fn host_masks(&self, session: &SessionContext) -> Vec<crate::agent::depot::HostMask> {
+        if self.image_root().is_some() {
+            Vec::new()
+        } else {
+            session.agent_depot.masks()
+        }
+    }
+
     fn refuse_unsupported(&self, request: &PlanRequest<'_>) -> Result<(), Diagnostic> {
         if self.settings.rootfs == PodmanRootfs::Image && self.settings.image.is_none() {
             // Das Laden lehnt das schon ab (`CONFIG_003`); ein Start nimmt
@@ -774,9 +785,129 @@ fn plan_warnings(profile: &SandboxProfile) -> Vec<Diagnostic> {
     warnings
 }
 
+/// The engine binds by path, not by descriptor (HUM-518): with an agent of the
+/// depot in play, a session bind (`--tests-dir`) or an extension of the
+/// profile (`mounts.extra_ro`, `mounts.extra_rw`) whose given source leads
+/// through a symbolic link owned by a user, not by root, is refused
+/// ([`link_not_of_root`]), so the path the engine resolves is the one
+/// that was opened and checked. Not refused for a link: the project directory
+/// (a linked project folder is a common setup) and the profile's system
+/// binds `mounts.ro` (`/etc/localtime` is a link on most systems, and these
+/// places belong to root); their resolved places pass the guard's check like
+/// every other bind. What remains for all of
+/// them is the window between the check and the engine's mount, in which a
+/// part of the path could be replaced; see `docs/SECURITY.md` on the agent
+/// depot.
+///
+/// # Errors
+///
+/// `AGENT_017` for such a bind; otherwise the opened sources.
+fn refuse_linked_moves(
+    session: &SessionContext,
+    profile: &SandboxProfile,
+    pinned: PinnedMounts,
+) -> Result<PinnedMounts, Diagnostic> {
+    if session.agent_depot.reserved.is_empty() {
+        return Ok(pinned);
+    }
+    let profile_binds = pinned
+        .read_only
+        .iter()
+        .zip(&profile.mounts.extra_ro)
+        .chain(pinned.writable.iter().zip(&profile.mounts.extra_rw));
+    let binds = pinned
+        .session
+        .iter()
+        .map(|(source, dst)| (source, dst))
+        .chain(profile_binds);
+    for (source, dst) in binds {
+        if let Some(link) = link_not_of_root(source.given(), &|uid| uid == 0) {
+            return Err(Diagnostic::builder(
+                humanitl_core::diagnostics::codes::AGENT_017,
+                Severity::Blocking,
+            )
+            .why(format!(
+                "an agent's source is the depot, and the bind at {} names {}, which leads \
+                 through the symbolic link {} of a user to {}; the container engine mounts by \
+                 path, so only a source without such links is bound",
+                dst.display(),
+                source.given().display(),
+                link.display(),
+                source.resolved().display()
+            ))
+            .build());
+        }
+    }
+    Ok(pinned)
+}
+
+/// The first symbolic link on the way to `path` that is not owned by an
+/// account `system` accepts (root), following every link to its target;
+/// `None` when every link on the way is a system link (macOS `/var` and
+/// `/tmp`, `/etc/localtime`) or there is none. Another session's agent can
+/// only plant links owned by the user, so only those can be swapped in the
+/// window before the engine mounts. A chain longer than 40 links counts as
+/// such a link.
+pub(crate) fn link_not_of_root(path: &Path, system: &dyn Fn(u32) -> bool) -> Option<PathBuf> {
+    use std::os::unix::fs::MetadataExt as _;
+    use std::path::Component;
+
+    let mut pending: std::collections::VecDeque<std::ffi::OsString> = path
+        .components()
+        .filter_map(|part| match part {
+            Component::Normal(name) => Some(name.to_owned()),
+            Component::ParentDir => Some("..".into()),
+            _ => None,
+        })
+        .collect();
+    let mut current = PathBuf::from("/");
+    let mut hops = 0_u32;
+    while let Some(name) = pending.pop_front() {
+        if name == ".." {
+            current.pop();
+            continue;
+        }
+        let next = current.join(&name);
+        let Ok(meta) = std::fs::symlink_metadata(&next) else {
+            return None;
+        };
+        if !meta.file_type().is_symlink() {
+            current = next;
+            continue;
+        }
+        hops += 1;
+        if !system(meta.uid()) || hops > 40 {
+            return Some(next);
+        }
+        let Ok(target) = std::fs::read_link(&next) else {
+            return Some(next);
+        };
+        if target.is_absolute() {
+            current = PathBuf::from("/");
+        }
+        let parts: Vec<std::ffi::OsString> = target
+            .components()
+            .filter_map(|part| match part {
+                Component::Normal(name) => Some(name.to_owned()),
+                Component::ParentDir => Some("..".into()),
+                _ => None,
+            })
+            .collect();
+        for part in parts.into_iter().rev() {
+            pending.push_front(part);
+        }
+    }
+    None
+}
+
 /// Die Quellen aus den geöffneten und geprüften Orten (HUM-263): eingehängt
 /// wird der Ort, an dem das Geöffnete liegt (P13).
-fn sources_of(pinned: &PinnedMounts, files: SessionFiles, handover: PathBuf) -> Sources {
+fn sources_of(
+    pinned: &PinnedMounts,
+    files: SessionFiles,
+    handover: PathBuf,
+    host_masks: Vec<crate::agent::depot::HostMask>,
+) -> Sources {
     let resolved = |list: &[crate::pinned::PinnedSource]| {
         list.iter()
             .map(|pin| pin.resolved().to_path_buf())
@@ -795,6 +926,13 @@ fn sources_of(pinned: &PinnedMounts, files: SessionFiles, handover: PathBuf) -> 
             .agent
             .as_ref()
             .map(|pin| pin.resolved().to_path_buf()),
+        depot: pinned.depot.as_ref().map(|(program, scratch)| {
+            (
+                program.resolved().to_path_buf(),
+                scratch.resolved().to_path_buf(),
+            )
+        }),
+        host_masks,
         files,
         handover,
     }
@@ -1515,6 +1653,12 @@ impl SandboxBackend for PodmanBackend {
                 .agent_program
                 .as_ref()
                 .map(|program| program.host.clone()),
+            depot: session
+                .agent_depot
+                .mount
+                .as_ref()
+                .map(|mount| (mount.program_dir.clone(), mount.scratch.clone())),
+            host_masks: self.host_masks(session),
             files: SessionFiles::under(&dir.files, session.files.len()),
             handover: dir.handover_dir.clone(),
         };
@@ -1572,6 +1716,7 @@ impl SandboxBackend for PodmanBackend {
             session,
             options,
         } = *request;
+        crate::agent::depot::guard::check(request)?; // first, HUM-518
         self.settings.within_host(HostResources::probe())?;
         self.refuse_unsupported(request)?;
         let policy = MountPolicy::from_paths(&self.paths);
@@ -1585,7 +1730,7 @@ impl SandboxBackend for PodmanBackend {
         policy.check_work_dir(&session.work_src)?;
         // Geöffnet und am Ort des Deskriptors geprüft wie unter bwrap
         // (HUM-263); eingehängt wird dieser Ort (P13).
-        let pinned = PinnedMounts::open(&policy, request)?;
+        let pinned = refuse_linked_moves(session, profile, PinnedMounts::open(&policy, request)?)?;
         BwrapBackend::check_proxy_socket_in(&self.paths, session)?;
         BwrapBackend::check_regular_file(&session.ca_cert_src, "CA certificate")?;
         BwrapBackend::check_regular_file(&session.ca_bundle_src, "CA bundle")?;
@@ -1600,7 +1745,8 @@ impl SandboxBackend for PodmanBackend {
         let dir = engine.session_dir(session.session);
         let names = Names::of(session.session, &engine);
         let files = SessionFiles::under(&dir.files, session.files.len());
-        let sources = sources_of(&pinned, files.clone(), dir.handover_dir.clone());
+        let masks = self.host_masks(session);
+        let sources = sources_of(&pinned, files.clone(), dir.handover_dir.clone(), masks);
         let fds = Fds::layout(options.stdio.pty_size().is_some());
         let (mounts, _) = plan::mounts(
             profile,

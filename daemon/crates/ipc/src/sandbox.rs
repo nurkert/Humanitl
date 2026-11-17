@@ -85,6 +85,7 @@ use std::path::{Path, PathBuf};
 use std::sync::{Arc, Mutex, PoisonError, RwLock};
 use std::time::{Duration, Instant, SystemTime};
 
+use humanitl_config::agents::SourceLock;
 use humanitl_config::secret::{KeyRef, KeyStore};
 use humanitl_config::{AskMode, Config, SandboxMode, WorkMode};
 use humanitl_core::diagnostics::codes;
@@ -409,6 +410,9 @@ struct Running {
     shells: ShellRegistry,
     /// Was ein Befund braucht, wenn der Agent nie läuft (HUM-137).
     agent: AgentFacts,
+    /// Der Agent, dessen Depot diese Sitzung eingehängt hat (HUM-518);
+    /// `humanitl agents remove` lehnt ab, solange sie läuft.
+    depot_agent: Option<String>,
 }
 
 /// Das Kommando dieser Sitzung und der `PATH`, unter dem es gesucht wird.
@@ -616,6 +620,8 @@ impl Drop for StartClaim {
 
 #[derive(Debug)]
 struct Inner {
+    /// Die Sperre der Quelle der Agenten (HUM-518, [`SandboxPorts::source_lock`]).
+    source_lock: SourceLock,
     /// Der Weg hinaus des Verkehrs des Agenten, wie er beim Start des Daemons
     /// galt (HUM-511): Der Proxy baut ihn einmal, ein `SetConfig` ändert ihn
     /// erst mit dem Neustart.
@@ -744,6 +750,10 @@ pub struct SandboxPorts {
     /// den Strom setzen die Terminal-Tests, damit beide Modi dieselben
     /// Prüfungen bestehen, und die Kernel-Stufe kennt nur ihn.
     pub terminal: TerminalTransport,
+    /// Die Sperre der Quelle der Agenten durch eine Firmenvorgabe (HUM-518).
+    /// Ohne Angabe [`SourceLock::of_policy`]; die Tests setzen sie, bis es
+    /// die Vorgabedatei gibt.
+    pub source_lock: Option<SourceLock>,
 }
 
 impl SandboxPorts {
@@ -805,6 +815,14 @@ impl SandboxPorts {
         self.terminal = terminal;
         self
     }
+
+    /// Dieselben Anschlüsse mit dieser Sperre der Quelle
+    /// ([`SandboxPorts::source_lock`]).
+    #[must_use]
+    pub fn with_source_lock(mut self, lock: SourceLock) -> Self {
+        self.source_lock = Some(lock);
+        self
+    }
 }
 
 impl SandboxService {
@@ -819,8 +837,15 @@ impl SandboxService {
         let config = Arc::new(resolver.base().config.clone());
         let keys = ports.keys.unwrap_or_else(|| KeyStore::for_paths(&paths));
         let egress = crate::egress::route(&config.egress);
+        let source_lock = ports
+            .source_lock
+            .unwrap_or_else(|| SourceLock::of_policy(&paths));
+        // Arbeitsordner des Agent-Depots, deren Sitzung einen Absturz nicht
+        // überlebt hat, gehen beim Start des Dienstes (HUM-518).
+        humanitl_sandbox::agent::depot::scratch::sweep_stale(&paths.agent_scratch_dir());
         Self {
             inner: Arc::new(Inner {
+                source_lock,
                 egress,
                 config: RwLock::new(config),
                 session_config: std::sync::atomic::AtomicBool::new(false),
@@ -859,6 +884,23 @@ impl SandboxService {
     /// Sandbox hat.
     pub fn terminal(&self, sandbox_id: &str) -> Result<TerminalHub, Diagnostic> {
         self.inner.terminal(sandbox_id)
+    }
+
+    /// Die Sperre der Quelle der Agenten, mit der dieser Dienst startet
+    /// (HUM-518); `Agents` und `SetConfig` lehnen mit derselben ab.
+    #[must_use]
+    pub fn source_lock(&self) -> SourceLock {
+        self.inner.source_lock.clone()
+    }
+
+    /// Der Agent, dessen Depot die laufende Sitzung eingehängt hat
+    /// (HUM-518); `None` ohne Sitzung oder ohne Depot.
+    #[must_use]
+    pub fn depot_in_use(&self) -> Option<String> {
+        lock(&self.inner.running)
+            .as_ref()
+            .filter(|running| running.handle.try_wait().is_none())
+            .and_then(|running| running.depot_agent.clone())
     }
 
     /// Das Backend, das das Sandbox-Profil mit diesem Namen verlangt
@@ -3067,6 +3109,7 @@ impl Inner {
         // [`Inner::work_dir_source`] die der laufenden Sitzung.
         let work_dir_source = self.work_dir_source(&self.config(), &self.pending_choice(), plan);
         let handle = backend.launch(&launch)?;
+        prepared.hand_scratch_to(&handle);
         let sandbox = handle.id;
         let handle = Arc::new(handle);
         let started = Arc::clone(&handle);
@@ -3089,6 +3132,7 @@ impl Inner {
             terminal,
             shells: ShellRegistry::for_sandbox(sandbox),
             agent,
+            depot_agent: prepared.depot_agent(),
         });
         drop(running);
         // Ab hier nennt die laufende Sandbox den Ordner; der des Starts gilt
@@ -3901,15 +3945,19 @@ impl Inner {
             // words would name the host path the sandbox does not have. A
             // caller's command is never rewritten: it comes back unchanged
             // from the adapter, and the bind beside it serves `PATH` only.
-            command: if agent.program.is_some() {
+            // The depot points a bare name of its agent at the program's
+            // place in the sandbox (HUM-518), the caller's command included.
+            command: if agent.program.is_some() || agent.depot.mount.is_some() {
                 agent.command.clone()
             } else {
                 Self::command(&config, command, &agent.command)
             },
             files: agent.files,
             agent_program: agent.program,
+            agent_depot: agent.depot,
         };
         let warnings = agent.warnings;
+        let depot_scratch = Mutex::new(agent.scratch);
 
         // Ein Schnappschuss ist eine Anzeige, kein Start: Ohne `bwrap` steht
         // die Zeile trotzdem da, und der Start scheitert später mit dem
@@ -3935,6 +3983,7 @@ impl Inner {
 
         Ok(self.with_plan_mode(Prepared {
             env_origin,
+            depot_scratch,
             warnings,
             profile,
             session,
@@ -4075,21 +4124,15 @@ impl Inner {
         // `~/.opencode/bin`, is bound read-only as one file and the command
         // points at it (HUM-278). A command from the caller stays as it is
         // and is never bound; the configured agent is bound beside it, so a
-        // shell finds it on `PATH` (HUM-280).
-        let mut command = adapter.command(&ctx);
-        let program = if ctx.agent_command_from_caller {
-            humanitl_sandbox::agent::plan_configured_agent(
-                &ctx,
-                adapter,
-                config
-                    .agent
-                    .command
-                    .as_ref()
-                    .map(|parts| parts.iter().map(OsString::from).collect()),
-            )
-        } else {
-            humanitl_sandbox::agent::bind_agent_program(&ctx, &mut command)
-        };
+        // shell finds it on `PATH` (HUM-280). An agent from the depot is
+        // never searched or bound on the host (HUM-518, `plan_depot`).
+        let depot = self.plan_depot(config, adapter, &ctx, need)?;
+        warnings.extend(depot.warnings);
+        let mut command = depot.command;
+        let program = depot
+            .host_bind
+            .then(|| host_program(config, &ctx, adapter, &mut command))
+            .flatten();
         if cfg!(target_os = "macos") && !ctx.agent_command_from_caller {
             command = adapter.on_shared_loopback(command);
         }
@@ -4099,6 +4142,34 @@ impl Inner {
             env: adapter.env(&ctx),
             files: adapter.files(&ctx)?,
             warnings,
+            depot: depot.session,
+            scratch: depot.scratch,
+        })
+    }
+
+    /// Das Agent-Depot dieser Sitzung (HUM-518), mit der Sperre des
+    /// Dienstes; nur ein Start legt den Arbeitsordner an.
+    fn plan_depot(
+        &self,
+        config: &Config,
+        adapter: &dyn humanitl_sandbox::agent::AgentAdapter,
+        ctx: &AgentContext,
+        need: KeyNeed,
+    ) -> Result<humanitl_sandbox::agent::depot::DepotPlan, Diagnostic> {
+        use humanitl_sandbox::agent::depot::{DepotInput, Purpose, plan_session};
+        plan_session(&DepotInput {
+            config,
+            lock: &self.source_lock,
+            paths: &self.paths,
+            session: self.session,
+            adapter: adapter.id(),
+            command: &adapter.command(ctx),
+            from_caller: ctx.agent_command_from_caller,
+            purpose: if need == KeyNeed::Start {
+                Purpose::Start
+            } else {
+                Purpose::Preview
+            },
         })
     }
 
@@ -4405,6 +4476,30 @@ struct Facts {
     agent_running: bool,
 }
 
+/// The agent program bound from the host (HUM-278, HUM-280): beside a
+/// caller's command the configured agent, otherwise the command's own
+/// program, which then names its place in the sandbox.
+fn host_program(
+    config: &Config,
+    ctx: &AgentContext,
+    adapter: &dyn humanitl_sandbox::agent::AgentAdapter,
+    command: &mut [OsString],
+) -> Option<humanitl_sandbox::agent::AgentProgram> {
+    if ctx.agent_command_from_caller {
+        humanitl_sandbox::agent::plan_configured_agent(
+            ctx,
+            adapter,
+            config
+                .agent
+                .command
+                .as_ref()
+                .map(|parts| parts.iter().map(OsString::from).collect()),
+        )
+    } else {
+        humanitl_sandbox::agent::bind_agent_program(ctx, command)
+    }
+}
+
 /// Was der Agent-Adapter beisteuert.
 #[derive(Debug, Default)]
 struct AgentContribution {
@@ -4416,6 +4511,10 @@ struct AgentContribution {
     /// Findings that do not stop the start, such as a shell without the key
     /// (HUM-280).
     warnings: Vec<Diagnostic>,
+    /// What the session gets from the agent depot (HUM-518).
+    depot: humanitl_sandbox::agent::depot::DepotSession,
+    /// The depot's scratch of a start, handed to the sandbox at its launch.
+    scratch: Option<humanitl_sandbox::agent::depot::Scratch>,
 }
 
 /// Was ein Sandbox-Profil, das sich nicht lesen lässt, beim Auflösen eines
@@ -4486,6 +4585,9 @@ struct Prepared {
     /// geprüfte Projektordner (HUM-294). Was nur ein Start weiß
     /// (Pseudoterminal, Schicht, Zuhörer), kommt dort dazu.
     options: LaunchOptions,
+    /// Der Arbeitsordner des Agent-Depots eines Starts (HUM-518): Er geht
+    /// beim Start an die Sandbox, sonst mit diesem Plan.
+    depot_scratch: Mutex<Option<humanitl_sandbox::agent::depot::Scratch>>,
     /// Wer den Wert jeder Umgebungsvariablen zuletzt geschrieben hat.
     ///
     /// Dieselbe Reihenfolge, in der [`SandboxProfile::effective_env`]
@@ -4517,6 +4619,20 @@ struct Shown {
 }
 
 impl Prepared {
+    /// The agent whose depot this plan mounts (HUM-518).
+    fn depot_agent(&self) -> Option<String> {
+        let mount = self.session.agent_depot.mount.as_ref()?;
+        Some(mount.agent.clone())
+    }
+
+    /// Der Arbeitsordner des Depots geht mit der Sandbox (HUM-518); bis
+    /// zum Start räumt ihn sein Wert weg, wenn Plan oder Start scheitern.
+    fn hand_scratch_to(&self, handle: &SandboxHandle) {
+        if let Some(scratch) = lock(&self.depot_scratch).take() {
+            scratch.hand_to(handle);
+        }
+    }
+
     /// Profil, Sitzung und Optionen dieses Plans als Anfrage an das Backend.
     fn request(&self) -> PlanRequest<'_> {
         PlanRequest::new(&self.profile, &self.session, &self.options)
@@ -6452,6 +6568,7 @@ mod tests {
             session_env: Vec::new(),
             command: Vec::new(),
             files: Vec::new(),
+            agent_depot: humanitl_sandbox::agent::depot::DepotSession::default(),
             agent_program: None,
         };
         let paths =
@@ -6466,6 +6583,7 @@ mod tests {
             )
             .expect("this build knows auto"),
             options: LaunchOptions::default(),
+            depot_scratch: Mutex::new(None),
             env_origin: BTreeMap::new(),
             warnings: Vec::new(),
             overlay_preview: None,
@@ -8532,6 +8650,221 @@ mod tests {
                 .expect("declared in the daemon's file"),
             Some(canonical)
         );
+    }
+
+    // ---- HUM-518: every start path of the daemon follows the depot ----
+
+    /// Claude Code in the depot under the service's data directory, filled
+    /// by hand until HUM-519 installs.
+    fn fill_claude_depot(home: &tempfile::TempDir) {
+        use std::os::unix::fs::PermissionsExt as _;
+        let depot = home.path().join("data/humanitl/agents/claude");
+        let version = depot.join("program/1.0.0");
+        for dir in [
+            home.path().join("data/humanitl/agents"),
+            depot.clone(),
+            depot.join("program"),
+            version.clone(),
+            depot.join("config"),
+            depot.join("credentials"),
+        ] {
+            std::fs::create_dir_all(&dir).unwrap();
+            std::fs::set_permissions(&dir, std::fs::Permissions::from_mode(0o700)).unwrap();
+        }
+        std::fs::write(version.join("claude"), "#!/bin/sh\n").unwrap();
+        std::fs::set_permissions(
+            version.join("claude"),
+            std::fs::Permissions::from_mode(0o700),
+        )
+        .unwrap();
+        std::fs::write(version.join("manifest.json"), r#"{"version":"1.0.0"}"#).unwrap();
+        std::fs::set_permissions(
+            version.join("manifest.json"),
+            std::fs::Permissions::from_mode(0o600),
+        )
+        .unwrap();
+        std::os::unix::fs::symlink("program/1.0.0", depot.join("current")).unwrap();
+    }
+
+    fn depot_lock() -> SourceLock {
+        SourceLock::none()
+            .lock(
+                humanitl_config::agents::LockScope::All,
+                humanitl_config::agents::AgentSource::Depot,
+                "/etc/humanitl/policy.toml",
+            )
+            .unwrap()
+    }
+
+    /// The final plan request of a start path, judged by the depot's guard,
+    /// the first step of every backend's plan. `Ok` holds the command the
+    /// session starts.
+    fn start_path(
+        home: &tempfile::TempDir,
+        lock: Option<SourceLock>,
+        agent_command: Option<&[&str]>,
+        caller: &[&str],
+        tweak: impl FnOnce(&mut humanitl_config::Config),
+    ) -> Result<Vec<String>, Diagnostic> {
+        let ports = lock.map_or_else(SandboxPorts::none, |lock| {
+            SandboxPorts::none().with_source_lock(lock)
+        });
+        let command = agent_command.map(|words| words.iter().map(|w| (*w).to_owned()).collect());
+        let service = service_configured(home, "opencode", None, ports, |config| {
+            config.agent.command = command;
+            tweak(config);
+        });
+        let caller: Vec<OsString> = caller.iter().map(OsString::from).collect();
+        let prepared = service.inner.prepare_keyed(
+            &v1::sandbox_request::Plan::default(),
+            &caller,
+            KeyNeed::Plan,
+        )?;
+        // The first step of every backend's plan (HUM-518); the rest of the
+        // plan needs a start, which a preview does not make.
+        humanitl_sandbox::agent::depot::guard::check(&prepared.request())?;
+        Ok(prepared
+            .session
+            .command
+            .iter()
+            .map(|part| part.to_string_lossy().into_owned())
+            .collect())
+    }
+
+    fn claude_depot(config: &mut humanitl_config::Config) {
+        config.agents.claude.source = Some(humanitl_config::agents::AgentSource::Depot);
+    }
+
+    /// The configured program (`agent.command` with the bare name) starts the
+    /// depot program with its arguments.
+    #[test]
+    fn the_configured_agent_starts_from_the_depot() {
+        let home = tempfile::tempdir().unwrap();
+        fill_claude_depot(&home);
+        let command = start_path(
+            &home,
+            None,
+            Some(&["claude", "--model", "x"]),
+            &[],
+            claude_depot,
+        )
+        .unwrap();
+        // On macOS the adapter's launcher on the shared loopback stands in
+        // front (`/bin/sh -c ...`); the agent's words end the command.
+        let expected = ["/run/humanitl/agent/claude", "--model", "x"];
+        if cfg!(target_os = "macos") {
+            assert!(
+                command.ends_with(&expected.map(String::from)),
+                "{command:?}"
+            );
+        } else {
+            assert_eq!(command, expected);
+        }
+    }
+
+    /// `agent.command` with a host path, and `run --` with a host path, a
+    /// program of the host or the host program of another depot agent: one
+    /// guard, `AGENT_017`. Under the lock the same with
+    /// `agents.claude.source = "host"` below it.
+    #[test]
+    fn every_daemon_start_path_refuses_a_host_program() {
+        let home = tempfile::tempdir().unwrap();
+        fill_claude_depot(&home);
+        let all_depot = |config: &mut humanitl_config::Config| {
+            config.agents.source = humanitl_config::agents::AgentSource::Depot;
+        };
+        let host_below = |config: &mut humanitl_config::Config| {
+            config.agents.claude.source = Some(humanitl_config::agents::AgentSource::Host);
+        };
+        for (lock, tweak) in [
+            (None, all_depot as fn(&mut humanitl_config::Config)),
+            (
+                Some(depot_lock()),
+                host_below as fn(&mut humanitl_config::Config),
+            ),
+        ] {
+            let found = start_path(
+                &home,
+                lock.clone(),
+                Some(&["/home/u/.local/bin/claude"]),
+                &[],
+                tweak,
+            )
+            .unwrap_err();
+            assert_eq!(
+                found.code.as_str(),
+                "AGENT_017",
+                "agent.command: {}",
+                found.why
+            );
+            for caller in [&["/usr/local/bin/claude"][..], &["codex"][..]] {
+                let found = start_path(&home, lock.clone(), None, caller, tweak).unwrap_err();
+                assert_eq!(
+                    found.code.as_str(),
+                    "AGENT_017",
+                    "run -- {caller:?}: {}",
+                    found.why
+                );
+            }
+            let command =
+                start_path(&home, lock.clone(), None, &["claude", "-p", "hi"], tweak).unwrap();
+            assert_eq!(command, ["/run/humanitl/agent/claude", "-p", "hi"]);
+        }
+    }
+
+    /// The app starts through `Sandbox(Start)`, which prepares with
+    /// [`KeyNeed::Start`]: the same guard, and the scratch exists only for a
+    /// start.
+    #[test]
+    fn the_start_of_the_app_takes_the_depot_and_creates_the_scratch() {
+        let home = tempfile::tempdir().unwrap();
+        fill_claude_depot(&home);
+        let service = service_configured(&home, "opencode", None, SandboxPorts::none(), |config| {
+            claude_depot(config);
+            config.agent.command = Some(vec!["claude".to_owned()]);
+        });
+        let prepared = service
+            .inner
+            .prepare_keyed(&v1::sandbox_request::Plan::default(), &[], KeyNeed::Start)
+            .unwrap();
+        let mount = prepared.session.agent_depot.mount.clone().unwrap();
+        assert!(mount.program_dir.ends_with("program/1.0.0"));
+        assert!(mount.scratch.is_dir(), "a start copies the configuration");
+        assert!(
+            prepared.session.agent_program.is_none(),
+            "nothing of the host"
+        );
+        drop(prepared);
+        assert!(
+            !mount.scratch.exists(),
+            "an unlaunched plan takes its scratch along"
+        );
+
+        let refused = service_configured(
+            &home,
+            "opencode",
+            None,
+            SandboxPorts::none().with_source_lock(depot_lock()),
+            |_| {},
+        )
+        .inner
+        .prepare_keyed(&v1::sandbox_request::Plan::default(), &[], KeyNeed::Start)
+        .unwrap_err();
+        // OpenCode has no recipe yet: under the lock it does not start from
+        // the host either.
+        assert_eq!(refused.code.as_str(), "AGENT_015");
+    }
+
+    /// AC1: without `agents.*` the plan of a host agent is the one of today.
+    #[test]
+    fn without_a_depot_the_session_carries_no_depot() {
+        let home = tempfile::tempdir().unwrap();
+        let service = service_for(&home, "opencode");
+        let prepared = service
+            .inner
+            .prepare_keyed(&v1::sandbox_request::Plan::default(), &[], KeyNeed::Plan)
+            .unwrap();
+        assert!(prepared.session.agent_depot.is_empty());
     }
 }
 

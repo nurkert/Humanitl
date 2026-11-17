@@ -295,6 +295,15 @@ const GROUP_OVERRIDES: &[GroupOverride] = &[
         after_higher: "proxy",
     },
     GroupOverride {
+        group: "agents",
+        path: "agents.source",
+        lower: "\"depot\"",
+        higher: "host",
+        read: |config| config.agents.source.as_str().to_owned(),
+        after_lower: "depot",
+        after_higher: "host",
+    },
+    GroupOverride {
         group: "update",
         path: "update.check",
         lower: "false",

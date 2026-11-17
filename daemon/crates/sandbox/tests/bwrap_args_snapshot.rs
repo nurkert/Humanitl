@@ -76,6 +76,7 @@ fn context(work_mode: WorkMode) -> SessionContext {
             OsString::from("echo hello world"),
         ],
         files: Vec::new(),
+        agent_depot: humanitl_sandbox::agent::depot::DepotSession::default(),
         agent_program: None,
     }
 }

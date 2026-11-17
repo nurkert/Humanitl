@@ -119,6 +119,26 @@ pub const PREVIEW_MASK_FD_FIRST: RawFd = 15;
 /// Launcher die echten Nummern; die Vorschau ist Anzeige, nicht Ausführung.
 pub const PREVIEW_AGENT_FD_FIRST: RawFd = 40;
 
+/// Ab dieser Nummer zählt die Vorschau die Deskriptoren der Masken über
+/// Host-Installationen eines Depot-Agenten (HUM-518).
+pub const PREVIEW_HOST_MASK_FD_FIRST: RawFd = 70;
+
+/// Was der Launcher zum Agent-Depot einer Sitzung beiträgt (HUM-518): die
+/// geöffneten Quellen der Einhängung und die Masken über Host-Installationen.
+#[derive(Debug, Clone, Default, PartialEq, Eq)]
+pub struct DepotInputs {
+    /// Der geöffnete Versionsordner; `None` bindet per Pfad (die Vorschau).
+    pub program: Option<SourceFd>,
+    /// Der geöffnete Arbeitsordner; `None` bindet per Pfad (die Vorschau).
+    pub scratch: Option<SourceFd>,
+    /// Die Masken, wie der Plan sie einmal bestimmt hat; `None` bestimmt sie
+    /// beim Übersetzen ([`crate::agent::depot::DepotSession::masks`]).
+    pub masks: Option<Vec<crate::agent::depot::HostMask>>,
+    /// Je Maske über eine Datei ein memfd, in der Reihenfolge der Masken;
+    /// fehlt einer, zählt die Vorschau ab [`PREVIEW_HOST_MASK_FD_FIRST`].
+    pub mask_fds: Vec<RawFd>,
+}
+
 /// Zeichen, die eine Shell unverändert liest und die deshalb ohne
 /// Anführungszeichen auskommen.
 fn is_safe(c: char) -> bool {
@@ -290,6 +310,8 @@ pub struct LaunchInputs {
     /// with its number after `--proxy-port`. `None` renders nothing; that is
     /// the preview, whose table the start computes from this very line.
     pub pins_fd: Option<RawFd>,
+    /// Das Agent-Depot der Sitzung (HUM-518); leer ohne Depot.
+    pub depot: DepotInputs,
 }
 
 /// The shim's flags between `--proxy-port` and the command, in their fixed
@@ -336,6 +358,12 @@ impl LaunchInputs {
             control_stream_fd: None,
             overlay: None,
             pins_fd: None,
+            depot: DepotInputs {
+                program: None,
+                scratch: None,
+                masks: None,
+                mask_fds: Vec::new(),
+            },
         }
     }
 
@@ -532,6 +560,12 @@ impl SandboxProfile {
         if let Some(program) = &ctx.agent_program {
             args.bind_source(false, &program.host, inputs.agent_program, &program.dst);
         }
+        // The agent depot (HUM-518): the resolved version directory read-only
+        // where a single bound program would lie, the session's copy of the
+        // configuration writable, and an empty read-only mount over every host
+        // install of a depot agent that exists on the host. After the
+        // profile's mounts, so no profile entry covers them.
+        render_depot(&mut args, ctx, inputs);
 
         // Wer der Nutzer ist, sagt der Launcher, nicht der Host: kein
         // Host-`/etc/passwd`, nur die eine Zeile für diese Kennung.
@@ -733,7 +767,10 @@ impl SandboxProfile {
         // shell started by the caller finds `opencode` or `pi` by name, with
         // the same file a daemon-started agent runs. The directory holds that
         // one bind and nothing else; without a bind it is not named.
-        if session.agent_program.is_some() {
+        for (key, value) in session.agent_depot.env() {
+            merged.insert(key.clone(), value.clone());
+        }
+        if session.agent_program.is_some() || session.agent_depot.mount.is_some() {
             let path = merged
                 .get("PATH")
                 .map_or(crate::agent::DEFAULT_SANDBOX_PATH, String::as_str);
@@ -754,6 +791,53 @@ impl SandboxProfile {
             merged.insert(key, value);
         }
         merged.into_iter().collect()
+    }
+}
+
+/// The depot's binds and masks (HUM-518), see [`SandboxProfile::to_bwrap_args`].
+fn render_depot(args: &mut Args, ctx: &SessionContext, inputs: &LaunchInputs) {
+    if let Some(mount) = &ctx.agent_depot.mount {
+        args.bind_source(
+            false,
+            &mount.program_dir,
+            inputs.depot.program,
+            Path::new(crate::agent::AGENT_PROGRAM_DIR),
+        );
+        args.bind_source(
+            true,
+            &mount.scratch,
+            inputs.depot.scratch,
+            Path::new(crate::agent::depot::DEPOT_CONFIG_DST),
+        );
+    }
+    let masks = inputs
+        .depot
+        .masks
+        .clone()
+        .unwrap_or_else(|| ctx.agent_depot.masks());
+    let mut files = 0_usize;
+    for mask in &masks {
+        if mask.dir {
+            // An empty tmpfs, then read-only: `--remount-ro` applies to the
+            // mount just made.
+            args.path("--tmpfs", &mask.target);
+            args.path("--remount-ro", &mask.target);
+            args.row_at(PolicyMode::Masked, None, &mask.target);
+        } else {
+            let fd = inputs
+                .depot
+                .mask_fds
+                .get(files)
+                .copied()
+                .unwrap_or_else(|| {
+                    RawFd::try_from(files)
+                        .ok()
+                        .and_then(|offset| PREVIEW_HOST_MASK_FD_FIRST.checked_add(offset))
+                        .unwrap_or(-1)
+                });
+            files += 1;
+            args.data(fd, &mask.target);
+        }
     }
 }
 
@@ -810,6 +894,12 @@ impl Origins {
                 PathBuf::from(CA_BUNDLE_DST),
             ]
             .into_iter()
+            .chain(ctx.agent_depot.mount.iter().flat_map(|_| {
+                [
+                    PathBuf::from(crate::agent::AGENT_PROGRAM_DIR),
+                    PathBuf::from(crate::agent::depot::DEPOT_CONFIG_DST),
+                ]
+            }))
             .collect(),
             user: profile
                 .mounts
@@ -974,7 +1064,10 @@ mod tests {
     use humanitl_config::WorkMode;
     use humanitl_core::ids::SessionId;
 
-    use super::{IdentityFds, LaunchInputs, MaskFds, PREVIEW_MASK_FD_FIRST, SourceFd, shell_quote};
+    use super::{
+        DepotInputs, IdentityFds, LaunchInputs, MaskFds, PREVIEW_MASK_FD_FIRST, SourceFd,
+        shell_quote,
+    };
     use crate::profile::{SandboxProfile, SessionContext};
 
     #[test]
@@ -1007,6 +1100,7 @@ mod tests {
             session_env: Vec::new(),
             command: vec!["true".into()],
             files: Vec::new(),
+            agent_depot: crate::agent::depot::DepotSession::default(),
             agent_program: None,
         }
     }
@@ -1119,6 +1213,7 @@ mod tests {
                 control_stream_fd: None,
                 overlay: None,
                 pins_fd: None,
+                depot: DepotInputs::default(),
             },
         );
         assert!(with.windows(2).any(|w| w == ["--json-status-fd", "11"]));
@@ -1220,6 +1315,7 @@ mod tests {
                 control_stream_fd: None,
                 overlay: None,
                 pins_fd: None,
+                depot: DepotInputs::default(),
             },
         );
         assert!(window_at(&args, &["--ro-bind-data", "40", "/work/.envrc"]).is_some());

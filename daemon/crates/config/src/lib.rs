@@ -49,6 +49,7 @@
 #![forbid(unsafe_code)]
 #![deny(missing_docs)]
 
+pub mod agents;
 pub mod alias;
 pub mod assign;
 pub mod edit;
@@ -80,6 +81,10 @@ pub use crate::validate::{
     resources_within_host,
 };
 
+pub use crate::agents::{
+    AgentSource, AgentSourceSettings, AgentsConfig, EffectiveSource, LockScope, Locked, SourceLock,
+    SourceOrigin, effective_source,
+};
 pub use crate::alias::{ALIASES, Alias, Retired, RetiredShape};
 pub use crate::env::{Env, LOADER_ENV_KEYS, is_loader_key};
 pub use crate::load::{

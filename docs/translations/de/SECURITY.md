@@ -113,6 +113,60 @@ abdeckt, ist das, was du installierst: Humanitl prüft das Paket nicht, eine bö
 kann also in der Sandbox tun, was ein gesteuerter Agent dort tun könnte.
 `agent.pi.web_access = off` hält es draußen, und ein Projekt-Profil kann das nicht umschalten.
 
+### Das Agent-Depot (HUM-518, ADR-0023)
+
+Ohne Opt-in kommt der Agent vom Host: Der Adapter findet sein Programm im `PATH` des Daemons oder in
+den Programmordnern des Nutzers, und der Daemon bindet diese eine native Datei nur lesbar ein
+(HUM-278). Mit `agents.source = "depot"` oder `agents.<id>.source = "depot"` (beide im
+Projekt-Profil gesperrt), und immer, wenn eine Firmenvorgabe die Quelle auf das Depot sperrt, kommt
+der Agent stattdessen aus dem **Agent-Depot**: einer Ablage je Agent unter dem Datenordner des
+Daemons (`$XDG_DATA_HOME/humanitl/agents/<id>/`, Ordner `0700`, Dateien `0600` bzw. `0700`, Besitzer
+der Nutzer des Daemons), die der Daemon bei jedem Öffnen prüft (Besitzer, Rechte, kein Symlink nach
+außen; sonst `AGENT_013`). Nichts aus dem Depot läuft je auf dem Host: Status, Doctor und
+Vorprüfung lesen die Version aus `manifest.json` und starten nichts.
+
+**Einhängungen.** Eine Sitzung mit einem Depot-Agenten bekommt zwei Einhängungen des Daemons, die
+kein Adapter hinzufügen kann: den aufgelösten Versionsordner `program/<version>/`, nie den Verweis
+`current`, nur lesbar unter `/run/humanitl/agent/`, jeder Eintrag unmittelbar vor dem Einhängen mit
+den Vertrauensregeln aus `locate.rs` geprüft (Besitzer, kein Schreibrecht für andere, kein Symlink
+aus dem Baum); und eine Arbeitskopie von `config/` und der Zugangsdatei des Depots unter dem
+Laufzeitordner der Sitzung (höchstens 64 MiB), schreibbar unter `/run/humanitl/agent-config`, am
+Ende der Sitzung gelöscht und nach einem Absturz beim nächsten Start. Nichts, was eine Sitzung
+schreibt, bleibt im Depot; das geprüfte Zurückschreiben der Zugangsdatei folgt mit HUM-520. Die
+Kernel-Stufe trägt das Depot noch nicht und lehnt eine solche Sitzung mit `AGENT_015` ab.
+
+**Ein Wächter.** Der Plan jedes Backends prüft zuerst das endgültige Kommando und die Einhängungen
+der Sitzung: ein Pfad auf dem Host, ein Wrapper oder ein Symlink auf ein Programm, das ein Adapter
+als Depot-Agenten erkennt, oder das Einhängen eines solchen Programms vom Host ist `AGENT_017`; der
+bloße Name startet das Depot-Programm. Eine Einhängung, die einen Ort des Hosts unter einen anderen
+Pfad legt (`--tests-dir`, eine Einhängung der Sitzung, das Projekt unter `/work`), darf keine solche
+Host-Installation sein, enthalten oder in einer liegen; das Backend prüft das noch einmal am
+geöffneten Deskriptor, so dass ein nach dem Wächter getauschter Symlink keine Einhängung erreicht.
+Eine Reservierung je Agent (`agents/<id>.lock`) gilt vom Start, bis die Sandbox, unter Podman ihr
+Container, weg ist; `humanitl agents remove` lehnt bis dahin ab (`AGENT_018`). *Grenze unter
+Podman:* Die Engine hängt per Pfad ein. Ist ein Depot-Agent im Spiel, wird eine Einhängung der
+Sitzung (`--tests-dir`) oder eine Erweiterung des Profils (`mounts.extra_ro`, `mounts.extra_rw`),
+deren Quelle über einen Symlink eines Nutzers statt von root führt, abgelehnt (Systemverweise wie
+`/var` und `/tmp` unter macOS bleiben erlaubt und werden an ihrem aufgelösten Ort geprüft); der Projektordner und die Systemeinhängungen des
+Profils (`mounts.ro`, etwa der Symlink `/etc/localtime`) dürfen Symlinks sein und werden an ihrem
+aufgelösten Ort geprüft. Für jede Einhängung gilt: Zwischen Prüfung
+und Einhängen der Engine könnte ein Teil des Pfades noch von jemandem ersetzt werden, der dessen
+Elternordner schreiben darf.
+
+**Masken.** Eine Startprüfung hält keine Shell auf, und das Standardprofil hängt `/usr` des Hosts nur
+lesbar ein. Mit `depot`, und unter der Sperre immer, legt der Launcher deshalb unter Linux über jeden
+Ort, den das Rezept des Agenten als Host-Installation nennt (Claude Code: `/usr/bin/claude`,
+`/usr/local/bin/claude`, `/usr/lib/node_modules/@anthropic-ai/claude-code`), eine leere, nur lesbare
+Einhängung, **nur wo der Ort auf dem Host besteht** (ein fehlender wird übersprungen: dort ist nichts
+zu erreichen, und unter dem nur lesbaren `/usr` lässt sich kein Einhängepunkt anlegen). Seatbelt
+(macOS) kennt keine Einhängungen: dort sind die Masken ausdrückliche Verbotsregeln `file-read*` und
+`process-exec` für dieselben Pfade, hinter der Regel, die Lesen außerhalb der privaten Bäume
+erlaubt, denn in SBPL gewinnt die letzte passende Regel.
+
+**Grenze der Sperre.** Die Sperre verhindert, dass Humanitl einen Agenten des Hosts startet oder in
+die Sandbox bringt; gegen einen Nutzer, der ein Agentenprogramm absichtlich an einen ungelisteten Ort
+kopiert, schützt sie nicht, auf seinem eigenen Rechner bestimmt er das.
+
 ### Vertrauenswürdige Basis
 
 Die vertrauenswürdige Basis (Trusted Computing Base, TCB) ist die Menge der Bauteile, deren
@@ -1734,6 +1788,7 @@ der Durchleitung oder an der Audit-Kette bekommt hier eine Zeile und in der Änd
 | 0.1.x | Linux, Podman: ein Abbild als Wurzel der Sandbox, mit Digest festgelegt und vor jedem Start geprüft (`SANDBOX_043`), von keinem Start gezogen; `humanitl sandbox image pull` zieht auf Wunsch, direkt und nicht durch den Proxy, und sagt das vorher; Projekt, Tür, CA, Shim und Dateien der Sitzung kommen vom Host, und ESC-2 prüft die CA nach Gerät und Inode (HUM-439, [Abschnitt 13](#ein-abbild-als-wurzel-hum-439), K-28). |
 | 0.1.x | Linux: Podman in der gemeinsamen Stufe (`podman/crun`) zugelassen, nachdem `escape-tests-podman` auf `main` grün war; ein Mensch wählt es mit `sandbox.backend = "podman"` oder `--backend podman`, `auto` bleibt bubblewrap, und die Kernel-Stufe (Backend `qemu`, ADR-0021) lehnt jeder Start bis HUM-449 mit `SANDBOX_048` ab (HUM-448, [Abschnitt 13](#13-linux-podman), K-27). |
 | 0.1.x | Linux: die Kernel-Stufe (Backend `qemu`, ADR-0021) zugelassen, nachdem `kvm-tests` und `escape-tests-qemu` auf `main` mit der Wegwerf-Sandbox im Gast (HUM-446) und den Proben mit Root im Gast (HUM-445) grün waren, in zehn Läufen hintereinander, in denen beide Jobs liefen (43624997550, 43630993303, 43638237420, 43641769840, 43646599744, 43648968241, 43656202366, 43661904978, 43669712307 und 43673927540); ein Mensch wählt sie mit `sandbox.backend = "qemu"` oder `--backend qemu`, `auto` bleibt bubblewrap, und eine fehlende Voraussetzung lehnt den Start mit `SANDBOX_045` ab (HUM-449, [Abschnitt 14](#14-linux-qemu-micro-vm-kernel-stufe), K-30 bis K-34). |
+| 0.1.x | Das Agent-Depot (`agents.source`, ohne Opt-in aus): der aufgelöste Versionsordner eines Depot-Agenten nur lesbar unter `/run/humanitl/agent/`, jeder Eintrag vor dem Einhängen geprüft; seine Konfiguration als schreibbare Arbeitskopie, die mit der Sitzung gelöscht wird; ein Wächter im Plan jedes Backends lehnt ein Programm des Hosts eines Depot-Agenten ab (`AGENT_017`); Host-Installationen von Depot-Agenten maskiert (unter Linux leere, nur lesbare Einhängungen nur für bestehende Orte, unter Seatbelt Verbotsregeln `file-read*` und `process-exec`); eine Firmenvorgabe darf nur das Depot nennen (`AGENT_010`) (HUM-518). |
 
 ## 12. macOS: Seatbelt statt bubblewrap
 

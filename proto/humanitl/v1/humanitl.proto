@@ -106,6 +106,15 @@ service Humanitl {
   // niemand entscheiden muss. Keine Antwort traegt die Zugangsdaten. Ein
   // Daemon vor Minor 41 kennt den Aufruf nicht (`UNIMPLEMENTED`).
   rpc Egress(EgressRequest) returns (EgressStatus);
+  // Das Agent-Depot (HUM-518, ADR-0023): je bekanntem Agenten die wirksame
+  // Quelle mit Herkunft und Sperre, die installierte Version aus
+  // `manifest.json`, die Signatur, ob eine Anmeldung liegt, die letzte
+  // Rueckschrift und die Groesse; dazu Quelle setzen und Depot entfernen.
+  // Nichts davon startet ein Programm aus dem Depot. Eine Firmenvorgabe, die
+  // die Quelle sperrt, lehnt `SetSource` auf `host` mit `AGENT_010` ab;
+  // `Remove` lehnt ab, solange eine Sitzung das Depot nutzt. Ein Daemon vor
+  // Minor 44 kennt den Aufruf nicht (`UNIMPLEMENTED`).
+  rpc Agents(AgentsRequest) returns (AgentsStatus);
 }
 
 // ---------- Info ----------
@@ -2806,4 +2815,65 @@ enum InterceptResumeReason {
   INTERCEPT_RESUME_REASON_SESSION_STARTED = 2;
   // Der Daemon endet.
   INTERCEPT_RESUME_REASON_DAEMON_STOPPING = 3;
+}
+
+// ---------- Agent-Depot (HUM-518) ----------
+
+// Auftrag an `Agents`. Genau eine Operation; jede antwortet mit dem Stand
+// danach.
+message AgentsRequest {
+  // Nur den Stand lesen.
+  message Status {}
+  // `agents.<agent>.source` setzen: `host` oder `depot`.
+  message SetSource {
+    string agent = 1;
+    string source = 2;
+  }
+  // Das Depot eines Agenten entfernen; die Quelle bleibt, wie sie ist.
+  message Remove {
+    string agent = 1;
+  }
+  oneof op {
+    Status status = 1;
+    SetSource set_source = 2;
+    Remove remove = 3;
+  }
+}
+
+// Der Stand eines Agenten im Depot.
+message AgentDepot {
+  // Kennung wie in `agents.<id>`, etwa `claude`.
+  string agent = 1;
+  // Der Name zur Anzeige, etwa `Claude Code`.
+  string display_name = 2;
+  // Die wirksame Quelle: `host` oder `depot`.
+  string source = 3;
+  // Woher sie kommt: `default`, `agents.source`, `agents.<id>.source` oder
+  // `policy`.
+  string origin = 4;
+  // Die Vorgabe, die die Quelle sperrt; leer ohne Sperre.
+  string locked_by = 5;
+  // Wahr, wenn der Adapter ein Rezept fuer das Depot mitbringt.
+  bool depot_supported = 6;
+  // Die installierte Version aus `manifest.json`; leer, wenn keine.
+  string version = 7;
+  // Das Ergebnis der Signaturpruefung aus `manifest.json`.
+  string signature = 8;
+  // Wahr, wenn das Depot eine Zugangsdatei haelt.
+  bool logged_in = 9;
+  // Die letzte Rueckschrift der Zugangsdatei (ab HUM-520); leer bis dahin.
+  string last_writeback = 10;
+  // Bytes aller Dateien des Depots.
+  uint64 size_bytes = 11;
+  // Wahr, solange die laufende Sitzung dieses Depot eingehaengt hat.
+  bool in_use = 12;
+  // Was zu sagen ist: Depot unbrauchbar (`AGENT_013`), nicht installiert
+  // (`AGENT_008`), nicht angemeldet (`AGENT_009`), ohne Rezept (`AGENT_015`).
+  repeated Diagnostic diagnostics = 13;
+}
+
+// Der Stand aller bekannten Agenten, in der Reihenfolge von
+// `agents.<id>`.
+message AgentsStatus {
+  repeated AgentDepot agents = 1;
 }

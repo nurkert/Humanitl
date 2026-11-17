@@ -357,6 +357,7 @@ fn run() -> Result<ExitCode, LaunchError> {
         shim_src: shim.path().to_path_buf(),
         command: args.command.clone(),
         files: Vec::new(),
+        agent_depot: humanitl_sandbox::agent::depot::DepotSession::default(),
         agent_program: None,
     };
 
@@ -1210,6 +1211,7 @@ mod tests {
             session_env: Vec::new(),
             command: words(&["/bin/sh", "/tests/escape/esc-1-sockets.sh"]),
             files: Vec::new(),
+            agent_depot: humanitl_sandbox::agent::depot::DepotSession::default(),
             agent_program: None,
         }
     }
@@ -1402,6 +1404,7 @@ mod tests {
             session_env: Vec::new(),
             command: words(&["/bin/sh", "-c", "true"]),
             files: Vec::new(),
+            agent_depot: humanitl_sandbox::agent::depot::DepotSession::default(),
             agent_program: None,
         };
         let tests_dir = state.join("tests-escape");

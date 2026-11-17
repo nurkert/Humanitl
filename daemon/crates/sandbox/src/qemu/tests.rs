@@ -39,6 +39,7 @@ fn session(work: &Path) -> SessionContext {
             mode: 0o400,
             secret: true,
         }],
+        agent_depot: crate::agent::depot::DepotSession::default(),
         agent_program: None,
     }
 }
@@ -995,4 +996,66 @@ fn a_cached_probe_does_not_count_with_resources_over_this_host() {
             "{small:?}"
         );
     }
+}
+
+/// HUM-518: the kernel level calls the depot's guard first, and refuses a
+/// depot mount it cannot carry yet with `AGENT_015` instead of starting
+/// without it.
+#[test]
+fn the_kernel_level_guards_the_depot_and_refuses_its_mount() {
+    use crate::agent::depot::{DepotMount, DepotSession, ReservedAgent};
+    let work = tempfile::tempdir().unwrap();
+    let runtime = tempfile::tempdir().unwrap();
+    let profile = profile();
+    let options = crate::launcher::LaunchOptions::default();
+    let backend = VmBackend {
+        paths: humanitl_config::Paths::new(humanitl_config::Env::from_pairs([(
+            "XDG_RUNTIME_DIR",
+            runtime.path().to_str().unwrap(),
+        )])),
+        config: QemuConfig::default(),
+        resolved: Resolved {
+            emulator: PathBuf::from("/nonexistent-hum518/emulator"),
+            file_daemon: PathBuf::from("/nonexistent-hum518/files"),
+            vsock_device: PathBuf::from("/nonexistent-hum518/vsock"),
+            bubblewrap: PathBuf::from("/nonexistent-hum518/bubblewrap"),
+            kernel: PathBuf::from("/nonexistent-hum518/kernel"),
+            modules: PathBuf::from("/nonexistent-hum518/modules"),
+            no_announce_submounts: true,
+        },
+    };
+    let reserved = vec![ReservedAgent {
+        agent: "claude".to_owned(),
+        program: "claude".to_owned(),
+        host_installs: Vec::new(),
+        locked_by: None,
+    }];
+    let mut session = session(work.path());
+    session.command = vec![OsString::from("/usr/local/bin/claude")];
+    session.agent_depot = DepotSession {
+        reserved: reserved.clone(),
+        ..DepotSession::default()
+    };
+    let found = backend
+        .plan(&PlanRequest::new(&profile, &session, &options))
+        .unwrap_err();
+    assert_eq!(found.code.as_str(), "AGENT_017", "{}", found.why);
+
+    session.command = vec![OsString::from("bash")];
+    session.agent_depot = DepotSession {
+        reserved,
+        mount: Some(DepotMount {
+            agent: "claude".to_owned(),
+            version: "1.0.0".to_owned(),
+            program_dir: PathBuf::from("/nonexistent-hum518/program/1.0.0"),
+            program: "claude".to_owned(),
+            scratch: PathBuf::from("/nonexistent-hum518/scratch"),
+            env: Vec::new(),
+        }),
+        ..DepotSession::default()
+    };
+    let found = backend
+        .plan(&PlanRequest::new(&profile, &session, &options))
+        .unwrap_err();
+    assert_eq!(found.code.as_str(), "AGENT_015", "{}", found.why);
 }

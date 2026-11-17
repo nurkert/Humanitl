@@ -144,6 +144,24 @@ impl Paths {
         self.data_dir().join("cloud-inference.toml")
     }
 
+    /// Die Depots der Agenten (ADR-0023, HUM-518): je Agent ein Ordner
+    /// `agents/<id>/` mit Programm, Konfiguration und Anmeldung. Im
+    /// Datenverzeichnis des Daemons, das keine Sandbox einhängt; nur der
+    /// Daemon bindet daraus einen Versionsordner nur lesbar ein.
+    #[must_use]
+    pub fn agents_dir(&self) -> PathBuf {
+        self.data_dir().join("agents")
+    }
+
+    /// Die Arbeitsordner des Agent-Depots (HUM-518): je Sitzung eine Kopie
+    /// von `config/` und der Zugangsdatei, schreibbar eingehängt und mit der
+    /// Sitzung gelöscht. Im Laufzeitverzeichnis, nie unter dem Depot, damit
+    /// nichts, was eine Sitzung schreibt, im Depot bleibt.
+    #[must_use]
+    pub fn agent_scratch_dir(&self) -> PathBuf {
+        self.runtime_dir().path.join("agent-scratch")
+    }
+
     /// Die Datenbank der Aufzeichnung.
     #[must_use]
     pub fn db_path(&self) -> PathBuf {

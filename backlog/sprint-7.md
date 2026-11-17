@@ -3801,6 +3801,43 @@ füllen die Tests das Depot von Hand.
    Teil); die drei Garantien und `tests/escape/` bleiben
    unverändert grün.
 
+
+### Stand nach der Umsetzung (2026-11-17)
+
+Konfiguration `agents.source` und `agents.<id>.source` (Vorgabe `host`),
+Auflösung mit Herkunft und Sperre; die Sperre der Firmenvorgabe ist eine
+Eingabe des Auflösers (`SourceLock::of_policy`), die Tests setzen, und
+greift auf jedem Schreibweg (`agents source`, `config set`, SetConfig,
+ChangeSetting, Einstellungszeile). Depot-Kern in
+`sandbox/src/agent/depot/` (Rezepte, Ablage, Prüfung des Versionsordners
+samt harter Links, Wegwerfkopie je Sitzung, Wächter). Ein Wächter
+(`AGENT_017`) steht vor jedem `SandboxBackend::plan` und prüft Befehl,
+Programm und jede eingebundene Quelle, die einen Host-Ort an einen anderen
+Pfad hängt; bwrap prüft nach dem Festhalten der Deskriptoren noch einmal,
+Podman lehnt verschobene Quellen über symbolische Links ab. Verdeckt
+werden die Host-Installationen jedes Agenten auf `depot` oder unter der
+Sperre (Linux leere Einhängungen nur für vorhandene Orte, Seatbelt
+Verbotsregeln hinter der Leseregel). Eine Reservierung je Agent (`flock`)
+hält ein Start bis zum wirklichen Ende der Sandbox, `remove` exklusiv
+(`AGENT_018`). RPC `Agents`, CLI `humanitl agents status|source|remove`,
+Zeilen in `doctor`, Protokoll 1.44. Ein neuer Agent braucht einen Eintrag
+in `recipe.rs` und eine Zeile im Makro `known_agents!`. SECURITY und K-36
+(en und de) nennen Herkunft, Einhängungen, Verdeckungen und die Grenzen
+(Sperre gegen absichtlich kopierte Programme, Pfadfenster bei Podman).
+Abweichung: Mit dem Kernel-Level lehnt Humanitl eine Depot-Sitzung vorerst
+mit `AGENT_015` ab, weil die beschreibbare Kopie dort eine eigene Freigabe
+braucht (Kandidat für ein eigenes Issue).
+
+Review: Codex Runde 1 drei blocking (Host-Installation über
+`--tests-dir`, Codex und agy ohne Verdeckung, harte Links in den
+Programmordner) und zwei major (`remove` gegen Start, Link oberhalb des
+Depots, letzterer auf minor herabgestuft), alle behoben; Delta ein
+blocking (Wettlauf zwischen Prüfung und Festhalten) und ein major
+(Reservierung endet vor dem Container), beide behoben. Sonnet als Ersatz
+für Antigravity kein blocking oder major; drei minor übernommen (eine
+Liste weniger und Makro für neue Agenten, Nachweis für AC5, Leerzeichen
+im Sperrvergleich).
+
 ---
 
 ## HUM-519 · Agent-Depot: Installation und Update in einer Wartungs-Sandbox, Version angeheftet
@@ -3963,6 +4000,11 @@ späteren. Der Wächter lässt nur die Zugangsdatei durch, und nur geprüft.
    Der Daemon prüft die Datei bei Änderung (abgefragt, etwa alle 10 s) und
    am Ende der Sitzung. Mit `agents.<id>.credential_writeback = false`
    schreibt er nichts zurück.
+   Die Schlüssel legt HUM-518 an, ohne Leser bis hier (Register in
+   `daemon/crates/config/tests/config_readers.rs`):
+   `agents.opencode.credential_writeback`, `agents.pi.credential_writeback`,
+   `agents.claude.credential_writeback`, `agents.codex.credential_writeback`,
+   `agents.agy.credential_writeback`.
 5. **Konfiguration ändern** über einen Wartungslauf `task = Config`
    (`humanitl agents config <id>`): der Agent läuft mit dem Depot als
    schreibbarer Kopie ohne Projekt; danach zeigen App und CLI die geänderten
