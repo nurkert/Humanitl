@@ -779,6 +779,37 @@ Namen unter `resolver.overrides` festlegen. Wer keinen eigenen Rechner hat, scha
 Durchleitung ab und lässt auch die Inferenz anhalten: unbequem, aber ehrlich. Einmal pro Start
 auf Zeile 4 der Isolationsanzeige schauen.
 
+#### Cloud-Inferenz (HUM-516)
+
+Mit einem Modell in der Cloud fließen über die Inferenz auf jeden Fall Daten ab: Prompts, die
+Dateien, die der Agent liest, und die Ausgaben seiner Werkzeuge gehen als Teil seiner Anfragen an
+den Anbieter. Das ist die Durchleitung bei ihrer Arbeit, kein Leck der Sandbox: Humanitl isoliert das
+System und hält jede andere Verbindung an; die Inferenz selbst ist bewusst freigegeben. Die
+Sicherheitsaussage bleibt wahr, weil die Durchleitung eine erklärte Freigabe ist, und der Anbieter
+gehört zu dem, dem der Mensch vertraut, solange er ihn nutzt.
+
+Humanitl macht den Fall sichtbar, statt ihn still durchzulassen. Der Daemon leitet ihn aus dem Host
+des Modell-Endpunkts ab, den der Adapter des Agenten nennt (`llm.endpoint` für OpenCode und pi; ein
+Adapter mit eigenem Anbieter wie Claude Code nennt diesen): Ein Endpunkt auf dem Loopback, an einer
+privaten Adresse, unter `.local`, `.lan`, `.home.arpa` oder `.internal` oder ein gespeicherter
+Server mit `llm.servers.NAME.local = true` ist lokal; jeder andere Host ist ein Anbieter außerhalb
+dieses Rechners. Aufgelöst wird dafür nichts (ADR-0006); ein öffentlicher Name eines eigenen Servers
+gilt deshalb als außerhalb, bis er markiert ist, und die Markierung gilt nur der Herkunft ihres
+Servers und fällt weg, wenn der Endpunkt auf eine andere wechselt. Der Hinweis (`LLM_010`) steht als
+orangefarbenes Tag mit dem Namen des Anbieters in der Kopfzeile der Sitzung, bei jedem Start von
+`humanitl run` und `go`, in `humanitl sessions`, als Zeile `inference` in `humanitl doctor` und einmal
+beim Wählen des Agenten oder Endpunkts. Der erste Start mit einer Kombination aus Agent und Anbieter
+fragt nach einer Bestätigung (Dialog in der App, Frage im Terminal; mit `--yes`, `--json` oder ohne
+Terminal eine Zeile auf stderr und kein Warten). Der Daemon hält die Bestätigung je Agent und
+Anbieter in seinem Datenverzeichnis (`cloud-inference.toml`), nie im Projekt und nie in der App;
+weder der Agent noch ein geklontes Repository kann sie ausstellen. Der Daemon setzt die Frage selbst
+durch: Er entscheidet an der ganz aufgelösten Konfiguration jedes Starts, `--llm URL` eingeschlossen,
+und lehnt einen Start mit einer unbestätigten Kombination mit `LLM_011` ab, außer die Anfrage
+bestätigt genau diesen Agenten und Anbieter oder sagt, dass der Hinweis für genau sie ohne Terminal
+gezeigt wurde; ein Client, der den Hinweis
+überspringt, scheitert sichtbar statt still zu starten. `humanitl sandbox run`, das im eigenen
+Prozess startet, fragt genauso. Bestätigt, blockiert der Hinweis nichts.
+
 #### Der Zugangsschlüssel des Modells (HUM-140)
 
 *Wo er liegt.* Im Schlüsselbund des Systems über den Secret Service (`gnome-keyring`, `kwallet`),
@@ -1850,6 +1881,7 @@ die Binaries im Disk-Image.
 | 0.1.0 | Die Wegwerf-Sandbox: der Projektordner als schreibgeschützte untere Schicht eines Overlays, die obere Schicht im Arbeitsspeicher unter dem Laufzeitverzeichnis mit einer Größengrenze, `mounts.extra_rw` schreibgeschützt; Änderungen werden nur bei der Übernahme zurückgeschrieben, nie durch einen Symlink, nie als Symlink aus dem Projekt hinaus, als Gerät oder mit setuid-Bits und nie über eine Datei, die der Mensch seit dem Start geändert hat, ohne `--overwrite` (HUM-350, K-24). |
 | 0.1.0 | Ein Projekt-Profil, ein Profil der Session oder ein Lauf (`humanitl run --llm NAME`) wählt mit `llm.server` einen der gespeicherten Modellserver; nur der gewählte Server ist die Durchleitung der Session und bekommt seinen Schlüssel; ein unbekannter Name lehnt den Start mit `CONFIG_021` ab und fällt nie auf `llm.active` zurück; Wahl und Herkunft stehen im Kopf der Sandbox und in `humanitl sandbox plan` (HUM-400, K-02). |
 | 0.1.0 | Der Bereich für Änderungen in der App: Ein Konflikt wird nur überschrieben, wenn er für genau diese Änderung bestätigt wurde (`ApplyChanges.overwrite_ids`); ein Konflikt, der nach der Auswahl auftritt, stoppt die Übernahme (HUM-351, K-24). |
+| 0.1.x | Cloud-Inferenz wird benannt: Liegt der Modell-Endpunkt des Agenten außerhalb dieses Rechners und seines Netzes, trägt die Kopfzeile der Sitzung ein orangefarbenes Tag mit dem Anbieter, `humanitl run` und `go` nennen ihn bei jedem Start, `humanitl doctor` hat die Zeile `inference`, und der erste Start je Agent und Anbieter fragt einmal; die Bestätigung liegt im Datenverzeichnis des Daemons, nie im Projekt oder in der App; blockiert wird nichts (HUM-516, [Abschnitt 5.1](#cloud-inferenz-hum-516), K-02). |
 
 ## 13. Linux: Podman
 

@@ -749,6 +749,8 @@ impl DaemonApi for FakeDaemon {
         // Die Zeile des Wegs hinaus, wie im echten Daemon (HUM-511): Der
         // Fake geht direkt.
         crate::egress::insert_doctor_line(&mut report, &humanitl_config::EgressConfig::default());
+        // Der gespielte Agent bleibt im eigenen Netz (HUM-516).
+        crate::cloud::insert_doctor_line(&mut report, &humanitl_config::Config::default());
         report
     }
 
@@ -1516,6 +1518,9 @@ impl FakeDaemon {
                             project_dir: String::new(),
                             project_path: String::new(),
                         }),
+                    // Der gespielte Agent fragt kein Modell außerhalb dieses
+                    // Rechners (HUM-516).
+                    cloud_inference: None,
                 },
             )),
         }

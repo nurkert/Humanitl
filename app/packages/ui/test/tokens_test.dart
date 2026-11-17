@@ -1161,6 +1161,53 @@ void main() {
       }
     });
 
+    test('outflow carries area and word and stands apart (HUM-516)', () {
+      for (final Brightness brightness in Brightness.values) {
+        final HTokens tokens = HTokens.forBrightness(brightness);
+        final HSurfaceColors c = tokens.colors;
+        final double areaRatio = worstOf(c.outflow, c.ladder);
+        expect(
+          areaRatio,
+          greaterThanOrEqualTo(HColorDerivation.areaMinContrast),
+          reason: '${brightness.name} outflow area is $areaRatio',
+        );
+        final double textRatio = worstOf(
+          c.outflowText,
+          HColorDerivation.textBackgrounds(c.outflow, c.ladder),
+        );
+        expect(
+          textRatio,
+          greaterThanOrEqualTo(HColorDerivation.textMinContrast),
+          reason: '${brightness.name} outflow text is $textRatio',
+        );
+        expect(tokens.stateTextOf(c.outflow), c.outflowText);
+        // Orange, nicht das Gelb der Warnung, nicht das Rot der Fehler und
+        // Sperren, nicht die Orchidee des Haltens.
+        for (final (String name, Color other) in <(String, Color)>[
+          ('warning', c.warning),
+          ('accent', c.accent),
+          ('error', tokens.state.error),
+          ('blocked', tokens.state.blocked),
+          ('held', tokens.state.held),
+        ]) {
+          final double d = perceivedDistance(c.outflow, other, null);
+          expect(
+            d,
+            greaterThanOrEqualTo(heldMinDistance),
+            reason:
+                '${brightness.name} outflow/$name is ${d.toStringAsFixed(3)}',
+          );
+        }
+        for (final String? vision in visions) {
+          expect(
+            perceivedDistance(c.outflow, tokens.state.held, vision),
+            greaterThanOrEqualTo(heldMinDistance),
+            reason: '${brightness.name} outflow/held under $vision',
+          );
+        }
+      }
+    });
+
     test('info, warning and held never share a family', () {
       // Gelb heißt Achtung, Silber heißt Auskunft, Orchidee heißt gehalten.
       // Info und Warnung stehen immer mit ihrem Wort da (`HDiagnosticCard`);

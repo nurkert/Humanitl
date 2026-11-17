@@ -216,6 +216,17 @@ of its endpoint, drops it. An edit that moves a server to another origin drops i
 key never follows an address it was not entered for. Do not save a server that no repository may
 reach.
 
+With a model in the cloud the second channel ends at a provider outside this machine (HUM-516): the
+files the agent reads and the output of its tools travel to it as part of the requests, by design.
+Humanitl derives the case from the host of the model endpoint the adapter names, without resolving
+anything, and names it in the session header, at the start of `humanitl run` and `go`, in `humanitl
+doctor` and when the agent or the endpoint is chosen; the first start per agent and provider asks
+once, the daemon refuses an unanswered first start (`LLM_011`) from the fully resolved start
+configuration, and the confirmation lives in the daemon's data directory, outside every project. A saved
+server marked `local = true` counts as local only for its own origin. *Residual risk:* the notice
+informs and blocks nothing; whoever confirms it accepts that the provider sees what the agent reads.
+A public name that points into the own network counts as outside until it is marked.
+
 ### K-03 The socket directory of the proxy
 
 If Humanitl bound the directory holding the socket, every file created there later would be visible
@@ -1050,6 +1061,7 @@ These attackers are not defended against, and Humanitl does not claim to:
 | 2026-11-15 | K-30 to K-34 `mitigated`: the kernel level (backend `qemu`) admitted after `kvm-tests` and `escape-tests-qemu` were green on `main` with HUM-446 and the probes with root in the guest of HUM-445, in ten consecutive runs in which both jobs ran (43624997550, 43630993303, 43638237420, 43641769840, 43646599744, 43648968241, 43656202366, 43661904978, 43669712307 and 43673927540, the rule written at HUM-471); chosen only by a person with `sandbox.backend = "qemu"` or `--backend qemu`, never by `auto`; a missing prerequisite refuses the start with `SANDBOX_045` | HUM-449 |
 | 2026-11-16 | K-35 added: a decision proxy of the user behind Humanitl (`egress.proxy`, opt-in), its CA only on that way, no direct fallback, who resolves chosen with `egress.proxy_resolve` | HUM-511 |
 | 2026-11-16 | K-35: with `hold.ask_mode = "upstream"` the decision proxy decides requests without a rule; only with a proxy in use, `block` never reaches it, `redact` and the hard block stay in Humanitl, the audit says `forward` by `upstream` with the proxy's status | HUM-512 |
+| 2026-11-17 | K-02: cloud inference named; an endpoint outside this machine and its network shows an orange tag, a start line and a doctor line, and asks once per agent and provider, confirmed in the daemon's data directory; blocks nothing | HUM-516 |
 
 Every security-relevant change to the shim, the mount allowlist, the filter or the passthrough gets
 a line here. Vulnerabilities are reported as described in

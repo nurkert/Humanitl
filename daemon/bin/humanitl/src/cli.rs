@@ -534,19 +534,35 @@ pub struct RunArgs {
     /// disposable sandbox. The same as sandbox.mode = "direct" for this run.
     #[arg(long)]
     pub direct: bool,
+
+    /// Do not ask before the first start of an agent whose model provider
+    /// lies outside this machine (cloud inference); the notice still goes to
+    /// stderr, and this counts as confirmed for that agent and provider.
+    /// Without a terminal or with --json nobody is asked either: the notice
+    /// is one line on stderr and the next start shows it again.
+    #[arg(long)]
+    pub yes: bool,
 }
 
 /// Die Argumente von `humanitl go` (HUM-496).
 ///
-/// Nur das Kommando: Der Modus ist immer `disposable`, und alles andere
-/// (`--backend`, `--work`, `--profile`, `--llm`) sind die globalen Schalter,
-/// die auch `humanitl run` nimmt.
+/// Das Kommando und `--yes` (HUM-516): Der Modus ist immer `disposable`,
+/// und alles andere (`--backend`, `--work`, `--profile`, `--llm`) sind die
+/// globalen Schalter, die auch `humanitl run` nimmt.
 #[derive(Debug, Args)]
 pub struct GoArgs {
     /// The command to run in the sandbox, after `--`; without it the agent
     /// from the configuration.
     #[arg(last = true, value_name = "CMD")]
     pub cmd: Vec<OsString>,
+
+    /// Do not ask before the first start of an agent whose model provider
+    /// lies outside this machine (cloud inference); the notice still goes to
+    /// stderr, and this counts as confirmed for that agent and provider.
+    /// Without a terminal or with --json nobody is asked either: the notice
+    /// is one line on stderr and the next start shows it again.
+    #[arg(long)]
+    pub yes: bool,
 }
 
 /// Die Unterkommandos von `humanitl audit`.
@@ -612,6 +628,13 @@ pub enum SandboxCmd {
         /// Run direct even if sandbox.mode is "disposable".
         #[arg(long)]
         direct: bool,
+        /// Do not ask before the first start of an agent whose model provider
+        /// lies outside this machine (cloud inference); the notice still goes
+        /// to stderr, and this counts as confirmed for that agent and
+        /// provider. Without a terminal or with --json the notice is one line
+        /// on stderr and nobody is asked.
+        #[arg(long)]
+        yes: bool,
         /// The command to run in the sandbox, after `--`.
         #[arg(last = true, value_name = "CMD", required = true)]
         cmd: Vec<OsString>,

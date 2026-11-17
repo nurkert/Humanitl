@@ -188,6 +188,10 @@ pub(crate) async fn launch(
         // (HUM-400). Ein älterer Daemon kennt das Feld nicht und nähme die
         // Wahl ohne ihn; das wäre ein anderer Server als der verlangte.
         llm_server: run_server(ctx, info.proto_minor)?,
+        // Was der Mensch zum Hinweis auf Cloud-Inferenz gesagt hat, setzt
+        // `cloud::prepare_start` (HUM-516).
+        acknowledge_cloud_inference: None,
+        cloud_notice_shown: None,
     };
 
     let session = json!({
@@ -200,6 +204,25 @@ pub(crate) async fn launch(
             .map(|arg| arg.to_string_lossy().into_owned())
             .collect::<Vec<_>>(),
     });
+
+    // Vor dem ersten Start mit einem Agenten, dessen Inferenz an einen
+    // Anbieter außerhalb dieses Rechners geht, einmal nachfragen (HUM-516).
+    // Ob das so ist und ob es schon bestätigt ist, sagt der Daemon für genau
+    // diesen Start, `--llm URL` eingeschlossen; er lehnt einen Start ohne
+    // Antwort selbst ab (`LLM_011`).
+    let mut start = start;
+    let mode = crate::cmd::cloud::mode(args.yes, ctx.render.is_json(), on_terminal);
+    if !crate::cmd::cloud::prepare_start(
+        &mut client,
+        &mut start,
+        info.proto_minor,
+        mode,
+        (&ctx.paths, config),
+    )
+    .await?
+    {
+        return Ok(EXIT_USER);
+    }
 
     ctx.render.note(&where_decisions_happen(config));
     let moderate = config.hold.ask_mode == AskMode::Terminal;
@@ -857,6 +880,12 @@ fn handle(ctx: &Context, event: v1::SandboxEvent, minor: u32) -> Option<Failure>
                     "[humanitl] {}",
                     crate::cmd::plan::server_line(status.llm_server.as_ref(), minor)
                 ));
+                // Wohin die Inferenz geht, bei jedem Start und in Orange
+                // (HUM-516); auch mit `-q`, denn es ist die eine Zeile, die
+                // sagt, was den Rechner verlässt.
+                if let Some(cloud) = status.cloud_inference.as_ref() {
+                    crate::cmd::cloud::print_short_line(cloud);
+                }
             }
             None
         }
@@ -912,7 +941,9 @@ fn handle(ctx: &Context, event: v1::SandboxEvent, minor: u32) -> Option<Failure>
         | Event::Retire(_)
         | Event::ChangesOutcome(_)
         | Event::ImagePulled(_)
-        | Event::ImagePullCancelled(_) => None,
+        | Event::ImagePullCancelled(_)
+        | Event::CloudInferenceAcknowledged(_)
+        | Event::CloudInferenceCheck(_) => None,
     }
 }
 
@@ -1320,11 +1351,13 @@ mod tests {
             cmd: vec![std::ffi::OsString::from("bash")],
             disposable: false,
             direct: false,
+            yes: false,
         };
         let agent = RunArgs {
             cmd: Vec::new(),
             disposable: false,
             direct: false,
+            yes: false,
         };
         assert!(attaches(&bash, false, false, false, true));
         assert!(!attaches(&bash, false, false, false, false), "no terminal");
@@ -1413,6 +1446,7 @@ mod tests {
                 cmd: Vec::new(),
                 disposable: false,
                 direct: false,
+                yes: false,
             },
         );
 
@@ -1440,6 +1474,7 @@ mod tests {
             cmd: Vec::new(),
             disposable: false,
             direct: false,
+            yes: false,
         }
     }
 
@@ -1513,6 +1548,7 @@ mod tests {
                 cmd: vec![std::ffi::OsString::from(own)],
                 disposable: false,
                 direct: false,
+                yes: false,
             };
             assert!(
                 refuse_terminal_ask(&config, &args, true).is_ok(),
@@ -1527,6 +1563,7 @@ mod tests {
             ],
             disposable: false,
             direct: false,
+            yes: false,
         };
         assert!(refuse_terminal_ask(&config, &shell, true).is_ok());
     }
@@ -1550,6 +1587,7 @@ mod tests {
                     cmd,
                     disposable: false,
                     direct: false,
+                    yes: false,
                 };
                 let failure = refuse_terminal_ask(&config, &args, true)
                     .expect_err(&format!("{named} draws the whole screen"));
@@ -1569,6 +1607,7 @@ mod tests {
             cmd: vec![std::ffi::OsString::from("/opt/bin/mycode")],
             disposable: false,
             direct: false,
+            yes: false,
         };
         let failure =
             refuse_terminal_ask(&config, &args, true).expect_err("mycode is the agent here");
@@ -1579,6 +1618,7 @@ mod tests {
             cmd: vec![std::ffi::OsString::from("bash")],
             disposable: false,
             direct: false,
+            yes: false,
         };
         assert!(refuse_terminal_ask(&config, &other, true).is_ok());
     }
@@ -1671,6 +1711,7 @@ mod tests {
             cmd: Vec::new(),
             disposable,
             direct,
+            yes: false,
         };
         assert_eq!(
             start_mode(&args(false, false), SandboxMode::Auto, 27),

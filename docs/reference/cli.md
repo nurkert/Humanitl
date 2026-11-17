@@ -265,6 +265,9 @@ Options:
   -v, --verbose...
           Explain what is happening; repeat for more
 
+      --yes
+          Do not ask before the first start of an agent whose model provider lies outside this machine (cloud inference); the notice still goes to stderr, and this counts as confirmed for that agent and provider. Without a terminal or with --json nobody is asked either: the notice is one line on stderr and the next start shows it again
+
   -q, --quiet
           Only the result, no notes
 
@@ -291,6 +294,9 @@ Arguments:
 Options:
       --json
           Machine-readable output: one JSON value on stdout, diagnostics included
+
+      --yes
+          Do not ask before the first start of an agent whose model provider lies outside this machine (cloud inference); the notice still goes to stderr, and this counts as confirmed for that agent and provider. Without a terminal or with --json nobody is asked either: the notice is one line on stderr and the next start shows it again
 
       --config <PATH>
           Read this config file instead of the one in the user's config directory
@@ -381,6 +387,9 @@ Options:
 
   -q, --quiet
           Only the result, no notes
+
+      --yes
+          Do not ask before the first start of an agent whose model provider lies outside this machine (cloud inference); the notice still goes to stderr, and this counts as confirmed for that agent and provider. Without a terminal or with --json the notice is one line on stderr and nobody is asked
 
       --profile <NAME>
           Use this profile for the session; falls back to the sandbox profile of that name when no session profile exists

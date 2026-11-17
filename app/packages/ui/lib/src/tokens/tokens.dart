@@ -31,6 +31,8 @@ class HSurfaceColors {
     required this.warningText,
     required this.info,
     required this.infoText,
+    required this.outflow,
+    required this.outflowText,
   });
 
   /// The dark ladder of BACKLOG.md 5.
@@ -74,6 +76,11 @@ class HSurfaceColors {
       HColors.info,
       surfaces: HColorDerivation.darkSurfaces,
     ),
+    outflow: HColors.outflow,
+    outflowText: HColorDerivation.textVariant(
+      HColors.outflow,
+      surfaces: HColorDerivation.darkSurfaces,
+    ),
   );
 
   /// The light ladder: the dark one inverted.
@@ -115,6 +122,11 @@ class HSurfaceColors {
     info: HColors.lInfo,
     infoText: HColorDerivation.textVariant(
       HColors.lInfo,
+      surfaces: HColorDerivation.lightSurfaces,
+    ),
+    outflow: HColors.lOutflow,
+    outflowText: HColorDerivation.textVariant(
+      HColors.lOutflow,
       surfaces: HColorDerivation.lightSurfaces,
     ),
   );
@@ -212,6 +224,16 @@ class HSurfaceColors {
 
   /// [info], wie sie ein Wort tragen darf.
   final Color infoText;
+
+  /// Daten verlassen diesen Rechner absichtlich, etwa über die Inferenz bei
+  /// einem Anbieter in der Cloud (HUM-516): Orange, nicht das Gelb der
+  /// Warnung und nicht das Rot der Fehler. Eine Fläche; Wörter stehen in
+  /// [outflowText].
+  final Color outflow;
+
+  /// [outflow], wie sie ein Wort tragen darf: 4,5:1 auf allen Flächen und
+  /// auf der eigenen Tönung.
+  final Color outflowText;
 
   /// The ladder from [bg0] to [bg3], darkest surface first in dark mode.
   List<Color> get ladder => <Color>[bg0, bg1, bg2, bg3];
@@ -468,6 +490,11 @@ class HTokens {
         color == HColors.info ||
         color == HColors.lInfo) {
       return colors.infoText;
+    }
+    if (color == colors.outflow ||
+        color == HColors.outflow ||
+        color == HColors.lOutflow) {
+      return colors.outflowText;
     }
     if (color == colors.accent ||
         color == HColors.accent ||

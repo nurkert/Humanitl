@@ -1621,6 +1621,8 @@ fn start_request(work_dir: &Path, marker: &str) -> v1::SandboxRequest {
             // Der Test gilt nicht der Vorgabe `auto` (HUM-357).
             sandbox_mode: "direct".to_owned(),
             llm_server: String::new(),
+            acknowledge_cloud_inference: None,
+            cloud_notice_shown: None,
         })),
     }
 }

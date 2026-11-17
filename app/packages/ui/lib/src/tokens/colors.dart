@@ -147,6 +147,22 @@ abstract final class HColors {
   /// (OKLab 0,18 auseinander), und mit 8,78:1 auf [lBg3] mehr als eine Fläche.
   static const Color lInfo = Color(0xFF404040);
 
+  /// Daten verlassen diesen Rechner absichtlich: ein klares Orange, bisher
+  /// nur für das Tag der Cloud-Inferenz (HUM-516) und spätere Hinweise
+  /// derselben Art.
+  ///
+  /// Weder das Gelb der Marke ([warning], [accent]) noch das Korallenrot von
+  /// Fehlern und Sperren (`secret`, `blocked`) noch die Orchidee von `held`:
+  /// Der Hinweis blockiert nichts, ist aber auch keine Warnung vor einem
+  /// Fehler. In OKLab mindestens 0,085 von allen dreien entfernt; die
+  /// Abstände und der Kontrast von Fläche und Wort stehen in
+  /// `tokens_test.dart`. Wie jede Farbe nie allein, sondern mit Wort.
+  static const Color outflow = Color(0xFFFF9100);
+
+  /// Light outflow: ein gebranntes Orange, dunkel genug für 3:1 als Fläche
+  /// auf der hellen Leiter, und mit Abstand zum Ocker des hellen Akzents.
+  static const Color lOutflow = Color(0xFFB35400);
+
   // --- Dark state colours ----------------------------------------------------
 
   /// A request waits for a human decision.

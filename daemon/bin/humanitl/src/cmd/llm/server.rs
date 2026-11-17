@@ -36,7 +36,23 @@ pub async fn run(ctx: &Context, cmd: &ServerCmd) -> Result<u8, Failure> {
         .map_err(|status| Failure::new(status_diagnostic(&status, "LlmServers")))?
         .into_inner();
     render(ctx, &list, changes);
+    // Wählt der Befehl den Server der nächsten Sitzung und geht deren
+    // Inferenz damit an einen Anbieter außerhalb dieses Rechners, steht der
+    // Hinweis einmal da (HUM-516), wie nach `config set llm.*`.
+    if selects_server(cmd)
+        && let Some(notice) = crate::cmd::config::cloud_notice(ctx, "llm.active")
+    {
+        ctx.render.note(&notice);
+    }
     Ok(EXIT_OK)
+}
+
+/// Ob dieses Unterkommando den aktiven Server oder dessen Endpunkt ändert.
+const fn selects_server(cmd: &ServerCmd) -> bool {
+    matches!(
+        cmd,
+        ServerCmd::Use { .. } | ServerCmd::Add { activate: true, .. } | ServerCmd::Edit { .. }
+    )
 }
 
 /// Die Operation zu einem Unterkommando, und ob sie etwas ändert.

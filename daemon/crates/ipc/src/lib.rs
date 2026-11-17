@@ -51,7 +51,11 @@ pub const PROTO_MAJOR: u32 = 1;
 /// Minor-Version des Vertrags. Steigt bei jeder additiven Änderung
 /// (`Info.proto_minor`).
 ///
-/// `42` seit dem Frage-Modus `upstream` (HUM-512): `DecisionSource`
+/// `43` seit dem Hinweis auf Cloud-Inferenz (HUM-516):
+/// `SandboxEvent.Status.cloud_inference` mit Agent, Anbieter und Bestätigung,
+/// die Operation `SandboxRequest.acknowledge_cloud_inference` und ihre
+/// Antwort `SandboxEvent.cloud_inference_acknowledged`.
+/// `42` war der Frage-Modus `upstream` (HUM-512): `DecisionSource`
 /// `DECISION_SOURCE_UPSTREAM` für eine Anfrage, die der Entscheidungs-Proxy
 /// hinter Humanitl entschied, `SandboxEvent.Status.ask_mode` für die
 /// Moduszeile und `upstream` als Wert von `Start.ask_mode`.
@@ -231,7 +235,7 @@ pub const PROTO_MAJOR: u32 = 1;
 /// Spiegelung in `app/lib/core/ipc/proto_version.dart` darf nachziehen: eine
 /// abweichende Minor ist verabredetermaßen kein Grund, die Verbindung
 /// abzulehnen (`docs/PROTOCOL.md`).
-pub const PROTO_MINOR: u32 = 42;
+pub const PROTO_MINOR: u32 = 43;
 
 /// Metadata-Schlüssel für das Session-Token aus
 /// `$XDG_RUNTIME_DIR/humanitl/token` (CONVENTIONS.md 3.6).
@@ -258,6 +262,7 @@ pub mod audit;
 pub mod auth;
 pub mod body;
 pub mod client;
+pub mod cloud;
 pub mod config_rpc;
 pub mod convert;
 mod deadline;

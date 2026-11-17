@@ -22,8 +22,11 @@
 library;
 
 import 'package:flutter/widgets.dart';
+import 'package:flutter_riverpod/flutter_riverpod.dart';
 
 import '../../../core/domain/domain.dart';
+import '../../../core/ipc/cloud_inference_provider.dart';
+import '../../../core/ui/cloud_inference_tag.dart';
 import '../../../core/ui/fix_control.dart';
 import '../../../core/ui/llm_endpoint_field.dart';
 import '../../../core/ui/ui.dart';
@@ -133,6 +136,9 @@ class LlmCheck extends StatelessWidget {
             primary: view.current && !fixIsPrimary,
           ),
           SizedBox(height: tokens.spacing.x2),
+          // Führt der Endpunkt zu einem Anbieter außerhalb dieses Rechners,
+          // steht hier einmal der Hinweis darauf (HUM-516).
+          const _CloudNote(),
           if (answered != null)
             _Models(probe: answered)
           else
@@ -165,6 +171,28 @@ class LlmCheck extends StatelessWidget {
           child: Text(l10n.setupLlmDiscoverOpen),
         ),
       ],
+    );
+  }
+}
+
+/// The notice on cloud inference under the endpoint, while the daemon says
+/// that the next session's inference goes to a provider outside this
+/// machine (HUM-516); nothing otherwise.
+class _CloudNote extends ConsumerWidget {
+  const _CloudNote();
+
+  @override
+  Widget build(BuildContext context, WidgetRef ref) {
+    final CloudInference? cloud = ref
+        .watch(plannedCloudInferenceProvider)
+        .value;
+    if (cloud == null) {
+      return const SizedBox.shrink();
+    }
+    final HTokens tokens = HTheme.of(context);
+    return Padding(
+      padding: EdgeInsets.only(bottom: tokens.spacing.x2),
+      child: CloudInferenceNote(cloud: cloud),
     );
   }
 }

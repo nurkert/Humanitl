@@ -13,6 +13,7 @@ import 'package:flutter_riverpod/flutter_riverpod.dart';
 
 import '../../../core/domain/domain.dart';
 import '../../../core/ipc/connection.dart';
+import '../../../core/ui/cloud_inference_tag.dart';
 import '../../../core/ui/hover_label.dart';
 import '../../../core/ui/sandbox_backend_choice.dart';
 import '../../../core/ui/ui.dart';
@@ -31,6 +32,7 @@ class SandboxHeader extends ConsumerWidget {
     required this.status,
     required this.onAskStop,
     this.onAskServer,
+    this.onAskCloud,
     super.key,
   });
 
@@ -43,6 +45,10 @@ class SandboxHeader extends ConsumerWidget {
   /// Asks the screen for the one question about the project's server
   /// before a start (HUM-405).
   final VoidCallback? onAskServer;
+
+  /// Asks the screen for the one confirmation of cloud inference before the
+  /// first start with this agent and provider (HUM-516).
+  final VoidCallback? onAskCloud;
 
   @override
   Widget build(BuildContext context, WidgetRef ref) {
@@ -59,93 +65,126 @@ class SandboxHeader extends ConsumerWidget {
       color: tokens.colors.bg1,
       child: HPaneHeader(
         key: const Key('sandbox-header'),
-        child: Row(
-          children: <Widget>[
-            SandboxStateIndicator(status: status),
-            SizedBox(width: tokens.spacing.x3),
-            HBadge(
-              text: status.profile.isEmpty
-                  ? l10n.sandboxProfileUnknown
-                  : l10n.sandboxProfile(status.profile),
-              color: tokens.colors.fg2,
-              textColor: tokens.colors.fg1,
-            ),
-            SandboxBackendBadge(status: status),
-            SandboxServerBadge(status: status),
-            // Abstand zum Pfad: Ein langer Pfad füllt den Rest bis an das
-            // Abzeichen heran, und ohne Lücke las er sich als dessen Teil
-            // (HUM-406).
-            SizedBox(width: tokens.spacing.x3),
-            // Der Picker bekommt den ganzen Rest und steht rechts. Ein `Spacer`
-            // daneben teilte den Platz mit ihm, und der Pfad bekäme die Hälfte
-            // dessen, was da ist.
-            Expanded(
-              child: Align(
-                alignment: Alignment.centerRight,
-                child: WorkDirPicker(
-                  workDir: status.workDirHost,
-                  workMode: status.workMode,
-                  chooseLabel: l10n.sandboxWorkDirChoose,
-                  chooseButtonLabel: l10n.workDirChooseButton,
-                  changeButtonLabel: l10n.workDirChangeButton,
-                  noneLabel: l10n.sandboxWorkDirNone,
-                  readOnlyLabel: l10n.sandboxWorkModeRo,
-                  readWriteLabel: l10n.sandboxWorkModeRw,
-                  // While the sandbox is up the mount cannot change; a picker
-                  // that answered would show a folder the running agent does
-                  // not have.
-                  lockedLabel: status.isUp || status.isBusy
-                      ? l10n.sandboxWorkDirLocked
-                      : null,
-                  onPick: (String dir) => unawaited(
-                    ref.read(sandboxStatusProvider.notifier).chooseWorkDir(dir),
-                  ),
-                  onMode: (WorkMode mode) => unawaited(
-                    ref
-                        .read(sandboxStatusProvider.notifier)
-                        .plan(workMode: mode),
-                  ),
+        child: LayoutBuilder(
+          builder: (BuildContext context, BoxConstraints row) => Row(
+            children: <Widget>[
+              SandboxStateIndicator(status: status),
+              SizedBox(width: tokens.spacing.x3),
+              // Der Hinweis auf Cloud-Inferenz steht gleich hinter dem
+              // Zustand und nie in der Rolle der Abzeichen: Er ist die eine
+              // Aussage dieser Zeile darüber, was den Rechner verlässt, und
+              // darf nicht aus dem Blick rollen (HUM-516).
+              SandboxCloudBadge(status: status),
+              // Profil, Backend und Server nehmen höchstens einen Teil der
+              // Zeile; mit mehr Abzeichen oder großer Schrift rollen sie in
+              // sich, statt Picker und Startknopf über den Rand zu schieben
+              // (HUM-516, wie die Controls rechts seit HUM-351).
+              ConstrainedBox(
+                constraints: BoxConstraints(
+                  maxWidth: row.maxWidth * _badgeShare,
                 ),
-              ),
-            ),
-            SizedBox(width: tokens.spacing.x3),
-            // Warten Änderungen eines Wegwerf-Laufs, stehen hier drei
-            // Controls statt zwei (HUM-351). Bei großer Schrift passen sie
-            // nicht mehr neben Zustand und Profil; dann rollen sie in sich,
-            // statt über den Rand zu laufen, und der Fokus holt jedes in
-            // Sicht.
-            if (waiting)
-              Flexible(
                 child: SingleChildScrollView(
-                  key: const Key('sandbox-header-trailing'),
+                  key: const Key('sandbox-header-badges'),
                   scrollDirection: Axis.horizontal,
-                  reverse: true,
                   child: Row(
                     mainAxisSize: MainAxisSize.min,
                     children: <Widget>[
-                      DisposableSwitch(status: status),
-                      SandboxStartStop(
-                        status: status,
-                        onAskStop: onAskStop,
-                        onAskServer: onAskServer,
+                      HBadge(
+                        text: status.profile.isEmpty
+                            ? l10n.sandboxProfileUnknown
+                            : l10n.sandboxProfile(status.profile),
+                        color: tokens.colors.fg2,
+                        textColor: tokens.colors.fg1,
                       ),
+                      SandboxBackendBadge(status: status),
+                      SandboxServerBadge(status: status),
                     ],
                   ),
                 ),
-              )
-            else ...<Widget>[
-              DisposableSwitch(status: status),
-              SandboxStartStop(
-                status: status,
-                onAskStop: onAskStop,
-                onAskServer: onAskServer,
               ),
+              // Abstand zum Pfad: Ein langer Pfad füllt den Rest bis an das
+              // Abzeichen heran, und ohne Lücke las er sich als dessen Teil
+              // (HUM-406).
+              SizedBox(width: tokens.spacing.x3),
+              // Der Picker bekommt den ganzen Rest und steht rechts. Ein `Spacer`
+              // daneben teilte den Platz mit ihm, und der Pfad bekäme die Hälfte
+              // dessen, was da ist.
+              Expanded(
+                child: Align(
+                  alignment: Alignment.centerRight,
+                  child: WorkDirPicker(
+                    workDir: status.workDirHost,
+                    workMode: status.workMode,
+                    chooseLabel: l10n.sandboxWorkDirChoose,
+                    chooseButtonLabel: l10n.workDirChooseButton,
+                    changeButtonLabel: l10n.workDirChangeButton,
+                    noneLabel: l10n.sandboxWorkDirNone,
+                    readOnlyLabel: l10n.sandboxWorkModeRo,
+                    readWriteLabel: l10n.sandboxWorkModeRw,
+                    // While the sandbox is up the mount cannot change; a picker
+                    // that answered would show a folder the running agent does
+                    // not have.
+                    lockedLabel: status.isUp || status.isBusy
+                        ? l10n.sandboxWorkDirLocked
+                        : null,
+                    onPick: (String dir) => unawaited(
+                      ref
+                          .read(sandboxStatusProvider.notifier)
+                          .chooseWorkDir(dir),
+                    ),
+                    onMode: (WorkMode mode) => unawaited(
+                      ref
+                          .read(sandboxStatusProvider.notifier)
+                          .plan(workMode: mode),
+                    ),
+                  ),
+                ),
+              ),
+              SizedBox(width: tokens.spacing.x3),
+              // Warten Änderungen eines Wegwerf-Laufs, stehen hier drei
+              // Controls statt zwei (HUM-351). Bei großer Schrift passen sie
+              // nicht mehr neben Zustand und Profil; dann rollen sie in sich,
+              // statt über den Rand zu laufen, und der Fokus holt jedes in
+              // Sicht.
+              if (waiting)
+                Flexible(
+                  child: SingleChildScrollView(
+                    key: const Key('sandbox-header-trailing'),
+                    scrollDirection: Axis.horizontal,
+                    reverse: true,
+                    child: Row(
+                      mainAxisSize: MainAxisSize.min,
+                      children: <Widget>[
+                        DisposableSwitch(status: status),
+                        SandboxStartStop(
+                          status: status,
+                          onAskStop: onAskStop,
+                          onAskServer: onAskServer,
+                          onAskCloud: onAskCloud,
+                        ),
+                      ],
+                    ),
+                  ),
+                )
+              else ...<Widget>[
+                DisposableSwitch(status: status),
+                SandboxStartStop(
+                  status: status,
+                  onAskStop: onAskStop,
+                  onAskServer: onAskServer,
+                  onAskCloud: onAskCloud,
+                ),
+              ],
             ],
-          ],
+          ),
         ),
       ),
     );
   }
+
+  /// Der größte Teil der Zeile, den Profil, Backend und Server zusammen
+  /// nehmen; der Rest gehört Zustand, Hinweis, Picker und Controls.
+  static const double _badgeShare = 0.35;
 }
 
 /// The dot and the word that say what the sandbox is doing.
@@ -310,6 +349,36 @@ class SandboxServerBadge extends StatelessWidget {
   }
 }
 
+/// The orange tag of cloud inference (HUM-516): where the agent's inference
+/// goes when that is a provider outside this machine, before a start and
+/// while the session runs, beside backend and server. Nothing for a local
+/// endpoint; the daemon decides which it is.
+class SandboxCloudBadge extends StatelessWidget {
+  /// Shows the tag of [status].
+  const SandboxCloudBadge({required this.status, super.key});
+
+  /// What the daemon last said.
+  final SandboxStatus status;
+
+  @override
+  Widget build(BuildContext context) {
+    final CloudInference? cloud = status.cloudInference;
+    if (cloud == null) {
+      return const SizedBox.shrink();
+    }
+    final HTokens tokens = HTheme.of(context);
+    // Ein langer Host oder große Schrift kürzt das Tag mit Auslassung, statt
+    // die Zeile zu sprengen; der ganze Host steht im Tooltip und im Popover
+    // (HUM-516, Review).
+    return Flexible(
+      child: Padding(
+        padding: EdgeInsets.only(right: tokens.spacing.x2),
+        child: CloudInferenceTag(cloud: cloud),
+      ),
+    );
+  }
+}
+
 /// Where the choice of [server] comes from, as the short word of the chip.
 String sandboxServerSource(AppLocalizations l10n, LlmServerChoice server) =>
     switch (server.source) {
@@ -329,12 +398,17 @@ class SandboxStartStop extends ConsumerWidget {
     required this.status,
     required this.onAskStop,
     this.onAskServer,
+    this.onAskCloud,
     super.key,
   });
 
   /// Asks the screen for the question about the project's server; a start
   /// whose project picks an unconfirmed server goes there first (HUM-405).
   final VoidCallback? onAskServer;
+
+  /// Asks the screen for the confirmation of cloud inference; the first
+  /// start with this agent and provider goes there first (HUM-516).
+  final VoidCallback? onAskCloud;
 
   /// What the daemon last said.
   final SandboxStatus status;
@@ -380,6 +454,15 @@ class SandboxStartStop extends ConsumerWidget {
               if (ask != null &&
                   (status.llmServer?.needsConfirmation ?? false)) {
                 ask();
+                return;
+              }
+              // Schickt der Agent seine Inferenz zu einem Anbieter außerhalb
+              // dieses Rechners, fragt der erste Start mit dieser Kombination
+              // einmal (HUM-516); was bestätigt ist, startet ohne Frage.
+              final VoidCallback? askCloud = onAskCloud;
+              if (askCloud != null &&
+                  (status.cloudInference?.needsConfirmation ?? false)) {
+                askCloud();
                 return;
               }
               unawaited(ref.read(sandboxStatusProvider.notifier).start());

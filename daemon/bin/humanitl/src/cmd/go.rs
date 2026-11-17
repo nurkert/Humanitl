@@ -41,6 +41,7 @@ pub async fn run(ctx: &Context, args: &GoArgs) -> Result<u8, Failure> {
         cmd: args.cmd.clone(),
         disposable: true,
         direct: false,
+        yes: args.yes,
     };
     let mut state = Launch {
         go: true,

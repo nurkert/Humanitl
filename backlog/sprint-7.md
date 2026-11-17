@@ -3334,6 +3334,44 @@ spätere, auch OpenCode und pi mit einem Cloud-Endpunkt) denselben brauchen.
 1. Niemand nutzt einen Cloud-Agenten in Humanitl, ohne den Hinweis gesehen
    zu haben; niemand wird durch ihn aufgehalten, der ihn bestätigt hat.
 
+### Stand nach der Umsetzung (2026-11-17)
+
+Urteil „Cloud" in `humanitl_config::inference::provider_outside` aus dem
+Host des Modell-Endpunkts, ohne DNS (ADR-0006): lokal sind Loopback,
+private Adressen, `localhost`, `.local`, `.lan`, `.home.arpa`, `.internal`
+und ein Server mit `llm.servers.NAME.local = true` (nur für seine Origin).
+Adapter-Hook `AgentAdapter::inference_endpoint` für HUM-514/515/517. Der
+Daemon prüft beim Start auf der ganz aufgelösten Konfiguration samt
+`cli_overrides`; einen unbestätigten ersten Start einer Kombination aus
+Agent und Anbieter lehnt er mit `LLM_011` ab, außer der Start trägt
+`CloudNoticeFor{agent, provider}` als Bestätigung (wird gemerkt) oder als
+ohne Terminal gezeigten Hinweis (wird nicht gemerkt), und zwar für genau
+den aufgelösten Anbieter. Neue Op `check_cloud_inference`, Protokoll 1.43.
+Bestätigungen in `$XDG_DATA_HOME/humanitl/cloud-inference.toml`. CLI:
+Frage `[y/N]` vor dem ersten Start, `--yes`, ohne Terminal eine Zeile auf
+stderr, orange Startzeile (ohne Farbe bei `NO_COLOR`), Zeile in
+`sessions`, `doctor`-Zeile `inference`, Hinweis bei `config set`,
+`llm server use/add/edit`; `sandbox run` und ein Daemon vor 1.43 prüfen
+lokal. App: orangefarbenes Tag oben in der Sitzung mit eigenem Token
+`outflow` (dunkel `#FF9100`, hell `#B35400`, Kontrast und Abstand zu
+Gelb, Rot und Orchid per Test), Popover mit vollem Text, Dialog vor dem
+ersten Start auch aus der Einrichtung, Notiz bei Agent- und Modellwahl;
+gegen einen Daemon vor 1.43 startet die App nicht und nennt den Neustart.
+SECURITY (5.1), THREAT-MODEL (K-02), README (en und de) nennen die
+Inferenz als gewollte Freigabe.
+
+Review: Codex Runde 1 drei blocking (`run --llm`, Start aus der
+Einrichtung, `sandbox run` ohne Hinweis) und ein minor (`llm server
+use`), alle behoben durch das Tor im Daemon plus die drei Wege; Delta zwei
+blocking (Antwort nicht an den gezeigten Anbieter gebunden, alter Daemon
+ohne Tor), beide behoben. Sonnet als Ersatz für Antigravity kein blocking
+oder major; zwei minor übernommen (Cloud-Dialog erst nach erfolgreicher
+Server-Bestätigung, Tag kürzt lange Hosts), einer verworfen (CLI-Frage
+englisch, wie alle CLI-Ausgaben). Owner-Entscheid: eigenes Orange-Token
+statt Ocker. Offen: Ordner-Wahl bekommt bei sichtbarem Tag höchstens die
+Hälfte des freien Platzes in der Kopfzeile; echte Schrift in den Goldens
+nicht gesichtet.
+
 ---
 
 ## HUM-514 · Agent-Adapter Claude Code

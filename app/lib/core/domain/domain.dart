@@ -3,6 +3,7 @@
 library;
 
 export 'catalog.dart';
+export 'cloud_inference.dart';
 export 'daemon_info.dart';
 export 'decision.dart';
 export 'diagnostic.dart';

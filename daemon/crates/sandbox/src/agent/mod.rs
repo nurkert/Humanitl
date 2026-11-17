@@ -26,6 +26,7 @@
 //! after the MVP and do not touch this core.
 
 pub mod briefing;
+pub mod cloud;
 pub mod locate;
 pub mod opencode;
 pub mod opencode_models;
@@ -747,6 +748,17 @@ pub trait AgentAdapter: Send + Sync {
     /// ohne Endpunkt gibt es nichts durchzulassen, und eine Regel auf einen
     /// erfundenen Host wäre schlimmer als keine.
     fn llm_passthrough(&self, llm: &LlmConfig) -> Option<Rule>;
+
+    /// Der Endpunkt, an den der Agent seine Inferenz schickt (HUM-516).
+    ///
+    /// Daraus folgt der Hinweis auf Cloud-Inferenz ([`cloud::cloud_inference`]).
+    /// Die Vorgabe ist `llm.endpoint`, der Endpunkt, den `OpenCode` und pi
+    /// bekommen. Ein Adapter, dessen Agent ohne `llm.endpoint` einen eigenen
+    /// Anbieter anspricht, etwa Claude Code `api.anthropic.com`, nennt hier
+    /// diesen. `None` heißt: kein Endpunkt, also kein Hinweis.
+    fn inference_endpoint(&self, llm: &LlmConfig) -> Option<url::Url> {
+        llm.endpoint.clone()
+    }
 
     /// Vorprüfung auf dem Host, vor dem Start. Leer heißt: nichts gefunden.
     ///

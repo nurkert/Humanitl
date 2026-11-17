@@ -72,6 +72,34 @@ pub fn is_loopback(endpoint: &Url) -> bool {
         .is_some_and(|host| host.is_loopback())
 }
 
+/// Die Namensendungen, die nach ihrem Namen allein im eigenen Netz liegen
+/// (HUM-076, ADR-0006): Bei ihnen verlässt eine Anfrage das eigene Netz
+/// nicht, ohne dass jemand den Namen auflösen müsste.
+pub const PRIVATE_SUFFIXES: &[&str] = &[".local", ".lan", ".home.arpa", ".internal"];
+
+/// Wahr, wenn der Endpunkt nach seinem Host allein im eigenen Netz liegt:
+/// eine Adresse aus einem privaten oder lokalen Bereich
+/// ([`humanitl_core::ip_is_private`], auch der Loopback), `localhost` oder ein
+/// Name unter [`PRIVATE_SUFFIXES`].
+///
+/// Aufgelöst wird nichts: Ein Name verlässt den Rechner erst, wenn eine
+/// Anfrage freigegeben ist (ADR-0006). Ein öffentlicher Name, der auf eine
+/// Adresse im LAN zeigt, gilt deshalb nicht als privat; für ihn gibt es die
+/// Markierung `llm.servers.NAME.local` (HUM-516). Eine Adresse ohne Host ist
+/// nicht privat.
+#[must_use]
+pub fn is_private_by_name(endpoint: &Url) -> bool {
+    match endpoint.host() {
+        Some(url::Host::Ipv4(ip)) => humanitl_core::ip_is_private(std::net::IpAddr::V4(ip)),
+        Some(url::Host::Ipv6(ip)) => humanitl_core::ip_is_private(std::net::IpAddr::V6(ip)),
+        Some(url::Host::Domain(name)) => {
+            let name = name.trim_end_matches('.').to_ascii_lowercase();
+            name == "localhost" || PRIVATE_SUFFIXES.iter().any(|suffix| name.ends_with(suffix))
+        }
+        None => false,
+    }
+}
+
 /// Die Basis-Adresse wie [`openai_base_url`], mit dem reservierten Namen
 /// [`humanitl_core::LLM_ALIAS_HOST`] statt des Hosts, wenn der Endpunkt auf
 /// dem Loopback liegt ([`is_loopback`]); sonst genau [`openai_base_url`]

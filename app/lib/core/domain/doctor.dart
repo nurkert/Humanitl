@@ -274,6 +274,11 @@ abstract final class DoctorCheckId {
   /// configuration; nothing is contacted.
   static const String egress = 'egress';
 
+  /// Where the agent's inference goes: on this machine or in the own
+  /// network, or to a provider outside (HUM-516). Read from the
+  /// configuration; nothing is contacted.
+  static const String inference = 'inference';
+
   /// Has the desktop a place for the tray icon?
   static const String tray = 'tray';
 

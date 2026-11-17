@@ -737,6 +737,36 @@ authentication in a company network. Prefer the IP address, or pin the name unde
 `resolver.overrides`. Whoever has no own machine switches the passthrough off and lets inference
 be held as well: inconvenient, but honest. Look at line 4 of the isolation panel once per start.
 
+#### Cloud inference (HUM-516)
+
+With a model in the cloud, data leaves through the inference in any case: prompts, the files the
+agent reads and the output of its tools go to the provider as part of its requests. That is the
+passthrough doing its job, not a leak of the sandbox: Humanitl isolates the system and holds every
+other connection; the inference itself is deliberately allowed. The security claim stays true
+because the passthrough is a declared allow, and the provider is part of what the person trusts
+for as long as they use it.
+
+Humanitl makes the case visible instead of letting it pass silently. The daemon derives it from the
+host of the model endpoint the agent's adapter names (`llm.endpoint` for OpenCode and pi; an
+adapter with a provider of its own, such as Claude Code, names that one): an endpoint on the
+loopback, at a private address, under `.local`, `.lan`, `.home.arpa` or `.internal`, or a saved
+server marked `llm.servers.NAME.local = true` is local; every other host is a provider outside
+this machine. Nothing is resolved for that (ADR-0006), so a public name of an own server counts as
+outside until it is marked; the mark covers only the origin of its server and is dropped when the
+endpoint moves to another one. The notice (`LLM_010`) stands as an orange tag in the session
+header with the provider's name, at every start of `humanitl run` and `go`, in `humanitl
+sessions`, as the line `inference` in `humanitl doctor`, and once when the agent or the endpoint is
+chosen. The first start with a combination of agent and provider asks for a confirmation (a dialog
+in the app, a question in the terminal; with `--yes`, `--json` or without a terminal one line on
+stderr and no wait). The daemon keeps the confirmation per agent and provider in its data
+directory (`cloud-inference.toml`), never in the project and never in the app, so neither the
+agent nor a cloned repository can issue it. The daemon enforces the question itself: it decides from
+the fully resolved configuration of each start, `--llm URL` included, and refuses a start with an
+unconfirmed combination with `LLM_011` unless the start request confirms exactly that agent and
+provider or says the notice for exactly them was shown without a terminal, so a client that skips the notice fails visibly instead of starting
+silently. `humanitl sandbox run`, which starts in its own process, asks the same way. Once
+confirmed, the notice blocks nothing.
+
 #### The reserved name `llm.humanitl.internal` (HUM-387)
 
 *Why it exists.* OpenCode 2.2.5 sends its model requests to a loopback `baseURL`
@@ -1848,6 +1878,7 @@ passthrough or the audit chain gets a line here and in the change history of
 | 0.1.x | Linux: Podman admitted at the plain level (`podman/crun`) after `escape-tests-podman` was green on `main`; a person chooses it with `sandbox.backend = "podman"` or `--backend podman`, `auto` stays bubblewrap, and the kernel level (backend `qemu`, ADR-0021) stays refused with `SANDBOX_048` until HUM-449 (HUM-448, [section 13](#13-linux-podman), K-27). |
 | 0.1.x | Linux: the kernel level (backend `qemu`, ADR-0021) admitted after `kvm-tests` and `escape-tests-qemu` were green on `main` with the disposable sandbox in the guest (HUM-446) and the probes with root in the guest (HUM-445), in ten consecutive runs in which both jobs ran (43624997550, 43630993303, 43638237420, 43641769840, 43646599744, 43648968241, 43656202366, 43661904978, 43669712307 and 43673927540); a person chooses it with `sandbox.backend = "qemu"` or `--backend qemu`, `auto` stays bubblewrap, and a missing prerequisite refuses the start with `SANDBOX_045` (HUM-449, [section 14](#14-linux-qemu-micro-vm-kernel-level), K-30 to K-34). |
 | 0.1.x | The decision proxy decides requests without a rule (`hold.ask_mode = "upstream"`, off by default, only with a proxy the running daemon uses): `block` stays final and never reaches it (the declared LLM passthrough ranks ahead of block rules and does, as any allow), `redact` (unless intercepting is paused) and the hard block on verified secrets stay in Humanitl, the flow is recorded as forwarded with the proxy's status, never as an allow (HUM-512, [section 6](#the-proxy-behind-decides-holdask_mode--upstream-hum-512), K-35). |
+| 0.1.x | Cloud inference is named: when the agent's model endpoint lies outside this machine and its network, the session header carries an orange tag with the provider, `humanitl run` and `go` print it at every start, `humanitl doctor` has the line `inference`, and the first start per agent and provider asks once; the confirmation lives in the daemon's data directory, never in the project or the app; nothing is blocked (HUM-516, [section 5.1](#cloud-inference-hum-516), K-02). |
 | 0.1.x | A decision proxy of the person behind Humanitl (`egress.proxy`, off by default): allowed requests leave only through it, re-encrypted against its CA, which is trusted on that way only; no direct fallback; who resolves is `egress.proxy_resolve` (`proxy` refuses local names and private literals first, `humanitl` resolves and checks every address); keys closed to project profiles, credentials in the keyring or the `0600` fallback file, never in `config.toml` (HUM-511, [section 6](#a-decision-proxy-behind-humanitl-hum-511), K-35). |
 
 ## 12. macOS: Seatbelt instead of bubblewrap

@@ -192,6 +192,8 @@ impl Fixture {
                 // Der Test gilt dem Terminal, nicht der Vorgabe `auto` (HUM-357).
                 sandbox_mode: "direct".to_owned(),
                 llm_server: String::new(),
+                acknowledge_cloud_inference: None,
+                cloud_notice_shown: None,
             })),
         }
     }

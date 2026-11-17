@@ -40,6 +40,7 @@ class HBadge extends StatelessWidget {
     this.semanticsLabel,
     this.focusNode,
     this.minLabelWidth = 0,
+    this.overflow = TextOverflow.clip,
     super.key,
   });
 
@@ -81,6 +82,12 @@ class HBadge extends StatelessWidget {
   /// Methode in der Warteschlange (HUM-406).
   final double minLabelWidth;
 
+  /// Wie eine Beschriftung endet, die nicht in die Breite passt, die der
+  /// Badge bekommt. Vorgabe ist das Abschneiden; ein Badge in einem
+  /// `Flexible`, dessen ganzer Text anderswo steht, endet mit Auslassung
+  /// (HUM-516).
+  final TextOverflow overflow;
+
   /// Mindesthöhe des sichtbaren Chips, unabhängig vom Hit-Target.
   static const double chipHeight = 18;
 
@@ -108,7 +115,7 @@ class HBadge extends StatelessWidget {
       child: Center(
         widthFactor: minLabelWidth > 0 ? null : 1,
         heightFactor: 1,
-        child: Text(text, maxLines: 1, overflow: TextOverflow.clip),
+        child: Text(text, maxLines: 1, overflow: overflow),
       ),
     );
 

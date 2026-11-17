@@ -93,6 +93,11 @@ async fn current(ctx: &Context) -> Result<u8, Failure> {
                 "proxy": route.proxy,
                 "resolve": route.resolve,
             })),
+            "cloud_inference": status.cloud_inference.as_ref().map(|cloud| json!({
+                "agent": cloud.agent,
+                "provider": cloud.provider,
+                "acknowledged": cloud.acknowledged,
+            })),
         }));
         return Ok(EXIT_OK);
     }
@@ -105,6 +110,15 @@ async fn current(ctx: &Context) -> Result<u8, Failure> {
         .line(&format!("session {} ({state}{sandbox})", status.session_id));
     ctx.render
         .line(&crate::cmd::plan::decided_by_line(&status, minor));
+    // Die Statuszeile nennt, wohin die Inferenz geht (HUM-516).
+    if let Some(cloud) = status.cloud_inference.as_ref() {
+        let colour = crate::cmd::cloud::colour_wanted(
+            std::env::var_os("NO_COLOR").as_deref(),
+            std::io::IsTerminal::is_terminal(&std::io::stdout()),
+        );
+        ctx.render
+            .line(&crate::cmd::cloud::short_line(cloud, colour));
+    }
     Ok(EXIT_OK)
 }
 

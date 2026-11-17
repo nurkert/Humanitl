@@ -35,6 +35,7 @@ import 'sandbox_text.dart';
 import 'widgets/argv_sheet.dart';
 import 'widgets/arrive.dart';
 import 'widgets/changes_panel.dart';
+import 'widgets/cloud_confirm_dialog.dart';
 import 'widgets/env_tab.dart';
 import 'widgets/image_pull.dart';
 import 'widgets/isolation_panel.dart';
@@ -94,6 +95,7 @@ class _SandboxScreenState extends ConsumerState<SandboxScreen> {
   bool _visible = false;
   bool _asking = false;
   bool _askingServer = false;
+  bool _askingCloud = false;
   bool _argvOpen = false;
 
   /// True for the one build in which the terminal comes back from the whole
@@ -124,8 +126,38 @@ class _SandboxScreenState extends ConsumerState<SandboxScreen> {
   void _cancelServer() => setState(() => _askingServer = false);
 
   void _confirmServer() {
+    // Fragt danach noch der Hinweis auf Cloud-Inferenz (HUM-516), startet
+    // erst dessen Bestätigung.
+    final bool cloudNext =
+        ref
+            .read(sandboxStatusProvider)
+            .value
+            ?.cloudInference
+            ?.needsConfirmation ??
+        false;
     setState(() => _askingServer = false);
-    unawaited(ref.read(sandboxStatusProvider.notifier).confirmServerAndStart());
+    unawaited(_confirmServerThenCloud(cloudNext: cloudNext));
+  }
+
+  /// Die Frage nach der Cloud-Inferenz erst, wenn der Daemon die Wahl des
+  /// Servers angenommen hat; eine abgelehnte steht als Befund da, und es
+  /// folgt keine zweite Frage (HUM-516, Review).
+  Future<void> _confirmServerThenCloud({required bool cloudNext}) async {
+    final bool confirmed = await ref
+        .read(sandboxStatusProvider.notifier)
+        .confirmServerAndStart(andStart: !cloudNext);
+    if (confirmed && cloudNext && mounted) {
+      setState(() => _askingCloud = true);
+    }
+  }
+
+  void _askCloud() => setState(() => _askingCloud = true);
+
+  void _cancelCloud() => setState(() => _askingCloud = false);
+
+  void _confirmCloud() {
+    setState(() => _askingCloud = false);
+    unawaited(ref.read(sandboxStatusProvider.notifier).confirmCloudAndStart());
   }
 
   void _showArgv() => setState(() => _argvOpen = true);
@@ -202,6 +234,7 @@ class _SandboxScreenState extends ConsumerState<SandboxScreen> {
                       status: status,
                       onAskStop: _askStop,
                       onAskServer: _askServer,
+                      onAskCloud: _askCloud,
                     ),
                     // Befunde schweben oben rechts über Terminal und
                     // Reitern, direkt unter dem Kopf mit dem Startknopf, an
@@ -268,6 +301,14 @@ class _SandboxScreenState extends ConsumerState<SandboxScreen> {
                 server: server,
                 onCancel: _cancelServer,
                 onConfirm: _confirmServer,
+              ),
+          if (_askingCloud)
+            if (status.cloudInference case final CloudInference cloud
+                when cloud.needsConfirmation)
+              CloudConfirmDialog(
+                cloud: cloud,
+                onCancel: _cancelCloud,
+                onConfirm: _confirmCloud,
               ),
         ],
       ),

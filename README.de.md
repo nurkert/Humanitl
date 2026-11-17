@@ -137,7 +137,10 @@ Seitenkanäle sind erklärt, in der App sichtbar und nicht geschlossen
 - **Die LLM-Durchleitung zum Sprachmodell:** Daten können hinaus. Dein Modell sieht jeden Prompt des
   Agenten ohne Halt; dieser Host gehört zu dem, dem du vertraust. Ein Projekt kann für seine
   Sitzungen einen anderen deiner gespeicherten Modellserver wählen, also gehört jeder gespeicherte
-  Server dazu.
+  Server dazu. Mit einem Cloud-Modell ist dieser Host der Anbieter: Was der Agent liest, geht als
+  Teil seiner Anfragen dorthin, so gewollt und kein Leck der Sandbox; Humanitl sagt das in der
+  Kopfzeile der Sitzung, beim Start und in `humanitl doctor` und fragt einmal je Agent und Anbieter
+  ([Cloud-Inferenz](docs/SECURITY.md#cloud-inference-hum-516)).
 - **Das Projektverzeichnis `/work`:** Daten können hinaus. Es ist beschreibbar; was der Agent dort
   hinterlässt, trägt vielleicht später ein Mensch hinaus.
 - **Die Terminalausgabe** kommt vom Agenten und wird gefiltert, nicht geglaubt.

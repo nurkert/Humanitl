@@ -530,6 +530,15 @@ abstract class DaemonClient {
   /// a `SANDBOX_043` warning when the pull did not end in time.
   Future<ImagePullCancelAnswer> cancelImagePull(String pullId);
 
+  /// `Sandbox(AcknowledgeCloudInference)`: the person confirmed the notice on
+  /// cloud inference for [agent] and [provider] (HUM-516). The daemon keeps
+  /// it in its data directory, never the app; afterwards
+  /// `SandboxStatus.cloudInference.acknowledged` is true for that
+  /// combination. Throws a [DaemonException] with `CONFIG_003` for an id or
+  /// host that is none, and with `CLI_004` from a daemon before contract
+  /// 1.43, which does not know the operation.
+  Future<void> acknowledgeCloudInference(String agent, String provider);
+
   /// Releases the transport. The client is unusable afterwards.
   Future<void> close();
 }
