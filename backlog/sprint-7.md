@@ -121,6 +121,8 @@ Diagnose-Codes, hier nur geplant (registriert vom genannten Issue in `codes.rs` 
 | HUM-524 | Entscheidungs-Proxy: Burp Suite in der Anleitung, mit Probelauf des Eigentümers | S | HUM-513 |
 | HUM-525 | Abhängigkeiten: `chrono` als nicht gepflegt gemeldet, Ausnahme mit Frist | S | – |
 | HUM-526 | Abhängigkeiten: von `chrono` auf `jiff` | M | HUM-525 |
+| HUM-527 | Website: `astro` auf 7.4.7 oder neuer (zwei Dependabot-Meldungen) | S | – |
+| HUM-528 | Ein Installationsskript für alle Systeme unter `humanitl.de/install` | M | – |
 | HUM-516 | Cloud-Agenten: gemeinsamer Hinweis auf den Abfluss über die Inferenz | S | HUM-037 |
 | HUM-518 | Agent-Depot: Kern, `agents.source`, Sperre durch Firmenvorgabe, RPC und CLI `status`, `source`, `remove` | M | ADR-0023 |
 | HUM-519 | Agent-Depot: Installation und Update in einer Wartungs-Sandbox, Version angeheftet | M | HUM-518 |
@@ -4303,4 +4305,167 @@ ipc, proxy, recorder, rules, sandbox), teils in öffentlichen Schnittstellen
 ### Akzeptanzkriterien
 1. Kein direkter Gebrauch von `chrono` mehr; Ausgaben und gespeicherte
    Formate unverändert.
+
+---
+
+## HUM-527 · Website: `astro` auf 7.4.7 oder neuer (zwei Dependabot-Meldungen)
+
+### Kontext
+Dependabot meldet für `website/package-lock.json` zwei Lücken in `astro`
+7.3.8:
+- GHSA-r3h5-4585-7x3w (CVE-2026-126364, mittel): Der Endpunkt `/_image`
+  des Adapters `@astrojs/node` kann Bilder aus einem Nachbarverzeichnis
+  lesen, das sich nur in Groß- und Kleinschreibung vom Ausgabeverzeichnis
+  unterscheidet. Behoben in 7.4.7.
+- GHSA-mh32-jxcr-mh9f (CVE-2026-126361, niedrig): XSS über einen
+  dynamischen Tag-Namen aus unvertrauter Eingabe. Behoben in 7.4.5.
+
+Bewertung für humanitl.de: Die Seite wird statisch gebaut, ohne Adapter
+(`website/astro.config.mjs`); den Endpunkt `/_image` gibt es nicht, die
+erste Meldung trifft uns nicht. Der einzige dynamische Tag
+(`website/src/components/security/Rich.astro`) bekommt seinen Namen aus
+Inhalten im Repo, nie aus einer Anfrage; die zweite ist praktisch ohne
+Risiko. Das Update ist Pflege, kein Notfall.
+
+### Spezifikation
+1. `astro` auf die neueste stabile 7.x ab 7.4.7, `@astrojs/markdown-remark`
+   passend; Versionen weiter exakt angeheftet, Lock-Datei mit npm.
+2. Bauen und die Prüfungen der Website (Build, Tests, Links,
+   Übersetzungen) wie in der CI; Ausgabe gegen den alten Stand vergleichen.
+3. Einige neue Unterpakete verlangen Node 22.23.4 oder neuer; die CI baut
+   mit Node 24, lokal gilt dieselbe Untergrenze.
+
+### Akzeptanzkriterien
+1. Beide Dependabot-Meldungen sind nach dem Merge geschlossen; die gebaute
+   Seite unterscheidet sich nur, wo das Update es erklärt.
+
+### Stand nach der Umsetzung (2026-11-17)
+`astro` 7.4.12, `@astrojs/markdown-remark` 7.3.9, exakt angeheftet; alle
+Pakete aus registry.npmjs.org mit Integritäts-Hash, keine neuen
+Installationsskripte, `npm audit` ohne Befund. Build (106 Seiten), 80
+Tests, Links und Übersetzungen grün. Offline gebaut sind alle 248
+gemeinsamen Dateien Byte für Byte gleich; neu fehlt nur ein
+unreferenziertes Originalbild `_astro/intercept.*.png`. Kein Adapter,
+`@astrojs/node` nicht im Lock. Review: Sonnet als Ersatz für Antigravity
+keine Befunde am Update, ein minor (Node-Untergrenze) übernommen; zum Text
+von HUM-528 drei major und sieben minor, alle eingearbeitet.
+
+---
+
+## HUM-528 · Ein Installationsskript für alle Systeme unter `humanitl.de/install`
+
+### Kontext
+Heute installiert `curl -fsSL https://apt.nurkert.de/install/humanitl |
+sudo sh` nur auf Debian und Verwandten. Jedes Release bringt aber schon
+`.deb`, `.rpm` (in Fedora 44 geprüft), AppImage, `tar.gz`, `.dmg`/`.zip`
+und `SHA256SUMS` mit. Wunsch des Eigentümers vom 2026-11-17: ein einziges,
+umfassendes Skript für alle Linux-Distributionen und macOS.
+
+### Spezifikation
+1. Datei `install.sh` im Wurzelverzeichnis des Repos, reines POSIX-`sh`,
+   der ganze Ablauf in einer Funktion, die erst am Ende aufgerufen wird
+   (ein abgebrochener Download führt nichts halb aus).
+2. Erkennen: Betriebssystem, Architektur, unter Linux `/etc/os-release`
+   (`ID`, `ID_LIKE`). Linux-Pakete gibt es nur für x86_64, macOS als
+   Universal-Build; eine andere Architektur (etwa aarch64 unter Linux)
+   bekommt eine klare Meldung, und nichts geschieht. Wege:
+   - Debian, Ubuntu und Verwandte: das APT-Repo `apt.nurkert.de` wie heute
+     (Schlüssel nach `/usr/share/keyrings/`, Quelle nach
+     `/etc/apt/sources.list.d/`), Updates über `apt upgrade`.
+   - Fedora, RHEL, Rocky, Alma: `.rpm` aus dem Release mit `dnf install`.
+     openSUSE nur, wenn ein Container-Check im Release (wie `check-rpm`
+     für Fedora) Abhängigkeitsnamen und `zypper install
+     --allow-unsigned-rpm` für das unsignierte Paket bestätigt; bis dahin
+     nimmt openSUSE den Archiv-Weg.
+   - Arch, Manjaro: über einen vorhandenen AUR-Helfer (`paru`, `yay`),
+     sofern `humanitl-bin` im AUR veröffentlicht ist (das lädt der
+     Maintainer von Hand hoch, `packaging/aur/README.md`); sonst das
+     Archiv.
+   - sonstiges Linux: `tar.gz` nach `~/.local`, ohne root.
+   - macOS: `.dmg` laden, einhängen, `Humanitl.app` nach `/Applications`
+     (ohne Schreibrecht dort nach `~/Applications`), aushängen.
+   Aktualisieren: APT über `apt upgrade`; die anderen Wege durch erneuten
+   Aufruf des Skripts, das eine vorhandene Installation erkennt und
+   ersetzt. Voraussetzungen der Sandbox (Benutzer-Namensräume, Sandbox-
+   Backend) prüft danach `humanitl sandbox check`.
+   - Windows und Unbekanntes: klare Meldung, nichts wird getan.
+3. Das Skript läuft als normaler Nutzer und ruft `sudo` nur für den
+   Paketschritt; den Befehl zeigt es vorher. Vor jedem Eingriff steht, was
+   geschieht, mit Rückfrage; `--yes` überspringt sie, `--dry-run` zeigt
+   nur an, ohne Terminal ohne `--yes` bricht es ab statt zu raten.
+   Optionen: `--version X.Y.Z`, `--method apt|rpm|aur|tarball|dmg`,
+   `--prefix` für das Archiv.
+4. Downloads nur über HTTPS von den GitHub-Releases; jede Datei gegen
+   `SHA256SUMS` geprüft (eine Datei für alle Assets, auch macOS): Das
+   Skript sucht die Zeile mit dem Dateinamen und bricht ab, wenn sie fehlt
+   oder nicht passt. Das Skript sagt ehrlich, dass Releases vor 1.0.0
+   unsigniert sind: Die Prüfsumme schützt vor kaputten Downloads, nicht vor
+   einem manipulierten Release.
+5. macOS-Quarantäne (Entscheid des Eigentümers): Das Skript entfernt oder
+   umgeht sie nie, auch nicht auf Wunsch. Weil `curl` anders als ein
+   Browser kein `com.apple.quarantine` setzt, setzt das Skript es selbst
+   auf die kopierte App (wie Homebrew bei Casks), damit Gatekeeper sie
+   genauso prüft wie nach einem Download im Browser. Danach erklärt es den
+   Weg über Systemeinstellungen › Datenschutz & Sicherheit › „Trotzdem
+   öffnen", falls macOS den ersten Start sperrt.
+6. Danach auf Nachfrage `humanitl daemon install` und `humanitl sandbox
+   check`.
+7. Website (GitHub Pages, kein eigener `Content-Type` möglich): Der Build
+   kopiert `install.sh` unverändert nach `https://humanitl.de/install` für
+   `curl`; kein Abruf zur Laufzeit. Ein Browser würde diese Datei ohne
+   Endung herunterladen statt anzeigen, deshalb führt „Skript vorher
+   lesen" auf eine eigene HTML-Seite, die beim Build aus derselben Datei
+   entsteht und den Quelltext mit Hervorhebung zeigt. Ein Test prüft, dass
+   `/install` Byte für Byte `install.sh` entspricht und die Leseseite
+   denselben Text enthält. Im Landing-Bereich der Startseite steht der
+   Einzeiler `curl -fsSL https://humanitl.de/install | sh` mit einem
+   Knopf, der genau diesen Befehl kopiert (nicht das Skript), dazu der
+   Link „Skript vorher lesen". Die Content-Security-Policy verbietet
+   Inline-Skripte, der Knopf kommt deshalb als eigene Skriptdatei. Die
+   Download-Seite (`website/src/components/pages/Download.astro`) zeigt
+   denselben Befehl.
+8. `apt.nurkert.de/install/humanitl` liegt nicht im Repo, sondern auf dem
+   APT-Server des Eigentümers. Es bleibt funktionsfähig (wer es mit `|
+   sudo sh` aufruft, bekommt weiter das Paket) und nennt zusätzlich das
+   neue Skript; die Änderung dort macht der Eigentümer von Hand, das Issue
+   liefert den Text. Im Repo nennen den neuen Einzeiler: `README.md`,
+   `README.de.md`, `docs/INSTALL.md`, `docs/translations/de/INSTALL.md`,
+   `docs/guides/install.md` samt Übersetzung, die Texte der Website
+   (`en.ts`, `de.ts`) und `website/src/components/pages/Download.astro`.
+
+### Tests
+- shellcheck ohne Befund; `sh -n` mit `dash` und `busybox sh`.
+- CI-Matrix in Containern: Debian, Ubuntu, Fedora, openSUSE, Arch, ein
+  sonstiges Linux (Archiv-Weg), dazu ein macOS-Runner; jeweils mit einem
+  lokalen Stellvertreter für die Release-Dateien (Basis-URL über eine
+  Umgebungsvariable), danach `humanitl --version`.
+- `--dry-run` ändert nichts; eine falsche Prüfsumme und eine fehlende
+  Zeile in `SHA256SUMS` brechen ab, bevor etwas installiert wird
+  (Mutationsbeweis: Prüfung entfernt färbt beide Tests rot).
+- macOS-Runner: Nach der Installation trägt die App `com.apple.quarantine`.
+  Das Skript enthält kein `xattr -d`, `xattr -c` und kein `spctl
+  --master-disable` (Test über den Quelltext).
+- aarch64-Linux, Windows (`MINGW`/`MSYS`) und ein unbekanntes System:
+  Meldung, nichts geändert.
+- Die Website liefert unter `/install` dieselben Bytes wie `install.sh`.
+
+### Akzeptanzkriterien
+1. Auf jedem genannten System führt `curl -fsSL https://humanitl.de/install
+   | sh` zu einem laufenden `humanitl`; auf anderen Systemen und
+   Architekturen ändert es nichts und sagt warum.
+2. Das Skript umgeht die macOS-Quarantäne nie; eine damit installierte App
+   prüft Gatekeeper wie nach einem Browser-Download.
+3. `--dry-run` ändert nichts; ohne Terminal und ohne `--yes` bricht das
+   Skript ab; eine falsche oder fehlende Prüfsumme bricht vor jeder
+   Installation ab.
+4. `/install` liefert genau `install.sh`; „Skript vorher lesen" zeigt den
+   Text im Browser.
+
+### Nachfolger, wenn Releases signiert sind
+Ab 1.0.0 sind Releases signiert (Entscheid des Eigentümers zu 0.1.0), die
+macOS-App dann mit Developer ID und Notarisierung. Dann soll das Skript
+verbessert werden: Signaturen prüfen statt nur `SHA256SUMS`, und der
+Hinweis auf „Trotzdem öffnen" auf macOS entfällt, weil Gatekeeper eine
+notarisierte App ohne Rückfrage startet. Das wird dann ein eigenes
+Issue.
 
