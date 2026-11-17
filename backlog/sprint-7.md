@@ -118,6 +118,7 @@ Diagnose-Codes, hier nur geplant (registriert vom genannten Issue in `codes.rs` 
 | HUM-511 | Egress: der Adapter `HttpProxy` zu einem Entscheidungs-Proxy des Nutzers | M | ADR-0022 |
 | HUM-512 | `hold.ask_mode = "upstream"`: Anfragen ohne Regel entscheidet der Proxy dahinter | M | HUM-511 |
 | HUM-513 | Entscheidungs-Proxy: Anleitung für mitmproxy, Ende-zu-Ende-Test | S | HUM-512 |
+| HUM-524 | Entscheidungs-Proxy: Burp Suite in der Anleitung, mit Probelauf des Eigentümers | S | HUM-513 |
 | HUM-516 | Cloud-Agenten: gemeinsamer Hinweis auf den Abfluss über die Inferenz | S | HUM-037 |
 | HUM-518 | Agent-Depot: Kern, `agents.source`, Sperre durch Firmenvorgabe, RPC und CLI `status`, `source`, `remove` | M | ADR-0023 |
 | HUM-519 | Agent-Depot: Installation und Update in einer Wartungs-Sandbox, Version angeheftet | M | HUM-518 |
@@ -4130,3 +4131,73 @@ Klartext liegen.
 3. `docs/SECURITY.md` und `docs/THREAT-MODEL.md` (K-36) nennen die
    Verschlüsselung und ihre Grenze (der Daemon entschlüsselt für jede
    Sitzung) im selben Commit.
+
+---
+
+## HUM-524 · Entscheidungs-Proxy: Burp Suite in der Anleitung, mit Probelauf des Eigentümers
+
+### Kontext
+Der Eigentümer möchte neben mitmproxy auch Burp Suite als Entscheidungs-
+Proxy hinter Humanitl nutzen (2026-11-16). HUM-513 hat Burp bewusst
+ausgelassen: genannt wird ein Werkzeug erst, wenn ein aktueller Build
+ausprobiert wurde (ADR-0022). Burp Community ist eine Desktop-Anwendung,
+das Abfangen geschieht per Klick (Annahme, im Probelauf zu bestätigen); den
+Probelauf macht deshalb der Eigentümer an seinem Rechner, die KI schreibt
+den Abschnitt und bessert nach dem Lauf nach.
+
+### Spezifikation
+1. Abschnitt „Burp Suite" in `docs/guides/decision-proxy-mitmproxy.md`
+   (oder eine eigene Anleitung, falls der Abschnitt die mitmproxy-Anleitung
+   unübersichtlich macht) samt deutscher Übersetzung. Jede Aussage zu Burp
+   mit Beleg aus der offiziellen PortSwigger-Dokumentation:
+   - Proxy-Listener, Vorgabe `127.0.0.1:8080`
+     ([Proxy settings](https://portswigger.net/burp/documentation/desktop/settings/tools/proxy)).
+   - Burp-CA exportieren über „Import / export CA certificate", Format DER
+     ([Managing CA certificates](https://portswigger.net/burp/documentation/desktop/tools/proxy/manage-certificates)),
+     dann nach PEM für `egress.proxy_ca` (absoluter Pfad):
+     `openssl x509 -inform der -in burp-ca.der -out burp-ca.pem`.
+   - Abfangen mit „Intercept on", Entscheiden mit „Forward" und „Drop"
+     ([Burp Proxy](https://portswigger.net/burp/documentation/desktop/tools/proxy)).
+   - Wahl von `egress.proxy_resolve`: Für Clients ohne `CONNECT` erzeugt
+     Burp das Blatt aus SNI
+     ([Invisible proxying](https://portswigger.net/burp/documentation/desktop/tools/proxy/invisible));
+     ob das auch bei `CONNECT IP:PORT` mit SNI-Name (`humanitl`) gilt und
+     ob `CONNECT host:port` (`proxy`) sauber läuft, klärt erst der
+     Probelauf.
+2. Im Probelauf zu klären und in der Anleitung festzuhalten, ehrlich auch
+   wenn es ungünstig ausfällt:
+   - Prüft Burp das Zertifikat des Ziels? Wenn nein, sagt die Anleitung
+     das deutlich: Die Verbindung vom Proxy zum Ziel ist dann nicht
+     geprüft, und Humanitl kann das nicht ausgleichen.
+   - Verbindet sich Burp vor der Entscheidung schon mit dem Ziel (wie
+     mitmproxy mit Vorgaben, HUM-513)? Gezählt am Ziel oder im Log von
+     Burp; wenn ja, Einstellung dagegen nennen oder die Grenze.
+   - Was sieht der Agent bei „Drop": eine Antwort, ein Abbruch oder `502`
+     erst nach `egress.proxy_response_timeout_secs`? Festgehalten in
+     derselben Form wie die Tabelle „was der Agent sieht" für mitmproxy.
+3. Ablauf: Die KI schreibt den Abschnitt und eine kurze Checkliste für den
+   Probelauf (Burp-Version, beide Werte von `proxy_resolve`, `humanitl
+   egress check`, eine Anfrage durchlassen, eine verwerfen, die drei
+   Fragen aus Punkt 2). Der Eigentümer fährt sie und meldet die
+   Beobachtungen; erst danach steht Burp mit Datum und Version als
+   ausprobiert in der Anleitung.
+4. Nach dem Probelauf: deutsche Übersetzung unter
+   `docs/translations/de/guides/` nachziehen, die Zeile zur Anleitung in
+   `docs/README.md` und den Satz zu Burp in ADR-0022 (Abschnitt Folgen) an
+   das Ergebnis anpassen.
+5. Kein Code, keine neuen Einstellungen. Fällt im Probelauf ein Fehler in
+   Humanitl auf, wird er ein eigenes Issue. Das Issue wartet nach dem
+   Schreiben des Abschnitts auf den Probelauf und hält den Sprint nicht
+   auf.
+
+### Akzeptanzkriterien
+1. Die Anleitung nennt Burp nur mit dem Ergebnis eines Probelaufs auf
+   einem aktuellen Build, mit Datum und Version.
+2. Jede Aussage zu Burp hat einen Beleg aus der PortSwigger-Dokumentation
+   oder ist als im Probelauf beobachtet gekennzeichnet.
+3. Prüfung des Zielzertifikats und Verbindungszeitpunkt sind beantwortet
+   und als Grenze genannt, wo sie ungünstig ausfallen.
+4. Die Checkliste für den Probelauf liegt vor; `humanitl egress check`,
+   eine durchgelassene und eine verworfene Anfrage sind als beobachtet
+   festgehalten; die deutsche Übersetzung ist aktuell.
+
