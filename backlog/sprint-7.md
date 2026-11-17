@@ -119,6 +119,8 @@ Diagnose-Codes, hier nur geplant (registriert vom genannten Issue in `codes.rs` 
 | HUM-512 | `hold.ask_mode = "upstream"`: Anfragen ohne Regel entscheidet der Proxy dahinter | M | HUM-511 |
 | HUM-513 | Entscheidungs-Proxy: Anleitung für mitmproxy, Ende-zu-Ende-Test | S | HUM-512 |
 | HUM-524 | Entscheidungs-Proxy: Burp Suite in der Anleitung, mit Probelauf des Eigentümers | S | HUM-513 |
+| HUM-525 | Abhängigkeiten: `chrono` als nicht gepflegt gemeldet, Ausnahme mit Frist | S | – |
+| HUM-526 | Abhängigkeiten: von `chrono` auf `jiff` | M | HUM-525 |
 | HUM-516 | Cloud-Agenten: gemeinsamer Hinweis auf den Abfluss über die Inferenz | S | HUM-037 |
 | HUM-518 | Agent-Depot: Kern, `agents.source`, Sperre durch Firmenvorgabe, RPC und CLI `status`, `source`, `remove` | M | ADR-0023 |
 | HUM-519 | Agent-Depot: Installation und Update in einer Wartungs-Sandbox, Version angeheftet | M | HUM-518 |
@@ -4200,4 +4202,67 @@ den Abschnitt und bessert nach dem Lauf nach.
 4. Die Checkliste für den Probelauf liegt vor; `humanitl egress check`,
    eine durchgelassene und eine verworfene Anfrage sind als beobachtet
    festgehalten; die deutsche Übersetzung ist aktuell.
+
+---
+
+## HUM-525 · Abhängigkeiten: `chrono` als nicht gepflegt gemeldet, Ausnahme mit Frist
+
+### Kontext
+Am 2026-11-17 erschien RUSTSEC-2026-0543: `chrono` gilt als nicht mehr
+gepflegt, alle Versionen sind betroffen, empfohlen wird `jiff`. `make
+rust-deny` scheitert damit in der CI für jeden Commit (zuerst gesehen am
+Lauf von HUM-516), obwohl keine Lücke bekannt ist.
+
+### Spezifikation
+1. Ausnahme in `daemon/deny.toml` mit Grund und Prüfdatum, im selben Stil
+   wie die bestehende für `unsafe-libyaml`.
+2. Der eigentliche Wechsel ist HUM-526.
+
+### Akzeptanzkriterien
+1. `make rust-deny` ist wieder grün; die Ausnahme nennt Grund, Folge-Issue
+   und Prüfdatum.
+
+### Stand nach der Umsetzung (2026-11-17)
+Ausnahme `RUSTSEC-2026-0543` in `daemon/deny.toml`, prüfen bis
+2027-01-17. `chrono` formatiert und liest bei uns nur Zeitstempel und zeigt Zeiten im
+lokalen Versatz des Hosts an; keine Zeitzonenregeln aus dem Netz. Review:
+Sonnet als Ersatz für Antigravity kein blocking oder major, zwei minor zu
+HUM-526 übernommen (fuzz-Crate, vollständige Crate-Liste).
+
+---
+
+## HUM-526 · Abhängigkeiten: von `chrono` auf `jiff`
+
+### Kontext
+HUM-525 hat die Meldung RUSTSEC-2026-0543 mit Frist ausgenommen. `chrono`
+steht direkt in `daemon/Cargo.toml` und wird in fast allen Crates benutzt
+(humanitl, humanitld, audit, audit-log, catalog, config, core-types,
+ipc, proxy, recorder, rules, sandbox), teils in öffentlichen Schnittstellen
+(`Expiry::At(DateTime<Utc>)`, `RuleSet::evaluate`), dazu eigenständig in
+`daemon/fuzz/Cargo.toml` mit eigener Lock-Datei.
+
+### Spezifikation
+1. Alle direkten Verwendungen von `chrono` auf `jiff` umstellen, auch in
+   `daemon/fuzz`; die Abhängigkeit setzt zentral, wer `daemon/Cargo.toml`
+   pflegt, nicht ein Issue-Agent.
+2. Ausgaben bleiben Byte für Byte gleich: Zeitstempel in Audit-Log,
+   Recorder, CLI-Ausgabe (`--json` eingeschlossen) und Katalog. Wo `jiff`
+   anders formatiert, wird das alte Format ausdrücklich nachgebildet; am
+   meisten gefährdet sind `to_rfc3339_opts(SecondsFormat::Secs, true)`,
+   das Format des Audit-Datensatzes (`audit/src/record.rs`) und die
+   Serde-Form von `Expiry` in gespeicherten Regeln.
+3. Gespeicherte Zeitstempel (Recorder-Datenbank, Audit-Dateien) bleiben
+   lesbar, ohne Migration der Daten.
+4. Die Ausnahme in `daemon/deny.toml` entfällt, sobald `chrono` auch nicht
+   mehr transitiv gezogen wird; sonst bleibt sie mit dem Hinweis, wer es
+   noch zieht.
+
+### Tests
+- Bestehende Tests mit festen Zeitstempeln bleiben unverändert grün.
+- Rundreise: mit der alten Fassung geschriebene Zeilen und Datenbankfelder
+  werden gelesen und gleich wieder ausgegeben.
+
+### Akzeptanzkriterien
+1. Kein direkter Gebrauch von `chrono` mehr; Ausgaben und gespeicherte
+   Formate unverändert.
 
