@@ -43,6 +43,7 @@ Diagnose-Codes, hier nur geplant (registriert vom genannten Issue in `codes.rs` 
 | HUM-546 | Interceptor-Ansicht im Terminal, Glocke bei neuem Halt | M | HUM-545 |
 | HUM-547 | `humanitl go`: Schließen hängt ab statt zu beenden, ein zweites `go` hängt sich an | M | HUM-542 |
 | HUM-548 | Doku: `cli.md`, `CONFIG.md`, `UX.md`, Anleitung „Starten"; Nachtrag zu ADR-0024 | S | HUM-531 bis HUM-547 |
+| HUM-552 | `Ctrl+,` schließt das Einstellungs-Sheet ohne Rückfrage bei ungespeichertem Formular | S | HUM-535 |
 | HUM-549 | Kandidat, nicht in diesem Sprint: mehrere Sitzungen je Daemon | L | HUM-537, HUM-547 |
 
 ---
@@ -1326,3 +1327,38 @@ Escape-Suite je Sitzung grün.
 
 ### Akzeptanzkriterien
 Werden mit der Spezifikation festgelegt.
+
+---
+
+## HUM-552 · `Ctrl+,` schließt das Einstellungs-Sheet ohne Rückfrage bei ungespeichertem Formular
+
+### Kontext
+Gefunden von Codex im Review von HUM-535, als Befund außerhalb des Umfangs.
+Seit HUM-414 fragt das Sheet nach, bevor es ein ungespeichertes Formular
+verwirft (etwa ein halb bearbeiteter Modellserver). Der Schließen-Knopf und
+`Esc` gehen über `SettingsController.leave` und fragen. Die Taste `Ctrl+,`,
+die das Sheet öffnet, schließt es aber auch: `shell_screen.dart` ruft dabei
+`_closeSettings()` direkt auf (Stand HUM-535, etwa Zeile 952), am Panel
+vorbei. Der Fehler bestand schon vor HUM-535.
+
+### Spezifikation
+1. Das Umschalten mit `Ctrl+,` schließt ein offenes Sheet über denselben
+   bewachten Weg wie Knopf und `Esc` (`SettingsController.leave`), also mit
+   Rückfrage bei ungespeichertem Formular.
+2. Bricht der Nutzer die Rückfrage ab, bleibt das Sheet offen und das
+   Formular unverändert.
+
+### Tests
+- Widget-Test: Formular eines Modellservers ändern, `Ctrl+,` drücken, die
+  Rückfrage erscheint; Abbrechen lässt Sheet und Eingabe stehen, Verwerfen
+  schließt. Mutationsbeweis: der direkte Aufruf von `_closeSettings()` färbt
+  den Test rot.
+- `TargetPlatformVariant` für Linux und macOS (auf macOS ist die Taste
+  `Cmd+,`).
+
+### Fallstricke
+- Der Weg darf nicht doppelt fragen, wenn `Esc` und `Ctrl+,` kurz
+  nacheinander kommen.
+
+### Akzeptanzkriterien
+1. Kein Weg schließt das Sheet mit ungespeichertem Formular ohne Rückfrage.
