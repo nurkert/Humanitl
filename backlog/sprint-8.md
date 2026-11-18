@@ -44,6 +44,7 @@ Diagnose-Codes, hier nur geplant (registriert vom genannten Issue in `codes.rs` 
 | HUM-547 | `humanitl go`: Schließen hängt ab statt zu beenden, ein zweites `go` hängt sich an | M | HUM-542 |
 | HUM-548 | Doku: `cli.md`, `CONFIG.md`, `UX.md`, Anleitung „Starten"; Nachtrag zu ADR-0024 | S | HUM-531 bis HUM-547 |
 | HUM-552 | `Ctrl+,` schließt das Einstellungs-Sheet ohne Rückfrage bei ungespeichertem Formular | S | HUM-535 |
+| HUM-554 | Quelle des Agenten (Host oder Depot) als Teil der Projektwahl, Depot vorbelegt, wenn nur dort bereit | M | HUM-536 |
 | HUM-549 | Kandidat, nicht in diesem Sprint: mehrere Sitzungen je Daemon | L | HUM-537, HUM-547 |
 
 ---
@@ -1362,3 +1363,38 @@ vorbei. Der Fehler bestand schon vor HUM-535.
 
 ### Akzeptanzkriterien
 1. Kein Weg schließt das Sheet mit ungespeichertem Formular ohne Rückfrage.
+
+---
+
+## HUM-554 · Quelle des Agenten (Host oder Depot) als Teil der Projektwahl
+
+### Kontext
+Aus dem Review von HUM-536. Die Spezifikation dort verlangte „Agent nur im
+Depot: Quelle `depot` vorbelegt". Gebaut wurde nach ADR-0023: Die Quelle
+ist eine Einstellung je Agent (`agents.<id>.source`), keine Projektwahl, und
+ein Start fällt nie auf die andere Quelle zurück. Darum zeigt der Vorschlag
+heute bei einem Agenten, der nur im Depot liegt, die wirksame Quelle `host`
+als Vorgabe, nicht wählbar und mit Grund. Der Erststart-Bildschirm kann die
+Quelle aber nicht umstellen; der Nutzer muss dafür `humanitl agents source`
+kennen. Das widerspricht „alles vorbelegt, nichts muss".
+
+### Spezifikation
+1. Die Quelle des Agenten wird ein Schlüssel der Projektwahl
+   (`PROJECT_CHOICE_KEYS`), der die globale Einstellung je Projekt
+   überschreibt; eine Sperre der Firmenvorgabe gilt weiter.
+2. `Projects.proposal`: Die Option eines Agenten trägt die Quelle in ihren
+   Paaren für `save_choice`. Ist der Agent nur in einer Quelle bereit, ist
+   diese vorbelegt; die andere steht mit Grund da.
+3. Ein Start ohne Bildschirm mit gespeicherter Projektwahl nimmt diese
+   Quelle; ohne Projektwahl gilt weiter ADR-0023 ohne Rückfall.
+4. ADR-0023 bekommt einen Nachtrag dazu.
+
+### Tests
+- Agent nur im Depot, keine Projektwahl: Vorschlag belegt `depot` vor, die
+  Paare enthalten die Quelle; nach `save_choice` startet `Sandbox(Plan)`
+  aus dem Depot. Mutationsbeweis: Quelle nicht in den Paaren färbt rot.
+- Sperre auf `agents.<id>.source`: Quelle nicht wählbar, Sperre genannt.
+
+### Akzeptanzkriterien
+1. Der Erststart-Bildschirm kann die Quelle wählen, und die Vorgabe ist der
+   Start, der mit der gespeicherten Wahl geschähe.
