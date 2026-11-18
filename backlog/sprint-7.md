@@ -136,6 +136,7 @@ Diagnose-Codes, hier nur geplant (registriert vom genannten Issue in `codes.rs` 
 | HUM-517 | Agent-Adapter Antigravity CLI (`agy`, Gemini) | M | HUM-516, HUM-518, HUM-519, HUM-520 |
 | HUM-522 | Agent-Depot: Ende-zu-Ende-Lauf mit Claude Code und Anleitung | S | HUM-514, HUM-521 |
 | HUM-523 | Agent-Depot: Zugangsdateien verschlüsselt mit Schlüssel aus dem Schlüsselbund | S | HUM-520 |
+| HUM-553 | Gemeinsamer Probedurchgang mit dem Eigentümer: gesammelte Handprüfungen | S | HUM-524 |
 
 ## HUM-428 · Port neutral: `PlanRequest`, `LaunchOptions`, `IsolationLevel`, Enum `Backend` statt `PlatformBackend`
 
@@ -4743,3 +4744,35 @@ major. Übernommen: Lösungsweg nach Installationsart (Paket:
 Unit nur, wenn die Einhängung wirklich von ihr kommt, richtiger Schlüssel
 `sandbox.qemu.modules`, Register und `DIAGNOSTICS.md` nachgezogen,
 robusteres Lesen der Einhängepunkte, CHANGELOG für 0.4.1.
+
+---
+
+## HUM-553 · Gemeinsamer Probedurchgang mit dem Eigentümer: gesammelte Handprüfungen
+
+### Kontext
+Entscheidung des Eigentümers vom 2026-11-18: Prüfungen, die nur er von Hand
+machen kann (Oberflächen fremder Programme, echte Anmeldungen, sein
+Rechner), halten kein Issue mehr auf. Die KI schließt jedes Issue so weit
+ab, wie sie es selbst prüfen kann, und kennzeichnet in der Doku ehrlich,
+was nicht beobachtet wurde. Die offene Handprüfung landet in der Liste
+dieses Issues. Später macht der Eigentümer einen einzigen gemeinsamen
+Durchgang mit der KI über die ganze Liste.
+
+### Liste
+1. HUM-524, Burp Suite als Entscheidungs-Proxy: den Probelauf der KI
+   (Burp Community unter Xvfb) am eigenen Rechner bestätigen: Abfangen,
+   „Forward", „Drop", Prüfung des Zielzertifikats, Zeitpunkt der
+   Verbindung zum Ziel. Danach in der Anleitung „ausprobiert" mit Datum und
+   Version auf den Lauf des Eigentümers umstellen.
+
+Weitere Punkte hängen spätere Issues hier an.
+
+### Ablauf
+- Die KI hält die Liste aktuell und erinnert, wenn sie wächst oder ein
+  Sprint endet.
+- Im Durchgang: je Punkt beobachten, Ergebnis in die betroffene Doku, ein
+  in Humanitl gefundener Fehler wird ein eigenes Issue.
+
+### Akzeptanzkriterien
+1. Jeder Punkt der Liste ist im Durchgang beobachtet und das Ergebnis in
+   der betroffenen Doku nachgetragen.
