@@ -25,6 +25,11 @@
 //!   otherwise `SANDBOX_054` and nothing is deleted. Forgetting a project is
 //!   a plan with the selection `forget` and runs the same way.
 //!
+//! One more only reads: `proposal` (HUM-536, `proposal.rs`), the first-start
+//! screen as data, for a known project or a folder the register does not
+//! know, optionally with a partial choice laid over the stored one; nothing
+//! is saved.
+//!
 //! Paths and names come from the file system and may hold control
 //! characters; they leave the daemon through [`sanitize_note`], as in
 //! `sessions summary`. The stored path is never computed back from a shown
@@ -117,6 +122,9 @@ pub struct Context {
     pub sandbox: Option<crate::sandbox::SandboxService>,
     /// Where an executed cleanup is recorded (`projects.cleaned`).
     pub audit: Option<humanitl_audit_log::AuditHandle>,
+    /// What a start proposal needs beyond this: the backend search and the
+    /// lock of the agent source (HUM-536).
+    pub proposal: proposal::Ports,
 }
 
 /// Answers one request.
@@ -147,6 +155,9 @@ pub async fn answer(
         }
         Some(v1::projects_request::Op::Cleanup(asked)) => {
             cleanup::run(&ctx, &recorder, asked).await
+        }
+        Some(v1::projects_request::Op::Proposal(asked)) => {
+            proposal::answer(&ctx, &recorder, asked).await
         }
         None => Err(refused("the request names no operation".to_owned())),
     }
@@ -554,6 +565,7 @@ pub(crate) fn refused(why: String) -> Diagnostic {
 }
 
 mod cleanup;
+pub mod proposal;
 
 pub use cleanup::{NOT_DELETED, WAITING_WARNING};
 

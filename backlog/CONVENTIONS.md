@@ -3894,3 +3894,55 @@ Wahl oder Registereintrag fiel), den ändernden Operationen von `LlmServers`,
 `config.toml` alle zwei Sekunden an Zeitpunkt und Größe misst (leere
 Schlüsselliste: alles kann sich geändert haben). Der Daemon selbst lädt
 dadurch nichts neu.
+
+### 4.54 Aus der Umsetzung des Startvorschlags (HUM-536, 2026-11-18)
+
+**Ein Vorschlag, aus der Auflösung des Starts.** `Projects.proposal` nimmt
+einen absoluten Ordner oder eine Projekt-Kennung und eine Teilwahl
+(`ChoiceValue`, Schlüssel für Schlüssel über der gespeicherten Wahl, ein
+leerer Wert nimmt den Schlüssel heraus) und antwortet mit `StartProposal`.
+Aufgelöst wird mit `humanitl_ipc::projects::check_for`, denselben Schritten
+wie `save_choice` und der Start: Eine Teilwahl, die nicht gälte, ist
+`CONFIG_024`. Modus, Backend, Profil und Schreibmodus kommen aus der
+Vorbereitung eines `Plan` (`SandboxService::proposal_plan`), mit Profil und
+Schreibmodus der Auflösung statt der Wahl eines anderen Clients (`pending`)
+oder der laufenden Sitzung. Gespeichert wird nichts.
+
+**Felder** in der Reihenfolge des Bildschirms: `agent` (`agent.adapter`),
+`folder_mode` (`sandbox.mode` und `sandbox.work_mode`: `disposable` =
+`disposable`+`rw`, `rw` = `direct`+`rw`, `ro` = `direct`+`ro`), `isolation`
+(`sandbox.backend`: `shared_kernel` behält ein Backend über dem geteilten Kern
+oder nimmt `auto`, `kernel` nennt das VM-Backend), `ask_mode`
+(`hold.ask_mode`), `llm_server` (`llm.server`, die gespeicherten Server),
+`profile` (`sandbox.profile`, die Sandbox-Profile, die ein Start fände). Jede
+Option trägt die Paare, die `save_choice` nimmt; ein Schlüssel des Felds, der
+in den Paaren fehlt, fällt aus der Wahl. `StartProposal.choice` sind die Paare
+der Vorgaben. Ein gesperrter Schlüssel steht in keinem Paar, das Feld trägt
+die Sperre (`SettingLock`), und jede Option mit anderem Wert ist nicht
+wählbar.
+
+**Vorgabe ist die Auflösung, auch wenn sie nicht wählbar ist.** Erreicht die
+Vorgabe die Untergrenze nicht oder fehlt ihr etwas, bleibt sie die Vorgabe,
+die Option nennt den Grund, und `StartProposal.diagnostics` trägt ihn wie der
+Start. Kein Rückfall auf eine andere Option.
+
+**Verfügbarkeit.** Die Stufen aus der Liste der Backends über das Gedächtnis
+der Suche (HUM-502) bis zur Frist des Aufrufers (`grpc-timeout`); jeder Befund
+eines Backends, auch `DOCTOR_012`, macht seine Stufe unwählbar, eine Stufe, die
+die Liste auf diesem System nicht kennt, ist `SANDBOX_045`. Gestartet wird
+nichts. Die Wegwerf-Schicht fragt das Backend an einem Plan mit schreibbarem
+Ordner (`SANDBOX_030`). Der Agent: die wirksame Quelle (`agents.<id>.source`,
+Sperre) bestimmt Vorgabe und Verfügbarkeit, beide Quellen stehen mit Grund da
+(Host: `AGENT_001`, Depot: `AGENT_015` ohne Rezept, `AGENT_008` nicht
+installiert, `AGENT_009` als Hinweis). Die Quelle ist keine Projektwahl;
+gewechselt wird sie mit `humanitl agents source`, ein Start nimmt nie die
+andere. `upstream` braucht `egress.proxy`.
+
+**Cloud-Inferenz** je Agent (Konfiguration mit diesem Adapter) und je Server
+(neu aufgelöst mit `llm.server` in der Wahl) und für die Vorgabe, über
+`humanitl_ipc::cloud::status`.
+
+**CLI.** `humanitl projects proposal [PATH] [--json]`, ohne `PATH` der
+aktuelle Ordner; Zeile der Paritätstabelle. Der Fake baut die Felder mit
+derselben Funktion (`proposal::build`), jeder Agent vom Host verfügbar, ohne
+Depot.

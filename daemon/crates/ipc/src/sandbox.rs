@@ -119,6 +119,7 @@ use crate::v1;
 
 mod cleanup;
 mod project;
+mod proposal;
 
 /// Der Name des Shims, wie er neben dem Daemon oder im Systempfad liegt.
 const SHIM_BINARY: &str = "humanitl-shim";
@@ -3886,6 +3887,21 @@ impl Inner {
         command: &[OsString],
         need: KeyNeed,
     ) -> Result<Prepared, Diagnostic> {
+        self.prepare_picking(config, choice, plan, command, need, &BackendPick::Detect)
+    }
+
+    /// [`Inner::prepare_keyed_with`] with a choice of how the backend is
+    /// searched: afresh like every start, or through the memory of the
+    /// backend search until a deadline (HUM-536, the start proposal).
+    fn prepare_picking(
+        &self,
+        config: &Arc<Config>,
+        choice: &PlanChoice,
+        plan: &v1::sandbox_request::Plan,
+        command: &[OsString],
+        need: KeyNeed,
+        pick: &BackendPick<'_>,
+    ) -> Result<Prepared, Diagnostic> {
         let config = Arc::clone(config);
         let policy = MountPolicy::from_paths(&self.paths);
         let name = self.profile_name(&config, choice, plan);
@@ -4015,15 +4031,7 @@ impl Inner {
         // und dem Sandbox-Profil (HUM-431). Was die Wahl ablehnt, lehnt
         // Vorschau und Start ab; zurückgefallen wird nur von der Prüfung des
         // Systems auf dasselbe Backend ohne Prüfung, nie auf ein anderes.
-        let backend = if let Some(given) = &self.backend {
-            given_backend(given, &config.sandbox, &profile.sandbox.backend)?;
-            given.clone()
-        } else {
-            let choice =
-                humanitl_sandbox::choose_backend(&config.sandbox, &profile.sandbox.backend)?;
-            Backend::detect(choice.name, self.paths.clone(), &config.sandbox)
-                .or_else(|_| Backend::fallback(choice.name, self.paths.clone(), &config.sandbox))?
-        };
+        let backend = self.pick_backend(&config, &profile, pick)?;
         let options = LaunchOptions {
             approved_work_dir: approved,
             ..LaunchOptions::default()
@@ -4044,6 +4052,44 @@ impl Inner {
                 notice: None,
             },
         }))
+    }
+
+    /// The backend of a preparation: the given one (escape suite), else the
+    /// one `sandbox.backend` chooses with floor and sandbox profile, found as
+    /// `pick` says; a search that fails falls back to the unchecked backend
+    /// for the preview, never for the kernel level under the memory.
+    fn pick_backend(
+        &self,
+        config: &Config,
+        profile: &SandboxProfile,
+        pick: &BackendPick<'_>,
+    ) -> Result<Backend, Diagnostic> {
+        if let Some(given) = &self.backend {
+            given_backend(given, &config.sandbox, &profile.sandbox.backend)?;
+            Ok(given.clone())
+        } else {
+            let choice =
+                humanitl_sandbox::choose_backend(&config.sandbox, &profile.sandbox.backend)?;
+            Ok(match pick {
+                BackendPick::Detect => {
+                    Backend::detect(choice.name, self.paths.clone(), &config.sandbox).or_else(
+                        |_| Backend::fallback(choice.name, self.paths.clone(), &config.sandbox),
+                    )?
+                }
+                BackendPick::Searched { searches, deadline } => searches
+                    .backend_within(choice.name, &config.sandbox, &self.paths, *deadline)
+                    .or_else(|found| {
+                        // Der Rückfall ohne Prüfung, wie beim Plan, aber nie
+                        // für die Kernel-Stufe: Ihr Rückfall sucht selbst,
+                        // und das kann dauern. Dann bleibt der Befund der
+                        // Suche (`SANDBOX_045`, `DOCTOR_012`).
+                        if choice.name == humanitl_sandbox::VM_BACKEND {
+                            return Err(found);
+                        }
+                        Backend::fallback(choice.name, self.paths.clone(), &config.sandbox)
+                    })?,
+            })
+        }
     }
 
     /// Der Modus, den ein Start ohne eigenen Wunsch bekäme, und die Schicht,
@@ -5189,6 +5235,18 @@ struct PlanChoice {
     /// Where `work_dir` came from (HUM-293); set exactly when it is.
     work_dir_source: Option<WorkDirSource>,
     work_mode: Option<WorkMode>,
+}
+
+/// How a preparation finds its backend.
+enum BackendPick<'a> {
+    /// Afresh, as every start and `Plan` does.
+    Detect,
+    /// Through the memory of the backend search, waiting at most until
+    /// `deadline` (HUM-502, HUM-536).
+    Searched {
+        searches: &'a humanitl_sandbox::BackendSearches,
+        deadline: Option<Instant>,
+    },
 }
 
 /// How often a `Plan` is built before it answers with what it has

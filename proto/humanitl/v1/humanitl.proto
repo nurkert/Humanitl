@@ -3037,12 +3037,27 @@ message ProjectsRequest {
     CleanupSelection selection = 1;
     string digest = 2;
   }
+  // Der Startvorschlag fuer einen Ordner (HUM-536): jedes Feld des
+  // Erststart-Bildschirms mit Optionen, Vorgabe, Verfuegbarkeit und Grund.
+  // Speichert nichts; gespeichert wird mit `save_choice`.
+  message Proposal {
+    // Der Ordner, absolut; ein Ordner, den das Register nicht kennt, bekommt
+    // die Vorgaben eines Starts ohne Projektwahl.
+    string path = 1;
+    // Sonst ein Projekt an seiner Kennung.
+    string project_id = 2;
+    // Eine Teilwahl ueber der gespeicherten Projektwahl, Schluessel fuer
+    // Schluessel; ein leerer Wert nimmt den Schluessel aus der Wahl. Der
+    // Vorschlag wird damit neu berechnet, ohne zu speichern.
+    repeated ChoiceValue values = 3;
+  }
   oneof op {
     List list = 1;
     Get get = 2;
     SaveChoice save_choice = 3;
     CleanupPlan cleanup_plan = 4;
     Cleanup cleanup = 5;
+    Proposal proposal = 6;
   }
 }
 
@@ -3194,4 +3209,84 @@ message ProjectsResponse {
   CleanupPlanView plan = 6;
   // `cleanup`: was geloescht wurde.
   CleanupResult cleaned = 7;
+  // `proposal`: der Startvorschlag.
+  StartProposal proposal = 8;
+}
+
+// Der Startvorschlag fuer ein Projekt (HUM-536, ADR-0024 Punkt 3): alles,
+// was der Erststart-Bildschirm zeigt, aus der Aufloesung, die ein Start
+// jetzt bekaeme. Kein Client zeigt eine Option, die hier nicht steht.
+message StartProposal {
+  // Der kanonische Ordner, gesaeubert fuer die Anzeige.
+  string path = 1;
+  // Der Ordnername, gesaeubert fuer die Anzeige.
+  string display_name = 2;
+  // Die Kennung im Register; leer fuer einen Ordner, den es nicht kennt.
+  string project_id = 3;
+  // Ob das Register fuer das Projekt eine Projektwahl haelt.
+  bool has_choice = 4;
+  // Die Felder in der Reihenfolge des Bildschirms: `agent`, `folder_mode`,
+  // `isolation`, `ask_mode`, `llm_server`, `profile`.
+  repeated ProposalField fields = 5;
+  // Die Wahl, die `save_choice` fuer genau die gezeigten Vorgaben nimmt:
+  // je Feld die Paare der Vorgabe, ohne gesperrte Schluessel.
+  repeated ChoiceValue choice = 6;
+  // Die Zeile fuer den Weg ohne Bildschirm, beginnend mit `Defaults: `.
+  string defaults_line = 7;
+  // Was dem Start mit den Vorgaben im Weg steht oder zu sagen ist.
+  repeated Diagnostic diagnostics = 8;
+  // Der Hinweis auf Cloud-Inferenz (HUM-516) fuer Agent und Server der
+  // Vorgabe; leer, wenn die Inferenz auf diesem Rechner bleibt.
+  CloudInference cloud_inference = 9;
+}
+
+// Ein Feld des Startvorschlags.
+message ProposalField {
+  // `agent`, `folder_mode`, `isolation`, `ask_mode`, `llm_server` oder
+  // `profile`.
+  string id = 1;
+  // Die Schluessel der Projektwahl, die das Feld schreibt.
+  repeated string keys = 2;
+  // Der Wert der Vorgabe, einer aus `options`; leer, wenn es keine gibt
+  // (etwa kein gespeicherter Modellserver).
+  string value = 3;
+  // Die Herkunft der Vorgabe wie in `FieldOrigin.origin`.
+  string origin = 4;
+  // Gesetzt, wenn eine Firmenvorgabe einen Schluessel des Felds festlegt.
+  SettingLock lock = 5;
+  repeated ProposalOption options = 6;
+}
+
+// Eine Option eines Felds.
+message ProposalOption {
+  // Der Wert, etwa `disposable` oder `kernel`.
+  string value = 1;
+  // Der Name zur Anzeige, englisch.
+  string label = 2;
+  // Ob ein Start mit dieser Option ginge.
+  bool available = 3;
+  // Warum nicht; leer, wenn verfuegbar.
+  repeated Diagnostic reasons = 4;
+  // Die Paare fuer die Schluessel des Felds; ein Schluessel des Felds, der
+  // hier fehlt, faellt aus der Wahl.
+  repeated ChoiceValue choice = 5;
+  // Nur `agent`: die wirksame Quelle, `host` oder `depot`.
+  string source = 6;
+  // Nur `agent`: beide Quellen mit Verfuegbarkeit und Grund.
+  repeated AgentSourceOption sources = 7;
+  // Nur `agent` und `llm_server`: der Hinweis auf Cloud-Inferenz mit
+  // dieser Option.
+  CloudInference cloud_inference = 8;
+}
+
+// Eine Quelle eines Agenten im Startvorschlag.
+message AgentSourceOption {
+  // `host` oder `depot`.
+  string source = 1;
+  // Ob das Programm dort bereitliegt.
+  bool available = 2;
+  // Warum nicht, oder was zu sagen ist (etwa nicht angemeldet).
+  repeated Diagnostic reasons = 3;
+  // Wahr fuer die wirksame Quelle (`agents.<id>.source`, Sperre).
+  bool selected = 4;
 }

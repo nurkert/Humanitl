@@ -5,7 +5,9 @@
 //! einem Lauf und laufender Sitzung. `get` nennt die Schlüssel der
 //! Projektwahl mit ihren Vorgabewerten; `save_choice` schreibt nirgends hin
 //! und antwortet `IPC_006`, wie der Fake bei jeder anderen Änderung, die er
-//! nicht halten kann.
+//! nicht halten kann. `proposal` (HUM-536) baut die Felder mit derselben
+//! Funktion wie der Daemon, aus den Vorgaben der Konfiguration, mit jedem
+//! Backend und jedem Agenten vom Host verfügbar und ohne Depot.
 
 use humanitl_config::{ProjectChoice, Sources};
 use humanitl_core::diagnostics::codes;
@@ -79,8 +81,95 @@ pub(super) fn answer(
                 .why("the fake daemon keeps no recording to clean up".to_owned())
                 .build())
         }
+        Some(v1::projects_request::Op::Proposal(asked)) => proposal(project, &asked),
         None => Err(refused("the request names no operation")),
     }
+}
+
+/// Der Startvorschlag des Fakes für einen absoluten Ordner oder das Projekt
+/// der Sitzung, mit der Teilwahl der Anfrage.
+fn proposal(
+    project: Option<v1::ProjectEntry>,
+    asked: &v1::projects_request::Proposal,
+) -> Result<v1::ProjectsResponse, Diagnostic> {
+    use crate::projects::proposal::{AgentFacts, Inputs, ServerFacts};
+
+    let known = project.filter(|project| {
+        asked.project_id == project.project_id
+            || (asked.project_id.is_empty() && asked.path == project.path)
+    });
+    let path = match &known {
+        Some(project) => project.path.clone(),
+        None if asked.project_id.is_empty() && asked.path.starts_with('/') => asked.path.clone(),
+        None => {
+            return Err(refused(
+                "the fake daemon proposes for an absolute folder or the project of its session",
+            ));
+        }
+    };
+    let choice = crate::projects::proposal::merged(None, &asked.values)?;
+    let resolved = humanitl_config::load(&Sources::empty().with_project_choice(Some(choice)))?;
+    let config = &resolved.config;
+    let paths = humanitl_config::Paths::new(humanitl_config::Env::from_pairs([(
+        "XDG_DATA_HOME",
+        "/nonexistent-humanitl-fake",
+    )]));
+    let agents = humanitl_sandbox::AdapterRegistry::builtin()
+        .ids()
+        .into_iter()
+        .map(|id| {
+            let mut with_agent = config.clone();
+            id.clone_into(&mut with_agent.agent.adapter);
+            AgentFacts {
+                id: id.to_owned(),
+                display_name: humanitl_sandbox::agent::depot::recipe::known(id)
+                    .map_or(id, |agent| agent.display_name)
+                    .to_owned(),
+                source: humanitl_config::agents::AgentSource::Host,
+                host: Ok(()),
+                depot: Err(Diagnostic::builder(codes::AGENT_008, Severity::Error)
+                    .why("the fake daemon has no agent depot".to_owned())
+                    .build()),
+                cloud: crate::cloud::status(&paths, &with_agent),
+            }
+        })
+        .collect();
+    let backends = humanitl_sandbox::list_backends_with(
+        &config.sandbox,
+        humanitl_sandbox::AUTO_BACKEND,
+        |_| None,
+    );
+    let built = crate::projects::proposal::build(&Inputs {
+        resolved: &resolved,
+        locks: &humanitl_config::PolicyLocks::none(),
+        plan: crate::projects::proposal::assumed_plan(config),
+        backends: &backends,
+        agents,
+        servers: config
+            .llm
+            .servers
+            .keys()
+            .map(|name| ServerFacts {
+                name: name.clone(),
+                cloud: None,
+                refusal: None,
+            })
+            .collect(),
+        profiles: vec![crate::projects::proposal::ProfileFacts {
+            name: config.sandbox.profile.clone(),
+            state: Ok(()),
+        }],
+        cloud: crate::cloud::status(&paths, config),
+    });
+    let mut proposal = crate::projects::proposal::proposal(None, &path, built);
+    if let Some(project) = known {
+        proposal.project_id = project.project_id;
+        proposal.display_name = project.display_name;
+    }
+    Ok(v1::ProjectsResponse {
+        proposal: Some(proposal),
+        ..v1::ProjectsResponse::default()
+    })
 }
 
 /// Das eine Projekt des Fakes; keines, wenn die Sitzung keinen Ordner nennt.

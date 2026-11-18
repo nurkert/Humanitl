@@ -278,6 +278,16 @@ pub enum ProjectsCmd {
         #[arg(long)]
         yes: bool,
     },
+    /// Show the start proposal for a folder: every field of the first-start
+    /// screen (agent and its source, folder mode, isolation, ask mode, model
+    /// server, profile) with its options, the default, and why an option is
+    /// not available. The defaults are the start that would happen without
+    /// a screen. Nothing is saved.
+    Proposal {
+        /// The project folder; relative to the current directory. Without
+        /// it, the current directory.
+        path: Option<std::path::PathBuf>,
+    },
 }
 
 /// Die Unterkommandos von `humanitl agents` (HUM-518, ADR-0023).

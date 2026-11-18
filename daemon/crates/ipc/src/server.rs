@@ -407,7 +407,10 @@ impl IpcServer {
     /// Die Sperre der Quelle der Agenten (HUM-518): die des Dienstes der
     /// Sandbox, sonst die der Vorgabe an diesen Pfaden.
     /// Woraus `Projects` antwortet (HUM-532).
-    fn projects_context(&self) -> crate::projects::Context {
+    ///
+    /// `deadline` is the caller's (`grpc-timeout`): a start proposal waits
+    /// for the backend search at most until then (HUM-502, HUM-536).
+    fn projects_context(&self, deadline: Option<Instant>) -> crate::projects::Context {
         crate::projects::Context {
             recorder: self.recorder.clone(),
             paths: self.doctor.paths.clone(),
@@ -418,6 +421,13 @@ impl IpcServer {
                 .and_then(SandboxService::project_activity),
             sandbox: self.sandbox.clone(),
             audit: self.audit.clone(),
+            proposal: crate::projects::proposal::Ports {
+                backends: crate::projects::proposal::BackendFacts::Searches {
+                    searches: self.searches.clone(),
+                    deadline,
+                },
+                source_lock: self.source_lock(),
+            },
         }
     }
 
@@ -2502,12 +2512,13 @@ impl v1::humanitl_server::Humanitl for IpcServer {
         &self,
         request: Request<v1::ProjectsRequest>,
     ) -> Result<Response<v1::ProjectsResponse>, Status> {
+        let deadline = crate::deadline::search_deadline(request.metadata(), Instant::now());
         let request = request.into_inner();
         let saved = match &request.op {
             Some(v1::projects_request::Op::SaveChoice(save)) => Some(save.project_id.clone()),
             _ => None,
         };
-        let response = crate::projects::answer(self.projects_context(), request)
+        let response = crate::projects::answer(self.projects_context(deadline), request)
             .await
             .map_err(|diagnostic| diagnostic_to_status(&diagnostic))?;
         publish_project_changes(&self.config_events, saved.as_deref(), &response);

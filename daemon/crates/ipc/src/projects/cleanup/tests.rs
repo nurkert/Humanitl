@@ -49,6 +49,7 @@ impl Fixture {
             activity,
             sandbox: None,
             audit: None,
+            proposal: crate::projects::proposal::Ports::default(),
         }
     }
 

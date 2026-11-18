@@ -108,6 +108,31 @@ impl BackendSearches {
 }
 
 impl BackendSearches {
+    /// Das Backend aus der Suche vor jedem Start, über dieses Gedächtnis und
+    /// höchstens bis `deadline` (HUM-536, der Startvorschlag): eine Suche,
+    /// die läuft oder noch gilt, wird mitbenutzt, keine startet doppelt.
+    ///
+    /// # Errors
+    ///
+    /// Der Befund der Suche (etwa `SANDBOX_045` ohne `/dev/kvm`), oder
+    /// `DOCTOR_012`, wenn sie bei `deadline` noch läuft.
+    pub fn backend_within(
+        &self,
+        name: &'static str,
+        sandbox: &SandboxRef,
+        paths: &Paths,
+        deadline: Option<Instant>,
+    ) -> Result<Backend, Diagnostic> {
+        match self.detect(name, sandbox, paths).wait(deadline) {
+            Waited::Done(found) => found,
+            Waited::Pending(running) => Err(still_searching(
+                name,
+                running,
+                &["humanitl", "projects", "proposal"],
+            )),
+        }
+    }
+
     /// Verwirft, was die Suche über dieses Backend weiß, für einen
     /// ausdrücklichen Wunsch wie den Probestart des Doctors: Eine Abhilfe, die
     /// der Mensch eben getroffen hat, zählt sofort.
