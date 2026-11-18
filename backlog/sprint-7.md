@@ -123,6 +123,7 @@ Diagnose-Codes, hier nur geplant (registriert vom genannten Issue in `codes.rs` 
 | HUM-526 | Abhängigkeiten: von `chrono` auf `jiff` | M | HUM-525 |
 | HUM-527 | Website: `astro` auf 7.4.7 oder neuer (zwei Dependabot-Meldungen) | S | – |
 | HUM-528 | Ein Installationsskript für alle Systeme unter `humanitl.de/install` | M | – |
+| HUM-550 | Ein Deinstallationsskript für alle Systeme unter `humanitl.de/uninstall` | M | HUM-528 |
 | HUM-529 | Kernel-Stufe startet unter der gehärteten Unit nicht (Module unsichtbar) | S | – |
 | HUM-516 | Cloud-Agenten: gemeinsamer Hinweis auf den Abfluss über die Inferenz | S | HUM-037 |
 | HUM-518 | Agent-Depot: Kern, `agents.source`, Sperre durch Firmenvorgabe, RPC und CLI `status`, `source`, `remove` | M | ADR-0023 |
@@ -4511,6 +4512,87 @@ verbessert werden: Signaturen prüfen statt nur `SHA256SUMS`, und der
 Hinweis auf „Trotzdem öffnen" auf macOS entfällt, weil Gatekeeper eine
 notarisierte App ohne Rückfrage startet. Das wird dann ein eigenes
 Issue.
+
+## HUM-550 · Ein Deinstallationsskript für alle Systeme unter `humanitl.de/uninstall`
+
+### Kontext
+Wunsch des Eigentümers vom 2026-11-18: zu `install.sh` (HUM-528) ein
+sauberes Gegenstück, ebenso universell. Heute muss man je nach Weg selbst
+wissen, was zu tun ist: `apt remove`, `dnf remove`, das AUR-Paket, Dateien
+unter `~/.local`, die App unter `/Applications` oder `~/Applications`, dazu
+die Unit des Daemons, die `humanitl daemon uninstall` (HUM-077,
+`daemon/bin/humanitl/src/cmd/daemon/uninstall.rs`) schon sauber abmeldet
+und entfernt, nur das, was `daemon install` angelegt hat.
+
+### Spezifikation
+1. Datei `uninstall.sh` im Wurzelverzeichnis des Repos, reines POSIX-`sh`,
+   gleicher Aufbau wie `install.sh`: der ganze Ablauf in einer Funktion,
+   die erst am Ende aufgerufen wird; gemeinsame Hilfen (Erkennen von
+   System und Weg, Rückfrage, `--yes`, `--dry-run`) nicht kopiert, sondern
+   aus einer Quelle, die der Website-Build in beide Dateien einsetzt oder
+   die beide gleich halten (ein Test vergleicht die gemeinsamen Teile).
+2. Erkennen, **wie** Humanitl installiert ist, statt zu raten: Paket in
+   `dpkg`, `rpm`, `pacman` (`humanitl` bzw. `humanitl-bin`), Archiv unter
+   dem Präfix von `install.sh` (`~/.local` oder `--prefix`), macOS-App in
+   `/Applications` oder `~/Applications`. Mehrere Funde werden alle
+   aufgelistet; nichts Gefundenes heißt: Meldung, nichts geschieht.
+3. Reihenfolge, je Schritt vorher angezeigt und mit Rückfrage:
+   1. laufende Sitzungen nennen; das Skript beendet keine, sondern bricht
+      ab, solange eine läuft (der Mensch beendet sie selbst);
+   2. `humanitl daemon uninstall` aufrufen, solange das Programm noch da
+      ist (unter macOS den launchd-Weg desselben Befehls); keine eigene
+      Kopie dieser Logik im Skript;
+   3. das Programm über den Weg entfernen, auf dem es kam (`apt remove`,
+      `dnf remove`, AUR-Helfer bzw. `pacman -R`, Archivdateien laut der
+      Liste, die `install.sh` beim Archiv-Weg ablegt, die App);
+      `sudo` nur für den Paketschritt, Befehl vorher gezeigt;
+   4. beim APT-Weg auf eigene Frage auch Quelle und Schlüssel von
+      `apt.nurkert.de` entfernen.
+4. **Nutzerdaten bleiben standardmäßig.** Konfiguration, Aufzeichnungen,
+   Projektregister, Agent-Depot und Audit-Kette löscht das Skript nur mit
+   `--purge`, und auch dann erst, nachdem es jeden Ort mit Größe einzeln
+   aufgelistet und der Mensch bestätigt hat. Ohne Terminal löscht
+   `--purge` nur zusammen mit `--yes`. Projektordner sind nie Teil davon
+   (Sprint 8, Grenze 3). Die Orte nennt das Skript nicht aus einer eigenen
+   Liste, sondern fragt sie, solange das Programm noch da ist, beim
+   Programm ab (ein Unterbefehl oder `--json` eines bestehenden Befehls,
+   der die Datenorte nennt; ADR-018).
+5. Optionen wie bei `install.sh`: `--yes`, `--dry-run`, `--method`, dazu
+   `--purge`. Ohne Terminal und ohne `--yes` bricht es ab statt zu raten.
+6. Website wie HUM-528: der Build kopiert `uninstall.sh` unverändert nach
+   `https://humanitl.de/uninstall`, eine Leseseite zeigt den Quelltext,
+   ein Test prüft Byte-Gleichheit. Die Download-Seite und
+   `docs/INSTALL.md` (samt Übersetzung) nennen den Einzeiler
+   `curl -fsSL https://humanitl.de/uninstall | sh`.
+
+### Tests
+- shellcheck ohne Befund; `sh -n` mit `dash` und `busybox sh`.
+- Dieselbe Container-Matrix wie HUM-528: erst `install.sh`, dann
+  `uninstall.sh --yes`; danach ist kein `humanitl` mehr in `PATH`, kein
+  Paket mehr registriert, keine Unit mehr vorhanden, die Nutzerdaten sind
+  noch da. Mit `--purge --yes` sind die genannten Orte weg und ein
+  Projektordner neben ihnen unberührt.
+- macOS-Runner: App und launchd-Agent weg, Daten ohne `--purge` da.
+- `--dry-run` ändert nichts. Eine laufende Sitzung bricht vor jedem
+  Schritt ab. Mutationsbeweis: Prüfung auf laufende Sitzung entfernt färbt
+  den Test rot; `--purge` ohne Bestätigung löscht nichts.
+
+### Fallstricke
+- `humanitl daemon uninstall` muss laufen, bevor das Programm weg ist;
+  danach gibt es den Befehl nicht mehr.
+- Ein Paketmanager entfernt keine Dateien im Home; die Nutzerdaten bleiben
+  dort also auch nach `apt remove` liegen, das Skript sagt das.
+
+### Akzeptanzkriterien
+1. Auf jedem System aus HUM-528 entfernt `curl -fsSL
+   https://humanitl.de/uninstall | sh` Programm, Unit und Paketquelle so,
+   wie `install.sh` sie angelegt hat; auf anderen Systemen ändert es
+   nichts und sagt warum.
+2. Nutzerdaten bleiben ohne `--purge`; mit `--purge` nur nach einzelner
+   Auflistung und Bestätigung; Projektordner nie.
+3. `/uninstall` liefert genau `uninstall.sh`.
+
+---
 
 ## HUM-529 · Kernel-Stufe startet unter der gehärteten Unit nicht (Module unsichtbar)
 
