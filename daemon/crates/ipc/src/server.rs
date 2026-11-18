@@ -921,6 +921,11 @@ impl IpcServer {
             // („ein Treffer erzeugt eine Warnung") und liesse den Menschen
             // ohne die eine Meldung zurueck, die er sehen muss. Eingeklappt
             // heisst nicht stumm (HUM-039).
+            // Eine Meldung des Sandbox-Backends ist für das Audit-Log und
+            // erreicht keinen Client (HUM-477).
+            if matches!(event, FlowEvent::Sandbox { .. }) {
+                return Vec::new();
+            }
             let hidden = !include_passthrough
                 && !matches!(event, FlowEvent::Diagnostic { .. })
                 && event.flow_id().is_some_and(|id| {

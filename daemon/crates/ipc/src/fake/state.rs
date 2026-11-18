@@ -969,6 +969,9 @@ pub fn event_to_proto(event: &FlowEvent, flow: &FakeFlow) -> v1::FlowEvent {
         } => Event::Intercept(crate::convert::intercept_changed_to_proto(
             *at, *change, *revision,
         )),
+        // Der Fake hat kein Sandbox-Backend; der Arm steht hier, damit die
+        // Übersetzung vollständig bleibt (HUM-477).
+        FlowEvent::Sandbox { at, .. } => return crate::convert::without_wire_form(*at),
     };
     v1::FlowEvent {
         at: Some(timestamp(event.at().unwrap_or(flow.last_at))),

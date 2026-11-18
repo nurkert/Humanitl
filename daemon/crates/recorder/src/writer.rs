@@ -796,12 +796,14 @@ impl Writer {
             // (HUM-073). Ein Wechsel der Pause des Abfangens gehört
             // keinem Flow; was sie bewirkt, steht an jedem Flow, den sie
             // durchließ (`paused`), und ihr Beginn und Ende im Audit-Log
-            // (HUM-407).
+            // (HUM-407). Eine Meldung des Sandbox-Backends gehört keinem
+            // Flow; sie steht im Audit-Log (HUM-477).
             FlowEvent::ResponseChunk { .. }
             | FlowEvent::Lagged { .. }
             | FlowEvent::Diagnostic { .. }
             | FlowEvent::AgentAsk { .. }
-            | FlowEvent::Intercept { .. } => Ok(()),
+            | FlowEvent::Intercept { .. }
+            | FlowEvent::Sandbox { .. } => Ok(()),
         }
     }
 

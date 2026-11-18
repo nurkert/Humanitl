@@ -24,7 +24,9 @@
 //! der Kette selbst; die Struktur steht in [`crate::retention`].
 //! `intercept.paused` und `intercept.resumed` kommen aus HUM-407 dazu: Beginn
 //! und Ende einer Pause des Abfangens, die ein Mensch über den Socket des
-//! Daemons beschlossen hat.
+//! Daemons beschlossen hat. `sandbox.door_capped` kommt aus HUM-477 dazu: Die
+//! Tür einer Sitzung der Kernel-Stufe hat eine Verbindung über ihrer
+//! Obergrenze abgewiesen.
 
 use std::time::SystemTime;
 
@@ -681,6 +683,19 @@ impl ProjectsCleaned {
     }
 }
 
+/// `sandbox.door_capped`: Die Tür einer Sitzung hat eine Verbindung des Gasts
+/// über ihrer Obergrenze sofort geschlossen (HUM-467, HUM-477).
+///
+/// Höchstens ein Record je Start der Sandbox: Das Backend meldet nur die
+/// erste solche Verbindung. Startet ein Daemon die Sandbox mehrmals, stehen
+/// mehrere unter derselben Sitzung des Audit-Logs, einer je Start. Die Verbindung erreichte den Proxy nicht; der Record sagt,
+/// dass der Gast es versucht hat, und nennt nur die Grenze.
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+pub struct SandboxDoorCapped {
+    /// Wie viele offene Verbindungen die Tür einer Sitzung höchstens hält.
+    pub cap: u32,
+}
+
 /// `intercept.resumed`: Eine Pause des Abfangens ist zu Ende (HUM-407).
 ///
 /// Ihr Beginn steht als `intercept.paused` davor; zwischen beiden steht jede
@@ -757,6 +772,9 @@ pub enum RecordKind {
     InterceptResumed(InterceptResumed),
     /// Ein bestätigter Aufräumplan wurde ausgeführt (HUM-533).
     ProjectsCleaned(ProjectsCleaned),
+    /// Die Tür einer Sitzung hat eine Verbindung über ihrer Obergrenze
+    /// abgewiesen (HUM-477).
+    SandboxDoorCapped(SandboxDoorCapped),
 }
 
 impl RecordKind {
@@ -789,11 +807,12 @@ impl RecordKind {
             Self::InterceptPaused => "intercept.paused",
             Self::InterceptResumed(_) => "intercept.resumed",
             Self::ProjectsCleaned(_) => "projects.cleaned",
+            Self::SandboxDoorCapped(_) => "sandbox.door_capped",
         }
     }
 
     /// Alle Namen, in der Reihenfolge der Tabelle.
-    pub const NAMES: [&'static str; 25] = [
+    pub const NAMES: [&'static str; 26] = [
         "daemon.started",
         "daemon.stopped",
         "session.started",
@@ -819,6 +838,7 @@ impl RecordKind {
         "intercept.paused",
         "intercept.resumed",
         "projects.cleaned",
+        "sandbox.door_capped",
     ];
 
     /// `data` dieser Art.
@@ -919,6 +939,7 @@ impl RecordKind {
             Self::InterceptPaused => json!({}),
             Self::InterceptResumed(d) => d.data(),
             Self::ProjectsCleaned(d) => d.data(),
+            Self::SandboxDoorCapped(d) => json!({ "cap": d.cap }),
         }
     }
 }
@@ -954,7 +975,7 @@ mod tests {
 
     #[test]
     fn every_kind_has_the_name_of_the_table_and_canonical_data() {
-        assert_eq!(RecordKind::NAMES.len(), 25);
+        assert_eq!(RecordKind::NAMES.len(), 26);
         for name in RecordKind::NAMES {
             let (area, verb) = name.split_once('.').unwrap();
             assert!(!area.is_empty() && !verb.is_empty(), "{name}");

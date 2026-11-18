@@ -90,7 +90,7 @@ use humanitl_config::secret::{KeyRef, KeyStore};
 use humanitl_config::{AskMode, Config, SandboxMode, WorkMode};
 use humanitl_core::diagnostics::codes;
 use humanitl_core::ids::{SandboxId, SessionId};
-use humanitl_core::{Diagnostic, FixAction, FlowEvent, Severity};
+use humanitl_core::{Diagnostic, FixAction, FlowEvent, SandboxNoticeSink, Severity};
 use humanitl_proxy::rules_store::RulesStore;
 use humanitl_proxy::session::{SessionSettings, SessionState};
 use humanitl_recorder::Recorder;
@@ -666,6 +666,8 @@ struct Inner {
     settings: Option<Arc<SessionSettings>>,
     /// Woher die Hinweiszeilen im Terminal kommen (HUM-042).
     notices: Option<HeldNotices>,
+    /// Wohin das Backend meldet, was ins Audit-Log gehört (HUM-477).
+    sandbox_notices: Option<SandboxNoticeSink>,
     /// Wohin die Zusammenfassung eines Laufs geht (HUM-043).
     ///
     /// Ohne Aufzeichnung entsteht sie trotzdem und reist als Ereignis; nur
@@ -761,6 +763,12 @@ pub struct SandboxPorts {
     /// Ohne Angabe [`SourceLock::of_policy`]; die Tests setzen sie, bis es
     /// die Vorgabedatei gibt.
     pub source_lock: Option<SourceLock>,
+    /// Der Kanal vom Backend in den Ereignisstrom der Sitzung (HUM-477):
+    /// Jeder Start gibt ihn dem Backend mit ([`LaunchOptions::notices`]),
+    /// und der Daemon schreibt, was darüber kommt, ins Audit-Log. Ohne
+    /// diesen Anschluss meldet das Backend nichts; so im Fake-Modus und in
+    /// den meisten Tests.
+    pub sandbox_notices: Option<SandboxNoticeSink>,
 }
 
 impl SandboxPorts {
@@ -830,6 +838,14 @@ impl SandboxPorts {
         self.source_lock = Some(lock);
         self
     }
+
+    /// Dieselben Anschlüsse mit diesem Kanal in den Ereignisstrom
+    /// ([`SandboxPorts::sandbox_notices`], HUM-477).
+    #[must_use]
+    pub fn with_sandbox_notices(mut self, sink: SandboxNoticeSink) -> Self {
+        self.sandbox_notices = Some(sink);
+        self
+    }
 }
 
 impl SandboxService {
@@ -865,6 +881,7 @@ impl SandboxService {
                 rules: ports.rules,
                 settings: ports.settings,
                 notices: ports.notices,
+                sandbox_notices: ports.sandbox_notices,
                 recorder: ports.recorder,
                 keys,
                 leaving: std::sync::atomic::AtomicBool::new(false),
@@ -4034,6 +4051,9 @@ impl Inner {
         let backend = self.pick_backend(&config, &profile, pick)?;
         let options = LaunchOptions {
             approved_work_dir: approved,
+            // Der Kanal in den Ereignisstrom reist mit jedem Plan; der Start
+            // nimmt dieselben Optionen (HUM-477).
+            notices: self.sandbox_notices.clone(),
             ..LaunchOptions::default()
         };
 
@@ -6090,6 +6110,33 @@ mod tests {
             .expect("the request is recorded")
             .headers
             .clone()
+    }
+
+    /// Der Kanal in den Ereignisstrom aus den Anschlüssen steht in den
+    /// Optionen jedes Plans, und `launch_with` gibt genau diese dem Backend
+    /// (HUM-477). Ohne Anschluss steht dort keiner.
+    #[test]
+    fn the_sandbox_notices_reach_the_launch_options() {
+        let home = tempfile::TempDir::new().unwrap();
+        let sink = humanitl_core::SandboxNoticeSink::announcing(|_| {});
+        let service = service_with(
+            &home,
+            "opencode",
+            None,
+            SandboxPorts::none().with_sandbox_notices(sink),
+        );
+        let prepared = service
+            .inner
+            .prepare_with_command(&v1::sandbox_request::Plan::default(), &[])
+            .expect("a plan");
+        assert!(prepared.options.notices.is_some());
+
+        let without = service_for(&home, "opencode");
+        let prepared = without
+            .inner
+            .prepare_with_command(&v1::sandbox_request::Plan::default(), &[])
+            .expect("a plan");
+        assert!(prepared.options.notices.is_none());
     }
 
     /// Ein Plan liest den Schlüssel nie: Die Datei steht da, damit Plan und

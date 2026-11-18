@@ -17,10 +17,18 @@
 //! | Ende des Sinks | `session.ended` mit den Zahlen der Sitzung |
 //!
 //! `daemon.started` und `daemon.stopped` schreibt `main`, `rule.*` und
-//! `llm.discover` der gRPC-Dienst. Ohne Quelle im heutigen Code bleiben
+//! `llm.discover` der gRPC-Dienst. Meldungen des Sandbox-Backends
+//! (`FlowEvent::Sandbox`, HUM-477) schreibt nicht dieser Sink, sondern der
+//! Kanal `sandbox_notices` in `main` direkt, bevor sie in den Strom gehen; hier
+//! fielen sie mit einem Rückstand weg, und der Vermerk der Tür kommt je Start
+//! nur einmal. Ihre Records sind `sandbox.door_capped` mit der Grenze,
+//! höchstens einmal je Start der Sandbox, und `isolation.check` mit jeder
+//! Garantie und ihrem Ergebnis ([`sandbox_record`]). Heute meldet nur die
+//! Kernel-Stufe, deren Prüfung auch auf dem Host läuft; die Prüfung der
+//! anderen Backends geht weiter nur an den Client, der gefragt hat. Ohne
+//! Quelle im heutigen Code bleiben
 //! `flow.forwarded` (das Ereignis nennt die festgenagelte Zieladresse nicht),
-//! `isolation.check` (die Messung läuft im Sandbox-Dienst und geht nur an den
-//! Client, der gefragt hat), `config.changed` (es gibt kein `SetConfig`,
+//! `config.changed` (es gibt kein `SetConfig`,
 //! HUM-069), `pseudonym.created` und `finding.allowlisted` (weder Editor noch
 //! Ausnahmeliste melden etwas, HUM-045 ff.) und `audit.verified` (die Prüfung
 //! über RPC baut HUM-070).
@@ -34,12 +42,13 @@ use std::time::SystemTime;
 
 use humanitl_audit::RecordKind;
 use humanitl_audit::kinds::{
-    DecisionKind, FlowBlockedReason, FlowDecided, FlowReceived, FlowResponded, InterceptResumed,
-    SessionEnded, SessionStarted,
+    CheckOutcome, DecisionKind, FlowBlockedReason, FlowDecided, FlowReceived, FlowResponded,
+    InterceptResumed, IsolationCheck, SandboxDoorCapped, SessionEnded, SessionStarted,
 };
 use humanitl_audit_log::AuditHandle;
 use humanitl_core::{
-    DecidedFindings, Decision, DecisionSource, FlowEvent, FlowId, InterceptChange, SessionId,
+    DecidedFindings, Decision, DecisionSource, FlowEvent, FlowId, InterceptChange, SandboxNotice,
+    SessionId,
 };
 use tokio::sync::broadcast::error::{RecvError, TryRecvError};
 use tokio::sync::{broadcast, oneshot};
@@ -219,7 +228,11 @@ impl Tally {
                     RecordKind::InterceptResumed(InterceptResumed { reason: *reason })
                 }
             }),
-            FlowEvent::Failed { .. }
+            // Was das Sandbox-Backend meldet, schreibt der Kanal aus
+            // `sandbox_notices` in `main` schon selbst ins Log, bevor es in
+            // den Strom geht (HUM-477): Hier fiele es mit dem Rückstand weg.
+            FlowEvent::Sandbox { .. }
+            | FlowEvent::Failed { .. }
             | FlowEvent::Lagged { .. }
             | FlowEvent::Diagnostic { .. }
             | FlowEvent::AgentAsk { .. } => {}
@@ -297,6 +310,24 @@ impl Tally {
         }
         self.record(RecordKind::SessionEnded(self.counts));
         self.counts
+    }
+}
+
+/// Der Record zu einer Meldung des Sandbox-Backends (HUM-477).
+pub(crate) fn sandbox_record(notice: &SandboxNotice) -> RecordKind {
+    match notice {
+        SandboxNotice::DoorCapped { cap } => {
+            RecordKind::SandboxDoorCapped(SandboxDoorCapped { cap: *cap })
+        }
+        SandboxNotice::IsolationChecked { results } => RecordKind::IsolationCheck(IsolationCheck {
+            results: results
+                .iter()
+                .map(|result| CheckOutcome {
+                    check: result.check.clone(),
+                    passed: result.passed,
+                })
+                .collect(),
+        }),
     }
 }
 

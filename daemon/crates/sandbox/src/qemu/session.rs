@@ -36,8 +36,10 @@
 //! [`MAX_DOOR_CONNECTIONS`] hält die Tür je Sitzung nicht offen: Eine
 //! Verbindung darüber geht sofort zu, ohne den Proxy zu erreichen, und die
 //! erste davon hält die Zulassung der Sitzung fest
-//! ([`crate::launcher::Admission::note_door`]). Ein Gast mit Root kann so die
-//! Fäden und Deskriptoren des Daemons nicht unbegrenzt binden.
+//! ([`crate::launcher::Admission::note_door`]) und meldet sie einmal in den
+//! Ereignisstrom der Sitzung, aus dem der Daemon das Audit-Log schreibt
+//! (`sandbox.door_capped`, HUM-477). Ein Gast mit Root kann so die Fäden und
+//! Deskriptoren des Daemons nicht unbegrenzt binden.
 //!
 //! Jeder Faden endet mit der Sitzung: Er wartet zugleich auf das Leseende der
 //! Lebensleine, deren Schreibende der Zustand der Sandbox hält.
@@ -51,6 +53,7 @@ use std::sync::{Arc, Condvar, Mutex, PoisonError};
 use std::thread;
 use std::time::{Duration, Instant};
 
+use humanitl_core::SandboxNotice;
 use rustix::event::{PollFd, PollFlags, poll};
 
 /// Die längste Zeile des Berichts, die der Daemon annimmt; eine längere
@@ -273,10 +276,18 @@ pub(crate) fn serve_door(
         let Some(slot) = slots.take() else {
             // Sofort zu, ohne zu lesen und ohne Faden.
             drop(guest);
-            admission.note_door(format!(
+            let first = admission.note_door(format!(
                 "the door closed a guest connection above the cap of {MAX_DOOR_CONNECTIONS} \
                  open connections; later ones are not noted"
             ));
+            // Nur die erste je Start geht in den Ereignisstrom und damit
+            // ins Audit-Log (HUM-477); ein Gast, der die Tür bestürmt, füllt
+            // das Log nicht.
+            if first {
+                admission.report(SandboxNotice::DoorCapped {
+                    cap: u32::try_from(MAX_DOOR_CONNECTIONS).unwrap_or(u32::MAX),
+                });
+            }
             continue;
         };
         match UnixStream::connect(proxy) {
@@ -663,7 +674,15 @@ mod tests {
         let (lifeline, read) = crate::shim_fds::Lifeline::new().unwrap();
         let ready = GuestReady::default();
         ready.set();
-        let admission = crate::launcher::Admission::default();
+        // Der Kanal in den Ereignisstrom der Sitzung (HUM-477).
+        let reported = Arc::new(Mutex::new(Vec::new()));
+        let sink = {
+            let reported = Arc::clone(&reported);
+            humanitl_core::SandboxNoticeSink::announcing(move |event| {
+                reported.lock().unwrap().push(event);
+            })
+        };
+        let admission = crate::launcher::Admission::reporting_to(Some(sink));
         let door_admission = admission.clone();
         let server = thread::spawn(move || {
             serve_door(&door, &proxy_path, &read, &ready, &door_admission);
@@ -676,6 +695,7 @@ mod tests {
             open.push((guest, upstream));
         }
         assert_eq!(admission.door(), None);
+        assert!(reported.lock().unwrap().is_empty());
 
         for _ in 0..2 {
             let mut over = UnixStream::connect(&door_path).unwrap();
@@ -697,6 +717,18 @@ mod tests {
         proxy.set_nonblocking(false).unwrap();
         let note = admission.door().unwrap();
         assert!(note.contains("cap of 64"), "{note}");
+        // Zwei Verbindungen über der Grenze, eine Meldung in den Strom.
+        {
+            let reported = reported.lock().unwrap();
+            assert_eq!(reported.len(), 1, "{reported:?}");
+            let humanitl_core::FlowEvent::Sandbox { notice, .. } = &reported[0] else {
+                panic!("expected a sandbox event, got {:?}", reported[0]);
+            };
+            assert_eq!(
+                *notice,
+                humanitl_core::SandboxNotice::DoorCapped { cap: 64 }
+            );
+        }
 
         for (index, (guest, upstream)) in open.iter_mut().enumerate() {
             let ping = format!("ping {index}");

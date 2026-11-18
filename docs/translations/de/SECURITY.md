@@ -2190,8 +2190,9 @@ aufgegebenes `CONNECT` könnte der Gast später noch annehmen, und es nähme den
 (HUM-470, eine Vorsorge: Das vsock-Gerät sagt binnen Millisekunden ab, solange der Gast nicht
 lauscht). Die Tür hält je Sitzung höchstens 64 Verbindungen zum Proxy offen (HUM-467); jede bindet
 zwei Fäden und vier Deskriptoren des Daemons. Eine Verbindung darüber geht sofort zu, ungelesen und
-ohne Faden, und die erste je Sitzung steht im Beleg von `single_socket` jeder späteren Prüfung; an
-den Garantien ändert das nichts, denn eine solche Verbindung erreicht nichts.
+ohne Faden, und die erste je Sitzung steht im Beleg von `single_socket` jeder späteren Prüfung und
+einmal je Start der Sandbox im Audit-Log als `sandbox.door_capped` (HUM-477); jede Prüfung der Kernel-Stufe samt
+Host-Prüfung steht dort als `isolation.check`; an den Garantien ändert das nichts, denn eine solche Verbindung erreicht nichts.
 
 ### Wie eine Sitzung entsteht
 

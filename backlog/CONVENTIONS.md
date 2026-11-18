@@ -3946,3 +3946,41 @@ andere. `upstream` braucht `egress.proxy`.
 aktuelle Ordner; Zeile der Paritätstabelle. Der Fake baut die Felder mit
 derselben Funktion (`proposal::build`), jeder Agent vom Host verfügbar, ohne
 Depot.
+
+### 4.55 Aus der Umsetzung der Sandbox-Ereignisse im Audit-Log (HUM-477, 2026-11-18)
+
+**Ein Kanal vom Backend in den Ereignisstrom.** `humanitl_core::SandboxNoticeSink`
+ist der Kanal, über den ein Sandbox-Backend während einer Sitzung meldet, was
+ins Audit-Log gehört; die Meldung ist `humanitl_core::SandboxNotice`. Der Sink
+reicht jede Meldung als `FlowEvent::Sandbox { at, notice }` weiter. Der Daemon
+baut ihn in `sandbox_notices` (`humanitld`), gibt ihn dem Sandbox-Dienst mit
+`SandboxPorts::with_sandbox_notices`, und jeder Plan trägt ihn in
+`LaunchOptions::notices` zum Backend. Ohne Sink
+meldet das Backend nichts. Die Typen liegen im Kern wie `InterceptPause`, damit
+gRPC-Dienst und Daemon sie halten, ohne von einem Adapter abzuhängen.
+
+**Die Meldungen.** `DoorCapped { cap }`: die erste Verbindung über der
+Obergrenze der Tür je Start der Sandbox (HUM-467; die `Admission` und ihr
+`OnceLock` entstehen mit jedem Plan, ein zweiter Start unter derselben
+Sitzungskennung des Audit-Logs meldet wieder); `Admission::note_door` entscheidet
+über „die erste", die Meldung geht nur, wenn es diese war. `IsolationChecked {
+results }`: jede Prüfung der Kernel-Stufe nach der Host-Prüfung, je Garantie nur
+Name (`IsolationCheck::as_str`) und Ergebnis, nie Beleg oder Befund, die Pfade
+und Text aus dem Gast tragen können (`launcher::isolation_notice`). Die übrigen
+Backends melden heute nichts; ihre Prüfung geht weiter nur an den Client, der
+gefragt hat.
+
+**Audit, direkt beim Schreiber.** `sandbox_notices` schreibt jede Meldung
+zuerst mit `AuditHandle::record` (unbegrenzte Warteschlange des Schreibers) ins
+Log und legt sie erst danach über die Halte-Warteschlange in den Strom. Der Sink
+des Audit-Logs (`audit_sink.rs`) übergeht `FlowEvent::Sandbox`: Sein Empfänger
+am begrenzten Rundfunk kann zurückfallen (`Lagged`), und der Vermerk der Tür
+kommt je Start nur einmal. `DoorCapped` wird die neue Art
+`sandbox.door_capped` mit `{ "cap": 64 }`, `IsolationChecked` die bestehende
+Art `isolation.check` mit `results` (`check`, `passed`), beides mit der Sitzung
+des Daemons (`audit_sink::sandbox_record`).
+
+**Nicht auf der Leitung.** `Subscribe` lässt `FlowEvent::Sandbox` aus; die
+Übersetzungen ins Protokoll (`convert::flow_event_to_proto`,
+`fake::state::event_to_proto`) geben für sie ein `FlowEvent` ohne `event`
+zurück. Kein Feld im Protokoll, keine neue Fassung.
