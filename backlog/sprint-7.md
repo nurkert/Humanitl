@@ -1804,6 +1804,64 @@ der anderen Sitzungen sperren lassen.
 1. Entscheidung mit Begründung; wenn gebaut, ein Test, dass eine volle
    Sitzung die Tür einer anderen nicht sperrt.
 
+### Entscheidung (2026-11-18)
+
+**Die Grenze je Sitzung genügt, solange der Daemon genau eine Sitzung
+führt; ein gemeinsames Limit wird nicht gebaut.** Ein zweiter Start ist heute
+`CLI_005` (`daemon/crates/ipc/src/sandbox.rs`, ADR-0024). Es gibt also nie
+eine zweite Tür, deren Plätze ein gemeinsames Limit schützen oder die ein
+Gast sperren könnte. Ein gemeinsames Limit über eine einzige Sitzung wäre
+entweder größer als 64 und damit wirkungslos, oder kleiner und dann nur eine
+niedrigere Grenze je Sitzung. Gebaut und getestet wäre ein Verteiler, den
+heute kein Weg erreicht, und seine Teilung (fester Anteil je Sitzung,
+geliehene Plätze, Rückgabe) hinge von Entscheidungen ab, die erst HUM-549
+trifft: wie viele Sitzungen ein Daemon führen darf und wie die Anfragen ihrer
+Türen dem Proxy zugeordnet werden.
+
+**Was heute geteilt wird, und warum es reicht.** Die Tür läuft im Prozess
+des Daemons; was ein Gast über sie bindet, fehlt den anderen Nutzern
+desselben Prozesses (gRPC-Clients, Aufzeichnung, Proxy). Gesucht wurde
+deshalb ein Betriebsmittel, das ein Gast schon mit einer Sitzung über die
+Zahl gleichzeitiger Verbindungen für einen anderen Verbraucher erschöpfen
+kann. Gefunden wurde keins:
+
+- Deskriptoren: Der Daemon hebt seine Grenze nicht an (kein `setrlimit`,
+  kein `LimitNOFILE` in `packaging/systemd/humanitld.service`); unter dem
+  Dienstverwalter des Nutzers gilt die weiche Vorgabe von systemd, 1024. Über
+  die Tür bindet ein Gast höchstens 256 Deskriptoren (64 Verbindungen zu je
+  vier), dazu je Verbindung im Proxy der angenommene Socket und die
+  Verbindung nach außen, zusammen etwa 384. Die Grenze des Proxys je Sitzung
+  (`limits.max_client_connections`, Vorgabe 256, HUM-120) greift dahinter
+  nicht einmal, weil die Tür vorher schließt. Es bleiben weit über 500
+  Deskriptoren für alles andere.
+- Fäden: höchstens 128 je Sitzung, ohne `TasksMax` an der Unit des Daemons;
+  die Vorgabe von systemd hängt vom Rechner ab, liegt aber üblicherweise
+  weit über 128 (auf diesem Rechner nicht gemessen).
+- Die übrigen Wege in den Gast (Bericht, Steuerstrom, höchstens vier Shells
+  über K-18) öffnet der Host selbst oder begrenzt sie fest; der Gast kann ihre
+  Zahl nicht treiben.
+
+Eine volle Tür sperrt also weder eine andere Sitzung (es gibt keine) noch
+einen anderen Verbraucher im Daemon. Nicht Gegenstand dieser Entscheidung ist
+der Speicher, der mit der Zahl der Anfragen über die Zeit wächst: Jede
+Anfrage legt einen Eintrag in der Flow-Registry des Proxys an, die keine
+Obergrenze und keine Verdrängung kennt, und Audit-Einträge laufen über einen
+unbegrenzten Kanal zum Schreiber. Viele Anfragen über eine einzige
+Verbindung können so den Speicher des Daemons füllen. Das ist ein eigenes
+Issue (HUM-556), kein Grund für ein gemeinsames Limit der Türen.
+
+**Wann die Frage wiederkommt.** Mit HUM-549 (mehrere Sitzungen je Daemon)
+summieren sich die Grenzen: Bei N Sitzungen bindet die Tür bis zu N mal 256
+Deskriptoren, und schon drei volle Türen kämen mit dem Proxy über die
+weiche Grenze von 1024 (drei mal etwa 384). HUM-549 muss deshalb mit der
+Zahl der Sitzungen auch das gemeinsame Budget festlegen: eine Obergrenze der Sitzungen, die Grenze der
+Deskriptoren des Daemons (anheben oder ausdrücklich setzen) und, wenn ein
+gemeinsames Limit der Türen nötig wird, einen garantierten Anteil je Sitzung,
+den keine andere Sitzung belegen kann, mit einem Test, dass eine volle
+Sitzung die Tür einer anderen nicht sperrt. Der Hinweis steht in HUM-549
+(`backlog/sprint-8.md`), der Satz zum Restrisiko in K-31 von
+`docs/THREAT-MODEL.md` (en und de).
+
 ---
 
 ## HUM-480 · Kernel level: enforce the programs of the unit and count them per role
