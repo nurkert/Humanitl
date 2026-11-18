@@ -1573,7 +1573,9 @@ nicht erreichbar oder passt sein Zertifikat nicht, scheitert die Anfrage mit ein
 `egress.proxy_resolve = "proxy"` (Vorgabe) löst Humanitl nichts auf und lehnt nur private
 IP-Literale und lokale Namen ab; ein öffentlicher Name, der auf eine private Adresse zeigt, ist dann
 Sache des Proxys. Mit `"humanitl"` prüft Humanitl jede Adresse, und die DNS-Anfrage geht hinaus,
-bevor der Proxy entschieden hat.
+bevor der Proxy entschieden hat. Die Prüfung bindet nur einen Proxy, der zur Adresse im `CONNECT`
+verbindet; Burp Suite 2026.11.2 löst den Namen aus `Host` erneut auf (beobachtet am 2026-11-18,
+HUM-524), mit Burp also `"proxy"` nehmen.
 
 **Der Proxy dahinter entscheidet (`hold.ask_mode = "upstream"`, HUM-512).** Ein zweites Opt-in auf
 dem ersten: Eine Anfrage ohne Regel oder mit `ask` wird nicht in Humanitl gehalten, sondern an den
@@ -1598,8 +1600,9 @@ freigegeben durch eine Regel, einen Menschen oder den Entscheidungs-Proxy deiner
   nicht.
 - *Wer auflöst.* Mit `"proxy"` ist ein öffentlicher Name, der auf `127.0.0.1`, das LAN oder eine
   Metadaten-Adresse zeigt, vom Proxy abzulehnen; mitmproxy hat keine solche Sperre. Mit
-  `"humanitl"` ist die Prüfung ganz, aber der Name geht als DNS-Anfrage hinaus, bevor dort
-  entschieden ist (ADR-0006 gilt im Opt-in nur zur Hälfte). Die Moduszeile jeder Sitzung und
+  `"humanitl"` ist die Prüfung nur mit einem Proxy ganz, der zur Adresse im `CONNECT` verbindet
+  (mitmproxy tut das; Burp Suite 2026.11.2 löst den Namen aus `Host` erneut auf, beobachtet am
+  2026-11-18, HUM-524), und der Name geht als DNS-Anfrage hinaus, bevor dort entschieden ist (ADR-0006 gilt im Opt-in nur zur Hälfte). Die Moduszeile jeder Sitzung und
   `humanitl sessions` sagen, was gilt.
 - *Was Humanitl aufzeichnet.* Die Quelle `upstream` (im Audit `decision: forward`,
   `decided_by: upstream`) und den Status der Antwort des Proxys in `flow.responded`; Humanitl

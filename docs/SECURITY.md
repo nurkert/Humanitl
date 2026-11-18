@@ -1494,7 +1494,9 @@ recording all happen in Humanitl first, and a `block` never reaches that proxy.
   `"humanitl"` too, before any resolution; a public name that resolves to
   a private address is the proxy's to refuse. `"humanitl"`: Humanitl resolves after its decision,
   checks the address (ADR-0006) and sends `CONNECT IP:PORT`; the query leaves before the proxy
-  decides.
+  decides. The check binds only a proxy that connects to the address in `CONNECT`; Burp Suite
+  2026.11.2 resolves the name from `Host` again (observed 2026-11-18, HUM-524), so with Burp use
+  `"proxy"`.
 - *Settings.* All `egress.*` keys are closed to project profiles; the credentials (`USER:PASSWORD`
   for `Proxy-Authorization: Basic`, split at the first colon, so the password may carry blanks)
   live in the keyring (`humanitl egress auth set`), or in the `0600` fallback file when the keyring
@@ -1527,9 +1529,10 @@ of the person's choice".
   what it reads. The isolation does not move: the agent still reaches only Humanitl.
 - *Who resolves.* With `egress.proxy_resolve = "proxy"` the proxy resolves after its own decision;
   a public name that points to `127.0.0.1`, the LAN or a metadata address is its to refuse, and
-  mitmproxy has no such guard of its own. With `"humanitl"` the private check is whole, but the
-  name leaves as a DNS query before the person at the proxy decides (ADR-0006 holds only half in
-  the opt-in). The mode line of every session and `humanitl sessions` say which applies.
+  mitmproxy has no such guard of its own. With `"humanitl"` the private check is whole only for
+  a proxy that connects to the address in `CONNECT` (mitmproxy does; Burp Suite 2026.11.2 resolves
+  the name from `Host` again, observed 2026-11-18, HUM-524), and the name leaves as a DNS query
+  before the person at the proxy decides (ADR-0006 holds only half in the opt-in). The mode line of every session and `humanitl sessions` say which applies.
 - *What Humanitl records.* Such a flow is recorded with the source `upstream` (audit `decision:
   forward`, `decided_by: upstream`) and the status of the proxy's answer in `flow.responded`;
   Humanitl claims no allow or block it did not see. The agent gets the proxy's answer unchanged,
@@ -1973,7 +1976,7 @@ passthrough or the audit chain gets a line here and in the change history of
 | 0.1.x | Linux: the kernel level (backend `qemu`, ADR-0021) admitted after `kvm-tests` and `escape-tests-qemu` were green on `main` with the disposable sandbox in the guest (HUM-446) and the probes with root in the guest (HUM-445), in ten consecutive runs in which both jobs ran (43624997550, 43630993303, 43638237420, 43641769840, 43646599744, 43648968241, 43656202366, 43661904978, 43669712307 and 43673927540); a person chooses it with `sandbox.backend = "qemu"` or `--backend qemu`, `auto` stays bubblewrap, and a missing prerequisite refuses the start with `SANDBOX_045` (HUM-449, [section 14](#14-linux-qemu-micro-vm-kernel-level), K-30 to K-34). |
 | 0.1.x | The decision proxy decides requests without a rule (`hold.ask_mode = "upstream"`, off by default, only with a proxy the running daemon uses): `block` stays final and never reaches it (the declared LLM passthrough ranks ahead of block rules and does, as any allow), `redact` (unless intercepting is paused) and the hard block on verified secrets stay in Humanitl, the flow is recorded as forwarded with the proxy's status, never as an allow (HUM-512, [section 6](#the-proxy-behind-decides-holdask_mode--upstream-hum-512), K-35). |
 | 0.1.x | Cloud inference is named: when the agent's model endpoint lies outside this machine and its network, the session header carries an orange tag with the provider, `humanitl run` and `go` print it at every start, `humanitl doctor` has the line `inference`, and the first start per agent and provider asks once; the confirmation lives in the daemon's data directory, never in the project or the app; nothing is blocked (HUM-516, [section 5.1](#cloud-inference-hum-516), K-02). |
-| 0.1.x | A decision proxy of the person behind Humanitl (`egress.proxy`, off by default): allowed requests leave only through it, re-encrypted against its CA, which is trusted on that way only; no direct fallback; who resolves is `egress.proxy_resolve` (`proxy` refuses local names and private literals first, `humanitl` resolves and checks every address); keys closed to project profiles, credentials in the keyring or the `0600` fallback file, never in `config.toml` (HUM-511, [section 6](#a-decision-proxy-behind-humanitl-hum-511), K-35). |
+| 0.1.x | A decision proxy of the person behind Humanitl (`egress.proxy`, off by default): allowed requests leave only through it, re-encrypted against its CA, which is trusted on that way only; no direct fallback; who resolves is `egress.proxy_resolve` (`proxy` refuses local names and private literals first, `humanitl` resolves and checks every address, binding only a proxy that connects to that address, not Burp); keys closed to project profiles, credentials in the keyring or the `0600` fallback file, never in `config.toml` (HUM-511, [section 6](#a-decision-proxy-behind-humanitl-hum-511), K-35). |
 | 0.1.x | The agent depot (`agents.source`, off by default): a depot agent's resolved version directory read-only at `/run/humanitl/agent/`, each entry trust-checked before the bind; its configuration as a writable scratch copy deleted with the session; one guard on every backend's plan refuses a host program of a depot agent (`AGENT_017`); host install locations of depot agents masked (empty read-only mounts under Linux only where they exist, `file-read*` and `process-exec` deny rules under Seatbelt); a company lock may only name the depot (`AGENT_010`) (HUM-518). |
 | 0.1.x | Cleanup and forgetting only through a plan the daemon lists and a person confirms; its digest binds identity and version of every item and is checked again in the deleting transaction (`SANDBOX_054`); never the project folder, the audit chain or the running session (HUM-533, [section 5.2](#cleanup-and-forgetting-hum-533), K-37). |
 | 0.1.x | The project choice: a per-project configuration layer the daemon keeps on the host in its register, written only through `Projects.save_choice`, never read from the project folder; a fixed allow-list of keys, the isolation floor only raised, company locks win, `CONFIG_024` otherwise; a start without a project folder is refused with `SANDBOX_053` instead of taking the daemon's working directory (HUM-532, [section 5.2](#the-project-choice-hum-532), K-37). |
