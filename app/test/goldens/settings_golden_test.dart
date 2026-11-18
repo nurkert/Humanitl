@@ -17,7 +17,7 @@ import 'package:flutter_test/flutter_test.dart';
 import 'package:humanitl/core/domain/domain.dart';
 import 'package:humanitl/core/ipc/client_providers.dart';
 import 'package:humanitl/core/ipc/fake_daemon_client.dart';
-import 'package:humanitl/features/settings/settings_overlay.dart';
+import 'package:humanitl/features/settings/settings_sheet.dart';
 
 import '../harness/settings_harness.dart' show SettingsCategory;
 
@@ -69,7 +69,7 @@ Widget sheet(GoldenVariant variant, FakeDaemonClient client) => goldenFrame(
   variant: variant,
   background: variant.tokens.colors.bg0,
   overrides: <Override>[daemonClientProvider.overrideWithValue(client)],
-  child: SettingsOverlay(onClose: () {}),
+  child: SettingsSheet(onClose: () {}),
 );
 
 /// Lässt Konfiguration und Schlüsselstatus ankommen und das Overlay

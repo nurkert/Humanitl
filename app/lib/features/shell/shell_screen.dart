@@ -33,7 +33,7 @@ import '../sandbox/providers/sandbox_status_provider.dart';
 import '../sandbox/sandbox_screen.dart';
 import '../sandbox/widgets/sandbox_terminal.dart';
 import '../sandbox/widgets/terminal_pane.dart' show terminalHoldsKeyboard;
-import '../settings/settings_overlay.dart';
+import '../settings/settings_sheet.dart';
 import '../setup/providers/setup_provider.dart';
 import 'agent_session_feed.dart';
 import 'providers/connection.dart';
@@ -1068,7 +1068,7 @@ class _ShellScreenState extends ConsumerState<ShellScreen> {
                 // bleibt, statt ihnen auszuweichen (HUM-404). Nur die Palette
                 // liegt noch darüber.
                 if (_settingsOpen)
-                  SettingsOverlay(
+                  SettingsSheet(
                     onClose: _closeSettings,
                     onClosed: _settingsClosed,
                     closing: _settingsClosing,

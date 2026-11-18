@@ -1,5 +1,5 @@
-/// The head row of the settings overlay: title, search field and close
-/// button (HUM-404).
+/// The head row of the settings panel: title, search field and, in a host
+/// that closes, the close button (HUM-404, HUM-535).
 library;
 
 import 'package:flutter/widgets.dart';
@@ -22,7 +22,7 @@ class SettingsHeader extends StatelessWidget {
     required this.searchController,
     required this.searchFocus,
     required this.onSubmitSearch,
-    required this.onClose,
+    this.onClose,
     super.key,
   });
 
@@ -41,8 +41,9 @@ class SettingsHeader extends StatelessWidget {
   /// `Enter` in the search field.
   final VoidCallback onSubmitSearch;
 
-  /// The close button.
-  final VoidCallback onClose;
+  /// The close button; null for a host that does not close, and then the
+  /// head has no close button (HUM-535).
+  final VoidCallback? onClose;
 
   /// The widest the search field gets.
   static const double searchWidth = 360;
@@ -107,15 +108,16 @@ class SettingsHeader extends StatelessWidget {
                             ),
                           ),
                         ),
-                        FocusTraversalOrder(
-                          order: const NumericFocusOrder(4),
-                          child: HIconButton(
-                            key: const Key('settings-close'),
-                            glyph: HGlyph.close,
-                            onPressed: onClose,
-                            semanticsLabel: l10n.settingsClose,
+                        if (onClose case final VoidCallback close)
+                          FocusTraversalOrder(
+                            order: const NumericFocusOrder(4),
+                            child: HIconButton(
+                              key: const Key('settings-close'),
+                              glyph: HGlyph.close,
+                              onPressed: close,
+                              semanticsLabel: l10n.settingsClose,
+                            ),
                           ),
-                        ),
                       ],
                     ),
                   ),

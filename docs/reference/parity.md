@@ -28,7 +28,7 @@ Eine RPC ohne CLI-Zeile und ohne Ausnahme bricht den CI-Job
 | `Humanitl.Egress` | `humanitl egress auth remove`<br>`humanitl egress auth set`<br>`humanitl egress check`<br>`humanitl egress status` | fehlt |
 | `Humanitl.Exec` | `humanitl sandbox exec` | `features/sandbox/widgets/terminal_tabs` |
 | `Humanitl.GetBody` | `humanitl flows show --body` | `features/history/history_detail` |
-| `Humanitl.GetConfig` | `humanitl config catalog`<br>`humanitl config catalog --project` | `features/settings/settings_overlay` |
+| `Humanitl.GetConfig` | `humanitl config catalog`<br>`humanitl config catalog --project` | `features/settings/settings_panel` |
 | `Humanitl.GetFlow` | `humanitl flows show` | `features/history/history_detail` |
 | `Humanitl.GetInfo` | `humanitl daemon status` | `features/shell/connection_gate` |
 | `Humanitl.GetSessionSummary` | `humanitl sessions summary` | fehlt |

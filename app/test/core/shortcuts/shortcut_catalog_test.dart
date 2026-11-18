@@ -98,7 +98,7 @@ const Map<String, String> keyHandlerAllowlist = <String, String>{
       'list navigation, read from the catalogue',
   'lib/features/settings/categories/models_category.dart':
       'Esc from the detail back to the list, read from the catalogue',
-  'lib/features/settings/settings_overlay.dart':
+  'lib/features/settings/settings_panel.dart':
       'type to search: any printable character starts the search',
   'lib/features/sandbox/widgets/terminal_pane.dart':
       'forwards every key to the emulator after asking the catalogue',
