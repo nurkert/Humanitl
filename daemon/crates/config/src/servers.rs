@@ -138,6 +138,10 @@ pub enum ServerSource {
     Run,
     /// Das Projekt-Profil, mit seinem Pfad.
     Project(std::path::PathBuf),
+    /// Die Projektwahl auf dem Host (HUM-532): die Wahl eines Menschen wie
+    /// `config.toml`, nicht die eines Repositorys, und deshalb ohne
+    /// Bestätigung je Ordner.
+    ProjectChoice,
     /// Ein Profil der Sitzung (`profiles/*.toml`), mit seinem Namen.
     Profile(String),
     /// `llm.server` in `config.toml`: eine Vorgabe des Nutzers wie
@@ -154,6 +158,7 @@ impl ServerSource {
         match origin {
             Origin::Cli | Origin::Env(_) => Self::Run,
             Origin::ProfileProject(path) => Self::Project(path.clone()),
+            Origin::ProjectChoice => Self::ProjectChoice,
             Origin::ProfileBuiltin(name) | Origin::ProfileGlobal(name) => {
                 Self::Profile(name.clone())
             }
@@ -169,7 +174,7 @@ impl ServerSource {
             Self::Run => "run",
             Self::Project(_) => "project",
             Self::Profile(_) => "profile",
-            Self::Config | Self::Default => "default",
+            Self::Config | Self::ProjectChoice | Self::Default => "default",
         }
     }
 }
@@ -181,6 +186,7 @@ impl std::fmt::Display for ServerSource {
             Self::Project(path) => write!(f, "the project profile {}", path.display()),
             Self::Profile(name) => write!(f, "the profile {name}"),
             Self::Config => write!(f, "{SERVER} in config.toml"),
+            Self::ProjectChoice => f.write_str("the project choice"),
             Self::Default => f.write_str("llm.active"),
         }
     }
@@ -235,6 +241,9 @@ impl ServerChoice {
             ServerSource::Run => "leave out --llm".to_owned(),
             ServerSource::Project(path) => format!("remove {SERVER} from {}", path.display()),
             ServerSource::Profile(name) => format!("remove {SERVER} from the profile {name}"),
+            ServerSource::ProjectChoice => {
+                format!("save the project choice again without {SERVER}")
+            }
             ServerSource::Config | ServerSource::Default => {
                 format!("remove {SERVER} from config.toml")
             }

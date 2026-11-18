@@ -85,7 +85,8 @@ pub static AREAS: &[AreaInfo] = &[
                (HUM-070), 019-020 der Zugangsschlüssel des Modells (HUM-140, \
                Bereich dafür bis 029 erweitert), 021 die gespeicherten \
                Modellserver (HUM-289), 022 der Server des Projekts (HUM-405), \
-               023 ein entfallener Wert einer Einstellung (HUM-464)",
+               023 ein entfallener Wert einer Einstellung (HUM-464), 024 die \
+               Projektwahl (HUM-532)",
     },
     AreaInfo {
         area: "sandbox",
@@ -99,7 +100,7 @@ pub static AREAS: &[AreaInfo] = &[
                Zulassung (HUM-431, Bereich dafür bis 059 erweitert), 037-044 und 049 Podman \
                (Sprint 7), 045-047 die Kernel-Stufe (HUM-464), 050 Dienstverwalter des \
                Nutzers (HUM-434), 051 beschreibbare Erweiterung unter der Kernel-Stufe \
-               (HUM-466)",
+               (HUM-466), 053 Start ohne Projektordner (HUM-532)",
     },
     AreaInfo {
         area: "proxy",
@@ -1972,6 +1973,23 @@ registry! {
     AGENT_018 => "agent", "Agent depot in use", "#agent_018",
         "The running session took this agent from the depot; its program directory and its configuration are bound into the sandbox. The depot is removed only when no session uses it.",
         "`CopyCommand` with `humanitl sandbox stop`, then remove again.";
+
+    // HUM-532: the project register and the project choice (ADR-0024).
+    /// A start without a project folder: the request names no `work_dir`,
+    /// and `sandbox.work_dir` holds no folder a person chose. The daemon no
+    /// longer falls back to its own working directory or to `$HOME`; a
+    /// launcher of the desktop starts it there, and the session would have
+    /// run in a folder nobody picked (HUM-532).
+    SANDBOX_053 => "sandbox", "Start without a project folder", "#sandbox_053",
+        "The start names no project folder: the request carries no `work_dir`, and `sandbox.work_dir` names none. The daemon does not take its own working directory or the home directory instead, because a launcher of the desktop starts it there and the agent would see a folder nobody chose. Nothing started, and the project register has no entry for it.",
+        "Choose a folder: open the start window of the app (`humanitl app`), run `humanitl go` or `humanitl run` inside the project folder, or pass `--work DIR`; `CopyCommand` with `humanitl run --work <dir>`.";
+    /// The project choice names a key outside its fixed allow-list, a value
+    /// that a company policy locks, or a `sandbox.min_isolation` below the
+    /// floor of the layers beneath it. Refused when it is saved and when it
+    /// is loaded for a start, never dropped in silence (HUM-532).
+    CONFIG_024 => "config", "Project choice not allowed", "#config_024",
+        "The project choice is the per-project layer the daemon keeps on the host, written only through `Projects.save_choice`. It may carry exactly the keys of the first-start screen (`agent.adapter`, `sandbox.mode`, `sandbox.work_mode`, `sandbox.backend`, `sandbox.min_isolation`, `hold.ask_mode`, `llm.server`, `sandbox.profile`); it may not lower `sandbox.min_isolation` below what `config.toml`, a profile or the project profile require, and it may not set a value a company policy locks. The sentence names the key; nothing was saved, or the start stopped.",
+        "Save the choice again without the named key (`Projects.save_choice`), or raise `sandbox.min_isolation` instead of lowering it; a locked value is decided by the policy.";
 }
 
 /// Sucht einen Code im Register.

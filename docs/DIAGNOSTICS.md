@@ -16,8 +16,8 @@ Entfernen eines Codes.
 |---|---|---|---|---|
 | daemon | `DAEMON` | 001 | 019 | 001-004 Start, Erreichbarkeit, Version des Daemons, 005-008 die Nutzer-Unit von `daemon install` (HUM-044), 009 Abschied (HUM-142), 010 Nutzersitzung, 011 Binaries aus dem `AppImage`, 012 `journalctl` (HUM-070), 013 der von systemd übergebene Socket (HUM-053), 014 `daemon uninstall` (HUM-077) |
 | ipc | `IPC` | 001 | 009 | gRPC-Schnittstelle, Token, Aufrufe gegen den Zustand |
-| config | `CONFIG` | 001 | 029 | 001-006 Datei, Schlüssel, Wertebereiche, 007-009 Profile (HUM-066), 010-012 Test-Wurzel und ihr Flag (HUM-087), 013 der Projektordner der Einrichtung (HUM-044), 017-018 Editor und Gruppenschlüssel (HUM-070), 019-020 der Zugangsschlüssel des Modells (HUM-140, Bereich dafür bis 029 erweitert), 021 die gespeicherten Modellserver (HUM-289), 022 der Server des Projekts (HUM-405), 023 ein entfallener Wert einer Einstellung (HUM-464) |
-| sandbox | `SANDBOX` | 001 | 059 | 001-006 Launcher und Profil, 007 Bridge-Richtung, 010-012 Start-Fehler, 019 verweigerte Versuche ungemeldet (HUM-138), 020-025 /work-Härtung (HUM-043), 030-032 Wegwerf-Sandbox (HUM-350), 033 Vorgabe fällt auf direkt zurück (HUM-357), 034-036 und 048 Wahl des Backends, Untergrenze der Isolation und Zulassung (HUM-431, Bereich dafür bis 059 erweitert), 037-044 und 049 Podman (Sprint 7), 045-047 die Kernel-Stufe (HUM-464), 050 Dienstverwalter des Nutzers (HUM-434), 051 beschreibbare Erweiterung unter der Kernel-Stufe (HUM-466) |
+| config | `CONFIG` | 001 | 029 | 001-006 Datei, Schlüssel, Wertebereiche, 007-009 Profile (HUM-066), 010-012 Test-Wurzel und ihr Flag (HUM-087), 013 der Projektordner der Einrichtung (HUM-044), 017-018 Editor und Gruppenschlüssel (HUM-070), 019-020 der Zugangsschlüssel des Modells (HUM-140, Bereich dafür bis 029 erweitert), 021 die gespeicherten Modellserver (HUM-289), 022 der Server des Projekts (HUM-405), 023 ein entfallener Wert einer Einstellung (HUM-464), 024 die Projektwahl (HUM-532) |
+| sandbox | `SANDBOX` | 001 | 059 | 001-006 Launcher und Profil, 007 Bridge-Richtung, 010-012 Start-Fehler, 019 verweigerte Versuche ungemeldet (HUM-138), 020-025 /work-Härtung (HUM-043), 030-032 Wegwerf-Sandbox (HUM-350), 033 Vorgabe fällt auf direkt zurück (HUM-357), 034-036 und 048 Wahl des Backends, Untergrenze der Isolation und Zulassung (HUM-431, Bereich dafür bis 059 erweitert), 037-044 und 049 Podman (Sprint 7), 045-047 die Kernel-Stufe (HUM-464), 050 Dienstverwalter des Nutzers (HUM-434), 051 beschreibbare Erweiterung unter der Kernel-Stufe (HUM-466), 053 Start ohne Projektordner (HUM-532) |
 | proxy | `PROXY` | 001 | 019 | Anfragen, Caps, Protokoll, 010-011 Grenzen der Verbindung (HUM-120), 012-019 Entscheidungs-Proxy hinter Humanitl (HUM-511) |
 | tls | `TLS` | 001 | 009 | CA, Zertifikate, Handschlag |
 | llm | `LLM` | 001 | 019 | LLM-Endpunkt und seine Antworten, 009 der Zugangsschlüssel (HUM-140), 010-011 Inferenz bei einem Anbieter außerhalb dieses Rechners (HUM-516, Bereich dafür bis 019 erweitert) |
@@ -395,6 +395,14 @@ Setting value retired
 **Auslöser.** `sandbox.podman.runtime` (from `config.toml`, a profile, the environment or the start of a session) names the runtime of the kernel level that the container engine no longer offers. The kernel level is a backend of its own now; the configuration does not load until the value is gone.
 
 **Fix.** `ChangeSetting` on `sandbox.backend` = `qemu`, the backend of the kernel level, and remove `sandbox.podman.runtime`.
+
+#### CONFIG_024
+
+Project choice not allowed
+
+**Auslöser.** The project choice is the per-project layer the daemon keeps on the host, written only through `Projects.save_choice`. It may carry exactly the keys of the first-start screen (`agent.adapter`, `sandbox.mode`, `sandbox.work_mode`, `sandbox.backend`, `sandbox.min_isolation`, `hold.ask_mode`, `llm.server`, `sandbox.profile`); it may not lower `sandbox.min_isolation` below what `config.toml`, a profile or the project profile require, and it may not set a value a company policy locks. The sentence names the key; nothing was saved, or the start stopped.
+
+**Fix.** Save the choice again without the named key (`Projects.save_choice`), or raise `sandbox.min_isolation` instead of lowering it; a locked value is decided by the policy.
 
 ### Bereich sandbox
 
@@ -781,6 +789,14 @@ Kernel level limits cannot be enforced
 **Auslöser.** The unit of a kernel-level session binds at most a fixed amount of memory and a fixed number of processes and threads (`MemoryMax`, `MemorySwapMax`, `TasksMax`), and the cgroup v2 controllers `memory` and `pids` are not delegated to the user's service manager, its cgroup cannot be read, or the running unit's cgroup does not carry the planned `memory.max`, `memory.swap.max` and `pids.max` (a slice in between withholds a controller). systemd would ignore the limits without saying so; a session without its limits does not start, and the agent never runs.
 
 **Fix.** `CopyCommand` with the systemd drop-in that delegates `cpu`, `cpuset`, `io`, `memory` and `pids` to user sessions, then a new login.
+
+#### SANDBOX_053
+
+Start without a project folder
+
+**Auslöser.** The start names no project folder: the request carries no `work_dir`, and `sandbox.work_dir` names none. The daemon does not take its own working directory or the home directory instead, because a launcher of the desktop starts it there and the agent would see a folder nobody chose. Nothing started, and the project register has no entry for it.
+
+**Fix.** Choose a folder: open the start window of the app (`humanitl app`), run `humanitl go` or `humanitl run` inside the project folder, or pass `--work DIR`; `CopyCommand` with `humanitl run --work <dir>`.
 
 ### Bereich proxy
 

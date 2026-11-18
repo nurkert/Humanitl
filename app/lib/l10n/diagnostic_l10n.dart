@@ -335,11 +335,13 @@ abstract final class DiagnosticL10n {
   'SANDBOX_043' => (l10n.diagSANDBOX043Title, l10n.diagSANDBOX043Why),
   'SANDBOX_050' => (l10n.diagSANDBOX050Title, l10n.diagSANDBOX050Why),
   'CONFIG_023' => (l10n.diagCONFIG023Title, l10n.diagCONFIG023Why),
+  'CONFIG_024' => (l10n.diagCONFIG024Title, l10n.diagCONFIG024Why),
   'SANDBOX_045' => (l10n.diagSANDBOX045Title, l10n.diagSANDBOX045Why),
   'SANDBOX_046' => (l10n.diagSANDBOX046Title, l10n.diagSANDBOX046Why),
   'SANDBOX_047' => (l10n.diagSANDBOX047Title, l10n.diagSANDBOX047Why),
   'DOCTOR_015' => (l10n.diagDOCTOR015Title, l10n.diagDOCTOR015Why),
   'SANDBOX_051' => (l10n.diagSANDBOX051Title, l10n.diagSANDBOX051Why),
   'SANDBOX_052' => (l10n.diagSANDBOX052Title, l10n.diagSANDBOX052Why),
+  'SANDBOX_053' => (l10n.diagSANDBOX053Title, l10n.diagSANDBOX053Why),
   _ => null,
 };

@@ -1190,6 +1190,24 @@ auch immer mit der Schicht geschieht. Ein Wegwerf-Lauf sagt nichts über den Net
 Agenten, und er ist keine zweite Verteidigungslinie für die Masken oben; er nimmt für die Dauer
 des Laufs den Schreibweg ins Projekt weg, mehr nicht.
 
+#### Die Projektwahl (HUM-532)
+
+Was ein Mensch auf dem Erststart-Bildschirm für ein Projekt gewählt hat (Agent, Ordnermodus,
+Backend, Untergrenze der Isolation, Frage-Modus, Modellserver, Sandbox-Profil), ist die
+**Projektwahl**. Sie ist eine Ebene der Konfiguration auf dem Host: Der Daemon hält sie in seinem
+Projektregister (`projects` in seiner SQLite-Datenbank unter `$XDG_DATA_HOME/humanitl`, `0600`) und
+schreibt sie nur über die RPC `Projects.save_choice` an seinem Socket. Sie wird nie aus dem
+Projektordner gelesen; weder ein geklontes Repository noch der Agent in einer Sitzung mit
+schreibbarem `/work` kann sie schreiben, denn der Agent hat keinen Weg zum Datenverzeichnis des
+Daemons oder zu seinem Socket. Sie liegt über dem Projekt-Profil und unter Umgebung und
+Kommandozeile (Herkunft `project-choice`). Sie trägt nur die Schlüssel einer festen
+Erlaubnisliste, nie `sandbox.work_dir`, `agent.command`, Einhängungen oder Regeln; sie hebt
+`sandbox.min_isolation`, senkt sie nie und lässt kein Backend darunter; und einen Wert, den eine Firmenvorgabe sperrt, kann sie
+nicht wählen. Jeder dieser Fälle ist `CONFIG_024`, beim Speichern und wenn ein Start die Wahl lädt,
+nie still verworfen. Ein Ordner, der am selben Pfad ersetzt wurde (anderes Gerät und anderer
+Inode), ist ein neues Projekt und startet ohne die alte Wahl. Ein Start ohne Projektordner wird mit
+`SANDBOX_053` abgelehnt; der Daemon nimmt nicht mehr sein eigenes Arbeitsverzeichnis.
+
 ### 5.3 Die Terminal-Ausgabe des Agenten
 
 *Warum es sie gibt.* Der Mensch muss sehen, was der Agent tut. Diese Ausgabe kommt vom Agenten und
@@ -1797,6 +1815,7 @@ der Durchleitung oder an der Audit-Kette bekommt hier eine Zeile und in der Änd
 | 0.1.x | Linux: Podman in der gemeinsamen Stufe (`podman/crun`) zugelassen, nachdem `escape-tests-podman` auf `main` grün war; ein Mensch wählt es mit `sandbox.backend = "podman"` oder `--backend podman`, `auto` bleibt bubblewrap, und die Kernel-Stufe (Backend `qemu`, ADR-0021) lehnt jeder Start bis HUM-449 mit `SANDBOX_048` ab (HUM-448, [Abschnitt 13](#13-linux-podman), K-27). |
 | 0.1.x | Linux: die Kernel-Stufe (Backend `qemu`, ADR-0021) zugelassen, nachdem `kvm-tests` und `escape-tests-qemu` auf `main` mit der Wegwerf-Sandbox im Gast (HUM-446) und den Proben mit Root im Gast (HUM-445) grün waren, in zehn Läufen hintereinander, in denen beide Jobs liefen (43624997550, 43630993303, 43638237420, 43641769840, 43646599744, 43648968241, 43656202366, 43661904978, 43669712307 und 43673927540); ein Mensch wählt sie mit `sandbox.backend = "qemu"` oder `--backend qemu`, `auto` bleibt bubblewrap, und eine fehlende Voraussetzung lehnt den Start mit `SANDBOX_045` ab (HUM-449, [Abschnitt 14](#14-linux-qemu-micro-vm-kernel-stufe), K-30 bis K-34). |
 | 0.1.x | Das Agent-Depot (`agents.source`, ohne Opt-in aus): der aufgelöste Versionsordner eines Depot-Agenten nur lesbar unter `/run/humanitl/agent/`, jeder Eintrag vor dem Einhängen geprüft; seine Konfiguration als schreibbare Arbeitskopie, die mit der Sitzung gelöscht wird; ein Wächter im Plan jedes Backends lehnt ein Programm des Hosts eines Depot-Agenten ab (`AGENT_017`); Host-Installationen von Depot-Agenten maskiert (unter Linux leere, nur lesbare Einhängungen nur für bestehende Orte, unter Seatbelt Verbotsregeln `file-read*` und `process-exec`); eine Firmenvorgabe darf nur das Depot nennen (`AGENT_010`) (HUM-518). |
+| 0.1.x | Die Projektwahl: eine Ebene der Konfiguration je Projekt, die der Daemon auf dem Host in seinem Register hält, nur über `Projects.save_choice` geschrieben, nie aus dem Projektordner gelesen; eine feste Erlaubnisliste von Schlüsseln, die Untergrenze der Isolation steigt nur, Sperren einer Firmenvorgabe gewinnen, sonst `CONFIG_024`; ein Start ohne Projektordner wird mit `SANDBOX_053` abgelehnt, statt das Arbeitsverzeichnis des Daemons zu nehmen (HUM-532, [Abschnitt 5.2](#die-projektwahl-hum-532), K-37). |
 
 ## 12. macOS: Seatbelt statt bubblewrap
 

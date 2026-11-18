@@ -80,6 +80,9 @@ impl WorkDirSource {
             Some(Origin::ProfileProject(path)) => Self::ConfigFile(path.clone()),
             Some(Origin::Env(name)) => Self::Env(name.clone()),
             Some(Origin::Cli) => Self::Flag,
+            // Die Projektwahl trägt keinen Ordner (HUM-532); stünde er doch
+            // dort, hätte ein Mensch ihn gewählt.
+            Some(Origin::ProjectChoice) => Self::Chosen,
             Some(Origin::Default) | None => Self::CurrentDir,
         }
     }

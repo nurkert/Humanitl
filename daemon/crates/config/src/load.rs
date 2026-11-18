@@ -7,8 +7,10 @@
 //! 3. das Profil `default`, als Datei oder eingebettet,
 //! 4. das gewählte Profil, falls es nicht `default` ist,
 //! 5. das Profil des Projekts,
-//! 6. Umgebungsvariablen `HUMANITL_*` mit `__` als Trenner der Ebenen,
-//! 7. Argumente der Kommandozeile.
+//! 6. die Projektwahl, die der Daemon auf dem Host hält (HUM-532,
+//!    [`crate::project_choice`]),
+//! 7. Umgebungsvariablen `HUMANITL_*` mit `__` als Trenner der Ebenen,
+//! 8. Argumente der Kommandozeile.
 //!
 //! Welche Profile die Ebenen 3 und 4 besetzen, entscheidet [`mod@crate::resolve`];
 //! hier stehen sie schon als Liste in [`Sources::profiles`].
@@ -60,6 +62,7 @@ use crate::env::Env;
 use crate::model::{Config, MinIsolation, RETIRED_KERNEL_RUNTIME};
 use crate::origin::{Origin, Resolved};
 use crate::profile::{ConfigOverlay, DEFAULT_PROFILE, Profile, ProfileSource, builtin_text};
+use crate::project_choice::{ProjectChoice, is_choice_key};
 use crate::schema::{self, Field};
 use crate::scope::ProjectScope;
 
@@ -88,6 +91,9 @@ pub struct Sources {
     pub profiles: Vec<ProfileSource>,
     /// Das Profil des Projekts, `<projekt>/.humanitl/profile.toml`.
     pub profile_project: Option<PathBuf>,
+    /// Die Projektwahl aus dem Register des Daemons (HUM-532); nur Schlüssel
+    /// aus [`crate::PROJECT_CHOICE_KEYS`].
+    pub project_choice: Option<ProjectChoice>,
     /// Das Präfix der Umgebungsvariablen, normalerweise [`DEFAULT_ENV_PREFIX`].
     pub env_prefix: &'static str,
     /// Die Umgebung. Übergeben, nicht aus dem Prozess gelesen.
@@ -103,6 +109,7 @@ impl Default for Sources {
             global_toml: None,
             profiles: Vec::new(),
             profile_project: None,
+            project_choice: None,
             env_prefix: DEFAULT_ENV_PREFIX,
             env: Env::default(),
             cli: Vec::new(),
@@ -128,6 +135,13 @@ impl Sources {
     #[must_use]
     pub fn with_profiles<I: IntoIterator<Item = ProfileSource>>(mut self, profiles: I) -> Self {
         self.profiles = profiles.into_iter().collect();
+        self
+    }
+
+    /// Setzt die Projektwahl.
+    #[must_use]
+    pub fn with_project_choice(mut self, choice: Option<ProjectChoice>) -> Self {
+        self.project_choice = choice;
         self
     }
 
@@ -214,6 +228,9 @@ pub fn load(sources: &Sources) -> Result<Resolved, Diagnostic> {
             entries_from_overlay(&profile.overlay, &profile.source.origin()),
             true,
         ));
+    }
+    if let Some(choice) = &sources.project_choice {
+        layers.push((choice_entries(choice), true));
     }
     layers.push((env_entries(&sources.env, sources.env_prefix), false));
     layers.push((cli_entries(&sources.cli), true));
@@ -445,6 +462,15 @@ fn env_entries(env: &Env, prefix: &str) -> Vec<Entry> {
     out
 }
 
+/// Die Einträge der Projektwahl: Text wie von der Kommandozeile, nach dem
+/// Typ des Feldes gelesen.
+fn choice_entries(choice: &ProjectChoice) -> Vec<Entry> {
+    choice
+        .iter()
+        .map(|(key, value)| entry_from_text(key.to_owned(), value, Origin::ProjectChoice))
+        .collect()
+}
+
 fn cli_entries(pairs: &[(String, String)]) -> Vec<Entry> {
     pairs
         .iter()
@@ -558,6 +584,12 @@ impl Merge {
             if matches!(entry.origin, Origin::ProfileProject(_)) && is_mount_key(&entry.path) {
                 return Err(project_mount_refused(&entry));
             }
+            // Die Grenze der Projektwahl ist ihre Erlaubnisliste, nicht
+            // `x-project-scope` (HUM-532). Auch unter einem alten Namen: Der
+            // Pfad ist hier schon der heutige.
+            if entry.origin == Origin::ProjectChoice && !is_choice_key(&entry.path) {
+                return Err(crate::project_choice::foreign_key(&entry.written_as));
+            }
 
             // Ein Schlüssel, den wir selbst entfernt haben, ist kein Tippfehler:
             // Die Datei des Nutzers war gestern gültig. Er wird übergangen und
@@ -662,6 +694,17 @@ impl Merge {
             // `config.toml` verlangt hat.
             if entry.path == MIN_ISOLATION && !raises_the_floor(self.flat.get(&entry.path), &entry)
             {
+                // Die Projektwahl senkt nie still (HUM-532): Ein Wert unter
+                // dem der Ebenen darunter ist `CONFIG_024`, ein gleicher
+                // ändert nichts.
+                if entry.origin == Origin::ProjectChoice
+                    && let Some(floor) = lowered_floor(self.flat.get(&entry.path), &entry)
+                {
+                    return Err(crate::project_choice::lowers_the_floor(
+                        entry.value.as_str().unwrap_or_default(),
+                        floor,
+                    ));
+                }
                 continue;
             }
 
@@ -829,6 +872,15 @@ fn never_skipped(path: &str) -> bool {
 /// Gleichstand bleibt die Herkunft der tieferen Ebene, die ihn zuerst
 /// verlangt hat. Ein Wert, den [`MinIsolation::parse`] nicht kennt, kommt hier
 /// nicht an: [`check_value`] hat ihn vorher abgelehnt.
+/// Die Untergrenze der Ebenen darunter, wenn `entry` unter ihr liegt.
+fn lowered_floor(current: Option<&TomlValue>, entry: &Entry) -> Option<&'static str> {
+    let level = |value: &TomlValue| value.as_str().and_then(MinIsolation::parse);
+    match (current.and_then(level), level(&entry.value)) {
+        (Some(now), Some(wanted)) if wanted < now => Some(now.as_str()),
+        _ => None,
+    }
+}
+
 fn raises_the_floor(current: Option<&TomlValue>, entry: &Entry) -> bool {
     let level = |value: &TomlValue| value.as_str().and_then(MinIsolation::parse);
     match (current.and_then(level), level(&entry.value)) {

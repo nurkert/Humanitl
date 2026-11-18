@@ -11,6 +11,7 @@
 //! es diese Dinge gibt (HUM-005).
 
 pub mod player;
+mod projects;
 pub mod state;
 
 use std::collections::BTreeMap;
@@ -894,6 +895,15 @@ impl DaemonApi for FakeDaemon {
             }
             None => Err(crate::egress::no_operation()),
         }
+    }
+
+    /// Das Projektregister (HUM-532): Der Fake kennt genau das Projekt
+    /// seiner Sitzung (`projects::answer`); speichern kann er nichts.
+    async fn projects(
+        &self,
+        request: v1::ProjectsRequest,
+    ) -> Result<v1::ProjectsResponse, Diagnostic> {
+        projects::answer(&self.state.session(), request)
     }
 
     /// Das Agent-Depot (HUM-518): Der Fake hat keines und keine Sperre;

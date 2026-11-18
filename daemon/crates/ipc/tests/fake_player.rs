@@ -874,6 +874,7 @@ async fn config_answers_and_keeps_only_what_the_daemon_accepts() {
     let snapshot = daemon
         .get_config(v1::GetConfigRequest {
             include_schema: true,
+            ..v1::GetConfigRequest::default()
         })
         .await
         .expect("config");

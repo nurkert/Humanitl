@@ -548,6 +548,12 @@ impl DaemonApi for SilentExport {
     ) -> Result<v1::ConfigSnapshot, Diagnostic> {
         self.inner.get_config(request).await
     }
+    async fn projects(
+        &self,
+        request: v1::ProjectsRequest,
+    ) -> Result<v1::ProjectsResponse, Diagnostic> {
+        self.inner.projects(request).await
+    }
     async fn set_config(
         &self,
         request: v1::SetConfigRequest,

@@ -972,6 +972,25 @@ dagegen an ihrem aufgelösten Ort geprüft, und bei jeder Einhängung könnte ei
 Prüfung und Einhängen der Engine noch von jemandem ersetzt werden, der dessen Elternordner schreiben
 darf.
 
+### K-37 Die Projektwahl und das Projektregister
+
+Der Daemon führt ein Register der bekannten Projekte und je Projekt die **Projektwahl** (HUM-532,
+ADR-0024): eine Ebene der Konfiguration über dem Projekt-Profil und unter Umgebung und
+Kommandozeile. **Angreifer:** ein geklontes Repository und der Agent, der `/work` und damit das
+Projekt-Profil `<projekt>/.humanitl/profile.toml` schreiben kann. **Abwehr:** Die Wahl liegt nicht im
+Projektordner, sondern in der SQLite-Datenbank des Daemons unter seinem Datenverzeichnis, und sie
+wird nur über `Projects.save_choice` am Socket des Daemons geschrieben, den die Sandbox nicht
+erreicht (Garantie 2). Ihre Schlüssel sind eine feste Erlaubnisliste (`CONFIG_024` für jeden
+anderen), sie senkt `sandbox.min_isolation` nie, und eine Sperre der Firmenvorgabe gewinnt gegen
+sie; dieselben Prüfungen laufen, wenn ein Start sie lädt, so dass eine Wahl, die nicht mehr gilt,
+den Start anhält, statt zu verschwinden. Das Register erkennt einen Ordner an seinem kanonischen
+Pfad zusammen mit Gerät und Inode: Ein anderer Ordner am selben Pfad ist ein neues Projekt ohne die
+alte Wahl. Ein Start ohne Projektordner wird abgelehnt (`SANDBOX_053`), statt das
+Arbeitsverzeichnis des Daemons einzuhängen, das ein Starter des Desktops beliebig gesetzt haben
+kann. *Restrisiko:* andere Prozesse desselben Nutzers können die Datenbank ändern, wie sie
+`config.toml` ändern können; ein Client am Socket des Daemons kann jede Wahl speichern, die die
+Erlaubnisliste zulässt, wie er `SetConfig` aufrufen kann.
+
 ## Annahmen
 
 | ID | Annahme | Wie man sie prüft | Wenn sie bricht |
@@ -1082,6 +1101,7 @@ Gegen diese Angreifer gibt es keine Abwehr, und Humanitl behauptet das auch nich
 | 2026-11-16 | K-35: Mit `hold.ask_mode = "upstream"` entscheidet der Entscheidungs-Proxy Anfragen ohne Regel; nur mit einem Proxy, der benutzt wird, `block` erreicht ihn nie, `redact` und die harte Sperre bleiben in Humanitl, das Audit sagt `forward` durch `upstream` mit dem Status des Proxys | HUM-512 |
 | 2026-11-17 | K-02: Cloud-Inferenz benannt; ein Endpunkt außerhalb dieses Rechners und seines Netzes zeigt ein orangefarbenes Tag, eine Zeile beim Start und im Doctor und fragt einmal je Agent und Anbieter, bestätigt im Datenverzeichnis des Daemons; blockiert nichts | HUM-516 |
 | 2026-11-17 | K-36 neu (erster Teil): das Agent-Depot als Herkunft des Agenten, der nur lesbare Versionsordner und die Arbeitskopie seiner Konfiguration, ein Wächter im Plan jedes Backends (`AGENT_017`), Masken über Host-Installationen (leere, nur lesbare Einhängungen nur für bestehende Orte, Verbotsregeln unter Seatbelt), die Grenze der Firmenvorgabe | HUM-518 |
+| 2026-11-18 | K-37 neu: die Projektwahl als Ebene auf dem Host, die weder Klon noch Agent schreiben, ihre Erlaubnisliste, die Untergrenze der Isolation steigt nur, Sperren der Firmenvorgabe, Wiedererkennen an Gerät und Inode; ein Start ohne Projektordner wird abgelehnt | HUM-532 |
 
 Jede sicherheitsrelevante Änderung am Shim, an der Mount-Erlaubnisliste, am Filter oder an der
 Durchleitung bekommt hier eine Zeile. Schwachstellen werden gemeldet, wie in

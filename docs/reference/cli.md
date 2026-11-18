@@ -95,6 +95,9 @@ step, is described in [`docs/cli.md`](../cli.md); which RPC each subcommand serv
 - [`humanitl agents status`](#humanitl-agents-status) Show every agent, or one: its source with origin or company lock, the installed version and signature, whether it is logged in, its size. Nothing from the depot is started for this
 - [`humanitl agents source`](#humanitl-agents-source) Set where an agent comes from: `host` or `depot` (`agents.<id>.source`). Switching back to `host` keeps the depot
 - [`humanitl agents remove`](#humanitl-agents-remove) Remove the depot of an agent with its program, configuration and login; refused while a session uses it. The source stays as it is
+- [`humanitl projects`](#humanitl-projects) The project register: the projects the daemon knows with their last start, agent and runs, and what was chosen for one of them
+- [`humanitl projects ls`](#humanitl-projects-ls) List the known projects, the latest start first: name, folder, agent, last start, runs, and whether a session runs or changes wait
+- [`humanitl projects show`](#humanitl-projects-show) Show one project by its folder: its entry and every key of its project choice with the chosen value, the value that applies and its origin
 
 ## Configuration flags
 
@@ -217,6 +220,7 @@ Commands:
   intercept  Pause intercepting, resume it, or show whether it is paused
   egress     The decision proxy behind Humanitl (`egress.proxy`): show it, check the connection, store its credentials
   agents     The agent depot: where each agent comes from (host or depot), its installed version and login; set the source, remove a depot
+  projects   The project register: the projects the daemon knows with their last start, agent and runs, and what was chosen for one of them
   help       Print this message or the help of the given subcommand(s)
 
 Options:
@@ -3126,6 +3130,96 @@ Options:
 
       --yes
           Do not ask
+
+      --config <PATH>
+          Read this config file instead of the one in the user's config directory
+
+  -v, --verbose...
+          Explain what is happening; repeat for more
+
+  -q, --quiet
+          Only the result, no notes
+
+      --profile <NAME>
+          Use this profile for the session; falls back to the sandbox profile of that name when no session profile exists
+
+  -h, --help
+          Print help
+```
+
+## humanitl projects
+
+```text
+The project register: the projects the daemon knows with their last start, agent and runs, and what was chosen for one of them
+
+Usage: humanitl projects [OPTIONS] <COMMAND>
+
+Commands:
+  ls    List the known projects, the latest start first: name, folder, agent, last start, runs, and whether a session runs or changes wait
+  show  Show one project by its folder: its entry and every key of its project choice with the chosen value, the value that applies and its origin
+  help  Print this message or the help of the given subcommand(s)
+
+Options:
+      --json
+          Machine-readable output: one JSON value on stdout, diagnostics included
+
+      --config <PATH>
+          Read this config file instead of the one in the user's config directory
+
+  -v, --verbose...
+          Explain what is happening; repeat for more
+
+  -q, --quiet
+          Only the result, no notes
+
+      --profile <NAME>
+          Use this profile for the session; falls back to the sandbox profile of that name when no session profile exists
+
+  -h, --help
+          Print help
+```
+
+## humanitl projects ls
+
+```text
+List the known projects, the latest start first: name, folder, agent, last start, runs, and whether a session runs or changes wait
+
+Usage: humanitl projects ls [OPTIONS]
+
+Options:
+      --json
+          Machine-readable output: one JSON value on stdout, diagnostics included
+
+      --config <PATH>
+          Read this config file instead of the one in the user's config directory
+
+  -v, --verbose...
+          Explain what is happening; repeat for more
+
+  -q, --quiet
+          Only the result, no notes
+
+      --profile <NAME>
+          Use this profile for the session; falls back to the sandbox profile of that name when no session profile exists
+
+  -h, --help
+          Print help
+```
+
+## humanitl projects show
+
+```text
+Show one project by its folder: its entry and every key of its project choice with the chosen value, the value that applies and its origin
+
+Usage: humanitl projects show [OPTIONS] <PATH>
+
+Arguments:
+  <PATH>
+          The project folder; relative to the current directory
+
+Options:
+      --json
+          Machine-readable output: one JSON value on stdout, diagnostics included
 
       --config <PATH>
           Read this config file instead of the one in the user's config directory

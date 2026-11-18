@@ -1206,6 +1206,24 @@ the layer. A disposable run says nothing about the agent's network traffic, and 
 second line of defence for the masks above; it removes the write path to the project for the
 duration of the run, nothing more.
 
+#### The project choice (HUM-532)
+
+What a person chose for a project on the first-start screen (agent, folder mode, backend, isolation
+floor, ask mode, model server, sandbox profile) is the **project choice**. It is a configuration
+layer on the host: the daemon keeps it in its project register (`projects` in its SQLite store under
+`$XDG_DATA_HOME/humanitl`, `0600`) and writes it only through the RPC `Projects.save_choice` on its
+socket. It is never read from the project folder, so neither a cloned repository nor the agent in a
+session with a writable `/work` can write it; the agent has no way to the daemon's data directory
+or to its socket. It ranks above the project profile and below the environment and the command
+line (origin `project-choice`). It carries only the keys of a fixed allow-list, never
+`sandbox.work_dir`, `agent.command`, mounts or rules; it raises `sandbox.min_isolation` and never
+lowers it, nor leaves a backend below it; and a value a company policy locks cannot be chosen. Each of these is `CONFIG_024` when
+the choice is saved and when a start loads it, never dropped in silence. A folder replaced at the
+same path (another device and inode) is a new project and starts without the old choice; the folder is checked again once the sandbox has mounted it, and
+a start that cannot be recorded in the register is stopped. A start
+without a project folder is refused with `SANDBOX_053`; the daemon no longer falls back to its own
+working directory.
+
 ### 5.3 The agent's terminal output
 
 *Why it exists.* The human has to see what the agent does. This output comes from the agent and
@@ -1940,6 +1958,7 @@ passthrough or the audit chain gets a line here and in the change history of
 | 0.1.x | Cloud inference is named: when the agent's model endpoint lies outside this machine and its network, the session header carries an orange tag with the provider, `humanitl run` and `go` print it at every start, `humanitl doctor` has the line `inference`, and the first start per agent and provider asks once; the confirmation lives in the daemon's data directory, never in the project or the app; nothing is blocked (HUM-516, [section 5.1](#cloud-inference-hum-516), K-02). |
 | 0.1.x | A decision proxy of the person behind Humanitl (`egress.proxy`, off by default): allowed requests leave only through it, re-encrypted against its CA, which is trusted on that way only; no direct fallback; who resolves is `egress.proxy_resolve` (`proxy` refuses local names and private literals first, `humanitl` resolves and checks every address); keys closed to project profiles, credentials in the keyring or the `0600` fallback file, never in `config.toml` (HUM-511, [section 6](#a-decision-proxy-behind-humanitl-hum-511), K-35). |
 | 0.1.x | The agent depot (`agents.source`, off by default): a depot agent's resolved version directory read-only at `/run/humanitl/agent/`, each entry trust-checked before the bind; its configuration as a writable scratch copy deleted with the session; one guard on every backend's plan refuses a host program of a depot agent (`AGENT_017`); host install locations of depot agents masked (empty read-only mounts under Linux only where they exist, `file-read*` and `process-exec` deny rules under Seatbelt); a company lock may only name the depot (`AGENT_010`) (HUM-518). |
+| 0.1.x | The project choice: a per-project configuration layer the daemon keeps on the host in its register, written only through `Projects.save_choice`, never read from the project folder; a fixed allow-list of keys, the isolation floor only raised, company locks win, `CONFIG_024` otherwise; a start without a project folder is refused with `SANDBOX_053` instead of taking the daemon's working directory (HUM-532, [section 5.2](#the-project-choice-hum-532), K-37). |
 
 ## 12. macOS: Seatbelt instead of bubblewrap
 

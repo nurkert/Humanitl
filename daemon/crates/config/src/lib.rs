@@ -22,6 +22,7 @@
 //! - [`private_dir`] das private Laufzeitverzeichnis, angelegt und geprüft
 //! - [`mod@load`] die sieben Ebenen der Präzedenz
 //! - [`profile`] Profile: `default`, `llm-only`, eigene und das des Projekts
+//! - [`project_choice`] die Projektwahl, die der Daemon je Projekt hält
 //! - [`mod@resolve`] welche Profile gelten und woher sie kommen
 //! - [`origin`] die Herkunft je Feld
 //! - [`edit`] der eine Wert, den der Daemon in `config.toml` schreibt
@@ -64,6 +65,7 @@ pub mod paths;
 pub mod pending;
 pub mod private_dir;
 pub mod profile;
+pub mod project_choice;
 pub mod resolve;
 pub mod schema;
 pub mod scope;
@@ -105,9 +107,12 @@ pub use crate::profile::{
     ProfileRules, ProfileSource, ProfileSummary, RULES_DOCUMENT_VERSION, builtin_names,
     builtin_text,
 };
+pub use crate::project_choice::{
+    LockedValue, PROJECT_CHOICE_KEYS, PolicyLocks, ProjectChoice, check_choice, is_choice_key,
+};
 pub use crate::resolve::{
     ProfileSelection, available_profiles, discover, discover_with, profile_exists, profile_layers,
-    profile_servers, resolve, sources_for, sources_with_global,
+    profile_servers, resolve, resolve_with_choice, sources_for, sources_with_global,
 };
 pub use crate::schema::{Field, json_schema};
 pub use crate::scope::{PROJECT_SCOPE_KEY, ProjectScope};

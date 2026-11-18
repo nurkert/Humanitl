@@ -34,6 +34,7 @@ pub mod intercept;
 pub mod llm;
 pub mod moderate;
 pub mod plan;
+pub mod projects;
 pub mod rules;
 pub mod run;
 pub mod sandbox;

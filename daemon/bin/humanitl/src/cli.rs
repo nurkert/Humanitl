@@ -221,6 +221,29 @@ pub enum Cmd {
         #[command(subcommand)]
         cmd: AgentsCmd,
     },
+
+    /// The project register: the projects the daemon knows with their last
+    /// start, agent and runs, and what was chosen for one of them.
+    Projects {
+        /// Was mit dem Register geschehen soll.
+        #[command(subcommand)]
+        cmd: ProjectsCmd,
+    },
+}
+
+/// Die Unterkommandos von `humanitl projects` (HUM-532, ADR-0024).
+#[derive(Debug, Subcommand)]
+pub enum ProjectsCmd {
+    /// List the known projects, the latest start first: name, folder, agent,
+    /// last start, runs, and whether a session runs or changes wait.
+    Ls,
+    /// Show one project by its folder: its entry and every key of its
+    /// project choice with the chosen value, the value that applies and its
+    /// origin.
+    Show {
+        /// The project folder; relative to the current directory.
+        path: std::path::PathBuf,
+    },
 }
 
 /// Die Unterkommandos von `humanitl agents` (HUM-518, ADR-0023).

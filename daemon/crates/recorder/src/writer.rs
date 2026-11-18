@@ -47,7 +47,7 @@ use humanitl_core::block::sanitize_note;
 use humanitl_core::ids::SandboxId;
 use humanitl_core::{
     BlockReason, DecidedFindings, Decision, DecisionSource, Finding, FixAction, FlowEvent, FlowId,
-    HeaderMap, HttpRequest, MAX_FLOW_DIAGNOSTICS, Scheme, SessionId, Severity,
+    HeaderMap, HttpRequest, MAX_FLOW_DIAGNOSTICS, ProjectId, Scheme, SessionId, Severity,
 };
 use rusqlite::Connection;
 use tokio::sync::oneshot;
@@ -56,6 +56,7 @@ use crate::blob::BlobStore;
 use crate::error::{RecorderError, storage_failed, unavailable_at};
 use crate::health::Reporter;
 use crate::hostkey::host_key;
+use crate::projects::{ProjectRow, ProjectStart, Registered};
 use crate::types::{Dir, PurgeReport, SessionMeta, millis};
 
 /// So lange bleibt eine Transaktion höchstens offen.
@@ -230,6 +231,24 @@ pub enum WriterCmd {
     /// Ein Blob ist geschrieben oder wird gerade geschrieben; seine Zeile
     /// kommt gleich. Bis dahin fasst ihn kein Aufräumlauf an.
     ReserveBlob([u8; 32]),
+    /// Ein Start im Projektregister, in einer eigenen Transaktion (HUM-532).
+    RegisterProject {
+        /// Was der Start über sein Projekt weiß.
+        start: Box<ProjectStart>,
+        /// Wohin die Zeile danach geht.
+        reply: oneshot::Sender<Result<Registered, RecorderError>>,
+    },
+    /// Die Projektwahl einer aktuellen Zeile (HUM-532).
+    SaveProjectChoice {
+        /// Das Projekt.
+        id: ProjectId,
+        /// Die Wahl als JSON-Text; `None` leert sie.
+        choice: Option<String>,
+        /// Wann.
+        at: SystemTime,
+        /// Wohin die Zeile danach geht; `None`, wenn es keine aktuelle gibt.
+        reply: oneshot::Sender<Result<Option<ProjectRow>, RecorderError>>,
+    },
     /// Statistiken für den Abfrageplaner neu erheben.
     Analyze(oneshot::Sender<Result<(), RecorderError>>),
     /// Offene Transaktion schließen und Bescheid geben.
@@ -362,6 +381,27 @@ impl Writer {
                     self.commit();
                     let _ignored = reply.send(self.analyze());
                 }
+                // Das Register schreibt in einer eigenen Transaktion und
+                // braucht die Zeile der Sitzung, die vielleicht noch im
+                // offenen Bündel steht: erst das Bündel, dann der Eintrag.
+                WriterCmd::RegisterProject { start, reply } => {
+                    self.commit();
+                    let _ignored = reply.send(crate::projects::register_start(&self.conn, &start));
+                }
+                WriterCmd::SaveProjectChoice {
+                    id,
+                    choice,
+                    at,
+                    reply,
+                } => {
+                    self.commit();
+                    let _ignored = reply.send(crate::projects::save_choice(
+                        &self.conn,
+                        id,
+                        choice.as_deref(),
+                        at,
+                    ));
+                }
                 other => {
                     self.begin();
                     self.dispatch(other);
@@ -468,7 +508,11 @@ impl Writer {
                 self.reserved.insert(sha256, Instant::now());
                 Ok(())
             }
-            WriterCmd::Flush(_) | WriterCmd::Purge { .. } | WriterCmd::Analyze(_) => Ok(()),
+            WriterCmd::Flush(_)
+            | WriterCmd::Purge { .. }
+            | WriterCmd::Analyze(_)
+            | WriterCmd::RegisterProject { .. }
+            | WriterCmd::SaveProjectChoice { .. } => Ok(()),
         };
         if let Err(err) = result {
             self.report(err);

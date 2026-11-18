@@ -57,8 +57,9 @@ sein Wert stammt, und die Oberfläche zeigt es an.
 | 3 | Profil `default`: `$XDG_CONFIG_HOME/humanitl/profiles/default.toml`, sonst die eingebettete Fassung |
 | 4 | das gewählte Profil, falls es nicht `default` ist; Datei, sonst eingebettet |
 | 5 | `<projekt>/.humanitl/profile.toml`, Block `[config]`; nur Felder mit Projekt `allowed` |
-| 6 | Umgebungsvariablen `HUMANITL_*` |
-| 7 | Argumente der Kommandozeile |
+| 6 | die Projektwahl, die der Daemon je Projekt auf dem Host hält (HUM-532); nur die Schlüssel des Erststart-Bildschirms, Herkunft `project-choice` |
+| 7 | Umgebungsvariablen `HUMANITL_*` |
+| 8 | Argumente der Kommandozeile |
 
 Ein Profil hat neben `[config]` nur `name`, `description` und `[rules]` (HUM-066,
 `docs/profiles.md`). Jeder andere Block auf der obersten Ebene ist `CONFIG_002`; eine

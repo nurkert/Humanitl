@@ -1977,5 +1977,9 @@
   "diagAGENT017Title": "Kommando nennt einen Agenten deines Rechners",
   "diagAGENT017Why": "Die Quelle dieses Agenten ist das Depot, und das Kommando oder ein Ordner der Sitzung nennt den Agenten, der auf deinem Rechner installiert ist. Starten darf nur der Agent aus dem Depot.",
   "diagAGENT018Title": "Agent-Depot in Gebrauch",
-  "diagAGENT018Why": "Eine laufende Sitzung nutzt das Depot dieses Agenten, deshalb wird es nicht entfernt. Beende zuerst die Sitzung."
+  "diagAGENT018Why": "Eine laufende Sitzung nutzt das Depot dieses Agenten, deshalb wird es nicht entfernt. Beende zuerst die Sitzung.",
+  "diagSANDBOX053Title": "Start ohne Projektordner",
+  "diagSANDBOX053Why": "Der Start nennt keinen Projektordner, und Humanitl wählt keinen für dich. Wähle einen Ordner im Startfenster, oder starte im Projekt.",
+  "diagCONFIG024Title": "Projektwahl nicht erlaubt",
+  "diagCONFIG024Why": "Die Wahl für dieses Projekt enthält eine Einstellung, die sie nicht tragen darf, einen Wert, den deine Firma festlegt, oder eine niedrigere Isolation, als die Einstellungen darunter verlangen. Nichts wurde gespeichert, oder der Start hielt an."
 }

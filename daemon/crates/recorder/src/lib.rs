@@ -55,6 +55,7 @@ mod filter;
 mod health;
 mod hostkey;
 mod message;
+mod projects;
 mod query;
 mod retention;
 mod schema;
@@ -85,6 +86,7 @@ pub use crate::health::{OutageEntry, is_outage};
 // über `query::list_flows`, das Fuzz-Target `flow_filter` direkt (HUM-056).
 pub use crate::filter::{Filter, Param as FilterParam, parse as parse_filter};
 pub use crate::hostkey::{host_key, suffix_range};
+pub use crate::projects::{ProjectRow, ProjectStart, Registered, same_place};
 pub use crate::query::ReadPool;
 pub use crate::retention::{DAY_SECS, RETENTION_INTERVAL, Retention};
 pub use crate::schema::{MIGRATIONS, Migration, latest_version};

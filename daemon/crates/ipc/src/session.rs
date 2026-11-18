@@ -139,6 +139,10 @@ pub struct SessionRequest {
     /// (`Start.llm_server`, HUM-400). Er geht Projekt, Profil und
     /// `llm.active` vor und wählt nur unter `llm.servers`.
     pub llm_server: Option<String>,
+    /// Die Projektwahl des Ordners aus dem Register des Daemons (HUM-532):
+    /// eine Ebene über dem Projekt-Profil und unter diesen Wünschen. Sie
+    /// kommt nie vom Client, sondern aus dem Register.
+    pub project_choice: Option<humanitl_config::ProjectChoice>,
 }
 
 impl SessionRequest {
@@ -389,7 +393,13 @@ impl SessionResolver {
                 |now| now.config.sandbox.work_dir,
             )
         });
-        humanitl_config::resolve(&selection, cwd.as_deref(), self.env(), &request.cli_pairs())
+        humanitl_config::resolve_with_choice(
+            &selection,
+            cwd.as_deref(),
+            self.env(),
+            &request.cli_pairs(),
+            request.project_choice.as_ref(),
+        )
     }
 }
 

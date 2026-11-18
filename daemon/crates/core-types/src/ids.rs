@@ -137,6 +137,15 @@ typed_id! {
     AskId
 }
 
+typed_id! {
+    /// Id eines Projekts im Register des Daemons (HUM-532, ADR-0024).
+    ///
+    /// Die stabile Kennung eines Projekts: Projektwahl, Aufräumen und Clients
+    /// beziehen sich auf sie, nicht auf den Pfad. Ein Ordner, der am selben
+    /// Pfad ersetzt wurde, bekommt eine neue.
+    ProjectId
+}
+
 #[cfg(test)]
 mod tests {
     #![allow(clippy::unwrap_used, clippy::expect_used, clippy::panic)]

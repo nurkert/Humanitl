@@ -6655,3 +6655,64 @@ fn a_pull_without_a_terminal_proposes_the_same_pull_with_yes() {
         "{text}"
     );
 }
+
+/// `projects ls --json` und `projects show PATH --json` (HUM-532): je ein
+/// JSON-Wert auf stdout, gelesen aus dem Register des Daemons; ein Ordner,
+/// den das Register nicht kennt, ist ein Befund, keine leere Antwort.
+#[test]
+fn projects_ls_and_show_answer_as_json() {
+    let harness = Harness::new();
+    let _server = FakeServer::start(&harness);
+
+    let listed = harness.run(["--json", "projects", "ls"]);
+    assert_eq!(code(&listed), 0, "{}", stderr(&listed));
+    let value: serde_json::Value =
+        serde_json::from_str(stdout(&listed).trim()).expect("one JSON value");
+    let projects = value["projects"].as_array().expect("a list");
+    assert_eq!(projects.len(), 1, "{value}");
+    assert_eq!(projects[0]["path"], "/home/nik/projects/shop-frontend");
+    assert_eq!(projects[0]["name"], "shop-frontend");
+    assert_eq!(projects[0]["last_agent"], "opencode");
+    assert_eq!(projects[0]["running"], true);
+    assert_eq!(projects[0]["runs"], 1);
+
+    let shown = harness.run([
+        "--json",
+        "projects",
+        "show",
+        "/home/nik/projects/shop-frontend",
+    ]);
+    assert_eq!(code(&shown), 0, "{}", stderr(&shown));
+    let value: serde_json::Value =
+        serde_json::from_str(stdout(&shown).trim()).expect("one JSON value");
+    assert_eq!(value["project"]["id"], projects[0]["id"]);
+    let keys: Vec<&str> = value["choice"]
+        .as_array()
+        .expect("the choice keys")
+        .iter()
+        .filter_map(|field| field["key"].as_str())
+        .collect();
+    assert_eq!(keys, humanitl_config::PROJECT_CHOICE_KEYS);
+    assert_eq!(value["choice"][0]["origin"], "default");
+
+    let unknown = harness.run(["--json", "projects", "show", "/somewhere/else"]);
+    assert_ne!(code(&unknown), 0);
+    let value: serde_json::Value =
+        serde_json::from_str(stdout(&unknown).trim()).expect("one JSON value");
+    assert_eq!(value["code"], "CONFIG_003");
+}
+
+/// Ohne `--json` eine Zeile je Projekt mit Agent und Läufen.
+#[test]
+fn projects_ls_names_the_agent_and_the_runs() {
+    let harness = Harness::new();
+    let _server = FakeServer::start(&harness);
+    let listed = harness.run(["projects", "ls"]);
+    assert_eq!(code(&listed), 0, "{}", stderr(&listed));
+    let text = stdout(&listed);
+    assert!(
+        text.contains("shop-frontend (/home/nik/projects/shop-frontend): opencode"),
+        "{text}"
+    );
+    assert!(text.contains("1 run, running"), "{text}");
+}

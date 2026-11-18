@@ -54,7 +54,7 @@ pub use crate::host::{HostName, HostParseError, LLM_ALIAS_HOST, META_HOST, ip_is
 pub use crate::http::{
     Authority, BodyRef, HeaderMap, HeaderName, HttpRequest, Method, Scheme, Upgrade, Version,
 };
-pub use crate::ids::{AskId, FlowId, IdParseError, RuleId, SandboxId, SessionId};
+pub use crate::ids::{AskId, FlowId, IdParseError, ProjectId, RuleId, SandboxId, SessionId};
 pub use crate::intercept::{InterceptChange, InterceptPause, InterceptStatus, ResumeReason};
 pub use crate::rule::{
     Action, EXACT_PATH_MARK, Expiry, HostPattern, Matcher, PathPattern, Rule, exact_path_entry,
