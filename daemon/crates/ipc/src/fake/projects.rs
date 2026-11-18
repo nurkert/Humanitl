@@ -51,6 +51,34 @@ pub(super) fn answer(
                 .why("the fake daemon keeps no project register to write to".to_owned())
                 .build())
         }
+        // HUM-533: Das eine Projekt des Fakes läuft; ein Plan nennt deshalb
+        // nichts zum Löschen, nur was bleibt, und ausführen kann der Fake
+        // nichts.
+        Some(v1::projects_request::Op::CleanupPlan(_)) => Ok(v1::ProjectsResponse {
+            plan: Some(v1::CleanupPlanView {
+                not_deleted: crate::projects::NOT_DELETED.to_owned(),
+                kept: project
+                    .iter()
+                    .map(|project| {
+                        format!(
+                            "The running session in {} and its requests stay.",
+                            project.path
+                        )
+                    })
+                    .collect(),
+                kinds: humanitl_recorder::CleanupKind::ALL
+                    .iter()
+                    .map(|kind| kind.as_str().to_owned())
+                    .collect(),
+                ..v1::CleanupPlanView::default()
+            }),
+            ..v1::ProjectsResponse::default()
+        }),
+        Some(v1::projects_request::Op::Cleanup(_)) => {
+            Err(Diagnostic::builder(codes::IPC_006, Severity::Error)
+                .why("the fake daemon keeps no recording to clean up".to_owned())
+                .build())
+        }
         None => Err(refused("the request names no operation")),
     }
 }

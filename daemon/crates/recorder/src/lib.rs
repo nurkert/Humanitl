@@ -50,6 +50,7 @@
 
 mod anchors;
 mod blob;
+mod cleanup;
 mod error;
 mod filter;
 mod health;
@@ -78,7 +79,11 @@ use humanitl_core::{
 use tokio::sync::{broadcast, oneshot};
 
 pub use crate::anchors::{AnchorStore, AuditAnchor, read_anchors};
-pub use crate::blob::{BlobStore, ORPHAN_GRACE};
+pub use crate::blob::{BlobRemoval, BlobReservation, BlobStore, ORPHAN_GRACE};
+pub use crate::cleanup::{
+    CleanupItem, CleanupKind, CleanupOutcome, CleanupPlan, CleanupScope, CleanupTarget, Executed,
+    Kept, KeptReason, LiveState, WaitingLayer,
+};
 pub use crate::error::RecorderError;
 pub use crate::filter::KEYS as FILTER_KEYS;
 pub use crate::health::{OutageEntry, is_outage};
@@ -97,7 +102,7 @@ pub use crate::types::{
     FlowDetail, FlowPage, FlowQuery, FlowSummary, MAX_LIMIT, MessageRecord, PurgeReport,
     SessionMeta, SessionSummaryRow, SortKey, millis,
 };
-pub use crate::writer::{BATCH_COMMANDS, BATCH_INTERVAL, RESERVATION_GRACE};
+pub use crate::writer::{BATCH_COMMANDS, BATCH_INTERVAL};
 
 use crate::error::storage_failed;
 use crate::health::Reporter;
@@ -376,7 +381,17 @@ impl Recorder {
 
         let inline =
             u64::try_from(stored.len()).unwrap_or(u64::MAX) <= self.settings.inline_max_bytes;
-        if !inline {
+        // Fällt `reservation` vorzeitig (Fehler, Abbruch des Aufrufers),
+        // ist der Blob wieder frei; sonst reist sie mit der Nachricht zum
+        // Schreib-Thread.
+        let reservation = if inline {
+            None
+        } else {
+            // Angemeldet, bevor die Datei entsteht oder als schon da gilt:
+            // Sonst könnte ein Aufräumlauf sie zwischen `put` und der Zeile
+            // entfernen, weil noch keine Zeile sie nennt (HUM-533). Frei wird
+            // sie, wenn der Schreib-Thread die Zeile geschrieben hat.
+            let held = self.blobs.reserve(&sha256);
             let blobs = Arc::clone(&self.blobs);
             let data = stored.clone();
             tokio::task::spawn_blocking(move || blobs.put(&sha256, &data))
@@ -384,7 +399,8 @@ impl Recorder {
                 .map_err(|err| {
                     storage_failed(format!("the blob writer did not finish ({err})"))
                 })??;
-        }
+            Some(Arc::new(held))
+        };
 
         let content_type = message::content_type_of(headers, &self.masks);
         self.send(WriterCmd::Message(Box::new(MessageWrite {
@@ -395,6 +411,7 @@ impl Recorder {
             content_encoding: message::content_encoding_of(headers, &self.masks),
             inline: if inline { Some(stored.clone()) } else { None },
             blob: if inline { None } else { Some(sha256) },
+            reservation,
             size,
             truncated,
             status: None,

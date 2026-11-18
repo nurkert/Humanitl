@@ -98,6 +98,8 @@ step, is described in [`docs/cli.md`](../cli.md); which RPC each subcommand serv
 - [`humanitl projects`](#humanitl-projects) The project register: the projects the daemon knows with their last start, agent and runs, and what was chosen for one of them
 - [`humanitl projects ls`](#humanitl-projects-ls) List the known projects, the latest start first: name, folder, agent, last start, runs, and whether a session runs or changes wait
 - [`humanitl projects show`](#humanitl-projects-show) Show one project by its folder: its entry and every key of its project choice with the chosen value, the value that applies and its origin
+- [`humanitl projects clean`](#humanitl-projects-clean) Clean up: the daemon lists every item it would delete (recorded requests with their bodies, waiting changes of a disposable run, project choices, register entries) with size, and asks. Without a folder every project except what is in use. The project folder and the audit log are never deleted. Without a terminal it deletes only with --yes and otherwise ends with exit 1 and the plan
+- [`humanitl projects forget`](#humanitl-projects-forget) Forget a project: its stored project choice and its register entry, shown as a plan and asked first. Recorded requests stay
 
 ## Configuration flags
 
@@ -3155,9 +3157,11 @@ The project register: the projects the daemon knows with their last start, agent
 Usage: humanitl projects [OPTIONS] <COMMAND>
 
 Commands:
-  ls    List the known projects, the latest start first: name, folder, agent, last start, runs, and whether a session runs or changes wait
-  show  Show one project by its folder: its entry and every key of its project choice with the chosen value, the value that applies and its origin
-  help  Print this message or the help of the given subcommand(s)
+  ls      List the known projects, the latest start first: name, folder, agent, last start, runs, and whether a session runs or changes wait
+  show    Show one project by its folder: its entry and every key of its project choice with the chosen value, the value that applies and its origin
+  clean   Clean up: the daemon lists every item it would delete (recorded requests with their bodies, waiting changes of a disposable run, project choices, register entries) with size, and asks. Without a folder every project except what is in use. The project folder and the audit log are never deleted. Without a terminal it deletes only with --yes and otherwise ends with exit 1 and the plan
+  forget  Forget a project: its stored project choice and its register entry, shown as a plan and asked first. Recorded requests stay
+  help    Print this message or the help of the given subcommand(s)
 
 Options:
       --json
@@ -3220,6 +3224,83 @@ Arguments:
 Options:
       --json
           Machine-readable output: one JSON value on stdout, diagnostics included
+
+      --config <PATH>
+          Read this config file instead of the one in the user's config directory
+
+  -v, --verbose...
+          Explain what is happening; repeat for more
+
+  -q, --quiet
+          Only the result, no notes
+
+      --profile <NAME>
+          Use this profile for the session; falls back to the sandbox profile of that name when no session profile exists
+
+  -h, --help
+          Print help
+```
+
+## humanitl projects clean
+
+```text
+Clean up: the daemon lists every item it would delete (recorded requests with their bodies, waiting changes of a disposable run, project choices, register entries) with size, and asks. Without a folder every project except what is in use. The project folder and the audit log are never deleted. Without a terminal it deletes only with --yes and otherwise ends with exit 1 and the plan
+
+Usage: humanitl projects clean [OPTIONS] [PATHS]...
+
+Arguments:
+  [PATHS]...
+          The project folders; relative to the current directory. None means every project
+
+Options:
+      --json
+          Machine-readable output: one JSON value on stdout, diagnostics included
+
+      --older-than <DAYS>
+          Only requests older than this many days, and the choice and entry of projects not started for so long
+
+      --config <PATH>
+          Read this config file instead of the one in the user's config directory
+
+      --include-waiting-changes
+          Also discard changes of a disposable run that wait for apply or discard. Changes not applied are lost for good
+
+      --unassigned
+          Only the sessions that belong to no project
+
+  -v, --verbose...
+          Explain what is happening; repeat for more
+
+  -q, --quiet
+          Only the result, no notes
+
+      --yes
+          Delete without asking
+
+      --profile <NAME>
+          Use this profile for the session; falls back to the sandbox profile of that name when no session profile exists
+
+  -h, --help
+          Print help
+```
+
+## humanitl projects forget
+
+```text
+Forget a project: its stored project choice and its register entry, shown as a plan and asked first. Recorded requests stay
+
+Usage: humanitl projects forget [OPTIONS] <PATH>
+
+Arguments:
+  <PATH>
+          The project folder; relative to the current directory
+
+Options:
+      --json
+          Machine-readable output: one JSON value on stdout, diagnostics included
+
+      --yes
+          Forget without asking
 
       --config <PATH>
           Read this config file instead of the one in the user's config directory

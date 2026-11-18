@@ -1,17 +1,25 @@
-//! `humanitl projects ls|show` (HUM-532, ADR-0024).
+//! `humanitl projects ls|show|clean|forget` (HUM-532, HUM-533, ADR-0024).
 //!
-//! Ein gRPC-Aufruf je Befehl und sonst nichts (ADR-018): welche Projekte es
+//! Ein gRPC-Aufruf je Schritt und sonst nichts (ADR-018): welche Projekte es
 //! gibt, wann und mit welchem Agenten sie zuletzt liefen und was für eines
-//! gewählt ist, weiß der Daemon in seinem Register. `projects forget` kommt
-//! mit dem Aufräumen (HUM-533) und löscht nur, was der Daemon vorher
-//! aufgelistet hat.
+//! gewählt ist, weiß der Daemon in seinem Register. `clean` und `forget`
+//! löschen nur, was der Daemon vorher als Plan aufgelistet hat: Die CLI zeigt
+//! den Plan, wie er kommt (Arten, Sätze, Warnungen, die Zeile, was nie
+//! gelöscht wird), fragt, und schickt den Digest dieses Plans zurück. Eine
+//! eigene Liste von Arten oder Kandidaten hält sie nicht.
+
+use std::io::{BufRead as _, IsTerminal as _};
 
 use chrono::{DateTime, Local};
+use humanitl_core::diagnostics::codes;
+use humanitl_core::{Diagnostic, Severity};
 use humanitl_ipc::v1;
 use serde_json::{Value, json};
 
 use crate::cli::ProjectsCmd;
-use crate::cmd::{Context, EXIT_OK, Failure, from_proto, status_diagnostic};
+use humanitl_ipc::client::Client;
+
+use crate::cmd::{Context, EXIT_OK, EXIT_USER, Failure, from_proto, status_diagnostic};
 
 /// So viele Seiten liest `ls` höchstens; mehr als 50 000 Projekte kennt
 /// niemand.
@@ -50,25 +58,280 @@ pub async fn run(ctx: &Context, cmd: &ProjectsCmd) -> Result<u8, Failure> {
             print_list(ctx, &projects);
         }
         ProjectsCmd::Show { path } => {
-            let absolute = if path.is_absolute() {
-                path.clone()
-            } else {
-                ctx.cwd.join(path)
-            };
-            let shown = client
-                .projects(v1::ProjectsRequest {
-                    op: Some(v1::projects_request::Op::Get(v1::projects_request::Get {
-                        project_id: String::new(),
-                        path: absolute.display().to_string(),
-                    })),
-                })
-                .await
-                .map_err(|status| Failure::new(status_diagnostic(&status, "Projects")))?
-                .into_inner();
+            let shown = get(&mut client, &absolute(ctx, path)).await?;
             print_detail(ctx, &shown);
+        }
+        ProjectsCmd::Clean {
+            paths,
+            older_than,
+            include_waiting_changes,
+            unassigned,
+            yes,
+        } => {
+            let selection = v1::CleanupSelection {
+                paths: paths.iter().map(|path| absolute(ctx, path)).collect(),
+                all: paths.is_empty() && !unassigned,
+                unassigned: *unassigned,
+                older_than_days: older_than.unwrap_or(0),
+                include_waiting_changes: *include_waiting_changes,
+                ..v1::CleanupSelection::default()
+            };
+            return clean(ctx, &mut client, selection, *yes).await;
+        }
+        ProjectsCmd::Forget { path, yes } => {
+            let shown = get(&mut client, &absolute(ctx, path)).await?;
+            let selection = v1::CleanupSelection {
+                forget: shown
+                    .project
+                    .map(|project| project.project_id)
+                    .unwrap_or_default(),
+                ..v1::CleanupSelection::default()
+            };
+            return clean(ctx, &mut client, selection, *yes).await;
         }
     }
     Ok(EXIT_OK)
+}
+
+/// Ein Ordner als absoluter Pfad, relativ zum Arbeitsverzeichnis.
+fn absolute(ctx: &Context, path: &std::path::Path) -> String {
+    let path = if path.is_absolute() {
+        path.to_path_buf()
+    } else {
+        ctx.cwd.join(path)
+    };
+    path.display().to_string()
+}
+
+async fn get(client: &mut Client, path: &str) -> Result<v1::ProjectsResponse, Failure> {
+    projects(
+        client,
+        v1::projects_request::Op::Get(v1::projects_request::Get {
+            project_id: String::new(),
+            path: path.to_owned(),
+        }),
+    )
+    .await
+}
+
+async fn projects(
+    client: &mut Client,
+    op: v1::projects_request::Op,
+) -> Result<v1::ProjectsResponse, Failure> {
+    client
+        .projects(v1::ProjectsRequest { op: Some(op) })
+        .await
+        .map(tonic::Response::into_inner)
+        .map_err(|status| Failure::new(status_diagnostic(&status, "Projects")))
+}
+
+/// Plan holen und zeigen, fragen, und genau diesen Plan ausführen.
+///
+/// Ohne Terminal und ohne `--yes` löscht nichts: Der Plan steht auf
+/// `stdout`, und der Lauf endet mit Exit 1.
+async fn clean(
+    ctx: &Context,
+    client: &mut Client,
+    selection: v1::CleanupSelection,
+    yes: bool,
+) -> Result<u8, Failure> {
+    let plan = projects(
+        client,
+        v1::projects_request::Op::CleanupPlan(v1::projects_request::CleanupPlan {
+            selection: Some(selection),
+        }),
+    )
+    .await?
+    .plan
+    .unwrap_or_default();
+    print_plan(ctx, &plan);
+    if plan.items.is_empty() {
+        ctx.render
+            .value(&json!({ "plan": plan_json(&plan), "deleted": false }));
+        ctx.render.line("Nothing to clean up.");
+        return Ok(EXIT_OK);
+    }
+    if !yes {
+        if ctx.render.is_json() || !std::io::stdin().is_terminal() {
+            let why = "nothing was deleted: there is no terminal to ask on; run the same command \
+                       with --yes to delete what the daemon then lists";
+            ctx.render.value(&json!({
+                "plan": plan_json(&plan),
+                "deleted": false,
+                "reason": why,
+            }));
+            ctx.render.note(why);
+            return Ok(EXIT_USER);
+        }
+        confirm(&plan)?;
+    }
+    let cleaned = projects(
+        client,
+        v1::projects_request::Op::Cleanup(v1::projects_request::Cleanup {
+            selection: plan.selection.clone(),
+            digest: plan.digest.clone(),
+        }),
+    )
+    .await?
+    .cleaned
+    .unwrap_or_default();
+    print_result(ctx, &plan, &cleaned);
+    Ok(EXIT_OK)
+}
+
+/// Fragt auf dem Terminal; die Warnungen standen schon über der Frage.
+fn confirm(plan: &v1::CleanupPlanView) -> Result<(), Failure> {
+    use std::io::Write as _;
+
+    let mut stderr = std::io::stderr();
+    let _ = write!(
+        stderr,
+        "Delete these {} item{}? [y/N] ",
+        plan.items.len(),
+        if plan.items.len() == 1 { "" } else { "s" }
+    );
+    let _ = stderr.flush();
+    let mut answer = String::new();
+    let _ = std::io::stdin().lock().read_line(&mut answer);
+    if is_yes(&answer) {
+        return Ok(());
+    }
+    Err(declined())
+}
+
+/// Nur `y` und `yes` gelten, gleich in welcher Schreibweise.
+fn is_yes(answer: &str) -> bool {
+    matches!(answer.trim().to_ascii_lowercase().as_str(), "y" | "yes")
+}
+
+/// Die Antwort war nicht ja: nichts gelöscht, Exit 1.
+fn declined() -> Failure {
+    Failure::with_exit(
+        Diagnostic::builder(codes::CLI_004, Severity::Info)
+            .why("nothing was deleted; the answer was not yes".to_owned())
+            .build(),
+        EXIT_USER,
+    )
+}
+
+/// Der Plan als Tabelle, darunter jede Warnung, was bleibt und was nie
+/// gelöscht wird; alles aus der Antwort des Daemons.
+fn print_plan(ctx: &Context, plan: &v1::CleanupPlanView) {
+    if ctx.render.is_json() {
+        return;
+    }
+    if !plan.items.is_empty() {
+        let rows: Vec<Vec<String>> = plan
+            .items
+            .iter()
+            .map(|item| {
+                vec![
+                    item.kind.clone(),
+                    item.count.to_string(),
+                    size(item.bytes),
+                    item.description.clone(),
+                ]
+            })
+            .collect();
+        ctx.render
+            .line(crate::render::table(&["KIND", "COUNT", "SIZE", "WHAT"], &rows).trim_end());
+        let total = plan
+            .items
+            .iter()
+            .map(|item| item.bytes)
+            .fold(0, u64::saturating_add);
+        ctx.render.line(&format!("About {} in total.", size(total)));
+    }
+    for item in plan.items.iter().filter(|item| !item.warning.is_empty()) {
+        ctx.render
+            .line(&format!("WARNING: {} ({})", item.warning, item.description));
+    }
+    for kept in &plan.kept {
+        ctx.render.line(&format!("Stays: {kept}"));
+    }
+    ctx.render.line(&plan.not_deleted);
+}
+
+fn print_result(ctx: &Context, plan: &v1::CleanupPlanView, cleaned: &v1::CleanupResult) {
+    if ctx.render.is_json() {
+        ctx.render.value(&json!({
+            "plan": plan_json(plan),
+            "deleted": true,
+            "outcomes": cleaned.outcomes.iter().map(|outcome| json!({
+                "kind": outcome.kind,
+                "project_id": outcome.project_id,
+                "path": outcome.path,
+                "deleted": outcome.deleted,
+                "count": outcome.count,
+                "bytes_freed": outcome.bytes_freed,
+                "reason": outcome.reason,
+            })).collect::<Vec<_>>(),
+            "bytes_freed": cleaned.bytes_freed,
+            "not_deleted": cleaned.not_deleted,
+        }));
+        return;
+    }
+    for outcome in &cleaned.outcomes {
+        let place = if outcome.path.is_empty() {
+            "sessions without a project".to_owned()
+        } else {
+            outcome.path.clone()
+        };
+        let mut line = if outcome.deleted {
+            format!(
+                "deleted {} {} of {place}, {} freed",
+                outcome.count,
+                outcome.kind,
+                size(outcome.bytes_freed)
+            )
+        } else {
+            format!("not deleted: {} of {place}", outcome.kind)
+        };
+        if !outcome.reason.is_empty() {
+            line = format!("{line} ({})", outcome.reason);
+        }
+        ctx.render.line(&line);
+    }
+    ctx.render
+        .line(&format!("{} freed in total.", size(cleaned.bytes_freed)));
+    ctx.render.line(&cleaned.not_deleted);
+}
+
+fn plan_json(plan: &v1::CleanupPlanView) -> Value {
+    json!({
+        "items": plan.items.iter().map(|item| json!({
+            "kind": item.kind,
+            "project_id": item.project_id,
+            "path": item.path,
+            "description": item.description,
+            "bytes": item.bytes,
+            "count": item.count,
+            "warning": item.warning,
+        })).collect::<Vec<_>>(),
+        "digest": plan.digest,
+        "kept": plan.kept,
+        "not_deleted": plan.not_deleted,
+        "kinds": plan.kinds,
+    })
+}
+
+/// Bytes, wie ein Mensch sie liest: `512 B`, `1.5 KiB`, `3.2 MiB`.
+fn size(bytes: u64) -> String {
+    const UNITS: [&str; 4] = ["KiB", "MiB", "GiB", "TiB"];
+    if bytes < 1024 {
+        return format!("{bytes} B");
+    }
+    #[allow(clippy::cast_precision_loss)]
+    let mut value = bytes as f64 / 1024.0;
+    let mut unit = UNITS[0];
+    for next in &UNITS[1..] {
+        if value < 1024.0 {
+            break;
+        }
+        value /= 1024.0;
+        unit = next;
+    }
+    format!("{value:.1} {unit}")
 }
 
 fn print_list(ctx: &Context, projects: &[v1::ProjectEntry]) {
@@ -201,6 +464,27 @@ mod tests {
     #![allow(clippy::unwrap_used, clippy::expect_used, clippy::panic)]
 
     use super::*;
+
+    /// Review HUM-533: Ein `n` am Terminal löscht nichts und endet mit Exit 1.
+    #[test]
+    fn answering_no_ends_with_exit_1() {
+        assert!(is_yes("y\n"));
+        assert!(is_yes(" YES "));
+        for answer in ["n\n", "", "no", "yes please"] {
+            assert!(!is_yes(answer), "{answer:?}");
+        }
+        let failure = declined();
+        assert_eq!(failure.exit, EXIT_USER);
+        assert_eq!(crate::cmd::exit_code(&failure.diagnostic), EXIT_USER);
+        assert_eq!(failure.diagnostic.code.as_str(), "CLI_004");
+    }
+
+    #[test]
+    fn sizes_read_like_a_human_writes_them() {
+        assert_eq!(size(512), "512 B");
+        assert_eq!(size(1536), "1.5 KiB");
+        assert_eq!(size(3 * 1024 * 1024), "3.0 MiB");
+    }
 
     #[test]
     fn a_line_names_agent_runs_and_state() {

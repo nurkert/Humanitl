@@ -991,6 +991,25 @@ kann. *Restrisiko:* andere Prozesse desselben Nutzers können die Datenbank änd
 `config.toml` ändern können; ein Client am Socket des Daemons kann jede Wahl speichern, die die
 Erlaubnisliste zulässt, wie er `SetConfig` aufrufen kann.
 
+**Aufräumen und Vergessen** (HUM-533, ADR-0024 Punkt 14). Das Register kann aufgezeichnete Flüsse
+und Bodies eines Projekts löschen, die wartenden Änderungen eines Wegwerf-Laufs (nur mit
+ausdrücklicher Wahl und mit der Warnung, dass nicht übernommene Änderungen endgültig verloren sind)
+und die Projektwahl mit ihrem Registereintrag; ein Projekt vergessen ist ein solcher Plan, beschränkt
+auf Wahl und Eintrag. **Angreifer:** ein Client oder ein Wettlauf, der mehr löschte, als der Mensch
+gesehen hat, oder eine veraltete Bestätigung. **Abwehr:** Gelöscht wird nichts, was der Daemon nicht
+vorher einzeln aufgelistet (`Projects.cleanup_plan`) und der Mensch bestätigt hat; `Projects.cleanup`
+nimmt den Digest dieses Plans, berechnet den Plan in der löschenden Transaktion neu und löscht nur
+bei gleichem Digest. Der Digest bindet Identität und Fassung jedes Eintrags (Kennungen der Sitzungen
+und Flüsse samt den Zeilen jedes Flusses, Hashes der Blobs und ob jeder fällt, die Kennung der wartenden Schicht, Projekt-`id` mit
+`version`, den Hash der Wahl), nicht Größen oder Zahlen; eine neue Sitzung, eine gleich lange andere
+Wahl oder eine Sitzung, die inzwischen läuft, ergibt `SANDBOX_054`, und nichts ist gelöscht. Die
+laufende Sitzung steht in keinem Plan. Der Projektordner, die Audit-Kette (`audit.jsonl`,
+`audit_anchors`), Regeln, die globale Konfiguration und das Agent-Depot stehen nie darin; jede
+Ausführung hinterlässt einen Record `projects.cleaned` nur mit Arten und Mengen. *Restrisiko:* ein
+Client am Socket des Daemons kann einen Plan ohne Menschen anfordern und bestätigen, wie er
+`SetConfig` aufrufen kann; der Plan nennt trotzdem, was fällt, und die Audit-Kette hält fest, dass es
+fiel.
+
 ## Annahmen
 
 | ID | Annahme | Wie man sie prüft | Wenn sie bricht |
@@ -1102,6 +1121,7 @@ Gegen diese Angreifer gibt es keine Abwehr, und Humanitl behauptet das auch nich
 | 2026-11-17 | K-02: Cloud-Inferenz benannt; ein Endpunkt außerhalb dieses Rechners und seines Netzes zeigt ein orangefarbenes Tag, eine Zeile beim Start und im Doctor und fragt einmal je Agent und Anbieter, bestätigt im Datenverzeichnis des Daemons; blockiert nichts | HUM-516 |
 | 2026-11-17 | K-36 neu (erster Teil): das Agent-Depot als Herkunft des Agenten, der nur lesbare Versionsordner und die Arbeitskopie seiner Konfiguration, ein Wächter im Plan jedes Backends (`AGENT_017`), Masken über Host-Installationen (leere, nur lesbare Einhängungen nur für bestehende Orte, Verbotsregeln unter Seatbelt), die Grenze der Firmenvorgabe | HUM-518 |
 | 2026-11-18 | K-37 neu: die Projektwahl als Ebene auf dem Host, die weder Klon noch Agent schreiben, ihre Erlaubnisliste, die Untergrenze der Isolation steigt nur, Sperren der Firmenvorgabe, Wiedererkennen an Gerät und Inode; ein Start ohne Projektordner wird abgelehnt | HUM-532 |
+| 2026-11-18 | K-37: Aufräumen und Vergessen nur über einen aufgelisteten, bestätigten Plan, dessen Digest Identität und Fassung jedes Eintrags bindet und in der löschenden Transaktion erneut geprüft wird (`SANDBOX_054`); nie der Projektordner, die Audit-Kette oder die laufende Sitzung | HUM-533 |
 
 Jede sicherheitsrelevante Änderung am Shim, an der Mount-Erlaubnisliste, am Filter oder an der
 Durchleitung bekommt hier eine Zeile. Schwachstellen werden gemeldet, wie in

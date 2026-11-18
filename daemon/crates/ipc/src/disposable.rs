@@ -334,6 +334,25 @@ impl Waiting {
         })
     }
 
+    /// Anzahl und Bytes der wartenden Änderungen für einen Aufräumplan
+    /// (HUM-533), und ob die Liste vollständig ist. Eine gekürzte Liste, eine
+    /// mit Stellen, die sich nicht lesen ließen, und eine Schicht, die sich
+    /// gar nicht lesen lässt (`(0, 0, false)`), sind unvollständig: Ein
+    /// Aufräumen verwürfe dann Änderungen, die niemand gesehen hat, und lehnt
+    /// ab.
+    pub(crate) fn footprint(&self) -> (u64, u64, bool) {
+        self.scan().map_or((0, 0, false), |set| {
+            (
+                u64::try_from(set.changes.len()).unwrap_or(u64::MAX),
+                set.changes
+                    .iter()
+                    .map(|change| change.size)
+                    .fold(0, u64::saturating_add),
+                !set.truncated && set.incomplete.is_empty(),
+            )
+        })
+    }
+
     /// Die Pfade, die mit einem Verwerfen verloren gehen, für die
     /// Aufzeichnung; leer, wenn die Schicht nicht zu lesen ist.
     pub(crate) fn discarded_paths(&self) -> Vec<String> {

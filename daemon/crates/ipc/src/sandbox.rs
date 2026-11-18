@@ -117,6 +117,7 @@ use crate::summary::SummaryWatch;
 use crate::terminal::{HeldNotices, TerminalHub};
 use crate::v1;
 
+mod cleanup;
 mod project;
 
 /// Der Name des Shims, wie er neben dem Daemon oder im Systempfad liegt.

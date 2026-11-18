@@ -640,6 +640,47 @@ impl RetentionApplied {
     }
 }
 
+/// `projects.cleaned`: Ein bestätigter Aufräumplan wurde ausgeführt
+/// (HUM-533, ADR-0024 Punkt 14).
+///
+/// Ein Record je Ausführung, mit den Arten und Mengen, ohne Inhalte: keine
+/// Pfade, keine Hosts, keine Kennungen von Projekten. Die Kette selbst ist
+/// nie Teil eines Plans; dieser Record steht in ihr wie jeder andere.
+#[derive(Debug, Clone, PartialEq, Eq)]
+pub struct ProjectsCleaned {
+    /// Die Art der Auswahl: `projects`, `all`, `unassigned` oder `forget`.
+    pub selection: String,
+    /// Je gelöschter Art die Menge und die freigegebenen Bytes.
+    pub kinds: Vec<CleanedKind>,
+}
+
+/// Eine Art in [`ProjectsCleaned`].
+#[derive(Debug, Clone, PartialEq, Eq)]
+pub struct CleanedKind {
+    /// `recorded_flows`, `waiting_changes`, `project_choice` oder
+    /// `register_entry`.
+    pub kind: String,
+    /// Wie viele Dinge fielen.
+    pub count: u64,
+    /// Wie viele Bytes frei wurden.
+    pub bytes: u64,
+}
+
+impl ProjectsCleaned {
+    /// `data` dieses Records.
+    #[must_use]
+    pub fn data(&self) -> Value {
+        json!({
+            "selection": self.selection,
+            "kinds": self
+                .kinds
+                .iter()
+                .map(|kind| json!({ "kind": kind.kind, "count": kind.count, "bytes": kind.bytes }))
+                .collect::<Vec<Value>>(),
+        })
+    }
+}
+
 /// `intercept.resumed`: Eine Pause des Abfangens ist zu Ende (HUM-407).
 ///
 /// Ihr Beginn steht als `intercept.paused` davor; zwischen beiden steht jede
@@ -714,6 +755,8 @@ pub enum RecordKind {
     InterceptPaused,
     /// Die Pause des Abfangens ist zu Ende (HUM-407).
     InterceptResumed(InterceptResumed),
+    /// Ein bestätigter Aufräumplan wurde ausgeführt (HUM-533).
+    ProjectsCleaned(ProjectsCleaned),
 }
 
 impl RecordKind {
@@ -745,11 +788,12 @@ impl RecordKind {
             Self::AuditPruned(_) => PRUNED_KIND,
             Self::InterceptPaused => "intercept.paused",
             Self::InterceptResumed(_) => "intercept.resumed",
+            Self::ProjectsCleaned(_) => "projects.cleaned",
         }
     }
 
     /// Alle Namen, in der Reihenfolge der Tabelle.
-    pub const NAMES: [&'static str; 24] = [
+    pub const NAMES: [&'static str; 25] = [
         "daemon.started",
         "daemon.stopped",
         "session.started",
@@ -774,6 +818,7 @@ impl RecordKind {
         PRUNED_KIND,
         "intercept.paused",
         "intercept.resumed",
+        "projects.cleaned",
     ];
 
     /// `data` dieser Art.
@@ -873,6 +918,7 @@ impl RecordKind {
             Self::AuditPruned(d) => d.data(),
             Self::InterceptPaused => json!({}),
             Self::InterceptResumed(d) => d.data(),
+            Self::ProjectsCleaned(d) => d.data(),
         }
     }
 }
@@ -908,7 +954,7 @@ mod tests {
 
     #[test]
     fn every_kind_has_the_name_of_the_table_and_canonical_data() {
-        assert_eq!(RecordKind::NAMES.len(), 24);
+        assert_eq!(RecordKind::NAMES.len(), 25);
         for name in RecordKind::NAMES {
             let (area, verb) = name.split_once('.').unwrap();
             assert!(!area.is_empty() && !verb.is_empty(), "{name}");

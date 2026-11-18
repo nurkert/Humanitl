@@ -62,6 +62,8 @@ pub static PARITY: &[(&str, &str)] = &[
     ("Humanitl.LlmServers", "llm server unassign"),
     ("Humanitl.LlmServers", "llm server use"),
     ("Humanitl.ProbeLlm", "llm test"),
+    ("Humanitl.Projects", "projects clean"),
+    ("Humanitl.Projects", "projects forget"),
     ("Humanitl.Projects", "projects ls"),
     ("Humanitl.Projects", "projects show"),
     ("Humanitl.Rules", "rules add"),

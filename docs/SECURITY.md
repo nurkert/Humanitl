@@ -1224,6 +1224,23 @@ a start that cannot be recorded in the register is stopped. A start
 without a project folder is refused with `SANDBOX_053`; the daemon no longer falls back to its own
 working directory.
 
+#### Cleanup and forgetting (HUM-533)
+
+The daemon deletes data of a project only through a plan it lists first, item by item
+(`Projects.cleanup_plan`): the recorded flows and bodies of the project, the waiting changes of a
+disposable run (only on explicit choice, and every client shows the warning that changes not
+applied are lost for good), and the stored project choice with its register entry. Forgetting a
+project is such a plan limited to choice and entry; there is no other way to delete it. Each plan
+carries a digest over the identity and version of every item (session and flow ids with the rows
+of each flow, blob hashes, the id and listing of the waiting layer, project id with version, the hash of the choice). `Projects.cleanup`
+takes that digest, computes the plan again inside the deleting transaction and deletes only when it
+is the same; a new session, a changed choice (even of the same length), a session that started or
+changes that wait now make it `SANDBOX_054`, and nothing is deleted. The running session is never
+part of a plan, and waiting changes whose listing is incomplete are never discarded. **The project folder and the audit chain are never deleted**, nor are rules, the
+global configuration or the agent depot; every plan says so in a fixed line each client shows. A
+body file is removed only when no remaining row names it. Each run leaves one `projects.cleaned`
+record in the audit chain, with kinds and amounts and without contents.
+
 ### 5.3 The agent's terminal output
 
 *Why it exists.* The human has to see what the agent does. This output comes from the agent and
@@ -1958,6 +1975,7 @@ passthrough or the audit chain gets a line here and in the change history of
 | 0.1.x | Cloud inference is named: when the agent's model endpoint lies outside this machine and its network, the session header carries an orange tag with the provider, `humanitl run` and `go` print it at every start, `humanitl doctor` has the line `inference`, and the first start per agent and provider asks once; the confirmation lives in the daemon's data directory, never in the project or the app; nothing is blocked (HUM-516, [section 5.1](#cloud-inference-hum-516), K-02). |
 | 0.1.x | A decision proxy of the person behind Humanitl (`egress.proxy`, off by default): allowed requests leave only through it, re-encrypted against its CA, which is trusted on that way only; no direct fallback; who resolves is `egress.proxy_resolve` (`proxy` refuses local names and private literals first, `humanitl` resolves and checks every address); keys closed to project profiles, credentials in the keyring or the `0600` fallback file, never in `config.toml` (HUM-511, [section 6](#a-decision-proxy-behind-humanitl-hum-511), K-35). |
 | 0.1.x | The agent depot (`agents.source`, off by default): a depot agent's resolved version directory read-only at `/run/humanitl/agent/`, each entry trust-checked before the bind; its configuration as a writable scratch copy deleted with the session; one guard on every backend's plan refuses a host program of a depot agent (`AGENT_017`); host install locations of depot agents masked (empty read-only mounts under Linux only where they exist, `file-read*` and `process-exec` deny rules under Seatbelt); a company lock may only name the depot (`AGENT_010`) (HUM-518). |
+| 0.1.x | Cleanup and forgetting only through a plan the daemon lists and a person confirms; its digest binds identity and version of every item and is checked again in the deleting transaction (`SANDBOX_054`); never the project folder, the audit chain or the running session (HUM-533, [section 5.2](#cleanup-and-forgetting-hum-533), K-37). |
 | 0.1.x | The project choice: a per-project configuration layer the daemon keeps on the host in its register, written only through `Projects.save_choice`, never read from the project folder; a fixed allow-list of keys, the isolation floor only raised, company locks win, `CONFIG_024` otherwise; a start without a project folder is refused with `SANDBOX_053` instead of taking the daemon's working directory (HUM-532, [section 5.2](#the-project-choice-hum-532), K-37). |
 
 ## 12. macOS: Seatbelt instead of bubblewrap

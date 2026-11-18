@@ -244,6 +244,40 @@ pub enum ProjectsCmd {
         /// The project folder; relative to the current directory.
         path: std::path::PathBuf,
     },
+    /// Clean up: the daemon lists every item it would delete (recorded
+    /// requests with their bodies, waiting changes of a disposable run,
+    /// project choices, register entries) with size, and asks. Without a
+    /// folder every project except what is in use. The project folder and the
+    /// audit log are never deleted. Without a terminal it deletes only with
+    /// --yes and otherwise ends with exit 1 and the plan.
+    Clean {
+        /// The project folders; relative to the current directory. None means
+        /// every project.
+        paths: Vec<std::path::PathBuf>,
+        /// Only requests older than this many days, and the choice and entry
+        /// of projects not started for so long.
+        #[arg(long, value_name = "DAYS")]
+        older_than: Option<u32>,
+        /// Also discard changes of a disposable run that wait for apply or
+        /// discard. Changes not applied are lost for good.
+        #[arg(long)]
+        include_waiting_changes: bool,
+        /// Only the sessions that belong to no project.
+        #[arg(long, conflicts_with_all = ["paths", "include_waiting_changes"])]
+        unassigned: bool,
+        /// Delete without asking.
+        #[arg(long)]
+        yes: bool,
+    },
+    /// Forget a project: its stored project choice and its register entry,
+    /// shown as a plan and asked first. Recorded requests stay.
+    Forget {
+        /// The project folder; relative to the current directory.
+        path: std::path::PathBuf,
+        /// Forget without asking.
+        #[arg(long)]
+        yes: bool,
+    },
 }
 
 /// Die Unterkommandos von `humanitl agents` (HUM-518, ADR-0023).

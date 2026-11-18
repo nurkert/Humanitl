@@ -1208,6 +1208,26 @@ nie still verworfen. Ein Ordner, der am selben Pfad ersetzt wurde (anderes Gerä
 Inode), ist ein neues Projekt und startet ohne die alte Wahl. Ein Start ohne Projektordner wird mit
 `SANDBOX_053` abgelehnt; der Daemon nimmt nicht mehr sein eigenes Arbeitsverzeichnis.
 
+#### Aufräumen und Vergessen (HUM-533)
+
+Der Daemon löscht Daten eines Projekts nur über einen Plan, den er vorher Eintrag für Eintrag
+auflistet (`Projects.cleanup_plan`): die aufgezeichneten Flüsse und Bodies des Projekts, die
+wartenden Änderungen eines Wegwerf-Laufs (nur mit ausdrücklicher Wahl, und jeder Client zeigt die
+Warnung, dass nicht übernommene Änderungen endgültig verloren sind) und die gespeicherte
+Projektwahl mit ihrem Registereintrag. Ein Projekt vergessen ist ein solcher Plan, beschränkt auf
+Wahl und Eintrag; einen anderen Weg, es zu löschen, gibt es nicht. Jeder Plan trägt einen Digest
+über Identität und Fassung jedes Eintrags (Kennungen der Sitzungen und Flüsse samt den Zeilen
+jedes Flusses, Hashes der Blobs, Kennung und Liste der wartenden Schicht, Projekt-`id` mit `version`, den Hash der Wahl).
+`Projects.cleanup` nimmt diesen Digest, berechnet den Plan in der löschenden Transaktion neu und
+löscht nur bei Gleichheit; eine neue Sitzung, eine geänderte Wahl (auch gleich lang), eine Sitzung,
+die inzwischen läuft, oder Änderungen, die inzwischen warten, ergeben `SANDBOX_054`, und nichts ist
+gelöscht. Die laufende Sitzung steht in keinem Plan, und wartende Änderungen, deren Liste unvollständig ist,
+verwirft kein Aufräumen. **Der Projektordner und die Audit-Kette werden
+nie gelöscht**, ebenso wenig Regeln, die globale Konfiguration oder das Agent-Depot; jeder Plan sagt
+das in einer festen Zeile, die jeder Client zeigt. Eine Body-Datei fällt nur, wenn keine
+verbleibende Zeile sie nennt. Jede Ausführung hinterlässt einen Record `projects.cleaned` in der
+Audit-Kette, mit Arten und Mengen und ohne Inhalte.
+
 ### 5.3 Die Terminal-Ausgabe des Agenten
 
 *Warum es sie gibt.* Der Mensch muss sehen, was der Agent tut. Diese Ausgabe kommt vom Agenten und
@@ -1815,6 +1835,7 @@ der Durchleitung oder an der Audit-Kette bekommt hier eine Zeile und in der Änd
 | 0.1.x | Linux: Podman in der gemeinsamen Stufe (`podman/crun`) zugelassen, nachdem `escape-tests-podman` auf `main` grün war; ein Mensch wählt es mit `sandbox.backend = "podman"` oder `--backend podman`, `auto` bleibt bubblewrap, und die Kernel-Stufe (Backend `qemu`, ADR-0021) lehnt jeder Start bis HUM-449 mit `SANDBOX_048` ab (HUM-448, [Abschnitt 13](#13-linux-podman), K-27). |
 | 0.1.x | Linux: die Kernel-Stufe (Backend `qemu`, ADR-0021) zugelassen, nachdem `kvm-tests` und `escape-tests-qemu` auf `main` mit der Wegwerf-Sandbox im Gast (HUM-446) und den Proben mit Root im Gast (HUM-445) grün waren, in zehn Läufen hintereinander, in denen beide Jobs liefen (43624997550, 43630993303, 43638237420, 43641769840, 43646599744, 43648968241, 43656202366, 43661904978, 43669712307 und 43673927540); ein Mensch wählt sie mit `sandbox.backend = "qemu"` oder `--backend qemu`, `auto` bleibt bubblewrap, und eine fehlende Voraussetzung lehnt den Start mit `SANDBOX_045` ab (HUM-449, [Abschnitt 14](#14-linux-qemu-micro-vm-kernel-stufe), K-30 bis K-34). |
 | 0.1.x | Das Agent-Depot (`agents.source`, ohne Opt-in aus): der aufgelöste Versionsordner eines Depot-Agenten nur lesbar unter `/run/humanitl/agent/`, jeder Eintrag vor dem Einhängen geprüft; seine Konfiguration als schreibbare Arbeitskopie, die mit der Sitzung gelöscht wird; ein Wächter im Plan jedes Backends lehnt ein Programm des Hosts eines Depot-Agenten ab (`AGENT_017`); Host-Installationen von Depot-Agenten maskiert (unter Linux leere, nur lesbare Einhängungen nur für bestehende Orte, unter Seatbelt Verbotsregeln `file-read*` und `process-exec`); eine Firmenvorgabe darf nur das Depot nennen (`AGENT_010`) (HUM-518). |
+| 0.1.x | Aufräumen und Vergessen nur über einen Plan, den der Daemon auflistet und ein Mensch bestätigt; sein Digest bindet Identität und Fassung jedes Eintrags und wird in der löschenden Transaktion erneut geprüft (`SANDBOX_054`); nie der Projektordner, die Audit-Kette oder die laufende Sitzung (HUM-533, [Abschnitt 5.2](#aufräumen-und-vergessen-hum-533), K-37). |
 | 0.1.x | Die Projektwahl: eine Ebene der Konfiguration je Projekt, die der Daemon auf dem Host in seinem Register hält, nur über `Projects.save_choice` geschrieben, nie aus dem Projektordner gelesen; eine feste Erlaubnisliste von Schlüsseln, die Untergrenze der Isolation steigt nur, Sperren einer Firmenvorgabe gewinnen, sonst `CONFIG_024`; ein Start ohne Projektordner wird mit `SANDBOX_053` abgelehnt, statt das Arbeitsverzeichnis des Daemons zu nehmen (HUM-532, [Abschnitt 5.2](#die-projektwahl-hum-532), K-37). |
 
 ## 12. macOS: Seatbelt statt bubblewrap

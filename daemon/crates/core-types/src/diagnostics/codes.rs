@@ -100,7 +100,8 @@ pub static AREAS: &[AreaInfo] = &[
                Zulassung (HUM-431, Bereich dafür bis 059 erweitert), 037-044 und 049 Podman \
                (Sprint 7), 045-047 die Kernel-Stufe (HUM-464), 050 Dienstverwalter des \
                Nutzers (HUM-434), 051 beschreibbare Erweiterung unter der Kernel-Stufe \
-               (HUM-466), 053 Start ohne Projektordner (HUM-532)",
+               (HUM-466), 053 Start ohne Projektordner (HUM-532), 054 Aufräumplan in Gebrauch \
+               oder veraltet (HUM-533)",
     },
     AreaInfo {
         area: "proxy",
@@ -1990,6 +1991,15 @@ registry! {
     CONFIG_024 => "config", "Project choice not allowed", "#config_024",
         "The project choice is the per-project layer the daemon keeps on the host, written only through `Projects.save_choice`. It may carry exactly the keys of the first-start screen (`agent.adapter`, `sandbox.mode`, `sandbox.work_mode`, `sandbox.backend`, `sandbox.min_isolation`, `hold.ask_mode`, `llm.server`, `sandbox.profile`); it may not lower `sandbox.min_isolation` below what `config.toml`, a profile or the project profile require, and it may not set a value a company policy locks. The sentence names the key; nothing was saved, or the start stopped.",
         "Save the choice again without the named key (`Projects.save_choice`), or raise `sandbox.min_isolation` instead of lowering it; a locked value is decided by the policy.";
+
+    // HUM-533: cleanup and forgetting through a confirmed plan (ADR-0024).
+    /// A cleanup plan cannot run: one of its items is in use (the running
+    /// session, changes of a disposable run that wait without the explicit
+    /// choice), or the plan changed since it was shown (a new session, a
+    /// changed choice, a new flow). Nothing was deleted (HUM-533).
+    SANDBOX_054 => "sandbox", "Cleanup plan in use or out of date", "#sandbox_054",
+        "Cleanup deletes only a plan the daemon listed item by item and a person confirmed. `Projects.cleanup` computes the plan again in the deleting transaction and compares its digest, which binds the identity and version of every item (session and flow ids, blob hashes, the id of the waiting layer, project id with version, the hash of the project choice). A difference, a running session or changes that wait without the explicit choice stop it, and nothing is deleted. The project folder and the audit chain are never part of a plan.",
+        "Show the plan again (`humanitl projects clean` or `humanitl projects forget`) and confirm the new one; stop the running session first (`humanitl sandbox stop`), or decide the waiting changes (`humanitl sandbox changes`, `apply`, `discard`) or include them explicitly with `--include-waiting-changes`.";
 }
 
 /// Sucht einen Code im Register.

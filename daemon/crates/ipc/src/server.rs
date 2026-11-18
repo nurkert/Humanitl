@@ -372,6 +372,8 @@ impl IpcServer {
                 .sandbox
                 .as_ref()
                 .and_then(SandboxService::project_activity),
+            sandbox: self.sandbox.clone(),
+            audit: self.audit.clone(),
         }
     }
 

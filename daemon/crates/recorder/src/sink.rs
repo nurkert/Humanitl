@@ -284,16 +284,21 @@ impl ResponseSink {
         }
 
         let sha256: [u8; 32] = core::mem::take(&mut self.hasher).finalize().into();
-        let (inline, blob) = match self.spill.take() {
+        let (inline, blob, reservation) = match self.spill.take() {
             Some((file, path)) => {
                 // Der Blob wird angemeldet, bevor er entsteht: sonst könnte ein
                 // Aufräumlauf zwischen Datei und Zeile die Datei für verwaist
-                // halten (siehe `Writer::drop_unreferenced`).
-                self.writer.send(WriterCmd::ReserveBlob(sha256))?;
+                // halten (siehe `Writer::drop_unreferenced`). Scheitert
+                // `put_temp`, fällt die Anmeldung mit dem Rücksprung.
+                let held = self.blobs.reserve(&sha256);
                 self.blobs.put_temp(&sha256, file, &path)?;
-                (None, Some(sha256))
+                (None, Some(sha256), Some(Arc::new(held)))
             }
-            None => (Some(Bytes::from(core::mem::take(&mut self.buffer))), None),
+            None => (
+                Some(Bytes::from(core::mem::take(&mut self.buffer))),
+                None,
+                None,
+            ),
         };
 
         let write = MessageWrite {
@@ -304,6 +309,7 @@ impl ResponseSink {
             content_encoding: self.content_encoding.take(),
             inline: inline.clone(),
             blob,
+            reservation,
             size: self.size,
             truncated: self.truncated,
             status,

@@ -13,8 +13,17 @@
 //!   allow-list, a locked value or a lowered `sandbox.min_isolation` is
 //!   `CONFIG_024`, and nothing is saved.
 //!
-//! Nothing here deletes. Forgetting a project is a cleanup plan the person
-//! confirms (HUM-533, limit 3 of sprint 8).
+//! Two more delete, and only through a plan (HUM-533, limit 3 of sprint 8,
+//! `cleanup.rs`):
+//!
+//! - `cleanup_plan`: the items a selection would delete, each with kind,
+//!   project, one sentence, size and count, what stays because it is in use,
+//!   the fixed line of what is never deleted, and a digest over the identity
+//!   and version of every item.
+//! - `cleanup`: runs exactly that plan. The recording computes the plan again
+//!   in the deleting transaction and deletes only when the digest is the same;
+//!   otherwise `SANDBOX_054` and nothing is deleted. Forgetting a project is
+//!   a plan with the selection `forget` and runs the same way.
 //!
 //! Paths and names come from the file system and may hold control
 //! characters; they leave the daemon through [`sanitize_note`], as in
@@ -102,6 +111,12 @@ pub struct Context {
     pub locks: PolicyLocks,
     /// The project of the latest start, if any.
     pub activity: Option<ProjectActivity>,
+    /// The sandbox service: what runs and which disposable layer waits, for
+    /// a cleanup plan; `None` in a daemon without sandbox and in tests, then
+    /// `activity` says what runs and no layer waits.
+    pub sandbox: Option<crate::sandbox::SandboxService>,
+    /// Where an executed cleanup is recorded (`projects.cleaned`).
+    pub audit: Option<humanitl_audit_log::AuditHandle>,
 }
 
 /// Answers one request.
@@ -127,6 +142,12 @@ pub async fn answer(
             detail(ctx, row).await
         }
         Some(v1::projects_request::Op::SaveChoice(save)) => save_choice(ctx, &recorder, save).await,
+        Some(v1::projects_request::Op::CleanupPlan(asked)) => {
+            cleanup::plan(&ctx, &recorder, asked).await
+        }
+        Some(v1::projects_request::Op::Cleanup(asked)) => {
+            cleanup::run(&ctx, &recorder, asked).await
+        }
         None => Err(refused("the request names no operation".to_owned())),
     }
 }
@@ -255,7 +276,7 @@ async fn page(
     })
 }
 
-async fn find(
+pub(crate) async fn find(
     recorder: &Recorder,
     get: &v1::projects_request::Get,
 ) -> Result<ProjectRow, Diagnostic> {
@@ -432,7 +453,7 @@ fn resolve_at(
 }
 
 /// Runs blocking work off the runtime threads.
-async fn blocking<T: Send + 'static>(
+pub(crate) async fn blocking<T: Send + 'static>(
     rpc: &str,
     work: impl FnOnce() -> T + Send + 'static,
 ) -> Result<T, Diagnostic> {
@@ -446,22 +467,26 @@ async fn blocking<T: Send + 'static>(
     })
 }
 
-fn parse_id(text: &str) -> Result<ProjectId, Diagnostic> {
+pub(crate) fn parse_id(text: &str) -> Result<ProjectId, Diagnostic> {
     ProjectId::parse(text.trim())
         .map_err(|_err| refused(format!("{:?} is no project id", text.trim())))
 }
 
-fn unknown(what: &str) -> Diagnostic {
+pub(crate) fn unknown(what: &str) -> Diagnostic {
     refused(format!(
         "no project {what:?} is known to this daemon; humanitl projects ls lists them"
     ))
 }
 
-fn refused(why: String) -> Diagnostic {
+pub(crate) fn refused(why: String) -> Diagnostic {
     Diagnostic::builder(CONFIG_003, Severity::Error)
         .why(why)
         .build()
 }
+
+mod cleanup;
+
+pub use cleanup::{NOT_DELETED, WAITING_WARNING};
 
 #[cfg(test)]
 mod tests;

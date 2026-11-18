@@ -6716,3 +6716,85 @@ fn projects_ls_names_the_agent_and_the_runs() {
     );
     assert!(text.contains("1 run, running"), "{text}");
 }
+
+/// `projects clean` ohne Terminal und ohne `--yes` (HUM-533): Der Plan des
+/// Daemons steht auf stdout, mit der Warnung vor wartenden Änderungen und
+/// der Zeile, was nie gelöscht wird; der Lauf endet mit Exit 1, und kein
+/// `cleanup` erreicht den Daemon.
+///
+/// Mutationsbeweis: Ohne die Ausgabe der Warnungen in `print_plan` fehlt
+/// `WARNING:` vor dem Ende, und der Test wird rot.
+#[test]
+fn projects_clean_without_a_terminal_shows_the_plan_and_deletes_nothing() {
+    let harness = Harness::new();
+    let (_server, cleanups) = FakeServer::start_with_cleanup(&harness);
+
+    let shown = harness.run(["projects", "clean", "--include-waiting-changes"]);
+    assert_eq!(code(&shown), 1, "{}", stderr(&shown));
+    let text = stdout(&shown);
+    assert!(text.contains("recorded_flows"), "{text}");
+    assert!(text.contains("2.0 KiB"), "{text}");
+    let warning = text
+        .find(&format!(
+            "WARNING: {}",
+            humanitl_ipc::projects::WAITING_WARNING
+        ))
+        .expect("the warning of the daemon");
+    let not_deleted = text
+        .find(humanitl_ipc::projects::NOT_DELETED)
+        .expect("the line of what is never deleted");
+    assert!(warning < not_deleted, "{text}");
+    assert!(
+        stderr(&shown).contains("nothing was deleted"),
+        "{}",
+        stderr(&shown)
+    );
+    assert_eq!(cleanups.load(std::sync::atomic::Ordering::SeqCst), 0);
+
+    let forget = harness.run([
+        "--json",
+        "projects",
+        "forget",
+        "/home/nik/projects/shop-frontend",
+    ]);
+    assert_eq!(code(&forget), 1, "{}", stderr(&forget));
+    let value: serde_json::Value =
+        serde_json::from_str(stdout(&forget).trim()).expect("one JSON value");
+    assert_eq!(value["deleted"], false);
+    assert_eq!(
+        value["plan"]["not_deleted"],
+        humanitl_ipc::projects::NOT_DELETED
+    );
+    assert_eq!(cleanups.load(std::sync::atomic::Ordering::SeqCst), 0);
+}
+
+/// `projects clean --yes` schickt genau den gezeigten Plan zurück und nennt,
+/// was gelöscht wurde.
+#[test]
+fn projects_clean_with_yes_runs_the_plan() {
+    let harness = Harness::new();
+    let (_server, cleanups) = FakeServer::start_with_cleanup(&harness);
+
+    let done = harness.run(["--json", "projects", "clean", "--yes"]);
+    assert_eq!(code(&done), 0, "{}", stderr(&done));
+    let value: serde_json::Value =
+        serde_json::from_str(stdout(&done).trim()).expect("one JSON value");
+    assert_eq!(value["deleted"], true);
+    assert_eq!(value["bytes_freed"], 2048);
+    assert_eq!(value["outcomes"][0]["kind"], "recorded_flows");
+    assert_eq!(cleanups.load(std::sync::atomic::Ordering::SeqCst), 1);
+}
+
+/// Gegen den Fake, dessen Sitzung läuft: nichts zu löschen, Exit 0, und der
+/// Satz, was bleibt.
+#[test]
+fn projects_clean_names_what_stays_in_use() {
+    let harness = Harness::new();
+    let _server = FakeServer::start(&harness);
+    let shown = harness.run(["projects", "clean"]);
+    assert_eq!(code(&shown), 0, "{}", stderr(&shown));
+    let text = stdout(&shown);
+    assert!(text.contains("Stays: The running session in"), "{text}");
+    assert!(text.contains("Nothing to clean up."), "{text}");
+    assert!(text.contains(humanitl_ipc::projects::NOT_DELETED), "{text}");
+}

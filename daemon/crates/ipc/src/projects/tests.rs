@@ -60,6 +60,8 @@ impl Fixture {
             paths: self.paths(),
             locks,
             activity,
+            sandbox: None,
+            audit: None,
         }
     }
 

@@ -4576,5 +4576,9 @@
   "diagCONFIG024Title": "Project choice not allowed",
   "@diagCONFIG024Title": {"description": "Title of the diagnostic CONFIG_024 (docs/DIAGNOSTICS.md, HUM-532): the per-project choice carries a key outside its list, a value a company policy locks, or a lower isolation floor."},
   "diagCONFIG024Why": "The choice for this project carries a setting it may not hold, a value your company fixes, or a lower isolation than the settings beneath it require. Nothing was saved, or the start stopped.",
-  "@diagCONFIG024Why": {"description": "Generic cause of CONFIG_024. Stands in the cause slot only when the diagnostic carries no sentence of the daemon's own (HUM-052)."}
+  "@diagCONFIG024Why": {"description": "Generic cause of CONFIG_024. Stands in the cause slot only when the diagnostic carries no sentence of the daemon's own (HUM-052)."},
+  "diagSANDBOX054Title": "Cleanup plan in use or out of date",
+  "@diagSANDBOX054Title": {"description": "Title of the diagnostic SANDBOX_054 (docs/DIAGNOSTICS.md, HUM-533): a cleanup plan holds an item in use or changed since it was shown; nothing was deleted."},
+  "diagSANDBOX054Why": "Something changed since the cleanup plan was shown, or one of its items is in use now. Nothing was deleted. Show the plan again and confirm the new one.",
+  "@diagSANDBOX054Why": {"description": "Generic cause of SANDBOX_054. Stands in the cause slot only when the diagnostic carries no sentence of the daemon's own (HUM-052)."}
 }
