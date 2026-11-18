@@ -67,8 +67,8 @@ use humanitl_config::{Config, Paths as XdgPaths, ResolverConfig, WorkMode};
 use humanitl_core::diagnostics::codes;
 use humanitl_core::shell::shell_path;
 use humanitl_core::{
-    Diagnostic, FixAction, FlowEvent, InterceptPause, ResumeReason, SecretMasks, SessionId,
-    Severity,
+    Diagnostic, FixAction, FlowEvent, InterceptPause, ResumeReason, SandboxNoticeSink, SecretMasks,
+    SessionId, Severity,
 };
 use humanitl_ipc::fake::{FakeDaemon, FakeOptions, Gates, Session};
 use humanitl_ipc::sandbox::SandboxPorts;
@@ -413,21 +413,14 @@ async fn run_daemon(cli: &Cli, passed: Option<systemd::Passed>) -> Result<(), Di
     let sandbox = SandboxService::new(
         SessionResolver::new(xdg.clone(), base),
         session,
-        SandboxPorts::none()
-            .with_rules(Arc::clone(&rules))
-            .with_settings(Arc::clone(&settings))
-            // Der Hinweis im Terminal kommt aus dem Ereignisstrom, den
-            // ohnehin alle lesen, und nicht aus einem Kanal vom Proxy zum
-            // Terminal (HUM-042, ARCHITECTURE 1.2).
-            .with_notices(HeldNotices::new(
-                Arc::clone(&queue),
-                Arc::clone(queue.registry()),
-            ))
-            // Was ein Lauf im Projektverzeichnis hinterlässt, bleibt in
-            // derselben Aufzeichnung liegen wie die Flows; ohne sie gäbe es
-            // die Zusammenfassung nur als Ereignis, und
-            // `humanitl sessions summary` fände nichts (HUM-043).
-            .with_recorder(recorder.clone()),
+        sandbox_ports(
+            &queue,
+            &rules,
+            &settings,
+            &recorder,
+            &audit.handle(),
+            session,
+        ),
     );
     let server = IpcServer::new(Arc::clone(&queue), &config, Some(session))
         .with_rules(Arc::clone(&rules), Some(recorder.clone()))
@@ -945,6 +938,62 @@ async fn report_diagnostics(
     }
 }
 
+/// Die Anschlüsse des Sandbox-Dienstes eines Daemons mit Proxy.
+fn sandbox_ports(
+    queue: &Arc<HoldQueue>,
+    rules: &Arc<RulesStore>,
+    settings: &Arc<SessionSettings>,
+    recorder: &Recorder,
+    audit: &AuditHandle,
+    session: SessionId,
+) -> SandboxPorts {
+    SandboxPorts::none()
+        .with_rules(Arc::clone(rules))
+        .with_settings(Arc::clone(settings))
+        // Der Hinweis im Terminal kommt aus dem Ereignisstrom, den ohnehin
+        // alle lesen, und nicht aus einem Kanal vom Proxy zum Terminal
+        // (HUM-042, ARCHITECTURE 1.2).
+        .with_notices(HeldNotices::new(
+            Arc::clone(queue),
+            Arc::clone(queue.registry()),
+        ))
+        // Was ein Lauf im Projektverzeichnis hinterlässt, bleibt in derselben
+        // Aufzeichnung liegen wie die Flows; ohne sie gäbe es die
+        // Zusammenfassung nur als Ereignis, und `humanitl sessions summary`
+        // fände nichts (HUM-043).
+        .with_recorder(recorder.clone())
+        // Was das Sandbox-Backend während der Sitzung meldet, geht ins
+        // Audit-Log und in denselben Strom (HUM-477).
+        .with_sandbox_notices(sandbox_notices(queue, audit.clone(), session))
+}
+
+/// Der Kanal vom Sandbox-Backend ins Audit-Log und in den Ereignisstrom
+/// (HUM-477).
+///
+/// **Ins Audit-Log direkt, nicht über den Strom.** Der Rundfunk des Stroms
+/// ist begrenzt: Bleibt der Sink des Audit-Logs hinter einem Schwall von
+/// Flows zurück, verliert er Ereignisse (`Lagged`). Für einen Flow ist das
+/// die dokumentierte Grenze; der Vermerk der Tür aber kommt je Start nur
+/// einmal, und verloren wäre er für immer. Jede Meldung geht deshalb zuerst
+/// über die unbegrenzte Warteschlange des Schreibers
+/// ([`AuditHandle::record`]) ins Log und erst danach als `FlowEvent::Sandbox`
+/// in den Strom, für jeden anderen Zuhörer; der Sink des Audit-Logs liest
+/// sie dort nicht ein zweites Mal. Beide Wege warten nicht; das Backend ruft
+/// den Kanal auch von seinen eigenen Fäden.
+fn sandbox_notices(
+    queue: &Arc<HoldQueue>,
+    audit: AuditHandle,
+    session: SessionId,
+) -> SandboxNoticeSink {
+    let queue = Arc::clone(queue);
+    SandboxNoticeSink::announcing(move |event| {
+        if let FlowEvent::Sandbox { notice, .. } = &event {
+            audit.record(Some(session), audit_sink::sandbox_record(notice));
+        }
+        queue.publish(event);
+    })
+}
+
 /// Schreibt einen Befund eines Schreib-Threads ins Protokoll, auf der Stufe
 /// seiner Schwere: `RECORDER_005` ist eine gute Nachricht und kein Fehler.
 fn log_diagnostic(source: &'static str, diagnostic: &Diagnostic) {
@@ -955,6 +1004,185 @@ fn log_diagnostic(source: &'static str, diagnostic: &Diagnostic) {
         Severity::Error | Severity::Blocking => {
             tracing::error!(code, why = %diagnostic.why, "{source}");
         }
+    }
+}
+
+/// Der Weg einer Meldung des Sandbox-Backends ins Audit-Log (HUM-477): über
+/// den Kanal, den `sandbox_ports` dem Sandbox-Dienst gibt, an der
+/// Halte-Warteschlange vorbei direkt zum Schreiber.
+///
+/// Das Backend ist eine Attrappe, die sich an der Tür verhält wie die
+/// Kernel-Stufe: Jede Verbindung über der Grenze geht zu, gemeldet wird nur
+/// die erste. Dass die Kernel-Stufe selbst so meldet, prüft
+/// `the_connection_above_the_cap_is_closed_and_the_others_keep_working` im
+/// Sandbox-Crate.
+#[cfg(test)]
+mod sandbox_notice_tests {
+    #![allow(clippy::unwrap_used, clippy::expect_used, clippy::panic)]
+
+    use std::sync::{Arc, OnceLock};
+
+    use humanitl_audit::kinds::SessionStarted;
+    use humanitl_audit::{AuditKey, AuditRecord, KeyOrigin};
+    use humanitl_audit_log::{AuditWriter, WriterOptions};
+    use humanitl_config::{Config, Limits};
+    use humanitl_core::{
+        CheckedGuarantee, FlowEvent, InterceptPause, SandboxNotice, SandboxNoticeSink, SessionId,
+    };
+    use humanitl_recorder::{Recorder, RecorderSettings};
+
+    use super::{AuditSink, FlowRegistry, HoldQueue, RulesStore, sandbox_ports, session_settings};
+
+    /// Die Tür einer Sitzung, so wie das Backend sie hält.
+    struct FakeDoor {
+        cap: u32,
+        open: u32,
+        noted: OnceLock<()>,
+        notices: SandboxNoticeSink,
+    }
+
+    impl FakeDoor {
+        fn connect(&mut self) {
+            if self.open < self.cap {
+                self.open += 1;
+            } else if self.noted.set(()).is_ok() {
+                self.notices
+                    .report(SandboxNotice::DoorCapped { cap: self.cap });
+            }
+        }
+    }
+
+    fn open_log(dir: &std::path::Path) -> AuditWriter {
+        let key = AuditKey::from_bytes([7; 32], KeyOrigin::File);
+        let (writer, _) = AuditWriter::open(
+            &dir.join("audit.jsonl"),
+            &key,
+            WriterOptions::default(),
+            &[],
+            None,
+        )
+        .unwrap();
+        writer
+    }
+
+    fn started() -> SessionStarted {
+        SessionStarted {
+            profile: "default".to_owned(),
+            agent: "opencode".to_owned(),
+            work_dir_hash: "0".repeat(64),
+            work_mode: "rw".to_owned(),
+            llm_endpoint_host: None,
+            sandbox_backend: None,
+            argv_hash: None,
+        }
+    }
+
+    /// Alles, was im Log steht, als Text und als Records.
+    fn records_of(writer: AuditWriter) -> (String, Vec<AuditRecord>) {
+        writer.handle().sync().unwrap();
+        let text = std::fs::read_to_string(writer.path()).unwrap();
+        drop(writer);
+        let records = text
+            .lines()
+            .map(|line| AuditRecord::from_line(line.as_bytes()).unwrap())
+            .collect();
+        (text, records)
+    }
+
+    /// Der Sink des Audit-Logs hängt hinter dem Strom zurück: Nach dem
+    /// Vermerk der Tür kommen mehr Ereignisse, als der Rundfunk hält, bevor
+    /// er das erste liest. Der Vermerk steht trotzdem genau einmal im Log.
+    #[tokio::test]
+    async fn a_session_whose_guest_exceeds_the_cap_has_exactly_one_audit_entry() {
+        let dir = tempfile::tempdir().unwrap();
+        let writer = open_log(dir.path());
+        let limits = Limits {
+            event_buffer: 8,
+            ..Limits::default()
+        };
+        let queue = Arc::new(HoldQueue::with_registry(
+            &limits,
+            Arc::new(FlowRegistry::new(&limits)),
+        ));
+        let session = SessionId::new();
+        let sink = AuditSink::start(writer.handle(), session, started(), queue.subscribe());
+        let mut stream = queue.subscribe();
+        // Dieselben Anschlüsse, die `run` dem Sandbox-Dienst gibt.
+        let recorder = Recorder::open(
+            &dir.path().join("humanitl.db"),
+            &dir.path().join("blobs"),
+            RecorderSettings::default(),
+        )
+        .unwrap();
+        let ports = sandbox_ports(
+            &queue,
+            &Arc::new(RulesStore::in_memory(session)),
+            &session_settings(&Config::default(), &Arc::new(InterceptPause::new())),
+            &recorder,
+            &writer.handle(),
+            session,
+        );
+        let notices = ports.sandbox_notices.expect("the daemon wires the channel");
+
+        let mut door = FakeDoor {
+            cap: 64,
+            open: 0,
+            noted: OnceLock::new(),
+            notices: notices.clone(),
+        };
+        // Der Gast öffnet 64 Verbindungen und dann drei weitere.
+        for _ in 0..67 {
+            door.connect();
+        }
+        // Ein Schwall danach, länger als der Rundfunk: Der Sink, der noch
+        // nichts gelesen hat, verliert den Vermerk im Strom.
+        for n in 0..32 {
+            queue.publish(FlowEvent::Lagged { n });
+        }
+        notices.report(SandboxNotice::IsolationChecked {
+            results: vec![
+                CheckedGuarantee {
+                    check: "no_network_interface".to_owned(),
+                    passed: true,
+                },
+                CheckedGuarantee {
+                    check: "single_socket".to_owned(),
+                    passed: true,
+                },
+            ],
+        });
+        // Im Strom steht die Meldung auch, für jeden anderen Zuhörer.
+        // Dieser Zuhörer ist ebenso zurückgefallen; er sieht den Vermerk der
+        // Tür nicht mehr, nur die Meldung nach dem Schwall.
+        let mut in_stream = 0;
+        loop {
+            match stream.try_recv() {
+                Ok(FlowEvent::Sandbox { .. }) => in_stream += 1,
+                Ok(_) | Err(tokio::sync::broadcast::error::TryRecvError::Lagged(_)) => {}
+                Err(_) => break,
+            }
+        }
+        assert_eq!(in_stream, 1, "the isolation notice after the burst");
+
+        let _ = sink.finish().await;
+        let (text, records) = records_of(writer);
+
+        let capped: Vec<&AuditRecord> = records
+            .iter()
+            .filter(|record| record.body.kind == "sandbox.door_capped")
+            .collect();
+        assert_eq!(capped.len(), 1, "{text}");
+        assert_eq!(capped[0].body.session, session.to_string());
+        assert_eq!(capped[0].body.data["cap"], 64);
+
+        let checked: Vec<&AuditRecord> = records
+            .iter()
+            .filter(|record| record.body.kind == "isolation.check")
+            .collect();
+        assert_eq!(checked.len(), 1, "{text}");
+        assert_eq!(checked[0].body.session, session.to_string());
+        assert_eq!(checked[0].body.data["results"][1]["check"], "single_socket");
+        assert_eq!(checked[0].body.data["results"][1]["passed"], true);
     }
 }
 

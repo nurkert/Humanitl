@@ -522,7 +522,8 @@ fn order_key(row: &FlowSummary) -> (bool, Option<Instant>, SystemTime, FlowId) {
 /// (der Flow beginnt damit), [`FlowEvent::ResponseChunk`],
 /// [`FlowEvent::Diagnostic`], [`FlowEvent::Lagged`] und
 /// [`FlowEvent::AgentAsk`], das zu gar keinem Flow gehört (HUM-073), ebenso
-/// wenig wie [`FlowEvent::Intercept`] (HUM-407).
+/// wenig wie [`FlowEvent::Intercept`] (HUM-407) und
+/// [`FlowEvent::Sandbox`] (HUM-477).
 fn transition_input(event: &FlowEvent) -> Option<TransitionInput> {
     match event {
         FlowEvent::Analyzed { findings, .. } => Some(TransitionInput::Analyze {
@@ -556,7 +557,8 @@ fn transition_input(event: &FlowEvent) -> Option<TransitionInput> {
         | FlowEvent::Diagnostic { .. }
         | FlowEvent::Lagged { .. }
         | FlowEvent::AgentAsk { .. }
-        | FlowEvent::Intercept { .. } => None,
+        | FlowEvent::Intercept { .. }
+        | FlowEvent::Sandbox { .. } => None,
     }
 }
 

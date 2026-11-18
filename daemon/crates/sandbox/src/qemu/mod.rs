@@ -1209,11 +1209,31 @@ impl SandboxBackend for VmBackend {
     ///
     /// Hat der Gast selbst schon abgelehnt, bleibt seine Diagnose die der
     /// Sitzung ([`host_check::merge`], HUM-470).
+    ///
+    /// Das Ergebnis geht außerdem in den Ereignisstrom der Sitzung und damit
+    /// als `isolation.check` ins Audit-Log (HUM-477).
     fn isolation_check(&self, handle: &SandboxHandle) -> Vec<CheckResult> {
-        let mut results = isolation_from_report(handle, handle.report_timeout());
+        let results = isolation_from_report(handle, handle.report_timeout());
         let Some(stop) = handle.unit() else {
             return results;
         };
+        let results = self.check_on_host(handle, stop, results);
+        stop.admission
+            .report(crate::launcher::isolation_notice(&results));
+        results
+    }
+}
+
+impl VmBackend {
+    /// Ergänzt die Ergebnisse aus dem Bericht des Gasts um die Prüfung auf
+    /// dem Host und schickt das Urteil an den Gast; ein rotes Urteil beendet
+    /// die Sitzung.
+    fn check_on_host(
+        &self,
+        handle: &SandboxHandle,
+        stop: &crate::launcher::UnitStop,
+        mut results: Vec<CheckResult>,
+    ) -> Vec<CheckResult> {
         name_the_link(&mut results, &stop.admission.link());
         name_the_door(&mut results, stop.admission.door());
         let mut findings = host_check::run(stop, &self.resolved, DOOR_PORT);
@@ -1547,7 +1567,7 @@ impl VmBackend {
         let timeout = options
             .report_timeout
             .unwrap_or_else(|| self.start_timeout());
-        let admission = crate::launcher::Admission::default();
+        let admission = crate::launcher::Admission::reporting_to(options.notices.clone());
         let link = session::GuestLink {
             device: layout.door_device(),
             report_port: REPORT_PORT,

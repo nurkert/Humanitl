@@ -27,8 +27,8 @@ use std::path::{Path, PathBuf};
 use std::sync::{Mutex, PoisonError};
 use std::time::Duration;
 
-use humanitl_core::Diagnostic;
 use humanitl_core::ids::SessionId;
+use humanitl_core::{Diagnostic, SandboxNotice, SandboxNoticeSink};
 
 use crate::bwrap_args::shell_line;
 use crate::disposable::OverlayDirs;
@@ -243,6 +243,12 @@ pub struct LaunchOptions {
     /// Kernel-Stufe ([`GuestRootProbe`], HUM-445). Jedes andere Backend
     /// liest das Feld nicht.
     pub guest_root_probe: GuestRootProbe,
+    /// Wohin das Backend meldet, was es während der Sitzung sieht (HUM-477):
+    /// der Kanal in den Ereignisstrom der Sitzung, aus dem der Daemon das
+    /// Audit-Log schreibt. Ohne Angabe meldet es nichts. Heute meldet nur die
+    /// Kernel-Stufe, und zwar die erste Verbindung über der Obergrenze ihrer
+    /// Tür und das Ergebnis jeder Prüfung samt der Prüfung auf dem Host.
+    pub notices: Option<SandboxNoticeSink>,
 }
 
 /// Eine Probe, die der Shim im Gast der Kernel-Stufe als Root ohne
@@ -738,12 +744,15 @@ pub(crate) enum Teardown {
 /// der Agent nie.
 ///
 /// Daneben steht hier, was die Tür der Sitzung einmal festhält (HUM-467):
-/// dass sie eine Verbindung über der Obergrenze abwies.
+/// dass sie eine Verbindung über der Obergrenze abwies; und wohin die
+/// Sitzung meldet, was ins Audit-Log gehört ([`LaunchOptions::notices`],
+/// HUM-477).
 #[derive(Debug, Clone, Default)]
 pub(crate) struct Admission(
     std::sync::Arc<Mutex<Verdict>>,
     std::sync::Arc<Mutex<String>>,
     std::sync::Arc<std::sync::OnceLock<String>>,
+    Option<SandboxNoticeSink>,
 );
 
 /// Wo das Urteil einer Sitzung steht.
@@ -773,6 +782,23 @@ impl Eq for Admission {}
     allow(dead_code, reason = "only the kernel level, Linux on x86-64, uses it")
 )]
 impl Admission {
+    /// Eine Zulassung, deren Sitzung an `notices` meldet (HUM-477).
+    pub(crate) fn reporting_to(notices: Option<SandboxNoticeSink>) -> Self {
+        Self(
+            std::sync::Arc::default(),
+            std::sync::Arc::default(),
+            std::sync::Arc::default(),
+            notices,
+        )
+    }
+
+    /// Meldet `notice` in den Ereignisstrom der Sitzung, wenn sie einen hat.
+    pub(crate) fn report(&self, notice: SandboxNotice) {
+        if let Some(notices) = &self.3 {
+            notices.report(notice);
+        }
+    }
+
     /// Legt die Verbindung ab, auf der das Urteil geht.
     pub(crate) fn offer(&self, stream: std::os::unix::net::UnixStream) {
         let mut verdict = self.0.lock().unwrap_or_else(PoisonError::into_inner);
@@ -993,6 +1019,26 @@ pub struct CheckResult {
     pub evidence: String,
     /// Der Befund, wenn sie nicht gilt oder nicht geprüft werden konnte.
     pub diagnostic: Option<Diagnostic>,
+}
+
+/// Die Meldung einer Prüfung für den Ereignisstrom (HUM-477): je Garantie nur
+/// Name und Ergebnis. Beleg und Befund bleiben beim Aufrufer der Prüfung; sie
+/// können Pfade und Text aus dem Gast tragen, und beides gehört nicht ins
+/// Audit-Log.
+#[cfg_attr(
+    not(all(target_os = "linux", target_arch = "x86_64")),
+    allow(dead_code, reason = "only the kernel level, Linux on x86-64, uses it")
+)]
+pub(crate) fn isolation_notice(results: &[CheckResult]) -> SandboxNotice {
+    SandboxNotice::IsolationChecked {
+        results: results
+            .iter()
+            .map(|result| humanitl_core::CheckedGuarantee {
+                check: result.check.as_str().to_owned(),
+                passed: result.passed,
+            })
+            .collect(),
+    }
 }
 
 /// Wohin Ein- und Ausgabe der Sandbox gehen.
@@ -1379,5 +1425,40 @@ mod tests {
             options.effective_report_timeout(),
             Duration::from_millis(300)
         );
+    }
+
+    /// HUM-477: Die Meldung einer Prüfung trägt je Garantie Name und
+    /// Ergebnis, nie Beleg oder Befund; ohne Sink meldet die Zulassung nichts
+    /// und scheitert nicht.
+    #[test]
+    #[allow(clippy::panic)]
+    fn the_notice_of_a_check_names_each_guarantee_and_nothing_else() {
+        let results: Vec<CheckResult> = IsolationCheck::ALL
+            .iter()
+            .map(|&check| CheckResult {
+                check,
+                passed: check != IsolationCheck::SingleSocket,
+                evidence: "/home/someone/secret-project".to_owned(),
+                diagnostic: None,
+            })
+            .collect();
+        let notice = isolation_notice(&results);
+        let SandboxNotice::IsolationChecked { results: checked } = &notice else {
+            panic!("expected an isolation notice, got {notice:?}");
+        };
+        let named: Vec<(&str, bool)> = checked
+            .iter()
+            .map(|guarantee| (guarantee.check.as_str(), guarantee.passed))
+            .collect();
+        assert_eq!(
+            named,
+            [
+                ("no_network_interface", true),
+                ("single_socket", false),
+                ("seccomp_active", true),
+            ]
+        );
+        assert!(!format!("{notice:?}").contains("secret-project"));
+        Admission::default().report(notice);
     }
 }

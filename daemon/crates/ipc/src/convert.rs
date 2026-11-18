@@ -1711,10 +1711,22 @@ pub fn flow_event_to_proto(
             change,
             revision,
         } => Event::Intercept(intercept_changed_to_proto(*at, *change, *revision)),
+        FlowEvent::Sandbox { at, .. } => return without_wire_form(*at),
     };
     v1::FlowEvent {
         at: Some(timestamp(event.at().unwrap_or_else(SystemTime::now))),
         event: Some(wire),
+    }
+}
+
+/// Eine Meldung des Sandbox-Backends gehört ins Audit-Log und nicht auf die
+/// Leitung (HUM-477): Was die Oberfläche von der Sandbox sieht, kommt über
+/// `Sandbox`. `Subscribe` lässt sie deshalb aus; wer trotzdem eine übersetzt,
+/// bekommt ein Ereignis ohne Inhalt.
+pub(crate) fn without_wire_form(at: SystemTime) -> v1::FlowEvent {
+    v1::FlowEvent {
+        at: Some(timestamp(at)),
+        event: None,
     }
 }
 
@@ -2604,6 +2616,22 @@ mod tests {
             panic!("lagged");
         };
         assert_eq!(lagged.dropped, 12);
+    }
+
+    /// Eine Meldung des Sandbox-Backends hat keine Form auf der Leitung
+    /// (HUM-477); sie gehört ins Audit-Log.
+    #[test]
+    fn a_sandbox_notice_has_no_wire_form() {
+        let registry = FlowRegistry::new(&Limits::default());
+        let wire = flow_event_to_proto(
+            &humanitl_core::FlowEvent::Sandbox {
+                at: std::time::SystemTime::now(),
+                notice: humanitl_core::SandboxNotice::DoorCapped { cap: 64 },
+            },
+            &registry,
+            None,
+        );
+        assert!(wire.event.is_none(), "{wire:?}");
     }
 
     #[test]

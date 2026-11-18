@@ -2384,7 +2384,8 @@ ready line, or no answer to the report or the control connection). After the rea
 keeps at most 64 connections to the proxy open per session (HUM-467); each binds two threads and
 four descriptors of the daemon. A connection above that is closed at once, without being read and
 without a thread, and the first one per session is noted in the evidence of `single_socket` in
-every later check; the guarantees do not change, since such a connection never reaches anything. The host opens each
+every later check and, once per sandbox launch, in the audit log as `sandbox.door_capped` (HUM-477); every check of
+the kernel level, the host check included, stands in the audit log as `isolation.check`; the guarantees do not change, since such a connection never reaches anything. The host opens each
 connection into the guest once and waits for its answer until the session's deadline: a
 `CONNECT` it gave up could still be accepted by the guest later and take the place of the report
 (HUM-470, a precaution: the vsock device refuses within milliseconds while the guest does not

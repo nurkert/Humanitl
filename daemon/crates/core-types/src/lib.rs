@@ -16,6 +16,8 @@
 //! - [`block`] die Antwort an einen geblockten Client
 //! - [`diagnostics`] Befunde mit Code, Grund und Behebung
 //! - [`shell`] Werte als Wörter der Shell für Behebungsvorschläge
+//! - [`sandbox_notice`] was ein Sandbox-Backend während einer Sitzung meldet
+//!   (HUM-477)
 #![forbid(unsafe_code)]
 #![deny(missing_docs)]
 
@@ -31,6 +33,7 @@ pub mod http;
 pub mod ids;
 pub mod intercept;
 pub mod rule;
+pub mod sandbox_notice;
 pub mod secret_mask;
 pub mod shell;
 pub mod terminal;
@@ -60,5 +63,6 @@ pub use crate::rule::{
     Action, EXACT_PATH_MARK, Expiry, HostPattern, Matcher, PathPattern, Rule, exact_path_entry,
     exact_path_of, path_prefix_is_valid,
 };
+pub use crate::sandbox_notice::{CheckedGuarantee, SandboxNotice, SandboxNoticeSink};
 pub use crate::secret_mask::SecretMasks;
 pub use crate::terminal::{TerminalFilter, TerminalPolicy};
