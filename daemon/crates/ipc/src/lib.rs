@@ -51,7 +51,14 @@ pub const PROTO_MAJOR: u32 = 1;
 /// Minor-Version des Vertrags. Steigt bei jeder additiven Änderung
 /// (`Info.proto_minor`).
 ///
-/// `47` seit dem Einstellungskatalog (HUM-534): `GetConfigRequest.include_catalog`
+/// `48` seit dem Startvorschlag (HUM-536): `ProjectsRequest.proposal` mit
+/// Ordner oder Kennung und einer Teilwahl antwortet mit
+/// `ProjectsResponse.proposal` (`StartProposal`: je Feld Schlüssel, Vorgabe,
+/// Herkunft, Sperre und Optionen mit Verfügbarkeit, Gründen und den Paaren
+/// der Wahl, beim Agenten die Quellen, bei Agent und Server der Hinweis auf
+/// Cloud-Inferenz; dazu die Wahl der Vorgaben, die Zeile `Defaults: …` und
+/// die Befunde). Speichert nichts.
+/// `47` war der Einstellungskatalog (HUM-534): `GetConfigRequest.include_catalog`
 /// und `language` mit der Antwort `ConfigSnapshot.catalog` (`SettingsCatalog`
 /// mit Kategorien und Einträgen samt Herkunft, `SettingLock` und
 /// `in_project_choice`), `GetConfigRequest.project_id` auch als Ordner und
@@ -253,7 +260,7 @@ pub const PROTO_MAJOR: u32 = 1;
 /// Spiegelung in `app/lib/core/ipc/proto_version.dart` darf nachziehen: eine
 /// abweichende Minor ist verabredetermaßen kein Grund, die Verbindung
 /// abzulehnen (`docs/PROTOCOL.md`).
-pub const PROTO_MINOR: u32 = 47;
+pub const PROTO_MINOR: u32 = 48;
 
 /// Metadata-Schlüssel für das Session-Token aus
 /// `$XDG_RUNTIME_DIR/humanitl/token` (CONVENTIONS.md 3.6).

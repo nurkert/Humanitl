@@ -101,6 +101,7 @@ step, is described in [`docs/cli.md`](../cli.md); which RPC each subcommand serv
 - [`humanitl projects show`](#humanitl-projects-show) Show one project by its folder: its entry and every key of its project choice with the chosen value, the value that applies and its origin
 - [`humanitl projects clean`](#humanitl-projects-clean) Clean up: the daemon lists every item it would delete (recorded requests with their bodies, waiting changes of a disposable run, project choices, register entries) with size, and asks. Without a folder every project except what is in use. The project folder and the audit log are never deleted. Without a terminal it deletes only with --yes and otherwise ends with exit 1 and the plan
 - [`humanitl projects forget`](#humanitl-projects-forget) Forget a project: its stored project choice and its register entry, shown as a plan and asked first. Recorded requests stay
+- [`humanitl projects proposal`](#humanitl-projects-proposal) Show the start proposal for a folder: every field of the first-start screen (agent and its source, folder mode, isolation, ask mode, model server, profile) with its options, the default, and why an option is not available. The defaults are the start that would happen without a screen. Nothing is saved
 
 ## Configuration flags
 
@@ -3192,11 +3193,12 @@ The project register: the projects the daemon knows with their last start, agent
 Usage: humanitl projects [OPTIONS] <COMMAND>
 
 Commands:
-  ls      List the known projects, the latest start first: name, folder, agent, last start, runs, and whether a session runs or changes wait
-  show    Show one project by its folder: its entry and every key of its project choice with the chosen value, the value that applies and its origin
-  clean   Clean up: the daemon lists every item it would delete (recorded requests with their bodies, waiting changes of a disposable run, project choices, register entries) with size, and asks. Without a folder every project except what is in use. The project folder and the audit log are never deleted. Without a terminal it deletes only with --yes and otherwise ends with exit 1 and the plan
-  forget  Forget a project: its stored project choice and its register entry, shown as a plan and asked first. Recorded requests stay
-  help    Print this message or the help of the given subcommand(s)
+  ls        List the known projects, the latest start first: name, folder, agent, last start, runs, and whether a session runs or changes wait
+  show      Show one project by its folder: its entry and every key of its project choice with the chosen value, the value that applies and its origin
+  clean     Clean up: the daemon lists every item it would delete (recorded requests with their bodies, waiting changes of a disposable run, project choices, register entries) with size, and asks. Without a folder every project except what is in use. The project folder and the audit log are never deleted. Without a terminal it deletes only with --yes and otherwise ends with exit 1 and the plan
+  forget    Forget a project: its stored project choice and its register entry, shown as a plan and asked first. Recorded requests stay
+  proposal  Show the start proposal for a folder: every field of the first-start screen (agent and its source, folder mode, isolation, ask mode, model server, profile) with its options, the default, and why an option is not available. The defaults are the start that would happen without a screen. Nothing is saved
+  help      Print this message or the help of the given subcommand(s)
 
 Options:
       --json
@@ -3336,6 +3338,37 @@ Options:
 
       --yes
           Forget without asking
+
+      --config <PATH>
+          Read this config file instead of the one in the user's config directory
+
+  -v, --verbose...
+          Explain what is happening; repeat for more
+
+  -q, --quiet
+          Only the result, no notes
+
+      --profile <NAME>
+          Use this profile for the session; falls back to the sandbox profile of that name when no session profile exists
+
+  -h, --help
+          Print help
+```
+
+## humanitl projects proposal
+
+```text
+Show the start proposal for a folder: every field of the first-start screen (agent and its source, folder mode, isolation, ask mode, model server, profile) with its options, the default, and why an option is not available. The defaults are the start that would happen without a screen. Nothing is saved
+
+Usage: humanitl projects proposal [OPTIONS] [PATH]
+
+Arguments:
+  [PATH]
+          The project folder; relative to the current directory. Without it, the current directory
+
+Options:
+      --json
+          Machine-readable output: one JSON value on stdout, diagnostics included
 
       --config <PATH>
           Read this config file instead of the one in the user's config directory

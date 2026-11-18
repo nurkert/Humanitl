@@ -1,4 +1,5 @@
-//! `humanitl projects ls|show|clean|forget` (HUM-532, HUM-533, ADR-0024).
+//! `humanitl projects ls|show|clean|forget|proposal` (HUM-532, HUM-533,
+//! HUM-536, ADR-0024).
 //!
 //! Ein gRPC-Aufruf je Schritt und sonst nichts (ADR-018): welche Projekte es
 //! gibt, wann und mit welchem Agenten sie zuletzt liefen und was für eines
@@ -6,7 +7,9 @@
 //! löschen nur, was der Daemon vorher als Plan aufgelistet hat: Die CLI zeigt
 //! den Plan, wie er kommt (Arten, Sätze, Warnungen, die Zeile, was nie
 //! gelöscht wird), fragt, und schickt den Digest dieses Plans zurück. Eine
-//! eigene Liste von Arten oder Kandidaten hält sie nicht.
+//! eigene Liste von Arten oder Kandidaten hält sie nicht. `proposal` zeigt
+//! den Startvorschlag des Daemons, wie er kommt; Optionen, Vorgaben und
+//! Gründe kennt nur der Daemon.
 
 use std::io::{BufRead as _, IsTerminal as _};
 
@@ -24,6 +27,9 @@ use crate::cmd::{Context, EXIT_OK, EXIT_USER, Failure, from_proto, status_diagno
 /// So viele Seiten liest `ls` höchstens; mehr als 50 000 Projekte kennt
 /// niemand.
 const MAX_PAGES: usize = 100;
+
+/// Die Frist für `proposal`, als `grpc-timeout` gesendet (HUM-536).
+const PROPOSAL_DEADLINE: std::time::Duration = std::time::Duration::from_secs(10);
 
 /// Führt `humanitl projects <cmd>` aus.
 ///
@@ -89,8 +95,147 @@ pub async fn run(ctx: &Context, cmd: &ProjectsCmd) -> Result<u8, Failure> {
             };
             return clean(ctx, &mut client, selection, *yes).await;
         }
+        ProjectsCmd::Proposal { path } => {
+            let folder = path.as_deref().unwrap_or_else(|| std::path::Path::new("."));
+            // Mit Frist wie `humanitl doctor`: Der Daemon wartet auf eine
+            // langsame Suche der Backends höchstens bis kurz davor und nennt
+            // die Stufe dann „wird geprüft" (HUM-502), statt zu hängen.
+            let mut request = tonic::Request::new(v1::ProjectsRequest {
+                op: Some(v1::projects_request::Op::Proposal(
+                    v1::projects_request::Proposal {
+                        path: absolute(ctx, folder),
+                        ..v1::projects_request::Proposal::default()
+                    },
+                )),
+            });
+            request.set_timeout(PROPOSAL_DEADLINE);
+            let proposal = client
+                .projects(request)
+                .await
+                .map_err(|status| Failure::new(status_diagnostic(&status, "Projects")))?
+                .into_inner()
+                .proposal
+                .unwrap_or_default();
+            print_proposal(ctx, &proposal);
+        }
     }
     Ok(EXIT_OK)
+}
+
+/// Der Startvorschlag: als JSON jedes Feld mit Optionen und Gründen, sonst
+/// die Zeile der Vorgaben, je Feld eine Zeile mit den Optionen (die Vorgabe
+/// mit `*`, beim Agenten die Quelle in Klammern, Cloud-Inferenz mit
+/// `[cloud: Anbieter]`, nicht wählbare mit dem Code des Grundes) und die
+/// Befunde.
+fn print_proposal(ctx: &Context, proposal: &v1::StartProposal) {
+    let diagnostics: Vec<_> = proposal.diagnostics.iter().filter_map(from_proto).collect();
+    if ctx.render.is_json() {
+        ctx.render.value(&proposal_json(proposal, &diagnostics));
+        return;
+    }
+    ctx.render
+        .line(&format!("{} ({})", proposal.display_name, proposal.path));
+    ctx.render.line(&proposal.defaults_line);
+    for field in &proposal.fields {
+        let options: Vec<String> = field
+            .options
+            .iter()
+            .map(|option| {
+                let mut text = option.value.clone();
+                if option.value == field.value {
+                    text.push('*');
+                }
+                if !option.source.is_empty() {
+                    text = format!("{text} [{}]", option.source);
+                }
+                if let Some(notice) = &option.cloud_inference {
+                    text = format!("{text} [cloud: {}]", notice.provider);
+                }
+                if !option.available {
+                    let codes: Vec<&str> = option
+                        .reasons
+                        .iter()
+                        .map(|reason| reason.code.as_str())
+                        .collect();
+                    text = format!("{text} (not available: {})", codes.join(", "));
+                }
+                text
+            })
+            .collect();
+        let locked = field
+            .lock
+            .as_ref()
+            .map(|lock| format!(" [locked by {}]", lock.locked_by))
+            .unwrap_or_default();
+        ctx.render
+            .line(&format!("  {}: {}{locked}", field.id, options.join(", ")));
+    }
+    for diagnostic in &diagnostics {
+        ctx.render.diagnostic(diagnostic);
+    }
+}
+
+fn proposal_json(proposal: &v1::StartProposal, diagnostics: &[Diagnostic]) -> Value {
+    let reasons = |reasons: &[v1::Diagnostic]| -> Vec<Value> {
+        reasons
+            .iter()
+            .filter_map(from_proto)
+            .map(|reason| crate::render::diagnostic_json(&reason))
+            .collect()
+    };
+    let pairs = |pairs: &[v1::ChoiceValue]| -> Vec<Value> {
+        pairs
+            .iter()
+            .map(|pair| json!({ "key": pair.key, "value": pair.value }))
+            .collect()
+    };
+    let cloud = |notice: Option<&v1::CloudInference>| {
+        notice.map(|notice| {
+            json!({
+                "agent": notice.agent,
+                "provider": notice.provider,
+                "acknowledged": notice.acknowledged,
+            })
+        })
+    };
+    json!({
+        "path": proposal.path,
+        "name": proposal.display_name,
+        "project_id": proposal.project_id,
+        "has_choice": proposal.has_choice,
+        "defaults_line": proposal.defaults_line,
+        "choice": pairs(&proposal.choice),
+        "cloud_inference": cloud(proposal.cloud_inference.as_ref()),
+        "fields": proposal.fields.iter().map(|field| json!({
+            "id": field.id,
+            "keys": field.keys,
+            "value": field.value,
+            "origin": field.origin,
+            "lock": field.lock.as_ref().map(|lock| json!({
+                "locked_by": lock.locked_by,
+                "reason": lock.reason,
+            })),
+            "options": field.options.iter().map(|option| json!({
+                "value": option.value,
+                "label": option.label,
+                "available": option.available,
+                "reasons": reasons(&option.reasons),
+                "choice": pairs(&option.choice),
+                "source": option.source,
+                "sources": option.sources.iter().map(|source| json!({
+                    "source": source.source,
+                    "available": source.available,
+                    "selected": source.selected,
+                    "reasons": reasons(&source.reasons),
+                })).collect::<Vec<_>>(),
+                "cloud_inference": cloud(option.cloud_inference.as_ref()),
+            })).collect::<Vec<_>>(),
+        })).collect::<Vec<_>>(),
+        "diagnostics": diagnostics
+            .iter()
+            .map(crate::render::diagnostic_json)
+            .collect::<Vec<_>>(),
+    })
 }
 
 /// Ein Ordner als absoluter Pfad, relativ zum Arbeitsverzeichnis.

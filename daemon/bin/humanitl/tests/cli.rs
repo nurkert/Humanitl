@@ -6702,6 +6702,66 @@ fn projects_ls_and_show_answer_as_json() {
     assert_eq!(value["code"], "CONFIG_003");
 }
 
+/// `projects proposal PATH --json` (HUM-536): der Startvorschlag des
+/// Daemons als ein JSON-Wert, jedes Feld des Erststart-Bildschirms in seiner
+/// Reihenfolge mit Vorgabe und Optionen, dazu die Zeile der Vorgaben.
+#[test]
+fn projects_proposal_answers_as_json() {
+    let harness = Harness::new();
+    let _server = FakeServer::start(&harness);
+
+    let shown = harness.run([
+        "--json",
+        "projects",
+        "proposal",
+        "/home/nik/projects/shop-frontend",
+    ]);
+    assert_eq!(code(&shown), 0, "{}", stderr(&shown));
+    let value: serde_json::Value =
+        serde_json::from_str(stdout(&shown).trim()).expect("one JSON value");
+    let ids: Vec<&str> = value["fields"]
+        .as_array()
+        .expect("the fields")
+        .iter()
+        .filter_map(|field| field["id"].as_str())
+        .collect();
+    assert_eq!(
+        ids,
+        [
+            "agent",
+            "folder_mode",
+            "isolation",
+            "ask_mode",
+            "llm_server",
+            "profile"
+        ],
+        "{value}"
+    );
+    assert_eq!(value["path"], "/home/nik/projects/shop-frontend");
+    assert!(
+        value["defaults_line"]
+            .as_str()
+            .is_some_and(|line| line.starts_with("Defaults: ")),
+        "{value}"
+    );
+    for field in value["fields"].as_array().unwrap() {
+        let default = field["value"].as_str().unwrap();
+        assert!(
+            default.is_empty()
+                || field["options"]
+                    .as_array()
+                    .unwrap()
+                    .iter()
+                    .any(|option| option["value"] == default),
+            "the default is one of the options: {field}"
+        );
+    }
+
+    let text = harness.run(["projects", "proposal", "/home/nik/projects/shop-frontend"]);
+    assert_eq!(code(&text), 0, "{}", stderr(&text));
+    assert!(stdout(&text).contains("Defaults: "), "{}", stdout(&text));
+}
+
 /// Ohne `--json` eine Zeile je Projekt mit Agent und Läufen.
 #[test]
 fn projects_ls_names_the_agent_and_the_runs() {
