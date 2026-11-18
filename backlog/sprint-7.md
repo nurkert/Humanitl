@@ -138,6 +138,7 @@ Diagnose-Codes, hier nur geplant (registriert vom genannten Issue in `codes.rs` 
 | HUM-523 | Agent-Depot: Zugangsdateien verschlüsselt mit Schlüssel aus dem Schlüsselbund | S | HUM-520 |
 | HUM-553 | Gemeinsamer Probedurchgang mit dem Eigentümer: gesammelte Handprüfungen | S | HUM-524 |
 | HUM-555 | Entscheidungs-Proxy: ein „Drop" des Proxys dahinter erscheint im Audit als `200`, die `502`-Meldung nennt Humanitl | S | HUM-524 |
+| HUM-556 | Speicher des Daemons: Flow-Registry ohne Obergrenze, Audit-Kanal unbegrenzt | M | HUM-479 |
 
 ## HUM-428 · Port neutral: `PlanRequest`, `LaunchOptions`, `IsolationLevel`, Enum `Backend` statt `PlatformBackend`
 
@@ -4936,3 +4937,42 @@ obwohl die Entscheidung der Proxy dahinter getroffen hat. Die Anleitung
 ### Akzeptanzkriterien
 1. Weder Agent noch Audit schreiben eine Entscheidung des Proxys dahinter
    Humanitl zu.
+
+---
+
+## HUM-556 · Speicher des Daemons: Flow-Registry ohne Obergrenze, Audit-Kanal unbegrenzt
+
+### Kontext
+Aus dem Review von HUM-479 (Codex). Jede Anfrage legt in der
+`FlowRegistry` des Proxys (`daemon/crates/proxy/src/registry.rs`, eine
+`DashMap` je Daemon) einen Eintrag an; die Registry kennt keine Obergrenze
+und im Betrieb keine Verdrängung. Audit-Einträge laufen über einen
+unbegrenzten Kanal zum Schreiber (`daemon/crates/audit-log/src/writer.rs`).
+Ein Gast, der über eine einzige Verbindung sehr viele Anfragen schickt, kann
+so über die Zeit den Speicher des Daemons füllen; mit ihm fallen gRPC,
+Aufzeichnung und Audit. Die Grenzen je Verbindung und je Sitzung (HUM-120,
+HUM-467) begrenzen nur Gleichzeitiges, nicht die Summe über die Zeit.
+
+### Spezifikation
+1. Messen: Speicher je Eintrag der Registry und Wachstum bei einer langen
+   Sitzung mit vielen kleinen Anfragen.
+2. Die Registry hält abgeschlossene Flows nur begrenzt im Speicher (Zahl
+   oder Alter, als Wert in `limits`); was die Aufzeichnung schon hat, wird
+   verdrängt. Gehaltene und laufende Flows werden nie verdrängt.
+3. Der Kanal zum Audit-Schreiber bekommt Gegendruck oder eine Obergrenze,
+   ohne dass ein sicherheitsrelevanter Eintrag still verloren geht (die
+   Meldungen der Sandbox aus HUM-477 müssen weiter ankommen); wenn das nicht
+   geht, eine begründete Entscheidung im Spec.
+4. `docs/THREAT-MODEL.md` (K-31 oder ein eigener Eintrag) nennt die Grenze.
+
+### Tests
+- Registry: nach N abgeschlossenen Flows über der Grenze bleibt die Zahl der
+  Einträge begrenzt, ein gehaltener Flow bleibt. Mutationsbeweis: ohne
+  Verdrängung rot.
+- Audit: ein Schwall von Einträgen bei langsamem Schreiber lässt den
+  Speicher nicht unbegrenzt wachsen und verliert keinen Eintrag der Sandbox.
+
+### Akzeptanzkriterien
+1. Eine Sitzung mit beliebig vielen Anfragen hält den Speicher des Daemons
+   begrenzt, ohne gehaltene Flows oder Audit-Einträge der Sandbox zu
+   verlieren.
