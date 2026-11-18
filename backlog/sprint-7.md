@@ -4278,6 +4278,18 @@ den Abschnitt und bessert nach dem Lauf nach.
    Schreiben des Abschnitts auf den Probelauf und hält den Sprint nicht
    auf.
 
+### Entscheidung des Eigentümers vom 2026-11-18
+Der Eigentümer macht den Probelauf jetzt nicht, und das Issue wartet nicht
+auf ihn. Den Probelauf macht die KI selbst: Burp Community von
+portswigger.net (Prüfsumme geprüft) unter Xvfb, nie auf dem echten
+Bildschirm, Konfiguration nur in einem Wegwerf-Verzeichnis, Humanitl nur
+über den Proxy-Crate gegen ein Stellvertreter-Ziel, nie gegen den echten
+humanitld. Was dabei nicht zu beobachten ist, steht in der Anleitung als
+„not observed in the AI trial" und geht in die Liste von HUM-553. Punkt 3
+der Spezifikation (Eigentümer fährt die Checkliste) und die Wartepflicht
+aus Punkt 5 entfallen damit; die Checkliste lebt als offene Punkte in
+HUM-553 weiter.
+
 ### Akzeptanzkriterien
 1. Die Anleitung nennt Burp nur mit dem Ergebnis eines Probelaufs auf
    einem aktuellen Build, mit Datum und Version.
@@ -4288,6 +4300,34 @@ den Abschnitt und bessert nach dem Lauf nach.
 4. Die Checkliste für den Probelauf liegt vor; `humanitl egress check`,
    eine durchgelassene und eine verworfene Anfrage sind als beobachtet
    festgehalten; die deutsche Übersetzung ist aktuell.
+
+### Stand nach der Umsetzung (2026-11-18)
+
+Probelauf der KI mit Burp Suite Community Edition 2026.11.2 (JAR,
+SHA-256 gegen die Angabe von PortSwigger geprüft) unter Xvfb, Klicks per
+`java.awt.Robot`, Humanitl als Proxy aus der Testunterstützung des
+Proxy-Crates gegen den Listener `127.0.0.1:8080`, Ziel ein TLS-Server mit
+selbstsigniertem Zertifikat, der jede Verbindung zählt. Belege (Protokolle
+je Lauf, Screenshots) im Scratchpad der Sitzung unter `hum-524/q/*.out`
+und `hum-524/work/`, nicht im Repository. Beobachtet: Prüfung
+besteht mit beiden Werten von `proxy_resolve`; Forward und Drop wirken mit
+beiden; „Verify upstream TLS" ist von Haus aus aus, das nicht vertraute
+Ziel kommt durch; von 16 angehaltenen Anfragen mit gelesenem
+Verbindungsprotokoll des Ziels hinterließen 15 vor der Entscheidung keine
+Verbindung, eine einen TLS-Handschlag ohne Anfrage, die 10 danach nicht;
+„Drop" liefert dem Agenten mit Vorgaben `200 OK` mit
+Fehlerseite von Burp, mit „Suppress Burp error messages in browser"
+sofort `502`; die vorgegebene Abfangregel lässt `.js`, `.css`, Bilder und
+Schriften ohne Halt durch (gesehen an `/lib/app.js`: Ziel binnen 76 ms
+kontaktiert, mit der Datei angehalten); Burp startet mit „Intercept off". Mit
+`proxy_resolve = "humanitl"` löst Burp den Namen aus `Host` erneut auf und
+übergeht die Adresse aus dem `CONNECT` (nachgewiesen mit einem Namen, den
+Burp nicht kannte: „Unknown host"); die Anleitung empfiehlt deshalb
+`proxy`. Die Anleitung bringt eine Projekt-Einstellungsdatei für
+`--config-file` mit den drei nötigen Änderungen, deren Schlüssel aus einer
+von Burp selbst gespeicherten Datei stammen und die nach einem Neustart
+wirkten. ADR-0022 (Folgen) und `docs/README.md` nachgezogen. Offen für den
+Eigentümer: HUM-553, Punkt 1.
 
 ---
 
@@ -4763,7 +4803,26 @@ Durchgang mit der KI über die ganze Liste.
    (Burp Community unter Xvfb) am eigenen Rechner bestätigen: Abfangen,
    „Forward", „Drop", Prüfung des Zielzertifikats, Zeitpunkt der
    Verbindung zum Ziel. Danach in der Anleitung „ausprobiert" mit Datum und
-   Version auf den Lauf des Eigentümers umstellen.
+   Version auf den Lauf des Eigentümers umstellen. Offen aus dem Probelauf
+   der KI vom 2026-11-18 (Burp 2026.11.2), jeweils in
+   `docs/guides/decision-proxy-burp.md` als „not observed in the AI trial"
+   markiert:
+   - `humanitl egress check` und „Verbindung prüfen" in der App gegen Burp,
+     mit dem echten Daemon nach `humanitl daemon restart` (die KI rief nur
+     den Prüfcode aus dem Proxy-Crate auf).
+   - Eine echte Agenten-Session durch Humanitl und Burp, samt Durchreiche
+     zum Sprachmodell (die KI nutzte einen eigenen Client und ein
+     Stellvertreter-Ziel).
+   - Ein Ziel mit Zertifikat einer öffentlichen CA bei eingeschaltetem
+     „Verify upstream TLS" (die KI prüfte nur ein selbstsigniertes Ziel).
+   - Burp aus dem nativen Installer statt dem JAR, und ob dessen Starter
+     `--config-file` mit `~/burp/humanitl.json` nimmt; sonst „Load project
+     settings" von Hand.
+   - Intercept, „Forward" und „Drop" von Hand am echten Bildschirm, und ob
+     Burp beim Eigentümer mit „Intercept off" startet.
+   - Ob der einzelne frühe TLS-Handschlag zum Ziel vor der Entscheidung
+     (einmal in 16 angehaltenen Anfragen, in den 10 danach nicht)
+     wieder auftaucht.
 
 Weitere Punkte hängen spätere Issues hier an.
 

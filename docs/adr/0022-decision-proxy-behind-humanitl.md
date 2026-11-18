@@ -75,7 +75,10 @@ weakening below, exists only after an explicit opt-in by the user.
    - `"humanitl"`: Humanitl resolves after its own decision, checks the
      address (ADR-0006) and sends `CONNECT IP:PORT` and the absolute form
      with the pinned address and the name in `Host`. The private check is
-     whole; the query leaves before the second proxy decides.
+     whole only if the second proxy connects to the address in `CONNECT`;
+     Burp Suite 2026.11.2 resolves the name from `Host` again (observed
+     2026-11-18, HUM-524), so with Burp it does not bind. The query leaves
+     before the second proxy decides.
 
    In both cases the
    egress port therefore tells the sender which request form to write (origin
@@ -121,8 +124,14 @@ weakening below, exists only after an explicit opt-in by the user.
   second for users who value their network more than the query. mitmproxy
   documents `CONNECT` to an address followed by a certificate for the name
   from SNI (docs.mitmproxy.org, "How mitmproxy works"), so `"humanitl"`
-  works with it; Burp is not named as supported until a current build has
-  been tried.
+  works with it. Burp Suite Community 2026.11.2, tried by the AI on
+  2026-11-18 (docs/guides/decision-proxy-burp.md), takes a `CONNECT` to an
+  address as well and issues its certificate for the name from SNI, but
+  for the request in the tunnel it resolves the name from `Host` again and
+  ignores the address, so with Burp `"humanitl"` keeps neither half and
+  the guide recommends `"proxy"`; Burp also needs "Verify upstream TLS"
+  and "Suppress Burp error messages in browser" switched on, which are off
+  by default. The trial by a person is open (HUM-553).
 - The connection to the second proxy starts on the host from the daemon,
   through the egress port; the sandbox has no route to it. The guarantees
   therefore stay untouched, and `tests/escape/` needs no change.
@@ -169,7 +178,9 @@ weakening below, exists only after an explicit opt-in by the user.
   literals and local names. The security statement, the doctor row and the
   mode line say so in the same commit as the mode (HUM-512).
 - **With `"humanitl"`** the DNS query happens before the second proxy
-  decides and names the host; the private check is whole.
+  decides and names the host; the private check is whole only for a second
+  proxy that connects to the address in `CONNECT`, which Burp does not
+  (HUM-524).
 - In both cases a rule `block` stops a request before any resolution, and
   the sandbox guarantees are untouched: the agent reaches only Humanitl.
 - A slow decision in the second proxy holds the agent's request up to

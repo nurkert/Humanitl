@@ -1,20 +1,22 @@
 ---
 source: guides/decision-proxy-burp.md
-source-sha256: 817f82013da8d8f6fac67993af0fb81dbfbfc54800563fbb6beedba054ea93db
+source-sha256: bc96899eef0807f5e1223732e56ed703548b42bddcd9f10128ca9f81b9bcc0b2
 lang: de
 ---
 # Burp Suite hinter Humanitl
 
 Applies to: Humanitl 0.1
 
-> **Noch nicht mit einem aktuellen Build ausprobiert.** Diese Anleitung beruht
-> allein auf der Dokumentation von PortSwigger. Noch niemand hat diese Schritte mit
-> einer aktuellen Burp Suite durchgespielt, deshalb gilt Burp nicht als unterstützt
-> ([ADR-0022](../adr/0022-decision-proxy-behind-humanitl.md)). Jede Aussage über
-> Burp verweist auf die Dokumentation von PortSwigger oder ist als „im Probelauf zu
-> bestätigen" markiert; die offenen Punkte stehen gesammelt unter
-> [Offen bis zum Probelauf](#open-until-the-trial). Datum, Burp-Version und das
-> Beobachtete kommen in die Anleitung, sobald der Probelauf gelaufen ist.
+> **Von der KI auf einem virtuellen Bildschirm ausprobiert, noch nicht von einem
+> Menschen.** Am 2026-11-18 lief Burp Suite Community Edition 2026.11.2 (das JAR
+> von portswigger.net, Prüfsumme gegen die von PortSwigger veröffentlichte
+> geprüft) unter Linux in Xvfb, und der Egress-Code von Humanitl war auf seinen
+> Listener gerichtet. Wo diese Anleitung „im Probelauf beobachtet" sagt, hat genau
+> dieser Build das getan; jede andere Aussage über Burp verweist auf die
+> Dokumentation von PortSwigger. Was der Probelauf nicht zeigen konnte, ist als
+> „im Probelauf der KI nicht beobachtet" markiert und offen für den Durchgang mit
+> dem Eigentümer (HUM-553). Wie der Probelauf ablief, steht unter
+> [So lief der Probelauf](#how-the-trial-was-run).
 
 Diese Anleitung stellt [Burp Suite](https://portswigger.net/burp/documentation/desktop/tools/proxy)
 hinter Humanitl, damit du die Anfragen des Agenten in Burp entscheidest statt in
@@ -32,12 +34,23 @@ wiederholt nur, was du für Burp brauchst. Nichts davon ist von Haus aus
 eingeschaltet. Ohne `egress.proxy` ist Humanitl der einzige Proxy, und jede Anfrage
 ohne Regel wartet in Humanitl auf dich.
 
+Burp braucht drei Einstellungen abweichend von seinen Vorgaben, bevor es ein
+sicherer Entscheidungs-Proxy ist, und Burp Community vergisst sie bei jedem Start.
+Schritt 1 lädt sie aus einer Datei; die Gründe stehen in den Schritten 1, 6 und 7:
+
+- „Verify upstream TLS" ist von Haus aus aus, also lässt Burp ein Zertifikat des
+  Ziels durch, dem niemand vertraut.
+- Eine verworfene Anfrage kommt beim Agenten als `200 OK` an, außer „Suppress Burp
+  error messages in browser" ist an.
+- Die vorgegebene Abfangregel lässt Anfragen nach Bildern, Stylesheets, Skripten
+  und Schriften ohne Frage durch.
+
 ## Wie die Teile zusammenpassen
 
 ```text
 Agent ──▶ Humanitl ──▶ Burp ──▶ Ziel
-     TLS mit der        TLS mit der      TLS zum Ziel;
-     Humanitl-CA        Burp-CA          geprüft? siehe unten
+     TLS mit der        TLS mit der      TLS zum Ziel, geprüft nur
+     Humanitl-CA        Burp-CA          mit „Verify upstream TLS"
 ```
 
 Es gibt zwei CAs, und jede Seite vertraut genau einer davon:
@@ -46,7 +59,7 @@ Es gibt zwei CAs, und jede Seite vertraut genau einer davon:
 |---|---|---|---|
 | Agent zu Humanitl | Humanitl, für den Namen, den der Agent wollte | der Humanitl-CA | der Agent, in der Sandbox |
 | Humanitl zu Burp | Burp, ein Zertifikat, das es je Host erzeugt | der Burp-CA dieser Installation | Humanitl, über `egress.proxy_ca`, nur auf diesem Weg |
-| Burp zum Ziel | der echte Server | einer öffentlichen CA | Burp, nur wenn es das TLS zum Ziel prüft (im Probelauf zu bestätigen) |
+| Burp zum Ziel | der echte Server | einer öffentlichen CA | Burp, nur mit „Verify upstream TLS"; von Haus aus aus |
 
 Der Proxy-Listener von Burp erzeugt von Haus aus
 [„CA-signed per-host certificates"](https://portswigger.net/burp/documentation/desktop/settings/tools/proxy),
@@ -60,22 +73,85 @@ Burp-CA nie und erreicht Burp nie selbst; er hat weiter genau einen Weg hinaus,
 Humanitl. Humanitl vertraut der Burp-CA nur auf Verbindungen über `egress.proxy`,
 nie auf einer direkten.
 
-Ob Burp das Zertifikat des Ziels prüft, ist offen. Seine TLS-Einstellungen haben
-eine Option „Verify upstream TLS" und eine Liste
-[„additional certificate authorities that Burp trusts when validating upstream TLS connections"](https://portswigger.net/burp/documentation/desktop/settings/network/tls);
-ob die Prüfung von Haus aus an ist, sagt die Dokumentation nicht (im Probelauf zu
-bestätigen). Prüft Burp nicht, prüft niemand die Verbindung von Burp zum Ziel, und
-Humanitl kann das nicht ausgleichen: Es sieht nur das Zertifikat von Burp, nie das
-des Ziels.
+Burp prüft das Zertifikat des Ziels nur, wenn du es ihm sagst. Seine
+TLS-Einstellungen sagen:
+[„To enable upstream TLS verification, click Verify upstream TLS"](https://portswigger.net/burp/documentation/desktop/settings/network/tls).
+Im Probelauf beobachtet: Die Option ist in einem frischen Burp aus, und ein Ziel,
+dessen selbstsigniertem Zertifikat niemand vertraute, kam mit seiner Antwort beim
+Agenten an. Mit der Option lehnte Burp dieses Ziel ab (das Ziel sah den TLS-Alarm
+„certificate unknown"), und der Agent bekam sofort `502`. Ohne sie prüft niemand
+die Verbindung von Burp zum Ziel, und Humanitl kann das nicht ausgleichen: Es sieht
+nur das Zertifikat von Burp, nie das des Ziels. Weitere CAs für diese Prüfung nimmt
+Burp aus seiner Liste der
+[„additional certificate authorities that Burp trusts when validating upstream TLS connections"](https://portswigger.net/burp/documentation/desktop/settings/network/tls).
+Dass ein Ziel mit einem Zertifikat einer öffentlichen CA mit eingeschalteter Option
+durchgeht, ist im Probelauf der KI nicht beobachtet (offen für den Durchgang mit
+dem Eigentümer, HUM-553).
 
-## 1. Burp starten und den Listener prüfen
+## 1. Burp mit den Einstellungen für Humanitl starten
 
-Starte Burp Suite als dein eigener Nutzer. Von Haus aus legt Burp einen einzigen
-Listener auf Port 8080 der Loopback-Schnittstelle an
+Burp Community hat nur ein vorübergehendes Projekt im Speicher; der Startdialog
+sagt „Project files are Burp Suite Professional only" (im Probelauf beobachtet).
+[Projekteinstellungen](https://portswigger.net/burp/documentation/desktop/settings)
+gelten nur im laufenden Projekt („only apply to the current project"), was du an
+ihnen änderst, ist also beim nächsten Start weg. Halte sie deshalb in einer Datei. Speichere dies als
+`~/burp/humanitl.json`:
+
+```json
+{
+  "project_options": {
+    "ssl": { "negotiation": { "enforce_upstream_trust": true } }
+  },
+  "proxy": {
+    "intercept_client_requests": {
+      "do_intercept": true,
+      "rules": [
+        {
+          "boolean_operator": "and",
+          "enabled": false,
+          "match_condition": "(^gif$|^jpg$|^png$|^css$|^js$|^ico$|^svg$|^eot$|^woff$|^woff2$|^ttf$)",
+          "match_relationship": "does_not_match",
+          "match_type": "file_extension"
+        }
+      ]
+    },
+    "miscellaneous": { "suppress_burp_error_messages_in_browser": true }
+  }
+}
+```
+
+Sie schaltet „Verify upstream TLS" ein, die vorgegebene Abfangregel ab, die
+statische Dateien überspringt (Schritt 6), und „Suppress Burp error messages in
+browser" ein (Schritt 7). Die Namen der Schlüssel stammen aus einer Datei, die Burp
+2026.11.2 mit „Save project settings" selbst gespeichert hat (im Probelauf
+beobachtet); die
+[Seite zu den Einstellungen](https://portswigger.net/burp/documentation/desktop/settings)
+beschreibt Speichern und Laden als JSON.
+
+Starte Burp mit der Datei. Das JAR nimmt sie als `--config-file`, das
+[„Load[s] the specified project configuration file"](https://portswigger.net/burp/documentation/desktop/troubleshooting/launch-from-command-line):
+
+```sh
+java -jar burpsuite.jar --config-file="$HOME/burp/humanitl.json"
+```
+
+Wähle „Temporary project in memory" und „Start Burp". Im Probelauf beobachtet:
+Nach einem solchen Start galten alle drei Einstellungen. Das JAR braucht dein
+eigenes Java; PortSwigger nennt
+[„Java 21"](https://portswigger.net/burp/documentation/desktop/troubleshooting/launch-from-command-line)
+als Mindestversion, die nativen Installer bringen ihr eigenes mit. Startest du Burp
+aus dem Installer, lade die Datei nach dem Start: Settings, „Manage global
+settings", „Project settings", „Load project settings" (diese Menünamen im
+Probelauf beobachtet). Ob der installierte Starter `--config-file` nimmt, ist im
+Probelauf der KI nicht beobachtet (offen für den Durchgang mit dem Eigentümer,
+HUM-553).
+
+Prüfe dann den Listener unter Proxy settings, „Proxy listeners". Von Haus aus legt
+Burp einen einzigen Listener auf Port 8080 der Loopback-Schnittstelle an
 ([„creates a single listener on port 8080 of the loopback interface"](https://portswigger.net/burp/documentation/desktop/settings/tools/proxy)),
-also dort, wo Humanitl ihn erreicht. Prüfe das unter Proxy settings, „Proxy
-listeners": Der Listener sollte nur an die Loopback-Schnittstelle gebunden sein.
-An alle Schnittstellen gebunden, können ihn andere Rechner in deinem Netz nutzen.
+also dort, wo Humanitl ihn erreicht; im Probelauf beobachtet: `127.0.0.1:8080`,
+Zertifikat „Per-host". An alle Schnittstellen gebunden, können ihn andere Rechner
+in deinem Netz nutzen.
 
 Lass die Einstellungen „Request handling" des Listeners („Redirect to host",
 „Redirect to port", „Force use of TLS", unsichtbares Proxying) aus. Humanitl ist
@@ -84,9 +160,16 @@ Fall, den Burp ohne
 [invisible proxying](https://portswigger.net/burp/documentation/desktop/tools/proxy/invisible)
 behandelt.
 
-Ob Burp das Ziel kontaktiert, bevor du entscheidest, ist offen: Die Dokumentation
-sagt nicht, wann Burp für eine angehaltene Anfrage die Verbindung zum Server
-öffnet (im Probelauf zu bestätigen). mitmproxy tut es mit seinen Vorgaben, siehe
+Ob Burp das Ziel kontaktiert, bevor du entscheidest: Im Probelauf beobachtet hat
+Burp eine angehaltene Anfrage vor „Forward" nicht an das Ziel geschickt, mit beiden
+Werten von `egress.proxy_resolve`. Von 16 angehaltenen Anfragen, bei denen das
+Verbindungsprotokoll des Ziels gelesen wurde, während die Anfrage wartete (6 bis 12
+Sekunden), hinterließen 15 vor der Entscheidung keine Verbindung am Ziel. Einmal sah
+das Ziel einen TLS-Handschlag ohne Anfrage in dem Moment, in dem eine angehaltene
+Anfrage bei Burp ankam; die 10 angehaltenen Anfragen danach wiederholten das nicht.
+Nimm es als möglich: Das Ziel kann erfahren, dass jemand verbindet (deine Adresse,
+der Name in SNI), bevor du entscheidest. mitmproxy tut das mit seinen Vorgaben
+jedes Mal, siehe
 [Schritt 1 der mitmproxy-Anleitung](decision-proxy-mitmproxy.md#1-install-and-start-mitmproxy).
 
 ## 2. Die CA von Burp exportieren
@@ -98,9 +181,10 @@ beschreibt:
 
 1. Im Reiter Proxy die Proxy settings öffnen.
 2. Unter „Proxy listeners" auf „Import / export CA certificate" klicken.
-3. Unter „Export" das Zertifikat im DER-Format wählen, nicht das mit dem privaten
-   Schlüssel, und speichern, etwa als `~/burp/burp-ca.der`. (Die Namen der
-   Exportwahlen stehen nicht auf jener Seite; im Probelauf zu bestätigen.)
+3. Unter „Export" „Certificate in DER format" wählen, „Next" klicken, einen
+   Dateinamen wie `~/burp/burp-ca.der` eingeben und wieder „Next" klicken. Nicht
+   „Private key in DER format" oder „Certificate and private key in PKCS#12
+   keystore" wählen. (Die Namen der Wahlen im Probelauf beobachtet.)
 
 Mit OpenSSL nach PEM umwandeln:
 
@@ -108,8 +192,9 @@ Mit OpenSSL nach PEM umwandeln:
 openssl x509 -inform der -in ~/burp/burp-ca.der -out ~/burp/burp-ca.pem
 ```
 
-Gib Humanitl nie eine Datei, die den privaten Schlüssel enthält. Humanitl liest aus
-der Datei nur Zertifikate und braucht nichts weiter.
+Im Probelauf beobachtet: Das Zertifikat heißt „PortSwigger CA". Gib Humanitl nie
+eine Datei, die den privaten Schlüssel enthält. Humanitl liest aus der Datei nur
+Zertifikate und braucht nichts weiter.
 
 ## 3. Humanitl auf Burp richten
 
@@ -119,7 +204,7 @@ muss ein absoluter Pfad sein, also lass die Shell `$HOME` einsetzen:
 ```sh
 humanitl config set egress.proxy http://127.0.0.1:8080
 humanitl config set egress.proxy_ca "$HOME/burp/burp-ca.pem"
-humanitl config set egress.proxy_resolve proxy     # die Vorgabe; siehe „Wer Namen auflöst"
+humanitl config set egress.proxy_resolve proxy     # die Vorgabe; mit Burp beibehalten
 ```
 
 Oder in `config.toml`:
@@ -135,7 +220,9 @@ proxy_response_timeout_secs = 300
 In der App: Einstellungen (`Ctrl+,`), Abschnitt „Entscheidungs-Proxy". „Adresse"
 nimmt `http://127.0.0.1:8080`; „CA-Zertifikat" hat eine Dateiauswahl für die
 PEM-Datei; „Wer Namen auflöst" ist „Proxy" oder „Humanitl". „Zugangsdaten" bleibt
-leer: Der vorgegebene Listener von Burp verlangt keine Anmeldung.
+leer: Der vorgegebene Listener von Burp verlangt keine Anmeldung. Bleib bei
+„Proxy": Mit Burp schützt „Humanitl" dein Netz nicht, siehe
+[Wer Namen auflöst](#who-resolves-names).
 
 Jeder Schlüssel steht in [CONFIG.md](../CONFIG.md#egress). Die Schlüssel sind
 `x-project-scope = denied`: Ein Projektprofil in einem geklonten Repository kann
@@ -173,15 +260,26 @@ humanitl egress check
 den TLS-Handschlag auf; es schickt keine Anfrage, in Burp wartet also nichts auf
 dich. Ein Fehler nennt seine Ursache mit einer Abhilfe, etwa einen Proxy, der nicht
 erreichbar ist, oder ein Zertifikat, das nicht zu `egress.proxy_ca` passt. Die App
-hat dieselbe Prüfung unter „Entscheidungs-Proxy", „Verbindung prüfen". Dass die
-Prüfung gegen Burp besteht, ist im Probelauf zu bestätigen.
+hat dieselbe Prüfung unter „Entscheidungs-Proxy", „Verbindung prüfen".
+
+Im Probelauf beobachtet: Die Prüfung bestand gegen Burp mit `egress.proxy_resolve`
+auf `proxy` und auf `humanitl`, mit `proxy` auch bei eingeschaltetem „Verify
+upstream TLS". Der Probelauf rief den Code der Prüfung aus dem Proxy-Crate von
+Humanitl auf, nicht den Befehl `humanitl` gegen einen laufenden Daemon; Befehl und
+Knopf in der App sind im Probelauf der KI nicht beobachtet (offen für den Durchgang
+mit dem Eigentümer, HUM-553). Die Prüfung zeigt, dass Humanitl Burp erreicht und
+seiner CA vertraut. Sie zeigt nicht, dass Burp das Ziel erreicht: Burp schließt den
+Handschlag mit Humanitl ab, ohne das Ziel zu kontaktieren (im Probelauf an
+angehaltenen Anfragen beobachtet).
 
 ## 6. In Burp abfangen und entscheiden
 
 Unter Proxy, Intercept schaltet der Knopf „Intercept on/off" das Abfangen:
 [„If the button shows Intercept on, messages are intercepted"](https://portswigger.net/burp/documentation/desktop/tools/proxy/intercept-messages);
-mit „Intercept off" leitet Burp alles von selbst weiter. Ob das Abfangen beim Start
-von Burp an ist, ist eine Einstellung,
+mit „Intercept off" leitet Burp alles von selbst weiter. Im Probelauf beobachtet:
+Ein frisches Burp startete mit „Intercept off", auch mit der Datei aus Schritt 1,
+schalte es also nach jedem Start ein. Ob das Abfangen beim Start von Burp an ist,
+ist eine Nutzereinstellung,
 [„Default Proxy interception state"](https://portswigger.net/burp/documentation/desktop/settings/tools/proxy).
 
 An einer angehaltenen Anfrage, wie
@@ -191,29 +289,62 @@ es beschreibt:
 - „Forward" schickt sie an das Ziel, und der Agent bekommt dessen Antwort.
 - „Drop" verwirft sie, „so that they never reach the target server".
 
+Im Probelauf beobachtet, mit beiden Werten von `egress.proxy_resolve`: Eine
+weitergeleitete Anfrage erreichte das Ziel erst nach „Forward", und der Agent bekam
+die Antwort des Ziels; eine verworfene Anfrage erreichte das Ziel nie. Der
+Probelauf klickte die Knöpfe mit einem Programm auf einem virtuellen Bildschirm;
+ein Mensch an einem echten Bildschirm ist im Probelauf der KI nicht beobachtet
+(offen für den Durchgang mit dem Eigentümer, HUM-553).
+
 Abfangregeln in den Proxy settings
 [„control which messages are stalled"](https://portswigger.net/burp/documentation/desktop/settings/tools/proxy)
-für dich. Welche Regeln ein frisches Burp mitbringt und welche Anfragen es also
-ohne Frage durchlässt, ist im Probelauf zu bestätigen.
+für dich. Im Probelauf beobachtet: Ein frisches Burp hat eine Regel eingeschaltet,
+„File extension Does not match `(^gif$|^jpg$|^png$|^css$|^js$|^ico$|^svg$|^eot$|^woff$|^woff2$|^ttf$)`".
+Mit ihr wurde eine Anfrage des Agenten nach `/lib/app.js` nicht angehalten,
+obwohl das Abfangen an war: Burp kontaktierte das Ziel binnen 76 Millisekunden (das
+Ziel protokollierte die Verbindung; es lehnte sie ab, weil in diesem Lauf „Verify
+upstream TLS" an war). Die Datei aus Schritt 1 schaltet die Regel ab; dann stand
+dieselbe Anfrage in der Intercept-Liste von Burp, und das Ziel sah 6 Sekunden lang
+bis „Drop" keine Verbindung (im Probelauf beobachtet). Startest du Burp
+ohne die Datei, schalte die Regel von Hand ab.
 
 Burp weiß nicht, welche Anfragen eine Regel in Humanitl freigegeben hat: Sein
 Abfangen gilt für alles, was ankommt, auch für die Durchreiche zum Sprachmodell und
 für Regeln `allow`. Soll der Verkehr zum Modellserver nicht auf dich warten, lege
-eine Abfangregel an, die seinen Host auslässt.
+eine Abfangregel an, die seinen Host auslässt. Wie sich die Durchreiche einer
+echten Session durch Burp verhält, ist im Probelauf der KI nicht beobachtet (offen
+für den Durchgang mit dem Eigentümer, HUM-553).
 
 ## 7. Was der Agent sieht
 
 | In Burp | Der Agent bekommt |
 |---|---|
 | weitergeleitet | die Antwort des Ziels, unverändert |
-| verworfen | im Probelauf zu bestätigen: eine Antwort von Burp, eine geschlossene Verbindung (`502` von Humanitl, sofort) oder `502` von Humanitl nach `egress.proxy_response_timeout_secs` |
+| verworfen, mit „Suppress Burp error messages in browser" | `502` von Humanitl, sofort |
+| verworfen, mit der Vorgabe von Burp | `200 OK` von Burp mit einer HTML-Seite „Request was dropped by user.", sofort |
+| Burp kann den Namen des Ziels nicht auflösen, Vorgabe von Burp | `200 OK` von Burp mit einer HTML-Seite „Unknown host: …", sofort |
+| Burp vertraut dem Ziel nicht („Verify upstream TLS" an), mit „Suppress Burp error messages in browser" | `502` von Humanitl, sofort |
 | niemand entscheidet | `502` von Humanitl, nach `egress.proxy_response_timeout_secs` |
 
+Alle Zeilen im Probelauf beobachtet. Nicht beobachtet: ein unbekannter Name mit
+eingeschalteter Einstellung und ein nicht vertrautes Ziel mit der Vorgabe von Burp;
+nach den beiden Zeilen zu „verworfen" ist wohl dasselbe `502` und `200 OK` zu
+erwarten, gezeigt hat der Probelauf das nicht. Die Vorgabe bei „Drop" ist die
+gefährliche: Der Agent sieht `200 OK` und kann die Fehlerseite von Burp für die
+Antwort des Ziels halten, und Humanitl zeichnet die Anfrage mit Status `200` auf.
+Dasselbe geschah, als Burp den Namen des Ziels nicht auflösen konnte („Unknown
+host"). Mit
+[„Suppress Burp error messages in browser"](https://portswigger.net/burp/documentation/desktop/settings/tools/proxy),
+das die Meldungen unterdrückt, „that are usually sent to the browser when errors
+occur", schließt Burp stattdessen die Verbindung, und Humanitl antwortet sofort mit
+`502`. Die Datei aus Schritt 1 schaltet das ein.
+
 Die letzte Zeile ist das Verhalten von Humanitl selbst und gilt für jeden Proxy
-dahinter. `egress.proxy_response_timeout_secs` (Vorgabe 300 Sekunden) ist, wie
-lange Humanitl auf den Kopf der Antwort von Burp wartet, weil dort ein Mensch
-entscheiden kann. Das Briefing des Agenten sagt ihm dasselbe: warten, dann `502`;
-ein `403` ist endgültig.
+dahinter; im Probelauf kam sie nach der Frist, mit dem Grund `upstream_timeout` im
+Rumpf. `egress.proxy_response_timeout_secs` (Vorgabe 300 Sekunden) ist, wie lange
+Humanitl auf den Kopf der Antwort von Burp wartet, weil dort ein Mensch entscheiden
+kann. Das Briefing des Agenten sagt ihm dasselbe: warten, dann `502`; ein `403` ist
+endgültig.
 
 Humanitl zeichnet eine solche Anfrage mit der Entscheidungsquelle `upstream` auf
 (im Audit `decision: forward`, `decided_by: upstream`) und mit dem Status der
@@ -223,31 +354,33 @@ gesehen hat.
 ## Wer Namen auflöst
 
 `egress.proxy_resolve` entscheidet, wer den Namen des Ziels in eine Adresse auflöst.
+Mit Burp nimm `proxy`.
 
 | | `proxy` (Vorgabe) | `humanitl` |
 |---|---|---|
 | Was Humanitl schickt | `CONNECT example.com:443` | `CONNECT 93.184.215.14:443`, den Namen in SNI |
-| DNS-Anfrage aus Humanitl | keine; wann Burp auflöst, ist im Probelauf zu bestätigen | eine, nach den eigenen Regeln von Humanitl, vor deiner Entscheidung in Burp |
-| Private Ziele | Humanitl lehnt private IP-Literale und lokale Namen ab; ein öffentlicher Name, der in dein Netz zeigt, ist Sache von Burp | Humanitl prüft auch die aufgelöste Adresse, wie ohne Burp |
-| Geht mit Burp | im Probelauf zu bestätigen | im Probelauf zu bestätigen |
+| DNS-Anfrage aus Humanitl | keine | eine, nach den eigenen Regeln von Humanitl, vor deiner Entscheidung in Burp |
+| Wohin Burp verbindet | zum Namen, von Burp aufgelöst; die Anfrage erst nach deiner Entscheidung, ein TLS-Handschlag ohne Anfrage wurde aber einmal davor gesehen (Schritt 1) | wieder zum Namen, von Burp aufgelöst; die Adresse im `CONNECT` wird nicht benutzt |
+| Private Ziele | Humanitl lehnt private IP-Literale und lokale Namen ab; ein öffentlicher Name, der in dein Netz zeigt, ist Sache von Burp | wie bei `proxy`: Die Prüfung der aufgelösten Adresse durch Humanitl bindet Burp nicht |
+| Geht mit Burp | ja, im Probelauf beobachtet | die Anfrage geht durch, im Probelauf beobachtet, aber siehe die Zeile darüber |
 
 Das `CONNECT` mit dem Namen ist der
 [übliche Weg](https://portswigger.net/burp/documentation/desktop/tools/proxy/invisible),
 wie ein Client mit Burp spricht: „clients send a CONNECT request that identifies
-the destination host and then perform TLS negotiation". Mit `humanitl` nennt das
-`CONNECT` nur eine Adresse, und das Zertifikat von Burp muss trotzdem den Namen
-tragen, weil Humanitl es gegen den Namen prüft. Für Clients ohne `CONNECT` nimmt
-Burp den Namen aus SNI, „to generate a certificate for that host"
-([Invisible proxying](https://portswigger.net/burp/documentation/desktop/tools/proxy/invisible));
-ob es nach einem `CONNECT` zu einer Adresse dasselbe tut, ist im Probelauf zu
-bestätigen. Tut es das nicht, scheitert `humanitl egress check` mit einem
-Zertifikat, das nicht passt.
+the destination host and then perform TLS negotiation". Im Probelauf beobachtet,
+mit `humanitl`: Burp nahm `CONNECT 127.0.0.1:18443` an und gab Humanitl ein
+Zertifikat für den Namen aus SNI, das Humanitl annahm. Für die Anfrage im Tunnel
+löste Burp aber den Namen aus `Host` selbst auf und überging die Adresse: Mit einem
+Namen, den Burp nicht auflösen konnte, scheiterte die Anfrage mit „Unknown host",
+obwohl das `CONNECT` eine erreichbare Adresse nannte.
 
-Nimm `proxy`, wenn keine DNS-Anfrage Humanitl verlassen soll, bevor du entschieden
-hast; ob Burp dann mit dem Auflösen auf deine Entscheidung wartet, ist offen, siehe
-Schritt 1. Nimm `humanitl`, wenn dir dein Netz wichtiger ist als die Anfrage beim
-Namensdienst: Dann ist nichts Privates erreichbar, und der Name geht als
-DNS-Anfrage hinaus, bevor du die Anfrage siehst.
+Mit Burp kostet `humanitl` also die DNS-Anfrage vor deiner Entscheidung und bringt
+nichts: Humanitl prüft eine Adresse, die Burp nicht benutzt, und die eigene
+Auflösung von Burp entscheidet, wohin die Anfrage geht. Burp verband ohne Einwand
+zu einem Ziel auf `127.0.0.1` (im Probelauf beobachtet), ein öffentlicher Name, der
+auf deinen Router oder einen Dienst auf deinem Rechner zeigt, erreicht ihn also,
+wenn du die Anfrage weiterleitest. Sieh dir den Host an, bevor du „Forward"
+klickst.
 
 ## Grenzen
 
@@ -255,12 +388,15 @@ Sie stehen in [SECURITY.md](../SECURITY.md#the-proxy-behind-decides-holdask_mode
 und im [Bedrohungsmodell](../THREAT-MODEL.md); kurz:
 
 - Burp sieht den entschlüsselten Verkehr, auch Geheimnisse, die Humanitl nicht
-  gesperrt hat, und die Durchreiche zum Sprachmodell. Seine Projektdatei und sein
-  HTTP-Verlauf enthalten sie; wer diese lesen kann, kann sie lesen.
-- Ob Burp das Zertifikat des Ziels prüft, ist offen (siehe
-  [Wie die Teile zusammenpassen](#how-the-pieces-fit)). Prüft es nicht, ist die
-  Verbindung von Burp zum Ziel nicht geprüft, und Humanitl kann das nicht
-  ausgleichen.
+  gesperrt hat, und die Durchreiche zum Sprachmodell. Sein HTTP-Verlauf enthält
+  sie, solange Burp läuft; wer den Speicher von Burp lesen kann, kann sie lesen.
+- Burp prüft das Zertifikat des Ziels nur mit „Verify upstream TLS" (Schritt 1).
+  Ohne die Option ist die Verbindung von Burp zum Ziel nicht geprüft, und Humanitl
+  kann das nicht ausgleichen.
+- `egress.proxy_resolve = "humanitl"` hält mit Burp private Ziele nicht fern, weil
+  Burp den Namen erneut auflöst (siehe [Wer Namen auflöst](#who-resolves-names)).
+- Die Vorgabe von Burp bei „Drop" und bei eigenen Fehlern ist `200 OK` mit einer
+  Fehlerseite (Schritt 7).
 - Die Isolierung wandert nicht: Der Agent erreicht nur Humanitl, die Verbindung zu
   Burp beginnt im Daemon.
 - Die für eine Session erklärte Durchreiche zum Sprachmodell ist ein `allow`, das
@@ -275,20 +411,46 @@ und im [Bedrohungsmodell](../THREAT-MODEL.md); kurz:
 - Pausiert jemand das Abfangen in Humanitl, geht auch eine Anfrage mit `redact` an
   Burp, so wie alles Wartende hinausgeht.
 
-## Offen bis zum Probelauf
+## So lief der Probelauf
 
-Der Probelauf auf einem aktuellen Burp-Build beantwortet diese Fragen; die
-Antworten ersetzen die Markierungen oben:
+Am 2026-11-18 ließ die KI Burp Suite Community Edition 2026.11.2 aus dem JAR
+laufen (SHA-256
+`ddd11e506bbbee7491c120901722a8bbd79d64d1298afceee1d334d27981516b`, wie von
+PortSwigger veröffentlicht), mit OpenJDK 25 aus Debian, das Burp als „not been
+fully tested" meldet, auf einem virtuellen X-Bildschirm (Xvfb) und mit eigenem
+Home-Verzeichnis. Sie nahm die Lizenz an, wählte Community Edition und ein
+vorübergehendes Projekt, exportierte die CA wie oben und klickte Intercept, Forward
+und Drop mit `java.awt.Robot`, den Bildschirm las sie aus Screenshots.
 
-- Besteht `humanitl egress check`, mit `egress.proxy_resolve` auf `proxy` und auf
-  `humanitl`?
-- Erreicht eine weitergeleitete Anfrage den Agenten, und bleibt eine verworfene vom
-  Ziel fern, mit beiden Werten?
-- Prüft Burp von Haus aus das Zertifikat des Ziels („Verify upstream TLS")?
-- Kontaktiert Burp das Ziel, bevor du eine angehaltene Anfrage weiterleitest?
-- Was bekommt der Agent, wenn du eine Anfrage verwirfst, und nach welcher Zeit?
-- Mit welchen Abfangregeln und welchem Abfangzustand startet ein frisches Burp, und
-  wie heißen die Wahlen beim Export der CA?
+Statt eines laufenden Daemons nutzte der Probelauf den Proxy von Humanitl aus der
+Testunterstützung des Proxy-Crates: denselben Egress-Code mit `hold.ask_mode =
+"upstream"`, `egress.proxy = http://127.0.0.1:8080`, der exportierten CA als
+`egress.proxy_ca` und beiden Werten von `egress.proxy_resolve`. Der Agent war ein
+Client, der `CONNECT` und TLS mit diesem Proxy sprach. Das Ziel war ein kleiner
+TLS-Server auf `127.0.0.1` mit einem selbstsignierten Zertifikat für
+`upstream.test`, dem nichts vertraute; er schrieb jede Verbindung mit Zeitstempel
+mit, und der Probelauf las dieses Protokoll, während eine Anfrage angehalten war,
+und wieder nach der Entscheidung; so zählte er Kontakte vor der Entscheidung. Die
+Seite des Agenten protokollierte Status, Rumpf und Zeit jeder Antwort. Diese
+Protokolle und die Screenshots bleiben bei den Notizen zum Probelauf von HUM-524
+außerhalb des Repositorys. Burp fand ihn über seine „Hostname
+resolution overrides"
+([DNS settings](https://portswigger.net/burp/documentation/desktop/settings/network/dns)).
+Die Prüfung aus Schritt 5 lief gegen das echte `example.com`.
+
+Im Probelauf der KI nicht beobachtet, offen für den Durchgang mit dem Eigentümer
+(HUM-553):
+
+- `humanitl egress check` und „Verbindung prüfen" in der App gegen Burp, mit einem
+  echten Daemon nach `humanitl daemon restart`.
+- Eine echte Agenten-Session durch Humanitl und Burp, samt Durchreiche zum
+  Sprachmodell.
+- Ein Ziel mit einem Zertifikat einer öffentlichen CA, mit eingeschaltetem „Verify
+  upstream TLS".
+- Burp aus dem nativen Installer, und ob dessen Starter `--config-file` nimmt.
+- Intercept, Forward und Drop, von einem Menschen an einem echten Bildschirm
+  geklickt, und der Abfangzustand beim Start des eigenen Burp des Eigentümers.
+- Ob der einzelne frühe TLS-Handschlag zum Ziel (Schritt 1) wieder auftaucht.
 
 ## Zurück
 
