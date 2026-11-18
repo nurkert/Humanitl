@@ -780,7 +780,11 @@ startet, schreibt unter derselben Sitzung des Audit-Logs einen weiteren); späte
 Daemons. Die Host-Prüfung lehnt jeden Socket im Laufzeitverzeichnis außer den erklärten ab, und
 mehr als einen vsock-Geräteprozess oder ein zweites Gerät. *Restrisiko:* ein Fehler im Prozess des
 vsock-Geräts; er läuft eingesperrt und ohne Netz wie die anderen Hilfsprozesse. Die Grenze gilt je
-Sitzung; viele Sitzungen zusammen summieren sich weiter.
+Sitzung, eine gemeinsame gibt es nicht (HUM-479): Der Daemon führt genau eine Sitzung (`CLI_005`),
+also kann kein Gast die Tür einer anderen Sitzung sperren, und eine volle Tür hält mit ihren
+Verbindungen im Proxy etwa 384 Deskriptoren, weit unter der weichen Grenze von 1024,
+die systemd dem Nutzerdienst des Daemons gibt.
+Mehrere Sitzungen zugleich (HUM-549) müssen zuerst ein gemeinsames Budget festlegen.
 
 ### K-32 Der Gastkernel
 
@@ -1125,6 +1129,7 @@ Gegen diese Angreifer gibt es keine Abwehr, und Humanitl behauptet das auch nich
 | 2026-11-18 | K-37 neu: die Projektwahl als Ebene auf dem Host, die weder Klon noch Agent schreiben, ihre Erlaubnisliste, die Untergrenze der Isolation steigt nur, Sperren der Firmenvorgabe, Wiedererkennen an Gerät und Inode; ein Start ohne Projektordner wird abgelehnt | HUM-532 |
 | 2026-11-18 | K-37: Aufräumen und Vergessen nur über einen aufgelisteten, bestätigten Plan, dessen Digest Identität und Fassung jedes Eintrags bindet und in der löschenden Transaktion erneut geprüft wird (`SANDBOX_054`); nie der Projektordner, die Audit-Kette oder die laufende Sitzung | HUM-533 |
 | 2026-11-18 | K-31: Die erste Verbindung über der Grenze der Tür erreicht einmal je Start der Sandbox das Audit-Log (`sandbox.door_capped`), direkt beim Schreiber und nicht über den begrenzten Rundfunk des Ereignisstroms, und jede Prüfung der Isolation der Kernel-Stufe samt Host-Prüfung steht dort als `isolation.check`; beides trägt ein Kanal vom Sandbox-Backend in den Ereignisstrom der Sitzung | HUM-477 |
+| 2026-11-18 | K-31: kein gemeinsames Limit der Tür-Verbindungen; die Grenze je Sitzung genügt, solange der Daemon eine Sitzung führt (`CLI_005`), und mehrere Sitzungen (HUM-549) müssen vorher ein gemeinsames Budget festlegen | HUM-479 |
 
 Jede sicherheitsrelevante Änderung am Shim, an der Mount-Erlaubnisliste, am Filter oder an der
 Durchleitung bekommt hier eine Zeile. Schwachstellen werden gemeldet, wie in

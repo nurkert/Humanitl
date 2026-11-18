@@ -1325,6 +1325,16 @@ Escape-Suite je Sitzung grün.
 - Eine Anfrage, die der falschen Sitzung zugeordnet wird, bekäme deren
   Regeln; die Zuordnung darf nur aus der Tür kommen, nie aus Angaben der
   Sandbox.
+- Die Tür der Kernel-Stufe ist nur je Sitzung begrenzt (64 Verbindungen,
+  bis zu 256 Deskriptoren des Daemons, HUM-467). HUM-479 hat ein gemeinsames
+  Limit verworfen, solange es nur eine Sitzung gibt (Entscheidung in
+  `backlog/sprint-7.md`). Mit mehreren Sitzungen summiert sich das, und
+  schon drei volle Türen kämen mit dem Proxy über die weiche Grenze von
+  1024 Deskriptoren des Daemons. Dieses Issue muss deshalb das gemeinsame
+  Budget neu entscheiden: Obergrenze der Sitzungen, Grenze der Deskriptoren des
+  Daemons, und wenn nötig ein gemeinsames Limit der Türen mit garantiertem
+  Anteil je Sitzung, getestet damit, dass eine volle Sitzung die Tür einer
+  anderen nicht sperrt.
 
 ### Akzeptanzkriterien
 Werden mit der Spezifikation festgelegt.

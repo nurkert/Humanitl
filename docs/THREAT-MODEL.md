@@ -791,7 +791,11 @@ can therefore bind at most 128 threads and 256 descriptors of the daemon through
 check refuses any socket in the runtime directory besides the declared ones, and more than one
 vsock device process or device. *Residual risk:* a
 flaw in the vsock device process; it runs jailed and without network like the other helpers. The
-cap is per session; many sessions together still add up.
+cap is per session and there is no shared one (HUM-479): the daemon runs exactly one session
+(`CLI_005`), so no guest can lock another session's door, and one full door with its proxy
+connections holds about 384 descriptors, well below the soft limit of 1024
+descriptors that systemd gives the daemon's user service. Running
+several sessions at once (HUM-549) must decide a shared budget first.
 
 ### K-32 The guest kernel
 
@@ -1131,6 +1135,7 @@ These attackers are not defended against, and Humanitl does not claim to:
 | 2026-11-18 | K-37 added: the project choice as a host-side layer that neither a clone nor the agent writes, its allow-list, the isolation floor only raised, company locks, recognition by device and inode; a start without a project folder is refused | HUM-532 |
 | 2026-11-18 | K-37: cleanup and forgetting only through a listed, confirmed plan whose digest binds identity and version of every item and is checked again in the deleting transaction (`SANDBOX_054`); never the project folder, the audit chain or the running session | HUM-533 |
 | 2026-11-18 | K-31: the first connection above the door's cap reaches the audit log once per sandbox launch (`sandbox.door_capped`), written straight to the audit writer and not through the bounded event broadcast, and every isolation check of the kernel level, the host check included, stands there as `isolation.check`; a channel from the sandbox backend into the session's event stream carries both | HUM-477 |
+| 2026-11-18 | K-31: no shared cap on door connections; the per-session cap suffices while the daemon runs one session (`CLI_005`), and several sessions (HUM-549) must decide a shared budget first | HUM-479 |
 
 Every security-relevant change to the shim, the mount allowlist, the filter or the passthrough gets
 a line here. Vulnerabilities are reported as described in
