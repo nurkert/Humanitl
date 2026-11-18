@@ -137,6 +137,7 @@ Diagnose-Codes, hier nur geplant (registriert vom genannten Issue in `codes.rs` 
 | HUM-522 | Agent-Depot: Ende-zu-Ende-Lauf mit Claude Code und Anleitung | S | HUM-514, HUM-521 |
 | HUM-523 | Agent-Depot: Zugangsdateien verschlüsselt mit Schlüssel aus dem Schlüsselbund | S | HUM-520 |
 | HUM-553 | Gemeinsamer Probedurchgang mit dem Eigentümer: gesammelte Handprüfungen | S | HUM-524 |
+| HUM-555 | Entscheidungs-Proxy: ein „Drop" des Proxys dahinter erscheint im Audit als `200`, die `502`-Meldung nennt Humanitl | S | HUM-524 |
 
 ## HUM-428 · Port neutral: `PlanRequest`, `LaunchOptions`, `IsolationLevel`, Enum `Backend` statt `PlatformBackend`
 
@@ -4835,3 +4836,37 @@ Weitere Punkte hängen spätere Issues hier an.
 ### Akzeptanzkriterien
 1. Jeder Punkt der Liste ist im Durchgang beobachtet und das Ergebnis in
    der betroffenen Doku nachgetragen.
+
+---
+
+## HUM-555 · Entscheidungs-Proxy: ein „Drop" des Proxys dahinter erscheint im Audit als `200`, die `502`-Meldung nennt Humanitl
+
+### Kontext
+Aus dem Probelauf mit Burp Suite 2026.11.2 (HUM-524). Mit den Vorgaben von
+Burp beantwortet „Drop" die Anfrage selbst mit `200 OK` und einer
+HTML-Fehlerseite („Request was dropped by user."). Humanitl zeichnet das als
+durchgelassene Anfrage mit Status `200` auf (`forward`, `upstream`); im
+Audit sieht ein verworfener Request aus wie ein erfolgreicher. Mit „Suppress
+Burp error messages in browser" schließt Burp die Verbindung, und der Agent
+bekommt `502` mit dem Text „Blocked by Humanitl. reason: upstream_connect",
+obwohl die Entscheidung der Proxy dahinter getroffen hat. Die Anleitung
+`docs/guides/decision-proxy-burp.md` empfiehlt die Einstellung schon.
+
+### Spezifikation
+1. Der Text der `502`, wenn der Proxy dahinter die Verbindung nach dem
+   Halten abbricht, nennt den Proxy dahinter als Quelle (etwa „closed by the
+   decision proxy"), nicht Humanitl; der Grund im Audit unterscheidet
+   „Proxy dahinter brach ab" von „Ziel nicht erreichbar".
+2. Prüfen und entscheiden, ob Humanitl eine Antwort des Proxys selbst (statt
+   des Ziels) erkennen kann, ohne Burp-eigene Texte zu raten; wenn nicht,
+   steht die Grenze in der Anleitung und in `docs/SECURITY.md` beim
+   Nachfragemodus `upstream` („ein Drop mit Fehlerseite erscheint im Audit
+   als 200").
+
+### Tests
+- Proxy-Test mit dem Stellvertreter aus HUM-513: Abbruch nach dem Halten
+  ergibt den neuen Text und Grund. Mutationsbeweis: alter Grund färbt rot.
+
+### Akzeptanzkriterien
+1. Weder Agent noch Audit schreiben eine Entscheidung des Proxys dahinter
+   Humanitl zu.
