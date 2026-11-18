@@ -2,8 +2,8 @@
 
 Applies to: Humanitl 0.1
 
-Status: Proposed
-Date: 2026-11-17
+Status: Accepted
+Date: 2026-11-18
 
 ## Context
 
@@ -133,8 +133,8 @@ gets a prefix key table, switchable views and detach on close.
    the digest binds the identity and version of every item, not the shown
    counts and sizes, and is rechecked in the deleting transaction).
    There is no separate `forget`: forgetting a project is a cleanup plan
-   limited to its choice and register entry, confirmed like any other. The scope of cleanup is a default still to be confirmed by
-   the owner (open question 8). A start without a project folder is
+   limited to its choice and register entry, confirmed like any other. The
+   scope of cleanup is point 14 (owner, 2026-11-18, question 8). A start without a project folder is
    refused with `SANDBOX_053` instead of falling back to a directory of
    the calling process.
 3. **Settings catalog in the daemon.** Categories, order, titles, help
@@ -227,6 +227,15 @@ gets a prefix key table, switchable views and detach on close.
     Runner of type hosted even after multiple attempts" seen on 2026-11-17),
     not in parallel, not after a failed step and not after a manual cancel,
     queued or running (owner, 2026-11-17).
+14. **Cleanup scope** (owner, 2026-11-18, question 8; the default of this
+    ADR, confirmed). Cleanup offers, each item listed by the daemon and
+    confirmed by the human: the recorded flows and bodies of the project;
+    its waiting changes of a disposable run, only on explicit choice and
+    with the warning that changes not applied are lost for good; and the
+    stored project choice with its register entry. Depot versions no
+    session uses are not part of project cleanup; the depot handles them
+    (`humanitl agents update`, `humanitl agents remove`, ADR-0023). The
+    project folder and the audit chain are never deleted.
 
 Diagnostic codes, planned here and registered by their issues:
 `SANDBOX_053` (start without project), `SANDBOX_054` (cleanup item in use),
@@ -334,18 +343,9 @@ binary grows by less than 1.5 MB (HUM-540, measured).
 
 ## Open questions for the owner
 
-Questions 1 to 7 and 9 were answered on 2026-11-17 and stand in the
-Decision section with their date (3 and 4 decided by the lead, the owner did
-not object). One remains:
-
-8. **Cleanup scope** (default, still to be confirmed by the owner). Until
-   then cleanup offers: the recorded flows and bodies of the project, its
-   waiting changes of a disposable run (only on explicit choice, with the
-   warning that changes not applied are lost for good), and the stored
-   project choice with its register entry. Depot versions no session uses
-   are not part of project cleanup; the depot handles them
-   (`humanitl agents update`, `humanitl agents remove`, ADR-0023). The
-   audit chain is never deleted.
+None. Questions 1 to 9 were answered on 2026-11-17 and 2026-11-18 and stand
+in the Decision section with their date (3 and 4 decided by the lead, the
+owner did not object).
 
 ## Affected issues
 
