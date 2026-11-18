@@ -1,8 +1,8 @@
 # Sprint 8 · Startfenster, Terminal-Client und Sitzungen, die ihr Terminal überleben
 
-Ziel des Sprints: Humanitl startet so, wie der Eigentümer es am 2026-11-17 beschrieben hat. Die App öffnet nie eine Sitzung ohne Projekt und zeigt sonst ein Startfenster (laufend, zuletzt, neu, aufräumen, Einstellungen als Reiter); `humanitl app [.]` öffnet es. `humanitl go claude` startet den Agenten im aktuellen Ordner, beim ersten Mal mit einem einzigen Bildschirm voller Vorgaben, danach ohne. Alle Einstellungen gibt es auch als TUI auf ratatui, aus demselben Katalog des Daemons. In der Sitzung wechselt eine Präfixtaste die Ansicht (Einstellungen, Interceptor) oder hängt ab, und Schließen hängt ab statt zu beenden. Dazu, unabhängig, ein Rückfall für den macOS-Runner des Releases. Entscheidung in [ADR-0024](../docs/adr/0024-terminal-client-and-start-window.md) (Proposed), Eintrag in `BACKLOG.md` Abschnitt 9, Punkt 24.
+Ziel des Sprints: Humanitl startet so, wie der Eigentümer es am 2026-11-17 beschrieben hat. Die App öffnet nie eine Sitzung ohne Projekt und zeigt sonst ein Startfenster (laufend, zuletzt, neu, aufräumen, Einstellungen als Reiter); `humanitl app [.]` öffnet es. `humanitl go claude` startet den Agenten im aktuellen Ordner, beim ersten Mal mit einem einzigen Bildschirm voller Vorgaben, danach ohne. Alle Einstellungen gibt es auch als TUI auf ratatui, aus demselben Katalog des Daemons. In der Sitzung wechselt eine Präfixtaste die Ansicht (Einstellungen, Interceptor) oder hängt ab, und Schließen hängt ab statt zu beenden. Dazu, unabhängig, ein Rückfall für den macOS-Runner des Releases. Entscheidung in [ADR-0024](../docs/adr/0024-terminal-client-and-start-window.md) (Accepted am 2026-11-18), Eintrag in `BACKLOG.md` Abschnitt 9, Punkt 24.
 
-Die offenen Fragen des ADR (dort nummeriert, hier als „Frage N" zitiert) hat der Eigentümer am 2026-11-17 beantwortet; die Fragen 3 und 4 hat der Hauptstrang nach dem Vorschlag des ADR entschieden, der Eigentümer hat nicht widersprochen. Die Antworten stehen im Abschnitt „Decision" des ADR mit Datum und sind in die Issues eingearbeitet. Offen ist nur Frage 8 (Umfang des Aufräumens): HUM-533 baut die Vorgabe des ADR, die der Eigentümer noch bestätigt. Kein Issue entscheidet eine offene Frage still.
+Die offenen Fragen des ADR (dort nummeriert, hier als „Frage N" zitiert) hat der Eigentümer am 2026-11-17 beantwortet; die Fragen 3 und 4 hat der Hauptstrang nach dem Vorschlag des ADR entschieden, der Eigentümer hat nicht widersprochen. Die Antworten stehen im Abschnitt „Decision" des ADR mit Datum und sind in die Issues eingearbeitet. Frage 8 (Umfang des Aufräumens) hat der Eigentümer am 2026-11-18 mit der Vorgabe des ADR beantwortet (HUM-530). Kein Issue entscheidet eine offene Frage still.
 
 Drei Grenzen gelten für jedes Issue dieses Sprints und sind Akzeptanzkriterium, auch wo das Issue sie nicht eigens nennt:
 
@@ -341,8 +341,8 @@ Sitzung mit schreibbarem Ordner für den Agenten schreibbar.
 ### Kontext
 ADR-0024 Punkt 2, Vorgabe 1 des Eigentümers: alte Sitzungen und Projekte
 aufräumen, mit Bestätigung, und klar, was genau gelöscht wird. Den Umfang
-(Frage 8) hat der Eigentümer nicht beantwortet; gebaut wird die Vorgabe des
-ADR, vom Eigentümer noch zu bestätigen (HUM-530).
+(Frage 8) hat der Eigentümer am 2026-11-18 mit der Vorgabe des ADR bestätigt
+(HUM-530, ADR-0024 Punkt 14).
 
 ### Spezifikation
 1. **`Projects.cleanup_plan`** (Auswahl: Projekte, Alter, „alles außer
