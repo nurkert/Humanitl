@@ -24,5 +24,6 @@ export 'rule.dart';
 export 'sandbox.dart';
 export 'sandbox_backends.dart';
 export 'settings.dart';
+export 'settings_catalog.dart';
 export 'terminal.dart';
 export 'update.dart';

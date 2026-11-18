@@ -162,7 +162,9 @@ impl ServerSource {
             Origin::ProfileBuiltin(name) | Origin::ProfileGlobal(name) => {
                 Self::Profile(name.clone())
             }
-            Origin::Global => Self::Config,
+            // Eine Firmenvorgabe ist eine Wahl über dem Menschen, nicht die
+            // eines Repositorys: wie `config.toml` ohne Bestätigung je Ordner.
+            Origin::Global | Origin::Policy(_) => Self::Config,
             Origin::Default => Self::Default,
         }
     }

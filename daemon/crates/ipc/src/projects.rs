@@ -176,7 +176,7 @@ pub fn resolve_for(
     locks: &PolicyLocks,
     row: &ProjectRow,
 ) -> (Result<Resolved, Diagnostic>, Option<Diagnostic>) {
-    let without = resolve_at(paths, &row.path, None);
+    let without = resolve_at(paths, locks, &row.path, None);
     let choice = match row.choice.as_deref().map(ProjectChoice::from_json) {
         None => return (without, None),
         Some(Err(found)) => return (without, Some(found)),
@@ -217,9 +217,9 @@ pub fn check_for(
     path: &str,
     choice: &ProjectChoice,
 ) -> Result<Resolved, Diagnostic> {
-    let below = resolve_at(paths, path, None)?;
+    let below = resolve_at(paths, locks, path, None)?;
     check_choice(choice, &below.config, locks)?;
-    let with = resolve_at(paths, path, Some(choice))?;
+    let with = resolve_at(paths, locks, path, Some(choice))?;
     let touches_level =
         choice.get("sandbox.backend").is_some() || choice.get("sandbox.min_isolation").is_some();
     if touches_level
@@ -430,9 +430,11 @@ pub fn entry(row: &ProjectRow, activity: Option<&ProjectActivity>) -> v1::Projec
 /// Resolves the configuration of a project folder without a wish: the folder
 /// as `sandbox.work_dir` on the command line level (only while it exists),
 /// so that its project profile applies even when `config.toml` names
-/// another folder.
+/// another folder. The locks of a company policy are the top layer
+/// (HUM-534).
 fn resolve_at(
     paths: &Paths,
+    locks: &PolicyLocks,
     path: &str,
     choice: Option<&ProjectChoice>,
 ) -> Result<Resolved, Diagnostic> {
@@ -443,13 +445,80 @@ fn resolve_at(
     } else {
         Vec::new()
     };
-    humanitl_config::resolve_with_choice(
+    let sources = humanitl_config::sources_for(
         &ProfileSelection::default(),
         present.then_some(dir),
         paths.env(),
         &pairs,
-        choice,
-    )
+    )?
+    .with_project_choice(choice.cloned())
+    .with_policy(locks.clone());
+    humanitl_config::load(&sources)
+}
+
+/// What `GetConfigRequest.project_id` names (HUM-534, specification 2a).
+#[derive(Debug, Clone, PartialEq, Eq)]
+pub enum ConfigTarget {
+    /// No project, or one the register does not know: the global resolution.
+    Global,
+    /// A project of the register, with its choice.
+    Project(ProjectRow),
+    /// A folder the register does not know: resolved as a start there would,
+    /// with its project profile and without a choice. The canonical path.
+    Folder(String),
+}
+
+/// Reads `GetConfigRequest.project_id`: a project id of the register or an
+/// absolute folder. Neither an unknown id nor an unknown folder is an error;
+/// they resolve without a project choice.
+///
+/// # Errors
+///
+/// The findings of the recording.
+pub async fn config_target(
+    recorder: Option<&Recorder>,
+    asked: &str,
+) -> Result<ConfigTarget, Diagnostic> {
+    let asked = asked.trim();
+    if asked.is_empty() {
+        return Ok(ConfigTarget::Global);
+    }
+    if Path::new(asked).is_absolute() {
+        let Ok(identity) = ProjectIdentity::of(Path::new(asked)) else {
+            return Ok(ConfigTarget::Global);
+        };
+        if let Some(recorder) = recorder
+            && let Some(row) = recorder
+                .current_project_at(identity.path_text(), Some((identity.dev, identity.ino)))
+                .await
+                .map_err(humanitl_recorder::RecorderError::into_diagnostic)?
+        {
+            return Ok(ConfigTarget::Project(row));
+        }
+        return Ok(ConfigTarget::Folder(identity.path_text()));
+    }
+    let (Some(recorder), Ok(id)) = (recorder, parse_id(asked)) else {
+        return Ok(ConfigTarget::Global);
+    };
+    Ok(recorder
+        .get_project(id)
+        .await
+        .map_err(humanitl_recorder::RecorderError::into_diagnostic)?
+        .map_or(ConfigTarget::Global, ConfigTarget::Project))
+}
+
+/// The configuration of a folder the register does not know, without a
+/// choice (HUM-534). Blocking: reads files.
+///
+/// # Errors
+///
+/// The findings of loading the configuration.
+pub fn resolve_folder(
+    paths: &Paths,
+    locks: &PolicyLocks,
+    path: &str,
+) -> Result<Resolved, Diagnostic> {
+    resolve_at(paths, locks, path, None)
 }
 
 /// Runs blocking work off the runtime threads.

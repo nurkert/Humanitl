@@ -610,6 +610,22 @@ message FlowEvent {
     // Flow; wer den Strom nach `Lagged` neu aufbaut, liest den Stand ueber
     // `Intercept{status}`.
     InterceptChanged intercept = 17;
+    // Die Aufloesung der Konfiguration kann sich geaendert haben (HUM-534):
+    // nach `SetConfig`, `Projects.save_choice`, dem Loeschen einer Wahl durch
+    // `Projects.cleanup`, einem Wechsel ueber `LlmServers`, `LlmKey`,
+    // `Egress` oder `Agents`, und wenn sich `config.toml` auf der Platte
+    // geaendert hat. Kein Flow; wer es sieht, laedt mit `GetConfig` neu.
+    ConfigChanged config_changed = 18;
+  }
+
+  // Was sich an der Konfiguration geaendert hat.
+  message ConfigChanged {
+    // Die betroffenen Schluessel; leer heisst: unbekannt, jeder kann es sein
+    // (eine von Hand geaenderte `config.toml`).
+    repeated string keys = 1;
+    // Die Kennung des Projekts, dessen Projektwahl sich geaendert hat; leer
+    // fuer die globale Ebene.
+    string project_id = 2;
   }
 
   // Ein neuer Flow ist eingetroffen.
@@ -2263,7 +2279,17 @@ message GetConfigRequest {
   // Die Konfiguration eines Projekts aus dem Register (HUM-532): sein Ordner
   // waehlt das Projekt-Profil, und seine Projektwahl ist die Ebene mit der
   // Herkunft `project-choice`. Leer heisst: ohne Projekt, wie bisher.
+  // Seit 1.47 auch ein absoluter Ordner (HUM-534): Er wird kanonisiert und im
+  // Register gesucht; ein Ordner, den das Register nicht kennt, wird ohne
+  // Projektwahl aufgeloest, mit seinem Projekt-Profil, wie ein Start dort.
+  // Eine unbekannte Kennung gibt die globale Aufloesung, ohne Fehler.
   string project_id = 2;
+  // Der Einstellungskatalog in `ConfigSnapshot.catalog` (HUM-534):
+  // Kategorien, Texte, Bedienart, Herkunft und Sperre je Eintrag.
+  bool include_catalog = 3;
+  // Die Sprache der Texte des Katalogs, `en` oder `de`; leer heisst
+  // `ui.language` der Aufloesung.
+  string language = 4;
 }
 
 // Die effektive Konfiguration samt Herkunft je Feld.
@@ -2281,13 +2307,95 @@ message ConfigSnapshot {
   // Die globale `config.toml`, in die `SetConfig` schreibt, als absoluter
   // Pfad. Die Oberflaeche bietet sie zum Oeffnen an.
   string config_path = 6;
+  // Nur mit `GetConfigRequest.include_catalog` (HUM-534).
+  SettingsCatalog catalog = 7;
+}
+
+// Der Einstellungskatalog (HUM-534, ADR-0024 Punkt 3): die eine Quelle, aus
+// der App und TUI ihre Einstellungen zeichnen. Kein Client haelt eine eigene
+// Liste.
+message SettingsCatalog {
+  // Die Sprache der Texte: `en` oder `de`.
+  string language = 1;
+  // In der Reihenfolge der linken Spalte.
+  repeated SettingsCategory categories = 2;
+  // Je Kategorie in der Reihenfolge ihrer Seite.
+  repeated SettingsEntry entries = 3;
+}
+
+// Eine Kategorie der Einstellungen.
+message SettingsCategory {
+  string id = 1;
+  // Die Stelle in der linken Spalte, ab 0.
+  uint32 order = 2;
+  string title = 3;
+}
+
+// Ein Wert einer Auswahl mit seinem Namen.
+message SettingsChoice {
+  // Der Wert, wie `SetConfig` ihn nimmt.
+  string value = 1;
+  string title = 2;
+}
+
+// Die Sperre eines Eintrags durch eine Firmenvorgabe. Fehlt sie, ist der
+// Eintrag nicht gesperrt.
+message SettingLock {
+  // Die Vorgabe, die sperrt, etwa der Pfad der Vorgabedatei.
+  string locked_by = 1;
+  // Immer gesetzt: ein gesperrter Wert ist in jedem Client nur lesbar.
+  bool read_only = 2;
+  // Ein Satz, warum, fuer die Anzeige an der Zeile.
+  string reason = 3;
+}
+
+// Ein Eintrag des Katalogs.
+message SettingsEntry {
+  // Der Schluessel der Konfiguration oder die Kennung einer besonderen Zeile
+  // ohne eigenen Schluessel, etwa `daemon.restart`.
+  string id = 1;
+  // Die Kennung der Kategorie.
+  string category = 2;
+  // Die Stelle in der Kategorie, ab 0.
+  uint32 order = 3;
+  string title = 4;
+  // Ein kurzer Satz unter dem Namen; leer, wenn es keinen gibt.
+  string help = 5;
+  // Die laengere Erklaerung hinter dem Info-Knopf; leer, wenn es keine gibt.
+  string details = 6;
+  // Woerter, die den Eintrag in der Suche auch finden; nie gezeigt.
+  repeated string keywords = 7;
+  // `switch`, `choice`, `text`, `number`, `secret_ref`, `path` oder
+  // `special`. Eine Zeile `special` zeichnet der Client mit dem Bedienelement,
+  // das er dieser `id` zuordnet; ein `secret_ref` wird nie aufgeloest
+  // gezeigt und nie ueber `SetConfig` geschrieben.
+  string control = 8;
+  // Bei `choice` die Werte mit ihren Namen.
+  repeated SettingsChoice choices = 9;
+  // Ob eine laufende Sitzung den alten Wert behaelt.
+  bool next_session = 10;
+  // `basic`, `advanced` oder `expert`.
+  string tier = 11;
+  // Leer fuer jeden Client, `app` fuer eine Einstellung des App-Fensters
+  // selbst, die die TUI nicht zeigt.
+  string client = 12;
+  // Die Herkunft des wirksamen Werts wie in `FieldOrigin.origin`, dazu
+  // `policy` fuer eine Sperre; leer fuer eine Zeile ohne Schluessel.
+  string origin = 13;
+  // Gesetzt, wenn eine Firmenvorgabe den Schluessel sperrt.
+  SettingLock lock = 14;
+  // Ob der Schluessel auf der Erlaubnisliste der Projektwahl steht (HUM-532).
+  // Nur dann schreibt ein Client ihn fuer ein Projekt, und zwar ueber
+  // `Projects.save_choice`, nie ueber `SetConfig`.
+  bool in_project_choice = 15;
 }
 
 // Woher der Wert eines Feldes stammt.
 message FieldOrigin {
   string key = 1;
   // `default`, `global`, `profile_builtin`, `profile_global`,
-  // `profile_project`, `project-choice` (HUM-532), `env` oder `cli`.
+  // `profile_project`, `project-choice` (HUM-532), `env`, `cli` oder
+  // `policy` (eine Sperre der Firmenvorgabe, HUM-534).
   string origin = 2;
 }
 

@@ -549,7 +549,18 @@ impl DaemonApi for FakeDaemon {
         &self,
         request: v1::GetConfigRequest,
     ) -> Result<v1::ConfigSnapshot, Diagnostic> {
-        Self::config_snapshot(self.state.config_overrides(), request.include_schema)
+        let mut snapshot =
+            Self::config_snapshot(self.state.config_overrides(), request.include_schema)?;
+        // Derselbe Katalog wie im Dienst (HUM-534), ohne Sperre und ohne
+        // `sandbox.mode`: Der Fake nennt `sandbox.disposable` nicht.
+        if request.include_catalog {
+            snapshot.catalog = Some(crate::config_rpc::catalog_for(
+                &snapshot,
+                &request.language,
+                &crate::config_rpc::CatalogScope::default(),
+            ));
+        }
+        Ok(snapshot)
     }
 
     /// `SetConfig` mit derselben Tür wie der Daemon (HUM-151, HUM-069): Was
@@ -613,10 +624,17 @@ impl DaemonApi for FakeDaemon {
             None => overrides.remove(&request.key),
         };
         let snapshot = Self::config_snapshot(overrides, false)?;
+        let key = request.key.clone();
         match stored {
             Some(value) => self.state.set_config(request.key, value),
             None => self.state.remove_config(&request.key),
         }
+        // Wie der Dienst (HUM-534): Jeder Abonnent erfährt die Änderung.
+        self.state
+            .emit(crate::config_events::event(v1::flow_event::ConfigChanged {
+                keys: vec![key],
+                project_id: String::new(),
+            }));
         Ok(snapshot)
     }
 
@@ -1679,7 +1697,8 @@ fn event_flow_id(event: &v1::FlowEvent) -> Option<FlowId> {
         | Event::Diagnostic(_)
         | Event::RulesChanged(_)
         | Event::AgentAsk(_)
-        | Event::Intercept(_) => {
+        | Event::Intercept(_)
+        | Event::ConfigChanged(_) => {
             return None;
         }
     };

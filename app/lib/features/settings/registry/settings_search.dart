@@ -1,17 +1,16 @@
-/// The search of the settings overlay over the register (HUM-404).
+/// The search of the settings overlay over the catalog (HUM-404, HUM-534).
 ///
 /// Plain and predictable on purpose: every word of the query must occur
 /// somewhere in the entry -- its name, help, longer explanation, keywords,
-/// the name of its category or its configuration key -- in the language of
-/// the interface. Case, umlauts and `ß` do not matter. No fuzzy matching: a
-/// search that finds a setting for a word it does not contain would be a
-/// search nobody can predict.
+/// the name of its category or its configuration key -- as the daemon's
+/// catalog words them in the language of the interface. Case, umlauts and
+/// `ß` do not matter. No fuzzy matching: a search that finds a setting for a
+/// word it does not contain would be a search nobody can predict.
 library;
 
 import 'package:flutter/foundation.dart';
 
 import '../../../core/domain/domain.dart';
-import '../../../l10n/l10n.dart';
 import 'settings_registry.dart';
 
 /// The hits of one category, in page order.
@@ -21,7 +20,7 @@ class SettingsSearchGroup {
   const SettingsSearchGroup(this.category, this.entries);
 
   /// The category the hits stand on.
-  final SettingsCategory category;
+  final SettingsCatalogCategory category;
 
   /// The hits.
   final List<SettingEntry> entries;
@@ -39,24 +38,20 @@ String foldForSearch(String text) => text
     .trim();
 
 /// Everything an entry can be found by, folded.
-String searchTextOf(SettingEntry entry, AppLocalizations l10n) => foldForSearch(
+String searchTextOf(SettingEntry entry, SettingsView view) => foldForSearch(
   <String?>[
-    entry.title(l10n),
-    entry.help?.call(l10n),
-    entry.details?.call(l10n),
-    entry.keywords(l10n),
-    entry.category.title(l10n),
+    entry.title,
+    entry.help,
+    entry.details,
+    entry.keywords,
+    view.category(entry.category)?.title,
     entry.id,
   ].whereType<String>().join(' '),
 );
 
-/// The entries [query] finds for a daemon described by [info], grouped by
-/// category in the order of the left column. Empty for an empty query.
-List<SettingsSearchGroup> searchSettings(
-  String query,
-  AppLocalizations l10n,
-  DaemonInfo? info,
-) {
+/// The entries [query] finds in [view], grouped by category in the order of
+/// the left column. Empty for an empty query.
+List<SettingsSearchGroup> searchSettings(String query, SettingsView view) {
   final List<String> words = foldForSearch(query)
       .split(' ')
       .where((String word) => word.isNotEmpty)
@@ -65,10 +60,10 @@ List<SettingsSearchGroup> searchSettings(
     return const <SettingsSearchGroup>[];
   }
   return <SettingsSearchGroup>[
-    for (final SettingsCategory category in SettingsCategory.values)
+    for (final SettingsCatalogCategory category in view.categories)
       if (<SettingEntry>[
-            for (final SettingEntry entry in settingsOf(category, info))
-              if (_matches(searchTextOf(entry, l10n), words)) entry,
+            for (final SettingEntry entry in view.inCategory(category.id))
+              if (_matches(searchTextOf(entry, view), words)) entry,
           ]
           case final List<SettingEntry> hits when hits.isNotEmpty)
         SettingsSearchGroup(category, hits),

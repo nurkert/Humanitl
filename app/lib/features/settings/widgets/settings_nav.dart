@@ -1,12 +1,13 @@
-/// The left column of the settings overlay: the categories (HUM-404).
+/// The left column of the settings overlay: the categories of the catalog
+/// (HUM-404, HUM-534).
 library;
 
 import 'package:flutter/services.dart';
 import 'package:flutter/widgets.dart';
 
+import '../../../core/domain/domain.dart';
 import '../../../core/shortcuts/shortcut_catalog.dart';
 import '../../../l10n/l10n.dart';
-import '../registry/setting_entry.dart';
 import 'settings_list_item.dart';
 
 /// The categories as one stop of the `Tab` order.
@@ -19,27 +20,27 @@ class SettingsNav extends StatefulWidget {
   /// Creates the column; [selected] is the category the page shows, or null
   /// while the search shows its hits.
   const SettingsNav({
+    required this.categories,
     required this.selected,
     required this.onSelect,
     super.key,
   });
 
-  /// The category of the page, or null.
-  final SettingsCategory? selected;
+  /// The categories of the catalog, in the order of the column.
+  final List<SettingsCatalogCategory> categories;
 
-  /// Invoked with the chosen category.
-  final ValueChanged<SettingsCategory> onSelect;
+  /// The id of the category of the page, or null.
+  final String? selected;
+
+  /// Invoked with the id of the chosen category.
+  final ValueChanged<String> onSelect;
 
   @override
   State<SettingsNav> createState() => _SettingsNavState();
 }
 
 class _SettingsNavState extends State<SettingsNav> {
-  late final Map<SettingsCategory, FocusNode> _nodes =
-      <SettingsCategory, FocusNode>{
-        for (final SettingsCategory category in SettingsCategory.values)
-          category: FocusNode(debugLabel: 'settings-nav-${category.name}'),
-      };
+  final Map<String, FocusNode> _nodes = <String, FocusNode>{};
 
   @override
   void dispose() {
@@ -49,23 +50,35 @@ class _SettingsNavState extends State<SettingsNav> {
     super.dispose();
   }
 
+  List<String> get _ids => <String>[
+    for (final SettingsCatalogCategory category in widget.categories)
+      category.id,
+  ];
+
+  FocusNode _node(String id) =>
+      _nodes.putIfAbsent(id, () => FocusNode(debugLabel: 'settings-nav-$id'));
+
   /// The category the arrow keys start from: the focused one, else the
   /// chosen one, else the first.
-  SettingsCategory get _current {
-    for (final MapEntry<SettingsCategory, FocusNode> entry in _nodes.entries) {
-      if (entry.value.hasFocus) {
-        return entry.key;
+  String? get _current {
+    for (final String id in _ids) {
+      if (_nodes[id]?.hasFocus ?? false) {
+        return id;
       }
     }
-    return widget.selected ?? SettingsCategory.values.first;
+    return widget.selected ?? (_ids.isEmpty ? null : _ids.first);
   }
 
   KeyEventResult _onKey(FocusNode _, KeyEvent event) {
     if (event is! KeyDownEvent && event is! KeyRepeatEvent) {
       return KeyEventResult.ignored;
     }
-    const List<SettingsCategory> all = SettingsCategory.values;
-    final int at = _current.index;
+    final List<String> all = _ids;
+    final String? current = _current;
+    if (current == null || all.isEmpty) {
+      return KeyEventResult.ignored;
+    }
+    final int at = all.indexOf(current).clamp(0, all.length - 1);
     // Die Tasten stehen im Katalog (HUM-420).
     final int? next = switch (event) {
       _ when AppShortcut.listNext.matches(event) => (at + 1).clamp(
@@ -87,19 +100,19 @@ class _SettingsNavState extends State<SettingsNav> {
     return KeyEventResult.handled;
   }
 
-  void _choose(SettingsCategory category) {
+  void _choose(String category) {
     widget.onSelect(category);
-    _nodes[category]!.requestFocus();
+    _node(category).requestFocus();
   }
 
   @override
   Widget build(BuildContext context) {
     final AppLocalizations l10n = context.l10n;
     // Ohne Wahl (während der Suche) steht der erste Eintrag im `Tab`.
-    final SettingsCategory tabStop =
-        widget.selected ?? SettingsCategory.values.first;
-    for (final MapEntry<SettingsCategory, FocusNode> entry in _nodes.entries) {
-      entry.value.skipTraversal = entry.key != tabStop;
+    final List<String> ids = _ids;
+    final String? tabStop = widget.selected ?? (ids.isEmpty ? null : ids.first);
+    for (final String id in ids) {
+      _node(id).skipTraversal = id != tabStop;
     }
     return Semantics(
       container: true,
@@ -112,13 +125,13 @@ class _SettingsNavState extends State<SettingsNav> {
           key: const Key('settings-nav'),
           padding: EdgeInsets.zero,
           children: <Widget>[
-            for (final SettingsCategory category in SettingsCategory.values)
+            for (final SettingsCatalogCategory category in widget.categories)
               SettingsListItem(
-                key: ValueKey<String>('settings-nav-${category.name}'),
-                title: category.title(l10n),
-                selected: category == widget.selected,
-                focusNode: _nodes[category],
-                onTap: () => _choose(category),
+                key: ValueKey<String>('settings-nav-${category.id}'),
+                title: category.title,
+                selected: category.id == widget.selected,
+                focusNode: _node(category.id),
+                onTap: () => _choose(category.id),
               ),
           ],
         ),

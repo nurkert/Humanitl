@@ -128,26 +128,23 @@ Future<void> press(WidgetTester tester, LogicalKeyboardKey key) async {
 }
 
 /// Ob die Kategorie [category] als Seite steht.
-Finder page(SettingsCategory category) =>
-    find.byKey(ValueKey<String>('settings-page-${category.name}'));
+Finder page(String category) =>
+    find.byKey(ValueKey<String>('settings-page-$category'));
 
 void main() {
   final TargetPlatformVariant linux = TargetPlatformVariant.only(
     TargetPlatform.linux,
   );
 
-  group('the register', () {
+  group('the catalog', () {
     test(
       'registry_covers_old_sheet: every row of the old sheet has an entry',
-      () {
+      () async {
+        final SettingsView view = await fakeSettingsView();
         final Set<String> ids = <String>{
-          for (final SettingEntry entry in settingsRegistry) entry.id,
+          for (final SettingEntry entry in view.entries) entry.id,
         };
-        expect(
-          ids,
-          hasLength(settingsRegistry.length),
-          reason: 'ids are unique',
-        );
+        expect(ids, hasLength(view.entries.length), reason: 'ids are unique');
         for (final String id in oldSheetIds) {
           expect(ids, contains(id), reason: '$id has an entry');
         }
@@ -157,46 +154,37 @@ void main() {
       },
     );
 
-    test('registry_search_finds_every_entry in English and German', () {
-      for (final Locale locale in const <Locale>[Locale('en'), Locale('de')]) {
-        final AppLocalizations l10n = lookupAppLocalizations(locale);
+    test('registry_search_finds_every_entry in English and German', () async {
+      for (final String language in const <String>['en', 'de']) {
+        final SettingsView view = await fakeSettingsView(language: language);
         for (final String id in oldSheetIds) {
-          final SettingEntry entry = settingEntry(id);
-          final List<String> keywords = entry
-              .keywords(l10n)
+          final SettingEntry entry = view.entry(id)!;
+          final List<String> keywords = entry.keywords
               .split(',')
               .map((String word) => word.trim())
               .toList();
-          for (final String term in <String>[
-            entry.title(l10n),
-            keywords.first,
-          ]) {
+          for (final String term in <String>[entry.title, keywords.first]) {
             final List<SettingEntry> hits = <SettingEntry>[
               for (final SettingsSearchGroup group in searchSettings(
                 term,
-                l10n,
-                FakeDaemonClient.disposableInfo,
+                view,
               ))
                 ...group.entries,
             ];
             expect(
-              hits,
-              contains(entry),
-              reason: '"$term" finds $id in ${locale.languageCode}',
+              hits.map((SettingEntry hit) => hit.id),
+              contains(id),
+              reason: '"$term" finds $id in $language',
             );
           }
         }
       }
     });
 
-    test('search folds case and umlauts and needs every word', () {
-      final AppLocalizations de = lookupAppLocalizations(const Locale('de'));
+    test('search folds case and umlauts and needs every word', () async {
+      final SettingsView de = await fakeSettingsView(language: 'de');
       List<String> ids(String query) => <String>[
-        for (final SettingsSearchGroup group in searchSettings(
-          query,
-          de,
-          FakeDaemonClient.disposableInfo,
-        ))
+        for (final SettingsSearchGroup group in searchSettings(query, de))
           for (final SettingEntry entry in group.entries) entry.id,
       ];
       expect(ids('SCHLUSSEL'), contains(FormKeys.llmApiKeyRef));
@@ -205,13 +193,29 @@ void main() {
       expect(ids('   '), isEmpty);
     });
 
-    test('a setting the daemon does not offer is not found', () {
-      final AppLocalizations en = lookupAppLocalizations(const Locale('en'));
+    // HUM-534: Die Suche sucht in den Texten des Katalogs. Mutationsbeweis:
+    // Ließe `searchTextOf` die Stichwörter weg, fände „Ollama" den Endpunkt
+    // nicht mehr, denn das Wort steht nur dort.
+    test('search finds an entry by a keyword of the catalog', () async {
+      final SettingsView view = await fakeSettingsView();
+      final List<String> found = <String>[
+        for (final SettingsSearchGroup group in searchSettings(
+          'countdown',
+          view,
+        ))
+          for (final SettingEntry entry in group.entries) entry.id,
+      ];
+      expect(found, <String>[FormKeys.holdTimeoutSecs]);
+    });
+
+    test('a setting the daemon does not offer is not found', () async {
+      final SettingsView view = await fakeSettingsView(
+        info: FakeDaemonClient.defaultInfo,
+      );
       final Iterable<String> found = <String>[
         for (final SettingsSearchGroup group in searchSettings(
           'disposable',
-          en,
-          FakeDaemonClient.defaultInfo,
+          view,
         ))
           for (final SettingEntry entry in group.entries) entry.id,
       ];
@@ -220,9 +224,10 @@ void main() {
 
     test(
       'the next-session note stands only where a session keeps the value',
-      () {
+      () async {
+        final SettingsView view = await fakeSettingsView();
         final Set<String> next = <String>{
-          for (final SettingEntry entry in settingsRegistry)
+          for (final SettingEntry entry in view.entries)
             if (entry.nextSession) entry.id,
         };
         expect(next, <String>{
@@ -246,12 +251,12 @@ void main() {
       'every_setting_is_found_and_reached (${german ? 'de' : 'en'})',
       (WidgetTester tester) async {
         await open(tester, german: german);
-        final AppLocalizations l10n = lookupAppLocalizations(
-          Locale(german ? 'de' : 'en'),
+        final SettingsView catalog = await fakeSettingsView(
+          language: german ? 'de' : 'en',
         );
         for (final String id in oldSheetIds) {
-          final SettingEntry entry = settingEntry(id);
-          await type(tester, entry.title(l10n));
+          final SettingEntry entry = catalog.entry(id)!;
+          await type(tester, entry.title);
           final Finder hit = find.byKey(ValueKey<String>('settings-hit-$id'));
           expect(hit, findsOneWidget, reason: '$id is a hit');
           await tester.tap(hit);
@@ -266,9 +271,7 @@ void main() {
           // Die Zeile steht im sichtbaren Teil der Seite, ganz oben oder
           // darunter, nicht unter dem Rand.
           final Rect view = tester.getRect(
-            find.byKey(
-              ValueKey<String>('settings-scroll-${entry.category.name}'),
-            ),
+            find.byKey(ValueKey<String>('settings-scroll-${entry.category}')),
           );
           final Rect at = tester.getRect(row);
           expect(
@@ -291,13 +294,10 @@ void main() {
       // „model" steht in den Zeilen der Modelle und in der Erklärung des
       // Agenten: zwei Gruppen.
       await type(tester, 'model');
+      final SettingsView view = await fakeSettingsView();
       final List<String> headers = <String>[
-        for (final SettingsSearchGroup group in searchSettings(
-          'model',
-          lookupAppLocalizations(const Locale('en')),
-          FakeDaemonClient.disposableInfo,
-        ))
-          group.category.name,
+        for (final SettingsSearchGroup group in searchSettings('model', view))
+          group.category.id,
       ];
       expect(
         headers.length,
@@ -512,12 +512,12 @@ void main() {
           size: window,
           uiState: scaleState(freshStatePath(), percent: percent),
         );
-        for (final SettingsCategory category in SettingsCategory.values) {
+        for (final String category in SettingsCategory.values) {
           await showSettingsCategory(tester, category);
           expect(
             tester.takeException(),
             isNull,
-            reason: '${category.name} at $percent %',
+            reason: '$category at $percent %',
           );
         }
         await type(tester, 'a');
@@ -637,8 +637,11 @@ void main() {
         alone(FakeDaemonClient.empty(), FormKeys.sandboxMode),
       );
       await tester.pumpAndSettle();
-      expect(page(SettingsCategory.sandbox), findsOneWidget);
+      // Der Katalog dieses Daemons nennt `sandbox.mode` nicht (HUM-534): Das
+      // Overlay öffnet die erste Seite, und die Suche hat die Tastatur.
+      expect(page(SettingsCategory.models), findsOneWidget);
       expect(find.byKey(const Key('settings-sandbox-mode')), findsNothing);
+      expect(focusIsWithin(const Key('settings-search')), isTrue);
       expect(tester.takeException(), isNull);
     }, variant: linux);
   });
@@ -679,13 +682,15 @@ void main() {
       findsOneWidget,
     );
     expect(find.text('Restart daemon'), findsOneWidget);
-    for (final Locale locale in const <Locale>[Locale('en'), Locale('de')]) {
-      final AppLocalizations l10n = lookupAppLocalizations(locale);
+    for (final String language in const <String>['en', 'de']) {
+      final SettingsView view = await fakeSettingsView(
+        language: language,
+        info: FakeDaemonClient.defaultInfo,
+      );
       final Iterable<String> found = <String>[
         for (final SettingsSearchGroup group in searchSettings(
-          l10n.settingsRestartLabel,
-          l10n,
-          FakeDaemonClient.defaultInfo,
+          view.entry(SettingIds.daemonRestart)!.title,
+          view,
         ))
           for (final SettingEntry entry in group.entries) entry.id,
       ];

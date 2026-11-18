@@ -40,6 +40,9 @@ pub enum Origin {
     Env(String),
     /// Ein Argument der Kommandozeile.
     Cli,
+    /// Eine Sperre der Firmenvorgabe (HUM-534), mit der Vorgabe, die sperrt;
+    /// über allen anderen Ebenen.
+    Policy(String),
 }
 
 impl Origin {
@@ -64,6 +67,7 @@ impl Origin {
             Self::ProjectChoice => 4,
             Self::Env(_) => 5,
             Self::Cli => 6,
+            Self::Policy(_) => 7,
         }
     }
 
@@ -80,6 +84,7 @@ impl Origin {
             Self::ProjectChoice => "project-choice",
             Self::Env(_) => "env",
             Self::Cli => "cli",
+            Self::Policy(_) => "policy",
         }
     }
 
@@ -104,6 +109,7 @@ impl fmt::Display for Origin {
             Self::ProjectChoice => f.write_str("project choice"),
             Self::Env(key) => write!(f, "env {key}"),
             Self::Cli => f.write_str("command line"),
+            Self::Policy(by) => write!(f, "company policy {by}"),
         }
     }
 }

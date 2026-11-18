@@ -6798,3 +6798,46 @@ fn projects_clean_names_what_stays_in_use() {
     assert!(text.contains("Nothing to clean up."), "{text}");
     assert!(text.contains(humanitl_ipc::projects::NOT_DELETED), "{text}");
 }
+
+/// `config catalog` (HUM-534): Kategorien und Einträge aus dem Katalog des
+/// Daemons, als JSON und als Text, in der Sprache des Schalters. Die
+/// Kommandozeile hat keine eigene Liste: Was sie zeigt, ist die Antwort von
+/// `GetConfig(include_catalog)`.
+#[test]
+fn config_catalog_prints_the_catalog_of_the_daemon() {
+    let harness = Harness::new();
+    let _server = FakeServer::start(&harness);
+
+    let listed = harness.run(["--json", "config", "catalog", "--language", "de"]);
+    assert_eq!(code(&listed), 0, "{}", stderr(&listed));
+    let value: serde_json::Value =
+        serde_json::from_str(stdout(&listed).trim()).expect("one JSON value");
+    assert_eq!(value["language"], "de");
+    let categories: Vec<&str> = value["categories"]
+        .as_array()
+        .expect("the categories")
+        .iter()
+        .filter_map(|category| category["id"].as_str())
+        .collect();
+    assert_eq!(categories, humanitl_config::catalog::CATEGORIES);
+    assert_eq!(value["categories"][0]["title"], "Modelle");
+    let entries = value["entries"].as_array().expect("the entries");
+    let timeout = entries
+        .iter()
+        .find(|entry| entry["id"] == "hold.timeout_secs")
+        .expect("the hold timeout");
+    assert_eq!(timeout["title"], "Haltefrist");
+    assert_eq!(timeout["control"], "number");
+    assert_eq!(timeout["origin"], "default");
+    assert_eq!(timeout["lock"], serde_json::Value::Null);
+
+    let text = harness.run(["config", "catalog", "--language", "en"]);
+    assert_eq!(code(&text), 0, "{}", stderr(&text));
+    let out = stdout(&text);
+    assert!(out.starts_with("Models\n"), "{out}");
+    assert!(
+        out.contains("  Hold timeout  [hold.timeout_secs]  number  from default"),
+        "{out}"
+    );
+    assert!(out.contains("[ui.scale]  special  (app only)"), "{out}");
+}

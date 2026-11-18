@@ -290,6 +290,12 @@ abstract class DaemonClient {
   /// the files (HUM-069).
   Future<ConfigValues> getConfig();
 
+  /// `GetConfig` with `include_catalog` (HUM-534): the settings catalog in
+  /// [language] (`en` or `de`; empty means `ui.language`), with origin, lock
+  /// and project-choice flag per entry. The one source of categories, titles,
+  /// order and controls; the app keeps no list of its own.
+  Future<SettingsCatalog> getSettingsCatalog({String language = ''});
+
   /// `LlmKey(status)`: whether an access key is stored and where (HUM-140).
   ///
   /// None of the three key methods ever returns the key: the daemon does not

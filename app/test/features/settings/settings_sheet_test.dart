@@ -12,7 +12,6 @@ import 'package:humanitl/core/domain/domain.dart';
 import 'package:humanitl/core/ipc/fake_daemon_client.dart';
 import 'package:humanitl/core/ui/ui.dart';
 import 'package:humanitl/features/settings/providers/file_opener.dart';
-import 'package:humanitl/features/settings/registry/setting_entry.dart';
 import 'package:humanitl/features/settings/widgets/setting_controls.dart';
 import 'package:humanitl/features/shell/providers/theme.dart';
 import 'package:humanitl/features/tray/providers/attention.dart';

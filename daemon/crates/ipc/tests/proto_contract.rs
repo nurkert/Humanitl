@@ -854,6 +854,14 @@ const FLOW_EVENT_FIELDS: &FieldTable = &[
         ".humanitl.v1.FlowEvent.InterceptChanged",
         Some("event"),
     ),
+    // HUM-534: die Auflösung der Konfiguration kann sich geändert haben;
+    // kein Flow, App und TUI laden mit `GetConfig` neu.
+    (
+        "config_changed",
+        18,
+        ".humanitl.v1.FlowEvent.ConfigChanged",
+        Some("event"),
+    ),
 ];
 
 /// `DecideRequest` vollstaendig, vor allem die drei Entscheidungen in

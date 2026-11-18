@@ -53,6 +53,7 @@ step, is described in [`docs/cli.md`](../cli.md); which RPC each subcommand serv
 - [`humanitl config set`](#humanitl-config-set) Write one key into config.toml, after checking it against the schema
 - [`humanitl config schema`](#humanitl-config-schema) Print the JSON schema of the configuration, or the list of profiles
 - [`humanitl config edit`](#humanitl-config-edit) Open config.toml in $VISUAL or $EDITOR and check it afterwards
+- [`humanitl config catalog`](#humanitl-config-catalog) Print the settings catalog of the running daemon: categories, titles, controls, origin and lock of every setting, the source the app and the settings TUI draw from
 - [`humanitl daemon`](#humanitl-daemon) The background service
 - [`humanitl daemon status`](#humanitl-daemon-status) Ask the daemon who it is
 - [`humanitl daemon install`](#humanitl-daemon-install) Write the systemd user unit that starts the daemon at login
@@ -1633,11 +1634,12 @@ The resolved configuration and its schema
 Usage: humanitl config [OPTIONS] <COMMAND>
 
 Commands:
-  get     Print the resolved value of one key, or of every key without one
-  set     Write one key into config.toml, after checking it against the schema
-  schema  Print the JSON schema of the configuration, or the list of profiles
-  edit    Open config.toml in $VISUAL or $EDITOR and check it afterwards
-  help    Print this message or the help of the given subcommand(s)
+  get      Print the resolved value of one key, or of every key without one
+  set      Write one key into config.toml, after checking it against the schema
+  schema   Print the JSON schema of the configuration, or the list of profiles
+  edit     Open config.toml in $VISUAL or $EDITOR and check it afterwards
+  catalog  Print the settings catalog of the running daemon: categories, titles, controls, origin and lock of every setting, the source the app and the settings TUI draw from
+  help     Print this message or the help of the given subcommand(s)
 
 Options:
       --json
@@ -1773,6 +1775,39 @@ Options:
 
       --config <PATH>
           Read this config file instead of the one in the user's config directory
+
+  -v, --verbose...
+          Explain what is happening; repeat for more
+
+  -q, --quiet
+          Only the result, no notes
+
+      --profile <NAME>
+          Use this profile for the session; falls back to the sandbox profile of that name when no session profile exists
+
+  -h, --help
+          Print help
+```
+
+## humanitl config catalog
+
+```text
+Print the settings catalog of the running daemon: categories, titles, controls, origin and lock of every setting, the source the app and the settings TUI draw from
+
+Usage: humanitl config catalog [OPTIONS]
+
+Options:
+      --json
+          Machine-readable output: one JSON value on stdout, diagnostics included
+
+      --project <PATH>
+          Resolve as a start in this project folder would, with its project choice
+
+      --config <PATH>
+          Read this config file instead of the one in the user's config directory
+
+      --language <LANG>
+          The language of the texts, `en` or `de`; without it `ui.language`
 
   -v, --verbose...
           Explain what is happening; repeat for more

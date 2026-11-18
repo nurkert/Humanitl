@@ -61,6 +61,7 @@ use crate::alias;
 use crate::env::Env;
 use crate::model::{Config, MinIsolation, RETIRED_KERNEL_RUNTIME};
 use crate::origin::{Origin, Resolved};
+use crate::policy::PolicyLocks;
 use crate::profile::{ConfigOverlay, DEFAULT_PROFILE, Profile, ProfileSource, builtin_text};
 use crate::project_choice::{ProjectChoice, is_choice_key};
 use crate::schema::{self, Field};
@@ -94,6 +95,9 @@ pub struct Sources {
     /// Die Projektwahl aus dem Register des Daemons (HUM-532); nur Schlüssel
     /// aus [`crate::PROJECT_CHOICE_KEYS`].
     pub project_choice: Option<ProjectChoice>,
+    /// Die Sperren einer Firmenvorgabe (HUM-534): die oberste Ebene, über
+    /// Umgebung und Kommandozeile.
+    pub policy: PolicyLocks,
     /// Das Präfix der Umgebungsvariablen, normalerweise [`DEFAULT_ENV_PREFIX`].
     pub env_prefix: &'static str,
     /// Die Umgebung. Übergeben, nicht aus dem Prozess gelesen.
@@ -110,6 +114,7 @@ impl Default for Sources {
             profiles: Vec::new(),
             profile_project: None,
             project_choice: None,
+            policy: PolicyLocks::none(),
             env_prefix: DEFAULT_ENV_PREFIX,
             env: Env::default(),
             cli: Vec::new(),
@@ -142,6 +147,13 @@ impl Sources {
     #[must_use]
     pub fn with_project_choice(mut self, choice: Option<ProjectChoice>) -> Self {
         self.project_choice = choice;
+        self
+    }
+
+    /// Setzt die Sperren einer Firmenvorgabe.
+    #[must_use]
+    pub fn with_policy(mut self, policy: PolicyLocks) -> Self {
+        self.policy = policy;
         self
     }
 
@@ -234,6 +246,9 @@ pub fn load(sources: &Sources) -> Result<Resolved, Diagnostic> {
     }
     layers.push((env_entries(&sources.env, sources.env_prefix), false));
     layers.push((cli_entries(&sources.cli), true));
+    // Zuletzt die Sperren der Firmenvorgabe: Kein anderer Weg ändert einen
+    // gesperrten Wert (HUM-534).
+    layers.push((policy_entries(&sources.policy), true));
 
     for (layer, (entries, hard)) in layers.into_iter().enumerate() {
         merge.apply(entries, hard, layer)?;
@@ -471,6 +486,20 @@ fn choice_entries(choice: &ProjectChoice) -> Vec<Entry> {
         .collect()
 }
 
+/// Die Einträge der Firmenvorgabe: Text wie von der Kommandozeile.
+fn policy_entries(policy: &PolicyLocks) -> Vec<Entry> {
+    policy
+        .iter()
+        .map(|(key, locked)| {
+            entry_from_text(
+                key.to_owned(),
+                &locked.value,
+                Origin::Policy(locked.by.clone()),
+            )
+        })
+        .collect()
+}
+
 fn cli_entries(pairs: &[(String, String)]) -> Vec<Entry> {
     pairs
         .iter()
@@ -560,6 +589,47 @@ impl Merge {
     /// das Laden abbricht oder nur einen Befund erzeugt. Ein Befund, der das
     /// Laden nicht abbricht, ist eine Warnung (heute: die Umgebung), nie ein
     /// Fehler; ein `Error` in `diagnostics` sähe aus wie ein gescheiterter Start.
+    /// Ein Wert für `sandbox.min_isolation`, der die Untergrenze nicht hebt:
+    /// Aus der Projektwahl ist ein niedrigerer `CONFIG_024` (HUM-532); aus
+    /// der Firmenvorgabe (HUM-534) ist ein gleicher die Herkunft und ein
+    /// niedrigerer ein Befund. Der Wert selbst bleibt draußen.
+    fn floor_not_raised(&mut self, entry: &Entry) -> Result<(), Diagnostic> {
+        // Die Projektwahl senkt nie still (HUM-532): Ein Wert unter
+        // dem der Ebenen darunter ist `CONFIG_024`, ein gleicher
+        // ändert nichts.
+        if entry.origin == Origin::ProjectChoice
+            && let Some(floor) = lowered_floor(self.flat.get(&entry.path), entry)
+        {
+            return Err(crate::project_choice::lowers_the_floor(
+                entry.value.as_str().unwrap_or_default(),
+                floor,
+            ));
+        }
+        // Eine Sperre der Firmenvorgabe (HUM-534): Die strengere
+        // Untergrenze bleibt. Ist die Sperre gleich, ist sie die
+        // Herkunft; liegt sie darunter, sagt ein Befund es, statt die
+        // Sperre still neben einer anderen Herkunft stehen zu lassen.
+        if let Origin::Policy(by) = &entry.origin {
+            match lowered_floor(self.flat.get(&entry.path), entry) {
+                None => {
+                    self.origins
+                        .insert(entry.path.clone(), entry.origin.clone());
+                }
+                Some(floor) => self.diagnostics.push(
+                    Diagnostic::builder(CONFIG_003, Severity::Warning)
+                        .why(format!(
+                            "the company policy {by} fixes {MIN_ISOLATION} to {:?}, \
+                             below {floor:?}, which a layer beneath it requires; the \
+                             stronger floor applies",
+                            entry.value.as_str().unwrap_or_default()
+                        ))
+                        .build(),
+                ),
+            }
+        }
+        Ok(())
+    }
+
     fn apply(
         &mut self,
         mut entries: Vec<Entry>,
@@ -694,17 +764,7 @@ impl Merge {
             // `config.toml` verlangt hat.
             if entry.path == MIN_ISOLATION && !raises_the_floor(self.flat.get(&entry.path), &entry)
             {
-                // Die Projektwahl senkt nie still (HUM-532): Ein Wert unter
-                // dem der Ebenen darunter ist `CONFIG_024`, ein gleicher
-                // ändert nichts.
-                if entry.origin == Origin::ProjectChoice
-                    && let Some(floor) = lowered_floor(self.flat.get(&entry.path), &entry)
-                {
-                    return Err(crate::project_choice::lowers_the_floor(
-                        entry.value.as_str().unwrap_or_default(),
-                        floor,
-                    ));
-                }
+                self.floor_not_raised(&entry)?;
                 continue;
             }
 

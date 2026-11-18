@@ -51,7 +51,13 @@ pub const PROTO_MAJOR: u32 = 1;
 /// Minor-Version des Vertrags. Steigt bei jeder additiven Änderung
 /// (`Info.proto_minor`).
 ///
-/// `46` seit dem Aufräumen (HUM-533): `ProjectsRequest.cleanup_plan` und
+/// `47` seit dem Einstellungskatalog (HUM-534): `GetConfigRequest.include_catalog`
+/// und `language` mit der Antwort `ConfigSnapshot.catalog` (`SettingsCatalog`
+/// mit Kategorien und Einträgen samt Herkunft, `SettingLock` und
+/// `in_project_choice`), `GetConfigRequest.project_id` auch als Ordner und
+/// ohne Fehler für ein unbekanntes Projekt, die Herkunft `policy` und das
+/// Ereignis `FlowEvent.config_changed`.
+/// `46` war das Aufräumen (HUM-533): `ProjectsRequest.cleanup_plan` und
 /// `ProjectsRequest.cleanup` mit `CleanupSelection`, die Antworten
 /// `ProjectsResponse.plan` (`CleanupPlanView` mit Einträgen, Digest, der
 /// Zeile, was nie gelöscht wird, und den bekannten Arten) und
@@ -247,7 +253,7 @@ pub const PROTO_MAJOR: u32 = 1;
 /// Spiegelung in `app/lib/core/ipc/proto_version.dart` darf nachziehen: eine
 /// abweichende Minor ist verabredetermaßen kein Grund, die Verbindung
 /// abzulehnen (`docs/PROTOCOL.md`).
-pub const PROTO_MINOR: u32 = 46;
+pub const PROTO_MINOR: u32 = 47;
 
 /// Metadata-Schlüssel für das Session-Token aus
 /// `$XDG_RUNTIME_DIR/humanitl/token` (CONVENTIONS.md 3.6).
@@ -276,6 +282,9 @@ pub mod auth;
 pub mod body;
 pub mod client;
 pub mod cloud;
+#[cfg(test)]
+mod config_catalog_tests;
+pub mod config_events;
 pub mod config_rpc;
 pub mod convert;
 mod deadline;
@@ -289,6 +298,7 @@ pub mod intercept;
 pub mod llm_key;
 pub mod llm_reach;
 pub mod llm_servers;
+pub mod policy_guard;
 pub mod projects;
 pub mod rules;
 pub mod sandbox;

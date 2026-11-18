@@ -1662,7 +1662,7 @@ Agent in the depot not logged in
 
 Agent source fixed by a company policy
 
-**Auslöser.** A company policy fixes the source of this agent to the depot. Starting it from the host and setting its source back to `host` are refused, on every way: a start, `humanitl agents source`, `humanitl config set`, the settings of the app and `ChangeSetting`. A policy may only name the depot; one that names the host is refused itself.
+**Auslöser.** A company policy fixes the source of this agent to the depot. Starting it from the host and setting its source back to `host` are refused, on every way: a start, `humanitl agents source`, `humanitl config set`, the settings of the app and `ChangeSetting`. A policy may only name the depot; one that names the host is refused itself. The same code refuses a write of any other setting a company policy fixes to one value, through `SetConfig` or `humanitl config set`; such a setting is read only in every client, and the sentence names the key and the policy.
 
 **Fix.** None. The policy decides; ask whoever manages it.
 

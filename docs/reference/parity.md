@@ -28,7 +28,7 @@ Eine RPC ohne CLI-Zeile und ohne Ausnahme bricht den CI-Job
 | `Humanitl.Egress` | `humanitl egress auth remove`<br>`humanitl egress auth set`<br>`humanitl egress check`<br>`humanitl egress status` | fehlt |
 | `Humanitl.Exec` | `humanitl sandbox exec` | `features/sandbox/widgets/terminal_tabs` |
 | `Humanitl.GetBody` | `humanitl flows show --body` | `features/history/history_detail` |
-| `Humanitl.GetConfig` | Ausnahme | `features/settings/settings_overlay` |
+| `Humanitl.GetConfig` | `humanitl config catalog`<br>`humanitl config catalog --project` | `features/settings/settings_overlay` |
 | `Humanitl.GetFlow` | `humanitl flows show` | `features/history/history_detail` |
 | `Humanitl.GetInfo` | `humanitl daemon status` | `features/shell/connection_gate` |
 | `Humanitl.GetSessionSummary` | `humanitl sessions summary` | fehlt |
@@ -58,5 +58,4 @@ Eine RPC ohne CLI-Zeile und ohne Ausnahme bricht den CI-Job
 
 | RPC | Begründung |
 |---|---|
-| `Humanitl.GetConfig` | CLI liest und schreibt die Konfiguration lokal über denselben Lader wie der Daemon; die Oberfläche nutzt beide RPCs seit HUM-069, die Anbindung der Kommandozeile folgt mit HUM-170. |
 | `Humanitl.SetConfig` | CLI liest und schreibt die Konfiguration lokal über denselben Lader wie der Daemon; die Oberfläche nutzt beide RPCs seit HUM-069, die Anbindung der Kommandozeile folgt mit HUM-170. |

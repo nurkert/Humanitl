@@ -1,56 +1,13 @@
 /// One setting as the overlay knows it: where it stands, what it is called,
-/// what finds it, and what draws it (HUM-404).
+/// what finds it, and what draws it (HUM-404). Where it stands, what it is
+/// called and what finds it come from the catalog of the daemon (HUM-534);
+/// the app adds only what draws it.
 library;
 
 import 'package:flutter/widgets.dart';
 
 import '../../../core/domain/domain.dart';
 import '../../../core/shortcuts/shortcut_catalog.dart';
-import '../../../l10n/l10n.dart';
-
-/// The categories of the overlay, in the order of the left column.
-enum SettingsCategory {
-  /// The saved model servers, each with endpoint, models and key, and who
-  /// uses which one (HUM-405).
-  models,
-
-  /// The coding agent a new session starts.
-  agent,
-
-  /// The project folder and where the agent writes.
-  sandbox,
-
-  /// How long a held request waits and where it is asked.
-  requests,
-
-  /// Language, appearance, scale and notifications of this window.
-  interface,
-
-  /// Every keyboard shortcut of the application, read only (HUM-420).
-  shortcuts,
-
-  /// The certificates the daemon trusts.
-  network,
-
-  /// An intercepting proxy of the person behind Humanitl (HUM-511).
-  egress,
-
-  /// The background service itself: version, updates, `config.toml`.
-  daemon;
-
-  /// The name in the left column and over the page.
-  String title(AppLocalizations l10n) => switch (this) {
-    SettingsCategory.models => l10n.settingsCategoryModels,
-    SettingsCategory.agent => l10n.settingsCategoryAgent,
-    SettingsCategory.sandbox => l10n.settingsCategorySandbox,
-    SettingsCategory.requests => l10n.settingsCategoryRequests,
-    SettingsCategory.interface => l10n.settingsCategoryInterface,
-    SettingsCategory.shortcuts => l10n.settingsCategoryShortcuts,
-    SettingsCategory.network => l10n.settingsCategoryNetwork,
-    SettingsCategory.egress => l10n.settingsCategoryEgress,
-    SettingsCategory.daemon => l10n.settingsCategoryDaemon,
-  };
-}
 
 /// The ids of the rows that are not a key of `config.toml`.
 ///
@@ -64,6 +21,10 @@ abstract final class SettingIds {
 
   /// The version of the daemon the window is connected to.
   static const String daemonVersion = 'daemon.version';
+
+  /// The keyboard shortcuts of the app (HUM-420); the catalog names the
+  /// category and this row, the app the shortcuts in it.
+  static const String shortcuts = 'shortcuts';
 
   /// The restart of the daemon, with the control of the shell (HUM-404).
   static const String daemonRestart = 'daemon.restart';
@@ -117,7 +78,25 @@ class SettingsPageData {
 /// Draws the row of an entry.
 typedef SettingBuilder = Widget Function(SettingsPageData data);
 
-/// One entry of the register.
+/// What the app adds to an entry of the catalog: the builder of its row.
+@immutable
+class SettingRowSpec {
+  /// Creates the spec; [build] null means another row draws this one along
+  /// with its own (the endpoint under the detail view of a server, HUM-405).
+  const SettingRowSpec({this.build, this.drawnWhen});
+
+  /// Draws the row, or null.
+  final SettingBuilder? build;
+
+  /// Whether the page has what the row needs, such as the restart control
+  /// of the shell; null means always. Search does not ask: in the app the
+  /// shell is always there.
+  final bool Function(SettingsPageData data)? drawnWhen;
+}
+
+/// One entry of the overlay: a catalog entry of the daemon with the builder
+/// of its row, or one of the app's own read-only rows (the keyboard
+/// shortcuts).
 ///
 /// Search, the left column and the jump of a `ChangeSetting` fix read the
 /// same entry; the row reads its name and help from it as well, so what the
@@ -129,52 +108,62 @@ class SettingEntry {
     required this.id,
     required this.category,
     required this.title,
-    required this.keywords,
+    this.keywords = '',
     this.help,
     this.details,
     this.nextSession = false,
-    this.shownWhen,
-    this.drawnWhen,
+    this.lock,
     this.build,
+    this.drawnWhen,
   });
+
+  /// The entry [catalog] with the builder of [spec].
+  factory SettingEntry.fromCatalog(
+    SettingsCatalogEntry catalog,
+    SettingRowSpec? spec,
+  ) => SettingEntry(
+    id: catalog.id,
+    category: catalog.category,
+    title: catalog.title,
+    help: catalog.help.isEmpty ? null : catalog.help,
+    details: catalog.details.isEmpty ? null : catalog.details,
+    keywords: catalog.keywords.join(', '),
+    nextSession: catalog.nextSession,
+    lock: catalog.lock,
+    build: spec?.build,
+    drawnWhen: spec?.drawnWhen,
+  );
 
   /// The configuration key, or one of [SettingIds].
   final String id;
 
-  /// The page the row stands on.
-  final SettingsCategory category;
+  /// The id of the category the row stands on.
+  final String category;
 
   /// The name of the setting.
-  final String Function(AppLocalizations l10n) title;
+  final String title;
 
   /// One short sentence under the name, or null.
-  final String? Function(AppLocalizations l10n)? help;
+  final String? help;
 
   /// The longer explanation behind the info button, or null.
-  final String Function(AppLocalizations l10n)? details;
+  final String? details;
 
   /// Comma-separated words that also find the entry; never shown.
-  final String Function(AppLocalizations l10n) keywords;
+  final String keywords;
 
   /// Whether a running session keeps the old value, so the row says that the
   /// change applies from the next one. Only where it is true.
   final bool nextSession;
 
-  /// Whether the daemon offers the setting at all; null means always. A row
-  /// the daemon does not offer is neither drawn nor found.
-  final bool Function(DaemonInfo? info)? shownWhen;
-
-  /// Whether the page has what the row needs, such as the restart control
-  /// of the shell; null means always. Search does not ask: in the app the
-  /// shell is always there.
-  final bool Function(SettingsPageData data)? drawnWhen;
+  /// The lock of a company policy: the row is read only and names it.
+  final SettingsLock? lock;
 
   /// Draws the row. Null for an entry another entry's builder draws along
   /// with its own, such as the model and the access key under the endpoint
   /// in the detail view of a server (HUM-405).
   final SettingBuilder? build;
 
-  /// Whether the entry stands in the overlay for a daemon described by
-  /// [info].
-  bool shownFor(DaemonInfo? info) => shownWhen?.call(info) ?? true;
+  /// Whether the page has what the row needs; null means always.
+  final bool Function(SettingsPageData data)? drawnWhen;
 }

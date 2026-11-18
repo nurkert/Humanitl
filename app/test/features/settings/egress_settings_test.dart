@@ -194,20 +194,12 @@ void main() {
     expect(hint, findsOneWidget);
   }, variant: _linux);
 
-  test('a daemon before contract 1.41 shows no decision proxy rows', () {
-    const DaemonInfo old = DaemonInfo(
-      daemonVersion: '0.1.0',
-      protoMajor: 1,
-      protoMinor: 40,
-      capabilities: <String>[],
-      sessionId: '',
-    );
-    expect(settingsOf(SettingsCategory.egress, old), isEmpty);
+  test('the decision proxy rows come from the catalog, in its order', () async {
+    final SettingsView view = await fakeSettingsView();
     expect(
-      settingsOf(
-        SettingsCategory.egress,
-        old.copyWith(protoMinor: 41),
-      ).map((SettingEntry entry) => entry.id),
+      view
+          .inCategory(SettingsCategory.egress)
+          .map((SettingEntry entry) => entry.id),
       <String>[
         FormKeys.egressProxy,
         FormKeys.egressProxyCa,
