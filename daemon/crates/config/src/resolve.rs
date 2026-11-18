@@ -120,6 +120,23 @@ pub fn resolve(
     load(&sources_for(selection, cwd, env, cli)?)
 }
 
+/// [`resolve`] mit der Projektwahl als Ebene über dem Projekt-Profil
+/// (HUM-532).
+///
+/// # Errors
+///
+/// Wie [`resolve`], dazu `CONFIG_024` für eine Wahl, die einen Schlüssel
+/// außerhalb der Liste trägt oder die Untergrenze der Isolation senkt.
+pub fn resolve_with_choice(
+    selection: &ProfileSelection,
+    cwd: Option<&Path>,
+    env: &Env,
+    cli: &[(String, String)],
+    choice: Option<&crate::ProjectChoice>,
+) -> Result<Resolved, Diagnostic> {
+    load(&sources_for(selection, cwd, env, cli)?.with_project_choice(choice.cloned()))
+}
+
 /// Die Quellen, die eine Profilauswahl bestimmt, ohne sie schon zu laden.
 ///
 /// Der Einstieg für alle, die vor dem Laden noch etwas an den Quellen ändern
@@ -179,6 +196,7 @@ pub fn sources_with_global(
         global_toml: global.clone(),
         profiles: layers_or_refuse(&paths, requested)?,
         profile_project: None,
+        project_choice: None,
         env_prefix: DEFAULT_ENV_PREFIX,
         env: env.clone(),
         cli: cli.to_vec(),
@@ -198,6 +216,7 @@ pub fn sources_with_global(
         global_toml: global,
         profiles: layers_or_refuse(&paths, &selected)?,
         profile_project: project,
+        project_choice: None,
         env_prefix: DEFAULT_ENV_PREFIX,
         env: env.clone(),
         cli: cli.to_vec(),

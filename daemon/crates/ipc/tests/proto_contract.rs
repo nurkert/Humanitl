@@ -1596,6 +1596,15 @@ const EXPECTED_RPCS: &[(&str, &str, &str, bool, bool)] = &[
         false,
         false,
     ),
+    // Das Projektregister (HUM-532): Liste, ein Projekt, Projektwahl; kein
+    // Aufruf löscht etwas.
+    (
+        "Projects",
+        ".humanitl.v1.ProjectsRequest",
+        ".humanitl.v1.ProjectsResponse",
+        false,
+        false,
+    ),
 ];
 
 #[test]

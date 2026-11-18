@@ -244,6 +244,9 @@ pub fn server_choice_to_proto(
         ServerSource::Project(path) => (Source::Project, path.display().to_string()),
         ServerSource::Profile(name) => (Source::Profile, name.clone()),
         ServerSource::Config => (Source::Default, "config.toml".to_owned()),
+        // Die Projektwahl ist die Wahl eines Menschen auf dem Host wie
+        // `config.toml` (HUM-532); sie braucht keine Bestätigung je Ordner.
+        ServerSource::ProjectChoice => (Source::Default, "project choice".to_owned()),
         ServerSource::Default => (Source::Default, String::new()),
     };
     let project_path = match &choice.source {

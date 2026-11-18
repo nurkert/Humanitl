@@ -68,6 +68,8 @@ use serde_json::json;
 use std::io::Write as _;
 
 use crate::cli::RunArgs;
+
+mod wish;
 use crate::cmd::{Context, EXIT_CHECK, EXIT_USER, Failure, from_proto, status_diagnostic};
 
 /// Ab dieser Minor kennt der Daemon `auto` in `Start.sandbox_mode`
@@ -82,16 +84,20 @@ const AUTO_MODE_MINOR: u32 = 27;
 /// `disposable` sein kann, aber nie `auto`.
 fn start_mode(
     args: &RunArgs,
-    configured: humanitl_config::SandboxMode,
+    wished: Option<humanitl_config::SandboxMode>,
     daemon_minor: u32,
 ) -> String {
     use humanitl_config::SandboxMode;
+    // Nur ein Wunsch dieses Laufs reist; ohne ihn löst der Daemon auf, mit
+    // der Projektwahl (HUM-532, [`wish`]).
     let mode = if args.disposable {
         SandboxMode::Disposable
     } else if args.direct {
         SandboxMode::Direct
+    } else if let Some(wished) = wished {
+        wished
     } else {
-        configured
+        return String::new();
     };
     if mode == SandboxMode::Auto && daemon_minor < AUTO_MODE_MINOR {
         return String::new();
@@ -142,10 +148,6 @@ pub(crate) async fn launch(
     // Zuerst und immer: Das Projekt-Profil wird gelesen, bevor irgendetwas
     // startet.
     let resolved = ctx.config()?;
-    let config = &resolved.config;
-    if launch.go {
-        crate::cmd::go::refuse_ask_terminal(config)?;
-    }
     ctx.render.detail(&session_lines(&resolved, args));
 
     // Beide Seiten müssen ein Terminal sein: Die Tasten kommen von `stdin`,
@@ -153,9 +155,23 @@ pub(crate) async fn launch(
     // samt seiner Steuerfolgen in eine Datei, und niemand sähe die Frage.
     let on_terminal = std::io::IsTerminal::is_terminal(&std::io::stdin())
         && std::io::IsTerminal::is_terminal(&std::io::stderr());
-    refuse_terminal_ask(config, args, on_terminal)?;
-
-    let mut client = ctx.connect().await?;
+    let named_config = ctx.config_file.is_some();
+    // Vor dem Verbinden nur, was keine Projektwahl mehr ändert: ein Wunsch
+    // dieses Laufs. Ein Frage-Modus aus `config.toml` kann die Wahl des
+    // Projekts überstimmen und wird erst danach geprüft (HUM-532); ohne
+    // Daemon gilt die Ablehnung trotzdem, statt `DAEMON_001`.
+    let local = terminal_refusals(&resolved.config, launch.go, args, on_terminal);
+    let deferred = match local {
+        Err(refused) if wish::per_run(&resolved, "hold.ask_mode", named_config) => {
+            return Err(refused);
+        }
+        Err(refused) => Some(refused),
+        Ok(()) => None,
+    };
+    let mut client = ctx
+        .connect()
+        .await
+        .map_err(|unreachable| deferred.unwrap_or(unreachable))?;
     let info = client
         .get_info(())
         .await
@@ -163,27 +179,38 @@ pub(crate) async fn launch(
         .into_inner();
     crate::cmd::daemon::check_proto(&info)?;
 
+    let (work_dir, work_dir_source) = ctx.work_dir(&resolved);
+    let chosen = Box::pin(wish::chosen_ask_mode(
+        &mut client,
+        &resolved,
+        named_config,
+        &work_dir,
+        info.proto_minor,
+    ))
+    .await;
+    let effective = with_chosen_ask_mode(&resolved, chosen, launch.go, args, on_terminal)?;
+    let config = &effective;
+
     // Der gespeicherte Ordner, `--work` für diesen einen Aufruf, und das
     // aktuelle Verzeichnis nur, wenn beides fehlt (HUM-293). Die Quelle geht
     // mit, damit der Daemon sie in einem `SANDBOX_006` nennt.
-    let (work_dir, work_dir_source) = ctx.work_dir(&resolved);
     let start = v1::sandbox_request::Start {
         // Das bwrap-Profil bleibt der Konfiguration überlassen; unter
         // `humanitl run` benennt `--profile` das Profil der Sitzung
         // (`backlog/CONVENTIONS.md` 4.23).
         profile: String::new(),
         work_dir: work_dir.display().to_string(),
-        work_mode: work_mode_name(config.sandbox.work_mode).to_owned(),
+        work_mode: wish::work_mode(&resolved, named_config),
         command: args
             .cmd
             .iter()
             .map(|arg| arg.to_string_lossy().into_owned())
             .collect(),
         session_profile: ctx.profile_flag().unwrap_or_default().to_owned(),
-        ask_mode: ask_mode_name(config.hold.ask_mode).to_owned(),
+        ask_mode: wish::ask_mode(&resolved, named_config),
         cli_overrides: session_overrides(ctx, &resolved),
         work_dir_source: Some(humanitl_ipc::work_dir::source_to_proto(&work_dir_source)),
-        sandbox_mode: start_mode(args, config.sandbox.mode, info.proto_minor),
+        sandbox_mode: start_mode(args, wish::mode(&resolved, named_config), info.proto_minor),
         // `--llm NAME`: der gespeicherte Server für genau diesen Lauf
         // (HUM-400). Ein älterer Daemon kennt das Feld nicht und nähme die
         // Wahl ohne ihn; das wäre ein anderer Server als der verlangte.
@@ -194,16 +221,7 @@ pub(crate) async fn launch(
         cloud_notice_shown: None,
     };
 
-    let session = json!({
-        "work_dir": work_dir.display().to_string(),
-        "profile": ctx.profile_flag().unwrap_or("default"),
-        "ask_mode": ask_mode_name(config.hold.ask_mode),
-        "command": args
-            .cmd
-            .iter()
-            .map(|arg| arg.to_string_lossy().into_owned())
-            .collect::<Vec<_>>(),
-    });
+    let session = session_value(ctx, args, &work_dir, config);
 
     // Vor dem ersten Start mit einem Agenten, dessen Inferenz an einen
     // Anbieter außerhalb dieses Rechners geht, einmal nachfragen (HUM-516).
@@ -1116,6 +1134,58 @@ fn where_decisions_happen(config: &Config) -> String {
 ///
 /// Entschieden wird am **wirksamen** Kommando: Wer `-- bash` schreibt, startet
 /// kein TUI, auch wenn der Adapter der Sitzung `opencode` heißt.
+/// Was `--json` über diesen Lauf sagt, bevor er startet.
+fn session_value(
+    ctx: &Context,
+    args: &RunArgs,
+    work_dir: &std::path::Path,
+    config: &Config,
+) -> serde_json::Value {
+    json!({
+        "work_dir": work_dir.display().to_string(),
+        "profile": ctx.profile_flag().unwrap_or("default"),
+        "ask_mode": ask_mode_name(config.hold.ask_mode),
+        "command": args
+            .cmd
+            .iter()
+            .map(|arg| arg.to_string_lossy().into_owned())
+            .collect::<Vec<_>>(),
+    })
+}
+
+/// Die Konfiguration dieses Laufs mit dem Frage-Modus der Projektwahl, wenn
+/// sie einen festlegt (HUM-532), und die Ablehnungen von `terminal` gegen
+/// genau diesen Modus: `terminal` aus `config.toml` mit der Wahl `ui` startet,
+/// die Wahl `terminal` unter `go` nicht.
+fn with_chosen_ask_mode(
+    resolved: &Resolved,
+    chosen: Option<AskMode>,
+    go: bool,
+    args: &RunArgs,
+    on_terminal: bool,
+) -> Result<Box<Config>, Failure> {
+    let mut config = Box::new(resolved.config.clone());
+    if let Some(chosen) = chosen {
+        config.hold.ask_mode = chosen;
+    }
+    terminal_refusals(&config, go, args, on_terminal)?;
+    Ok(config)
+}
+
+/// `CLI_002` für einen Frage-Modus `terminal`, den dieser Lauf nicht tragen
+/// kann: unter `go` nie, sonst nicht ohne Terminal.
+fn terminal_refusals(
+    config: &Config,
+    go: bool,
+    args: &RunArgs,
+    on_terminal: bool,
+) -> Result<(), Failure> {
+    if go {
+        crate::cmd::go::refuse_ask_terminal(config)?;
+    }
+    refuse_terminal_ask(config, args, on_terminal)
+}
+
 fn refuse_terminal_ask(config: &Config, args: &RunArgs, on_terminal: bool) -> Result<(), Failure> {
     if config.hold.ask_mode != AskMode::Terminal {
         return Ok(());
@@ -1534,6 +1604,36 @@ mod tests {
     }
 
     /// Kein Kommando hinter `--`.
+    /// HUM-532, Codex: `terminal` aus `config.toml` und die Projektwahl
+    /// `ui`: `go` startet, denn die Wahl gewinnt; ohne Wahl bleibt es
+    /// `CLI_002`, und die Wahl `terminal` lehnt `go` ebenso ab.
+    ///
+    /// Mutationsbeweis: Prüfte `with_chosen_ask_mode` den lokalen Modus statt
+    /// des gewählten, käme `CLI_002`, und der Test wird rot.
+    #[test]
+    fn the_chosen_ask_mode_decides_the_terminal_refusal() {
+        let dir = tempfile::tempdir().unwrap();
+        let file = dir.path().join("config.toml");
+        std::fs::write(&file, "[hold]\nask_mode = \"terminal\"\n").unwrap();
+        let resolved = humanitl_config::load(&humanitl_config::Sources {
+            global_toml: Some(file),
+            ..humanitl_config::Sources::empty()
+        })
+        .unwrap();
+        let go = true;
+        let chosen = super::with_chosen_ask_mode(&resolved, Some(AskMode::Ui), go, &no_cmd(), true)
+            .expect("the project choice wins over config.toml");
+        assert_eq!(chosen.hold.ask_mode, AskMode::Ui);
+        let refused = super::with_chosen_ask_mode(&resolved, None, go, &no_cmd(), true)
+            .expect_err("terminal from config.toml without a choice");
+        assert_eq!(refused.diagnostic.code.as_str(), "CLI_002");
+        let ui = humanitl_config::load(&humanitl_config::Sources::empty()).unwrap();
+        let refused =
+            super::with_chosen_ask_mode(&ui, Some(AskMode::Terminal), go, &no_cmd(), true)
+                .expect_err("a chosen terminal under go");
+        assert_eq!(refused.diagnostic.code.as_str(), "CLI_002");
+    }
+
     fn no_cmd() -> RunArgs {
         RunArgs {
             cmd: Vec::new(),
@@ -1779,28 +1879,31 @@ mod tests {
             yes: false,
         };
         assert_eq!(
-            start_mode(&args(false, false), SandboxMode::Auto, 27),
+            start_mode(&args(false, false), Some(SandboxMode::Auto), 27),
             "auto"
         );
-        assert_eq!(start_mode(&args(false, false), SandboxMode::Auto, 26), "");
         assert_eq!(
-            start_mode(&args(false, false), SandboxMode::Direct, 27),
+            start_mode(&args(false, false), Some(SandboxMode::Auto), 26),
+            ""
+        );
+        assert_eq!(
+            start_mode(&args(false, false), Some(SandboxMode::Direct), 27),
             "direct"
         );
         assert_eq!(
-            start_mode(&args(false, false), SandboxMode::Disposable, 26),
+            start_mode(&args(false, false), Some(SandboxMode::Disposable), 26),
             "disposable"
         );
         assert_eq!(
-            start_mode(&args(true, false), SandboxMode::Direct, 27),
+            start_mode(&args(true, false), Some(SandboxMode::Direct), 27),
             "disposable"
         );
         assert_eq!(
-            start_mode(&args(false, true), SandboxMode::Auto, 27),
+            start_mode(&args(false, true), Some(SandboxMode::Auto), 27),
             "direct"
         );
         assert_eq!(
-            start_mode(&args(false, true), SandboxMode::Disposable, 26),
+            start_mode(&args(false, true), Some(SandboxMode::Disposable), 26),
             "direct"
         );
         assert_eq!(SandboxMode::default(), SandboxMode::Auto);

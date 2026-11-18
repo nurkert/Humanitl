@@ -4568,5 +4568,13 @@
   "diagAGENT018Title": "Agent depot in use",
   "@diagAGENT018Title": {"description": "Title of the diagnostic AGENT_018 (docs/DIAGNOSTICS.md, HUM-518): remove was asked while a session holds the depot's reservation."},
   "diagAGENT018Why": "A running session uses the depot of this agent, so it is not removed. End the session first.",
-  "@diagAGENT018Why": {"description": "Generic cause of AGENT_018. Stands in the cause slot only when the diagnostic carries no sentence of the daemon's own (HUM-052)."}
+  "@diagAGENT018Why": {"description": "Generic cause of AGENT_018. Stands in the cause slot only when the diagnostic carries no sentence of the daemon's own (HUM-052)."},
+  "diagSANDBOX053Title": "Start without a project folder",
+  "@diagSANDBOX053Title": {"description": "Title of the diagnostic SANDBOX_053 (docs/DIAGNOSTICS.md, HUM-532): a start names no project folder, and the daemon no longer takes its own working directory."},
+  "diagSANDBOX053Why": "The start names no project folder, and Humanitl does not pick one for you. Choose a folder in the start window, or start inside the project.",
+  "@diagSANDBOX053Why": {"description": "Generic cause of SANDBOX_053. Stands in the cause slot only when the diagnostic carries no sentence of the daemon's own (HUM-052)."},
+  "diagCONFIG024Title": "Project choice not allowed",
+  "@diagCONFIG024Title": {"description": "Title of the diagnostic CONFIG_024 (docs/DIAGNOSTICS.md, HUM-532): the per-project choice carries a key outside its list, a value a company policy locks, or a lower isolation floor."},
+  "diagCONFIG024Why": "The choice for this project carries a setting it may not hold, a value your company fixes, or a lower isolation than the settings beneath it require. Nothing was saved, or the start stopped.",
+  "@diagCONFIG024Why": {"description": "Generic cause of CONFIG_024. Stands in the cause slot only when the diagnostic carries no sentence of the daemon's own (HUM-052)."}
 }

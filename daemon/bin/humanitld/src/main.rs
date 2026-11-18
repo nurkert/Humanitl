@@ -1418,7 +1418,10 @@ fn session_meta(session: SessionId, config: &Config) -> SessionMeta {
         started_at: SystemTime::now(),
         sandbox_profile: config.sandbox.profile.clone(),
         llm_endpoint: config.llm.endpoint.as_ref().map(ToString::to_string),
-        work_dir: work_dir_of(config).display().to_string(),
+        // Kein Ordner, bevor ein Start ihn nennt (HUM-532): Das
+        // Arbeitsverzeichnis des Daemons ist nie ein Projekt. Der erste
+        // Start trägt Ordner, Agent und Projekt der Sitzung ein.
+        work_dir: String::new(),
         agent: config.agent.adapter.clone(),
     }
 }

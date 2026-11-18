@@ -223,6 +223,7 @@ async fn run(ctx: &Context, command: Cmd) -> Result<u8, Failure> {
         Cmd::Intercept { cmd } => cmd::intercept::run(ctx, &cmd).await,
         Cmd::Egress { cmd } => cmd::egress::run(ctx, &cmd).await,
         Cmd::Agents { cmd } => cmd::agents::run(ctx, &cmd).await,
+        Cmd::Projects { cmd } => cmd::projects::run(ctx, &cmd).await,
     }
 }
 

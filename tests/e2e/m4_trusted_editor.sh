@@ -420,6 +420,15 @@ notifications = false
 [audit]
 anchor_every = 5
 
+[sandbox]
+# Der Projektordner, den ein Mensch gewählt hat. Seit HUM-532 ist das
+# Arbeitsverzeichnis des Daemons nie mehr die Vorgabe: Ohne diesen Eintrag
+# meldete die Projektzeile des Setups `CONFIG_013`, die Shell holte sich den
+# Setup-Bildschirm einmal nach vorn (`_offerSetup`), nachdem der Treiber schon
+# auf die Warteschlange geschaltet hatte, und die gehaltene Anfrage erschien
+# dort nie. `humanitl run` in Schritt 6 nimmt denselben Ordner.
+work_dir = "$M4_PROJECT"
+
 [resolver]
 # Test-Hebel aus HUM-087, nur wirksam mit --allow-test-ca.
 overrides = { "$M4_HOST" = "$E2E_FAKE_ADDR" }

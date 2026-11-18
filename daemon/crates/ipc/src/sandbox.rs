@@ -117,6 +117,8 @@ use crate::summary::SummaryWatch;
 use crate::terminal::{HeldNotices, TerminalHub};
 use crate::v1;
 
+mod project;
+
 /// Der Name des Shims, wie er neben dem Daemon oder im Systempfad liegt.
 const SHIM_BINARY: &str = "humanitl-shim";
 
@@ -701,6 +703,9 @@ struct Inner {
     /// Die Ziehen eines Abbilds, die gerade laufen, nach ihrer Kennung
     /// (HUM-457); `cancel_image_pull` bricht über sie ab.
     image_pulls: crate::image_pulls::ImagePulls,
+    /// Das Projekt des letzten Starts im Register (HUM-532); `Projects.list`
+    /// nennt daran die laufende Sitzung und wartende Änderungen.
+    project: Mutex<Option<humanitl_core::ProjectId>>,
 }
 
 /// Woran der Dienst hängt, wenn eine Sitzung startet.
@@ -867,6 +872,7 @@ impl SandboxService {
                 backend: ports.backend,
                 terminal: ports.terminal,
                 image_pulls: crate::image_pulls::ImagePulls::default(),
+                project: Mutex::new(None),
             }),
         }
     }
@@ -1874,9 +1880,10 @@ impl Inner {
             }
         };
 
-        if !self.settle_session(&start, work_dir, &plan, &tx).await {
+        // Erst das Projekt (HUM-532), dann die Konfiguration der Sitzung.
+        let Some(project) = self.settle_session(&start, work_dir, &plan, &tx).await else {
             return;
-        }
+        };
 
         let starting = {
             let this = Arc::clone(&self);
@@ -1932,7 +1939,8 @@ impl Inner {
                         break;
                     }
                 }
-                self.accompany(&plan, run, output_rx, llm, &tx).await;
+                self.accompany(&plan, &project, run, output_rx, llm, &tx)
+                    .await;
             }
             Ok(Err(diagnostic)) => {
                 let _ = tx.send(diagnostic_event(&diagnostic)).await;
@@ -1968,6 +1976,7 @@ impl Inner {
     async fn accompany(
         self: &Arc<Self>,
         plan: &v1::sandbox_request::Plan,
+        project: &project::StartProject,
         run: Launched,
         output: std::sync::mpsc::Receiver<humanitl_sandbox::OutputChunk>,
         llm: Option<LlmWatch>,
@@ -1976,7 +1985,7 @@ impl Inner {
         let watch = run.watch;
         let sandbox = run.sandbox;
         let disposable = run.disposable;
-        self.attend(plan, output, llm, tx).await;
+        self.attend(plan, project, output, llm, tx).await;
         match disposable {
             Some(waiting) => self.settle_disposable(waiting, tx).await,
             None => self.summarize(watch, sandbox, tx).await,
@@ -2050,6 +2059,7 @@ impl Inner {
     async fn attend(
         self: &Arc<Self>,
         plan: &v1::sandbox_request::Plan,
+        project: &project::StartProject,
         output: std::sync::mpsc::Receiver<humanitl_sandbox::OutputChunk>,
         mut llm: Option<LlmWatch>,
         tx: &mpsc::Sender<v1::SandboxEvent>,
@@ -2062,6 +2072,11 @@ impl Inner {
             let _ = tx.send(log_event(line)).await;
         }
         if !self.check_isolation_or_kill(plan, tx).await {
+            return;
+        }
+        // Der Ordner ist eingehängt: noch derselbe, und der Start steht im
+        // Register, sonst endet die Sandbox hier (HUM-532).
+        if !self.settle_project(plan, project, tx).await {
             return;
         }
         let this = Arc::clone(self);
@@ -2109,8 +2124,9 @@ impl Inner {
         self.report_exit(&first, tx).await;
     }
 
-    /// Löst die Konfiguration dieser Sitzung auf, sendet ihre Befunde und sagt,
-    /// ob der Start weitergehen darf.
+    /// Prüft das Projekt dieses Starts ([`Inner::start_project`]), löst die
+    /// Konfiguration der Sitzung mit seiner Projektwahl auf, sendet ihre
+    /// Befunde und gibt das Projekt zurück, wenn der Start weitergehen darf.
     ///
     /// Auflösen liest Dateien und gehört deshalb auf einen eigenen Faden.
     async fn settle_session(
@@ -2119,19 +2135,24 @@ impl Inner {
         work_dir: Option<PathBuf>,
         plan: &v1::sandbox_request::Plan,
         tx: &mpsc::Sender<v1::SandboxEvent>,
-    ) -> bool {
+    ) -> Option<project::StartProject> {
+        let project = self.project_or_refuse(plan, tx).await?;
         let this = Arc::clone(self);
         let wish = start.clone();
-        let applied =
-            tokio::task::spawn_blocking(move || this.apply_session(&wish, work_dir)).await;
+        let choice = project.choice.clone();
+        let chosen = choice.clone();
+        let applied = tokio::task::spawn_blocking(move || {
+            this.apply_session_with_choice(&wish, work_dir, chosen)
+        })
+        .await;
         match applied {
             Ok(Ok(diagnostics)) => {
                 for diagnostic in &diagnostics {
                     if tx.send(diagnostic_event(diagnostic)).await.is_err() {
-                        return false;
+                        return None;
                     }
                 }
-                true
+                Some(project)
             }
             Ok(Err(diagnostic)) => {
                 let _ = tx.send(diagnostic_event(&diagnostic)).await;
@@ -2143,19 +2164,21 @@ impl Inner {
                     let this = Arc::clone(self);
                     let wish = start.clone();
                     failed.cloud_inference = tokio::task::spawn_blocking(move || {
-                        this.check_cloud_inference(&wish).ok().flatten()
+                        this.check_cloud_inference_with(&wish, choice)
+                            .ok()
+                            .flatten()
                     })
                     .await
                     .ok()
                     .flatten();
                 }
                 let _ = tx.send(status_event(failed)).await;
-                false
+                None
             }
             Err(error) => {
                 let diagnostic = joined_failed(&error);
                 let _ = tx.send(diagnostic_event(&diagnostic)).await;
-                false
+                None
             }
         }
     }
@@ -2186,12 +2209,25 @@ impl Inner {
     ///
     /// `CONFIG_001` bis `CONFIG_003`, wenn Profil, Frage-Modus oder ein
     /// Konfigurationswert des Clients nicht durchkommen.
+    #[cfg(test)]
     fn apply_session(
         &self,
         start: &v1::sandbox_request::Start,
         work_dir: Option<PathBuf>,
     ) -> Result<Vec<Diagnostic>, Diagnostic> {
-        let request = session_request(start, work_dir)?;
+        self.apply_session_with_choice(start, work_dir, None)
+    }
+
+    /// [`Inner::apply_session`] mit der Projektwahl des Ordners als Ebene
+    /// über dem Projekt-Profil (HUM-532).
+    fn apply_session_with_choice(
+        &self,
+        start: &v1::sandbox_request::Start,
+        work_dir: Option<PathBuf>,
+        choice: Option<humanitl_config::ProjectChoice>,
+    ) -> Result<Vec<Diagnostic>, Diagnostic> {
+        let mut request = session_request(start, work_dir)?;
+        request.project_choice = choice;
         let resolved = self.resolver.resolve(&request)?;
         // Geht die Inferenz an einen Anbieter außerhalb dieses Rechners, und
         // hat niemand diese Kombination bestätigt, startet nichts, bis der
@@ -2211,8 +2247,19 @@ impl Inner {
         &self,
         start: &v1::sandbox_request::Start,
     ) -> Result<Option<v1::CloudInference>, Diagnostic> {
+        self.check_cloud_inference_with(start, None)
+    }
+
+    /// [`Inner::check_cloud_inference`] mit der Projektwahl des Starts, der
+    /// gerade an `LLM_011` scheiterte (HUM-532).
+    fn check_cloud_inference_with(
+        &self,
+        start: &v1::sandbox_request::Start,
+        choice: Option<humanitl_config::ProjectChoice>,
+    ) -> Result<Option<v1::CloudInference>, Diagnostic> {
         let work_dir = non_empty(&start.work_dir).map(PathBuf::from);
-        let request = session_request(start, work_dir)?;
+        let mut request = session_request(start, work_dir)?;
+        request.project_choice = choice;
         let resolved = self.resolver.resolve(&request)?;
         Ok(crate::cloud::status(&self.paths, &resolved.config))
     }
@@ -4268,30 +4315,18 @@ impl Inner {
 
     /// Das Projektverzeichnis dieses Wunsches, sonst das der laufenden
     /// Sandbox, sonst das des Starts, der gerade anläuft, sonst
-    /// `sandbox.work_dir` der Konfiguration, sonst [`Self::default_work_dir`].
+    /// `sandbox.work_dir` der Konfiguration, sonst der leere Pfad.
+    ///
+    /// Der leere Pfad heißt „niemand hat gewählt": Das Setup verlangt dann
+    /// eine Auswahl (`CONFIG_013`), und ein Start lehnt mit `SANDBOX_053` ab
+    /// (HUM-532). Das Arbeitsverzeichnis des Daemons ist nie die Vorgabe: Ein
+    /// Starter des Desktops startet ihn irgendwo, und der Agent sähe einen
+    /// Ordner, den niemand gewählt hat (bis HUM-532 die Vorgabe aus HUM-262).
     fn work_dir(
         &self,
         config: &Config,
         choice: &PlanChoice,
         plan: &v1::sandbox_request::Plan,
-    ) -> PathBuf {
-        self.work_dir_with_cwd(
-            config,
-            choice,
-            plan,
-            std::env::current_dir().ok().as_deref(),
-        )
-    }
-
-    /// [`Self::work_dir`] mit dem Arbeitsverzeichnis als Argument statt aus dem
-    /// Prozess, damit ein Test die Vorgabe mit einem abgelehnten Verzeichnis
-    /// prüfen kann, ohne das Arbeitsverzeichnis aller Tests zu verstellen.
-    fn work_dir_with_cwd(
-        &self,
-        config: &Config,
-        choice: &PlanChoice,
-        plan: &v1::sandbox_request::Plan,
-        cwd: Option<&Path>,
     ) -> PathBuf {
         // Der Wunsch dieses Aufrufs, aber in der Fassung, die `check_work_dir`
         // aufgelöst hat: `remember` hat ihn unmittelbar davor abgelegt. Die
@@ -4309,11 +4344,7 @@ impl Inner {
         if let Some(starting) = choice.work_dir.clone() {
             return starting;
         }
-        config
-            .sandbox
-            .work_dir
-            .clone()
-            .unwrap_or_else(|| self.default_work_dir(cwd))
+        config.sandbox.work_dir.clone().unwrap_or_default()
     }
 
     /// Ob `work_src` der Ordner aus `sandbox.work_dir` ist (HUM-294): kein
@@ -4372,26 +4403,6 @@ impl Inner {
             }
             Ok(_) | Err(_) => WorkDirSource::ConfigFile(file),
         }
-    }
-
-    /// Die Vorgabe, wenn niemand einen Ordner genannt hat: das
-    /// Arbeitsverzeichnis des Daemons, aber nur, wenn ein Start es annähme.
-    ///
-    /// Der Daemon läuft als Nutzerdienst, und systemd startet ihn im
-    /// Heimatverzeichnis; eine Anwendung aus dem Menü des Desktops ebenso.
-    /// Ungeprüft wurde daraus der Projektordner `$HOME`, das Setup zeigte ihn
-    /// grün, und erst der Start verweigerte ihn mit `SANDBOX_006` (HUM-262).
-    /// Die Vorgabe geht deshalb durch dieselbe Regel, die der Start anlegt
-    /// ([`MountPolicy::check_work_dir`]), und keine strengere: Eine neue Regel
-    /// ist nicht das Ziel, nur dieselbe früher. Hält sie nicht, gibt es keine
-    /// Vorgabe: Der leere Pfad heißt „niemand hat gewählt", und das Setup
-    /// verlangt eine Auswahl (`CONFIG_013`), statt einen Ordner anzubieten,
-    /// den der Start ablehnt.
-    fn default_work_dir(&self, cwd: Option<&Path>) -> PathBuf {
-        let policy = MountPolicy::from_paths(&self.paths);
-        cwd.filter(|dir| dir.is_dir() && policy.check_work_dir(dir).is_ok())
-            .map(Path::to_path_buf)
-            .unwrap_or_default()
     }
 
     /// Der Modus dieses Wunsches, sonst der der laufenden Sandbox, sonst der
@@ -5285,6 +5296,9 @@ fn session_request(
         // ihre Durchreiche, ihr Schlüssel, ihr Ziel der Maske. Ein Name ohne
         // Eintrag lehnt hier ab (`CONFIG_021`).
         llm_server: non_empty(&start.llm_server),
+        // Die Projektwahl kommt nie aus der Anfrage, sondern aus dem
+        // Register (HUM-532); der Start setzt sie danach.
+        project_choice: None,
     })
 }
 
@@ -6107,46 +6121,25 @@ mod tests {
         assert_eq!(refused.code, codes::LLM_009);
     }
 
-    /// HUM-262: Die Vorgabe ist nie ein Ordner, den der Start ablehnt.
-    ///
-    /// Der Daemon läuft als Nutzerdienst im Heimatverzeichnis. Das enthält die
-    /// Konfiguration von Humanitl, also gibt es dann keine Vorgabe, und das
-    /// Setup verlangt eine Auswahl. Ein Arbeitsverzeichnis, das die Regel
-    /// annimmt, bleibt die Vorgabe wie bisher.
+    /// HUM-532: Ohne gewählten Ordner nennt der Plan keinen, gleich in
+    /// welchem Verzeichnis der Daemon läuft; das Setup verlangt dann eine
+    /// Auswahl, statt das Arbeitsverzeichnis des Daemons vorzuschlagen.
     #[test]
-    fn the_default_folder_is_never_one_the_start_refuses() {
+    fn the_daemons_working_directory_is_never_the_project() {
         let home = tempfile::TempDir::new().unwrap();
         let service = service_for(&home, "opencode");
         let inner = &service.inner;
-        for refused in [home.path(), Path::new("/"), &home.path().join("config")] {
-            assert_eq!(
-                inner.default_work_dir(Some(refused)),
-                PathBuf::new(),
-                "{}",
-                refused.display()
-            );
-        }
-        assert_eq!(inner.default_work_dir(None), PathBuf::new());
-        assert_eq!(
-            inner.default_work_dir(Some(&home.path().join("missing"))),
-            PathBuf::new(),
-            "a folder that is not there is no default"
-        );
-        let project = home.path().join("project");
-        assert_eq!(inner.default_work_dir(Some(&project)), project);
-
-        // Und ohne `sandbox.work_dir` landet genau diese Vorgabe im Plan: Ein
-        // Daemon, der im Heimatverzeichnis läuft, nennt keinen Ordner, einer
-        // in einem Projektordner diesen.
         let mut config = (*inner.config()).clone();
         config.sandbox.work_dir = None;
         let plan = v1::sandbox_request::Plan::default();
         assert_eq!(
-            inner.work_dir_with_cwd(&config, &inner.pending_choice(), &plan, Some(home.path())),
+            inner.work_dir(&config, &inner.pending_choice(), &plan),
             PathBuf::new()
         );
+        let project = home.path().join("project");
+        config.sandbox.work_dir = Some(project.clone());
         assert_eq!(
-            inner.work_dir_with_cwd(&config, &inner.pending_choice(), &plan, Some(&project)),
+            inner.work_dir(&config, &inner.pending_choice(), &plan),
             project
         );
     }

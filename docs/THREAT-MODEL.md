@@ -974,6 +974,23 @@ owned by a user (not root) is refused while the project directory and the profil
 places, and for every bind a part of the path could still be replaced between the check
 and the engine's mount by someone who can write its parent.
 
+### K-37 The project choice and the project register
+
+The daemon keeps a register of known projects and, per project, the **project choice** (HUM-532,
+ADR-0024): a configuration layer above the project profile and below environment and command line.
+**Attacker:** a cloned repository and the agent, which can write `/work` and therefore the project
+profile `<project>/.humanitl/profile.toml`. **Defence:** the choice is not in the project folder; it
+lives in the daemon's SQLite store under its data directory and is written only through
+`Projects.save_choice` on the daemon socket, which the sandbox cannot reach (guarantee 2). Its keys
+are a fixed allow-list (`CONFIG_024` for any other), it never lowers `sandbox.min_isolation`, and a
+company lock wins over it; the same checks run when a start loads it, so a choice that no longer
+holds stops the start instead of vanishing. The register recognises a folder by its canonical path
+together with device and inode: another folder at the same path is a new project without the old
+choice. A start without a project folder is refused (`SANDBOX_053`) instead of mounting the
+daemon's working directory, which a desktop launcher may have set to anything. *Residual risk:*
+other processes of the same user can change the store, as they can `config.toml`; a client on the
+daemon socket can save any choice the allow-list admits, as it can call `SetConfig`.
+
 ## Assumptions
 
 | ID | Assumption | How to check it | If it breaks |
@@ -1092,6 +1109,7 @@ These attackers are not defended against, and Humanitl does not claim to:
 | 2026-11-16 | K-35: with `hold.ask_mode = "upstream"` the decision proxy decides requests without a rule; only with a proxy in use, `block` never reaches it, `redact` and the hard block stay in Humanitl, the audit says `forward` by `upstream` with the proxy's status | HUM-512 |
 | 2026-11-17 | K-02: cloud inference named; an endpoint outside this machine and its network shows an orange tag, a start line and a doctor line, and asks once per agent and provider, confirmed in the daemon's data directory; blocks nothing | HUM-516 |
 | 2026-11-17 | K-36 added (first part): the agent depot as the agent's origin, the read-only version directory and the scratch copy of its configuration, one guard on every backend's plan (`AGENT_017`), masks of host installs (empty read-only mounts only where they exist, Seatbelt deny rules), the limit of the company lock | HUM-518 |
+| 2026-11-18 | K-37 added: the project choice as a host-side layer that neither a clone nor the agent writes, its allow-list, the isolation floor only raised, company locks, recognition by device and inode; a start without a project folder is refused | HUM-532 |
 
 Every security-relevant change to the shim, the mount allowlist, the filter or the passthrough gets
 a line here. Vulnerabilities are reported as described in

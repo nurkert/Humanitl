@@ -115,6 +115,15 @@ service Humanitl {
   // `Remove` lehnt ab, solange eine Sitzung das Depot nutzt. Ein Daemon vor
   // Minor 44 kennt den Aufruf nicht (`UNIMPLEMENTED`).
   rpc Agents(AgentsRequest) returns (AgentsStatus);
+  // Das Projektregister (HUM-532, ADR-0024): bekannte Projekte mit letztem
+  // Start, Agent, Laeufen und laufender Sitzung (`list`), ein Projekt mit
+  // seiner Wahl und deren Herkunft (`get`), und die Projektwahl speichern
+  // (`save_choice`). Die Wahl ist eine Ebene auf dem Host, nie im
+  // Projektordner; ein Schluessel ausserhalb ihrer Liste, ein gesperrter
+  // Wert oder eine gesenkte Untergrenze ist `CONFIG_024`. Geloescht wird
+  // hier nichts. Ein Daemon vor Minor 45 kennt den Aufruf nicht
+  // (`UNIMPLEMENTED`).
+  rpc Projects(ProjectsRequest) returns (ProjectsResponse);
 }
 
 // ---------- Info ----------
@@ -2251,6 +2260,10 @@ message AuditResponse {
 // Abfrage der effektiven Konfiguration.
 message GetConfigRequest {
   bool include_schema = 1;
+  // Die Konfiguration eines Projekts aus dem Register (HUM-532): sein Ordner
+  // waehlt das Projekt-Profil, und seine Projektwahl ist die Ebene mit der
+  // Herkunft `project-choice`. Leer heisst: ohne Projekt, wie bisher.
+  string project_id = 2;
 }
 
 // Die effektive Konfiguration samt Herkunft je Feld.
@@ -2273,7 +2286,8 @@ message ConfigSnapshot {
 // Woher der Wert eines Feldes stammt.
 message FieldOrigin {
   string key = 1;
-  // `default`, `global`, `profile:global`, `profile:project`, `env` oder `cli`.
+  // `default`, `global`, `profile_builtin`, `profile_global`,
+  // `profile_project`, `project-choice` (HUM-532), `env` oder `cli`.
   string origin = 2;
 }
 
@@ -2876,4 +2890,101 @@ message AgentDepot {
 // `agents.<id>`.
 message AgentsStatus {
   repeated AgentDepot agents = 1;
+}
+
+// ---------- Projektregister (HUM-532) ----------
+
+// Auftrag an `Projects`. Genau eine Operation.
+message ProjectsRequest {
+  // Eine Seite der bekannten Projekte, der juengste Start zuerst.
+  message List {
+    // Hoechstens so viele; 0 heisst 50, mehr als 500 gilt als 500.
+    uint32 limit = 1;
+    // `ProjectsResponse.next_cursor` der vorigen Seite; leer heisst von vorn.
+    string cursor = 2;
+  }
+  // Ein Projekt, an seiner Kennung oder an seinem Ordner.
+  message Get {
+    // Die Kennung aus `ProjectEntry.project_id`; auch eine ersetzte Zeile.
+    string project_id = 1;
+    // Sonst der Ordner, absolut; der Daemon kanonisiert ihn und nimmt den
+    // aktuellen Eintrag dort.
+    string path = 2;
+  }
+  // Die Projektwahl eines aktuellen Eintrags ersetzen. Leere `values`
+  // leeren sie.
+  message SaveChoice {
+    string project_id = 1;
+    repeated ChoiceValue values = 2;
+  }
+  oneof op {
+    List list = 1;
+    Get get = 2;
+    SaveChoice save_choice = 3;
+  }
+}
+
+// Ein Schluessel der Projektwahl mit seinem Wert als Text.
+message ChoiceValue {
+  string key = 1;
+  string value = 2;
+}
+
+// Ein Eintrag des Registers.
+message ProjectEntry {
+  // Die stabile Kennung des Projekts (UUID).
+  string project_id = 1;
+  // Der kanonische Ordner auf dem Host, gesaeubert fuer die Anzeige.
+  string path = 2;
+  // Der Ordnername, gesaeubert fuer die Anzeige.
+  string display_name = 3;
+  google.protobuf.Timestamp first_seen = 4;
+  // Leer fuer ein Projekt ohne Start seit dem Register.
+  google.protobuf.Timestamp last_started = 5;
+  // Der Agent-Adapter des letzten Starts.
+  string last_agent = 6;
+  uint64 runs = 7;
+  // Wahr, solange die Sitzung dieses Daemons in diesem Projekt laeuft.
+  bool running = 8;
+  // Die Kennung dieser Sitzung (`Info.session_id`); leer ohne.
+  string session_id = 9;
+  // Wahr, wenn Aenderungen einer Wegwerf-Sandbox dieses Projekts auf eine
+  // Entscheidung warten.
+  bool changes_waiting = 10;
+  // Wahr, wenn der Ordner fehlt.
+  bool missing = 11;
+  // Wahr fuer eine Zeile, die ein anderer Ordner am selben Pfad ersetzt hat.
+  bool replaced = 12;
+  // Ob eine Projektwahl gespeichert ist, und wann.
+  bool has_choice = 13;
+  google.protobuf.Timestamp choice_saved_at = 14;
+  // Steigt bei jeder Aenderung des Eintrags (HUM-533 bindet sie).
+  uint64 version = 15;
+}
+
+// Ein Schluessel der Projektwahl, wie er fuer dieses Projekt gilt.
+message ProjectChoiceField {
+  string key = 1;
+  // Der gewaehlte Wert; leer, wenn die Wahl den Schluessel nicht traegt.
+  string chosen = 2;
+  // Der wirksame Wert als Text, nach allen Ebenen.
+  string effective = 3;
+  // Die Herkunft des wirksamen Werts wie in `FieldOrigin.origin`.
+  string origin = 4;
+}
+
+// Antwort auf `Projects`.
+message ProjectsResponse {
+  // `list`: die Seite.
+  repeated ProjectEntry projects = 1;
+  // `list`: der Cursor der naechsten Seite; leer auf der letzten.
+  string next_cursor = 2;
+  // `get` und `save_choice`: das Projekt.
+  ProjectEntry project = 3;
+  // `get` und `save_choice`: jeder Schluessel der Liste mit Wahl, Wert und
+  // Herkunft, in der Reihenfolge der Liste.
+  repeated ProjectChoiceField choice = 4;
+  // Was die Aufloesung fuer dieses Projekt zu sagen hat, etwa `CONFIG_024`
+  // fuer eine gespeicherte Wahl, die nicht mehr gilt.
+  repeated Diagnostic diagnostics = 5;
 }

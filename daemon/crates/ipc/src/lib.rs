@@ -51,7 +51,11 @@ pub const PROTO_MAJOR: u32 = 1;
 /// Minor-Version des Vertrags. Steigt bei jeder additiven Änderung
 /// (`Info.proto_minor`).
 ///
-/// `44` seit dem Agent-Depot (HUM-518): die RPC `Agents` mit
+/// `45` seit dem Projektregister (HUM-532): die RPC `Projects` mit
+/// `ProjectsRequest` (`list`, `get`, `save_choice`) und `ProjectsResponse`,
+/// `GetConfigRequest.project_id` und die Herkunft `project-choice` in
+/// `FieldOrigin`.
+/// `44` war das Agent-Depot (HUM-518): die RPC `Agents` mit
 /// `AgentsRequest` (Stand, Quelle setzen, Depot entfernen) und
 /// `AgentsStatus` je bekanntem Agenten.
 /// `43` war der Hinweis auf Cloud-Inferenz (HUM-516):
@@ -238,7 +242,7 @@ pub const PROTO_MAJOR: u32 = 1;
 /// Spiegelung in `app/lib/core/ipc/proto_version.dart` darf nachziehen: eine
 /// abweichende Minor ist verabredetermaßen kein Grund, die Verbindung
 /// abzulehnen (`docs/PROTOCOL.md`).
-pub const PROTO_MINOR: u32 = 44;
+pub const PROTO_MINOR: u32 = 45;
 
 /// Metadata-Schlüssel für das Session-Token aus
 /// `$XDG_RUNTIME_DIR/humanitl/token` (CONVENTIONS.md 3.6).
@@ -280,6 +284,7 @@ pub mod intercept;
 pub mod llm_key;
 pub mod llm_reach;
 pub mod llm_servers;
+pub mod projects;
 pub mod rules;
 pub mod sandbox;
 pub mod server;

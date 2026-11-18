@@ -501,6 +501,35 @@ pub fn snapshot(paths: &Paths) -> v1::ConfigSnapshot {
     snapshot
 }
 
+/// [`snapshot`] für ein Projekt aus dem Register (HUM-532,
+/// `GetConfig.project_id`): sein Ordner wählt das Projekt-Profil, und seine
+/// Projektwahl ist die Ebene mit der Herkunft `project-choice`. Lädt die Wahl
+/// nicht mehr (`CONFIG_024`), steht ihr Befund in `diagnostics`, und die Werte
+/// sind die ohne sie.
+#[must_use]
+pub fn project_snapshot(
+    paths: &Paths,
+    locks: &humanitl_config::PolicyLocks,
+    row: &humanitl_recorder::ProjectRow,
+) -> v1::ConfigSnapshot {
+    let (resolved, found) = crate::projects::resolve_for(paths, locks, row);
+    let mut snapshot =
+        match resolved.and_then(|resolved| convert::config_snapshot_to_proto(&resolved, false)) {
+            Ok(snapshot) => snapshot,
+            Err(diagnostic) => v1::ConfigSnapshot {
+                diagnostics: vec![convert::diagnostic_to_proto(&diagnostic)],
+                ..v1::ConfigSnapshot::default()
+            },
+        };
+    if let Some(found) = found {
+        snapshot
+            .diagnostics
+            .insert(0, convert::diagnostic_to_proto(&found));
+    }
+    snapshot.config_path = paths.config_path().display().to_string();
+    snapshot
+}
+
 #[cfg(test)]
 mod tests {
     #![allow(clippy::unwrap_used, clippy::expect_used, clippy::panic)]

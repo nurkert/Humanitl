@@ -33,6 +33,9 @@ pub enum Origin {
     ProfileGlobal(String),
     /// Das Profil des Projekts, mit seinem Pfad.
     ProfileProject(PathBuf),
+    /// Die Projektwahl, die der Daemon auf dem Host hält (HUM-532); über dem
+    /// Projekt-Profil, unter Umgebung und Kommandozeile.
+    ProjectChoice,
     /// Eine Umgebungsvariable, mit ihrem Namen.
     Env(String),
     /// Ein Argument der Kommandozeile.
@@ -58,8 +61,9 @@ impl Origin {
             Self::Global => 1,
             Self::ProfileBuiltin(_) | Self::ProfileGlobal(_) => 2,
             Self::ProfileProject(_) => 3,
-            Self::Env(_) => 4,
-            Self::Cli => 5,
+            Self::ProjectChoice => 4,
+            Self::Env(_) => 5,
+            Self::Cli => 6,
         }
     }
 
@@ -72,6 +76,8 @@ impl Origin {
             Self::ProfileBuiltin(_) => "profile_builtin",
             Self::ProfileGlobal(_) => "profile_global",
             Self::ProfileProject(_) => "profile_project",
+            // So nennen ADR-0024 und HUM-532 die Herkunft auf der Leitung.
+            Self::ProjectChoice => "project-choice",
             Self::Env(_) => "env",
             Self::Cli => "cli",
         }
@@ -95,6 +101,7 @@ impl fmt::Display for Origin {
             Self::ProfileBuiltin(name) => write!(f, "profile builtin {name}"),
             Self::ProfileGlobal(name) => write!(f, "profile {name}"),
             Self::ProfileProject(path) => write!(f, "project profile {}", path.display()),
+            Self::ProjectChoice => f.write_str("project choice"),
             Self::Env(key) => write!(f, "env {key}"),
             Self::Cli => f.write_str("command line"),
         }
@@ -172,6 +179,7 @@ mod tests {
             Origin::Global,
             Origin::ProfileGlobal("work".to_owned()),
             Origin::ProfileProject(PathBuf::from("/p/.humanitl/profile.toml")),
+            Origin::ProjectChoice,
             Origin::Env("HUMANITL_HOLD__TIMEOUT_SECS".to_owned()),
             Origin::Cli,
         ];

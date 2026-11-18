@@ -110,8 +110,11 @@ fn render_preamble(out: &mut String) {
         "| 5 | `<projekt>/.humanitl/profile.toml`, Block `[config]`; nur Felder mit Projekt \
          `allowed` |\n",
     );
-    out.push_str("| 6 | Umgebungsvariablen `HUMANITL_*` |\n");
-    out.push_str("| 7 | Argumente der Kommandozeile |\n\n");
+    out.push_str(
+        "| 6 | die Projektwahl, die der Daemon je Projekt auf dem Host hält (HUM-532); nur die \
+         Schlüssel des Erststart-Bildschirms, Herkunft `project-choice` |\n\
+         | 7 | Umgebungsvariablen `HUMANITL_*` |\n| 8 | Argumente der Kommandozeile |\n\n",
+    );
     out.push_str(
         "Ein Profil hat neben `[config]` nur `name`, `description` und `[rules]` (HUM-066,\n\
          `docs/profiles.md`). Jeder andere Block auf der obersten Ebene ist `CONFIG_002`; eine\n\

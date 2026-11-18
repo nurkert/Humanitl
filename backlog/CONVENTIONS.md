@@ -3718,3 +3718,40 @@ Gebaut im Umfang der zweiten Umfangsentscheidung vom 2026-09-18 (Kopf von `backl
 - **Oberfläche.** `CloudInferenceTag` (`core/ui/cloud_inference_tag.dart`) im Token `outflow` (siehe Nachtrag) gleich hinter dem Zustand im Kopf der Sandbox, außerhalb der Rolle der übrigen Abzeichen (Profil, Backend, Server nehmen seit HUM-516 höchstens 35 Prozent der Zeile und rollen darüber in sich); Tooltip und Klick zeigen den ganzen Text. `CloudConfirmDialog` vor dem ersten Start, `CloudInferenceNote` unter der Wahl des Agenten und im Abschnitt Modell (`plannedCloudInferenceProvider` fragt `Sandbox(Status)`, nie `Plan`: der trüge die Wahl des Sandbox-Bildschirms).
 - **Nachtrag aus dem Review (Codex, Sonnet).** Das Tor sitzt im Daemon: `humanitl_ipc::cloud::gate` in `Inner::apply_session` entscheidet an der ganz aufgelösten Konfiguration des Starts (`cli_overrides` eingeschlossen) und lehnt eine unbestätigte Kombination mit `LLM_011` (Error) ab, außer `Start.acknowledge_cloud_inference` (Feld 11, wird gemerkt) oder `Start.cloud_notice_shown` (Feld 12, ohne Terminal, wird nicht gemerkt); der Schnappschuss des Befunds nennt dann `cloud_inference`. `SandboxRequest.check_cloud_inference` (Feld 14, ein `Start`) antwortet mit `SandboxEvent.cloud_inference_check` (Feld 16) für genau diesen Start; `humanitl run`/`go` fragen damit statt mit `Plan`. `humanitl sandbox run --yes` fragt selbst (`cmd::cloud::confirm_local`), die Einrichtung („Start agent") zeigt denselben `CloudConfirmDialog`, `humanitl llm server use|add --activate|edit` zeigen den Hinweis. Neues Token `outflow`/`outflowText` in `humanitl_ui` (dunkel `#FF9100`, hell `#B35400`), nur für diesen Hinweis; das Tag kürzt sich in einem `Flexible` mit Auslassung (`HBadge.overflow`).
 - **Zweiter Nachtrag (Codex, Delta).** `Start.acknowledge_cloud_inference` und `Start.cloud_notice_shown` sind `CloudNoticeFor {agent, provider}`, nicht mehr Wahrheitswerte: Das Tor nimmt eine Antwort nur für genau den Agenten und Anbieter an, den die Auflösung des Starts ergibt; sonst `LLM_011` mit dem wirklichen Anbieter, und nichts wird gemerkt. Gegen einen Daemon vor 1.43 fragt `humanitl run`/`go` an der eigenen Konfiguration (`cmd::cloud::old_daemon_notice`, merkt nichts), und die App startet gar nicht (`DaemonInfo.knowsCloudInference`, `CLI_004` mit Neustart).
+
+### 4.51 Aus der Umsetzung des Projektregisters (HUM-532, 2026-11-18)
+
+**Acht Ebenen statt sieben.** Zwischen Projekt-Profil und Umgebung liegt die
+Projektwahl (`humanitl_config::ProjectChoice`, Herkunft `project-choice`,
+`Origin::ProjectChoice`). Sie liegt im Register des Daemons auf dem Host
+(Tabelle `projects`, Spalte `choice`), nie im Projektordner, und wird nur über
+`Projects.save_choice` geschrieben. Ihre Grenze ist die feste Erlaubnisliste
+`humanitl_config::PROJECT_CHOICE_KEYS` (`agent.adapter`, `sandbox.mode`,
+`sandbox.work_mode`, `sandbox.backend`, `sandbox.min_isolation`,
+`hold.ask_mode`, `llm.server`, `sandbox.profile`), nicht `x-project-scope`.
+Ein Schlüssel außerhalb der Liste, ein Wert unter der Untergrenze der Ebenen
+darunter und ein Wert, den eine Firmenvorgabe sperrt (`PolicyLocks`), sind
+`CONFIG_024`, beim Speichern und beim Laden. Die Herkunft heißt auf der
+Leitung `project-choice` (mit Bindestrich, wie ADR-0024 sie nennt); die
+übrigen Herkünfte bleiben in `snake_case`.
+
+**Ein Projekt ist eine `ProjectId`, nicht ein Pfad.** Die Tabelle `projects`
+(Migration V13) hält je Zeile Kennung, kanonischen Pfad, `dev`/`ino` des
+ersten Starts, Ordnername, erstes Auftreten, letzten Start und Agenten, Läufe,
+Wahl, `replaced_at` und `version`. Genau eine aktuelle Zeile je Pfad
+(Teilindex `projects_current_path`); ein anderer Ordner am alten Pfad ersetzt
+die Zeile, die als Verlauf bleibt. `sessions.project_id` ordnet jede Sitzung
+einem Projekt zu; alles je Projekt wählt über diese Spalte, nie über
+`sessions.work_dir`. Eine Sitzung des Daemons kann mehrere Starts tragen; ihre
+Zeile nennt Ordner, Agent und Projekt des letzten, und bis zum ersten Start keinen Ordner
+(`work_dir` leer, nie das Arbeitsverzeichnis des Daemons). Ein Start, der sich nicht
+eintragen lässt oder dessen Ordner sich nach dem Laden der Wahl ändert, endet (`RECORDER_003`,
+`SANDBOX_042`). `humanitl run` und `go` schicken `work_mode`, `ask_mode` und `sandbox_mode`
+nur als Wunsch dieses Laufs (Schalter, `HUMANITL_*`, `--config`), sonst leer.
+
+**Kein Start ohne Projekt.** Das Arbeitsverzeichnis des Daemons ist nie die
+Vorgabe für den Projektordner (bis HUM-532 die Vorgabe aus HUM-262). Ohne
+Ordner in der Anfrage und ohne `sandbox.work_dir` lehnt `Sandbox(Start)` mit
+`SANDBOX_053` ab; ein Plan nennt dann den leeren Pfad, und das Setup verlangt
+eine Auswahl (`CONFIG_013`).
+

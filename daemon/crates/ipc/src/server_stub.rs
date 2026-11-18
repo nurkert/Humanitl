@@ -297,6 +297,25 @@ pub trait DaemonApi: Send + Sync + 'static {
         .why("this daemon has no agent depot".to_owned())
         .build())
     }
+
+    /// Das Projektregister (HUM-532): Liste, ein Projekt, Projektwahl.
+    ///
+    /// Die Vorgabe antwortet `IPC_006`: ohne Aufzeichnung kein Register.
+    ///
+    /// # Errors
+    ///
+    /// [`Diagnostic`] mit `IPC_006`, oder dem Befund der Operation.
+    async fn projects(
+        &self,
+        _request: v1::ProjectsRequest,
+    ) -> Result<v1::ProjectsResponse, Diagnostic> {
+        Err(Diagnostic::builder(
+            humanitl_core::diagnostics::codes::IPC_006,
+            humanitl_core::Severity::Error,
+        )
+        .why("this daemon keeps no project register".to_owned())
+        .build())
+    }
 }
 
 /// Der tonic-Dienst über einem beliebigen [`DaemonApi`].
@@ -759,6 +778,18 @@ impl<T: DaemonApi> v1::humanitl_server::Humanitl for DaemonService<T> {
         self.check_token(&request)?;
         self.api
             .agents(request.into_inner())
+            .await
+            .map(Response::new)
+            .map_err(|diagnostic| diagnostic_to_status(&diagnostic))
+    }
+
+    async fn projects(
+        &self,
+        request: Request<v1::ProjectsRequest>,
+    ) -> Result<Response<v1::ProjectsResponse>, Status> {
+        self.check_token(&request)?;
+        self.api
+            .projects(request.into_inner())
             .await
             .map(Response::new)
             .map_err(|diagnostic| diagnostic_to_status(&diagnostic))

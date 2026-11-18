@@ -362,6 +362,19 @@ impl IpcServer {
 
     /// Die Sperre der Quelle der Agenten (HUM-518): die des Dienstes der
     /// Sandbox, sonst die der Vorgabe an diesen Pfaden.
+    /// Woraus `Projects` antwortet (HUM-532).
+    fn projects_context(&self) -> crate::projects::Context {
+        crate::projects::Context {
+            recorder: self.recorder.clone(),
+            paths: self.doctor.paths.clone(),
+            locks: humanitl_config::PolicyLocks::of_policy(&self.doctor.paths),
+            activity: self
+                .sandbox
+                .as_ref()
+                .and_then(SandboxService::project_activity),
+        }
+    }
+
     fn source_lock(&self) -> humanitl_config::agents::SourceLock {
         self.sandbox.as_ref().map_or_else(
             || humanitl_config::agents::SourceLock::of_policy(&self.doctor.paths),
@@ -1951,11 +1964,40 @@ impl v1::humanitl_server::Humanitl for IpcServer {
         &self,
         request: Request<v1::GetConfigRequest>,
     ) -> Result<Response<v1::ConfigSnapshot>, Status> {
-        let include_schema = request.into_inner().include_schema;
+        let v1::GetConfigRequest {
+            include_schema,
+            project_id,
+        } = request.into_inner();
         let paths = self.doctor.paths.clone();
-        let mut snapshot = tokio::task::spawn_blocking(move || config_rpc::snapshot(&paths))
-            .await
-            .map_err(|error| diagnostic_to_status(&unfinished("GetConfig", &error)))?;
+        // Die Konfiguration eines Projekts aus dem Register (HUM-532): sein
+        // Ordner und seine Projektwahl mit der Herkunft `project-choice`.
+        let project = if project_id.trim().is_empty() {
+            None
+        } else {
+            let recorder = self.recorder.as_ref().ok_or_else(|| {
+                diagnostic_to_status(
+                    &Diagnostic::builder(codes::IPC_006, Severity::Error)
+                        .why(
+                            "this daemon runs without a recording, so it keeps no project \
+                             register"
+                                .to_owned(),
+                        )
+                        .build(),
+                )
+            })?;
+            Some(
+                crate::projects::lookup(recorder, &project_id)
+                    .await
+                    .map_err(|diagnostic| diagnostic_to_status(&diagnostic))?,
+            )
+        };
+        let locks = humanitl_config::PolicyLocks::of_policy(&paths);
+        let mut snapshot = tokio::task::spawn_blocking(move || match project {
+            Some(row) => config_rpc::project_snapshot(&paths, &locks, &row),
+            None => config_rpc::snapshot(&paths),
+        })
+        .await
+        .map_err(|error| diagnostic_to_status(&unfinished("GetConfig", &error)))?;
         if include_schema {
             snapshot.json_schema = humanitl_config::json_schema().to_string();
         }
@@ -2329,6 +2371,18 @@ impl v1::humanitl_server::Humanitl for IpcServer {
         .map_err(|error| diagnostic_to_status(&unfinished("Agents", &error)))?
         .map_err(|diagnostic| diagnostic_to_status(&diagnostic))?;
         Ok(Response::new(status))
+    }
+
+    /// Das Projektregister (HUM-532, [`crate::projects`]): Liste, ein
+    /// Projekt mit seiner Wahl, Projektwahl speichern. Nichts davon löscht.
+    async fn projects(
+        &self,
+        request: Request<v1::ProjectsRequest>,
+    ) -> Result<Response<v1::ProjectsResponse>, Status> {
+        crate::projects::answer(self.projects_context(), request.into_inner())
+            .await
+            .map(Response::new)
+            .map_err(|diagnostic| diagnostic_to_status(&diagnostic))
     }
 
     /// Die Pause des Abfangens (HUM-407, [`crate::intercept`]): lesen,
@@ -3278,6 +3332,7 @@ mod tests {
         let with_schema = server
             .get_config(Request::new(v1::GetConfigRequest {
                 include_schema: true,
+                ..v1::GetConfigRequest::default()
             }))
             .await
             .unwrap()
