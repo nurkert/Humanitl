@@ -25,7 +25,7 @@ import 'package:humanitl/core/ui/ui.dart';
 import 'package:humanitl/features/intercept/intercept_screen.dart';
 import 'package:humanitl/features/intercept/widgets/queue_pane.dart';
 import 'package:humanitl/features/sandbox/widgets/sandbox_terminal.dart';
-import 'package:humanitl/features/settings/settings_overlay.dart';
+import 'package:humanitl/features/settings/settings_sheet.dart';
 import 'package:humanitl/features/shell/widgets/command_palette.dart';
 import 'package:humanitl/l10n/l10n.dart';
 import 'package:xterm2/ui.dart';
@@ -350,7 +350,7 @@ void main() {
     // Tastatur, obwohl der Emulator sie hielt.
     await pressCtrl(tester, LogicalKeyboardKey.comma);
     await settle(tester);
-    expect(find.byType(SettingsOverlay), findsOneWidget);
+    expect(find.byType(SettingsSheet), findsOneWidget);
     expect(terminalHasKeyboard(), isFalse, reason: 'the sheet took the keys');
     expect(HLayerScope.holdsFocus(), isTrue);
 
@@ -398,7 +398,7 @@ void main() {
     await tester.sendKeyEvent(LogicalKeyboardKey.escape);
     await settle(tester);
     expect(find.byType(CommandPalette), findsNothing);
-    expect(find.byType(SettingsOverlay), findsOneWidget);
+    expect(find.byType(SettingsSheet), findsOneWidget);
     expect(FocusManager.instance.primaryFocus, sheet, reason: 'back to it');
     expect(terminalHasKeyboard(), isFalse);
 
@@ -633,12 +633,12 @@ void main() {
 
     await pressCtrl(tester, LogicalKeyboardKey.comma);
     await settle(tester);
-    expect(find.byType(SettingsOverlay), findsOneWidget);
+    expect(find.byType(SettingsSheet), findsOneWidget);
     expect(terminalHasKeyboard(), isFalse);
 
     await tester.sendKeyEvent(LogicalKeyboardKey.escape);
     await settle(tester);
-    expect(find.byType(SettingsOverlay), findsNothing);
+    expect(find.byType(SettingsSheet), findsNothing);
     expect(terminalHasKeyboard(), isTrue, reason: 'back to the terminal');
     client.typed.clear();
     await tester.sendKeyEvent(LogicalKeyboardKey.escape);
@@ -660,13 +660,13 @@ void main() {
 
     await pressCtrl(tester, LogicalKeyboardKey.comma);
     await settle(tester);
-    expect(find.byType(SettingsOverlay), findsOneWidget);
+    expect(find.byType(SettingsSheet), findsOneWidget);
     await tester.sendKeyEvent(LogicalKeyboardKey.escape);
     // Es fährt aus, bevor es geht (HUM-404).
     await tester.pump();
     await tester.pump(const Duration(milliseconds: 400));
     await settle(tester);
-    expect(find.byType(SettingsOverlay), findsNothing);
+    expect(find.byType(SettingsSheet), findsNothing);
 
     await pressCtrl(tester, LogicalKeyboardKey.digit2);
     await settle(tester);
@@ -693,7 +693,7 @@ void main() {
     await settle(tester);
     await tester.pump(const Duration(milliseconds: 600));
     await settle(tester);
-    expect(find.byType(SettingsOverlay), findsOneWidget);
+    expect(find.byType(SettingsSheet), findsOneWidget);
     expect(terminalHasKeyboard(), isFalse, reason: 'the sheet keeps it');
     client.typed.clear();
     await tester.sendKeyEvent(LogicalKeyboardKey.keyA);
@@ -704,13 +704,13 @@ void main() {
     // erste `Esc` leert sie, erst das zweite schließt.
     await tester.sendKeyEvent(LogicalKeyboardKey.escape);
     await settle(tester);
-    expect(find.byType(SettingsOverlay), findsOneWidget);
+    expect(find.byType(SettingsSheet), findsOneWidget);
     await tester.sendKeyEvent(LogicalKeyboardKey.escape);
     // Es fährt aus, bevor es geht (HUM-404).
     await tester.pump();
     await tester.pump(const Duration(milliseconds: 400));
     await settle(tester);
-    expect(find.byType(SettingsOverlay), findsNothing);
+    expect(find.byType(SettingsSheet), findsNothing);
     await pressCtrl(tester, LogicalKeyboardKey.digit2);
     await settle(tester);
     expect(headerTitle(tester), 'History', reason: 'the shell hears Ctrl+2');

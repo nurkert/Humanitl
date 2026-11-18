@@ -27,7 +27,7 @@ import 'package:humanitl/features/intercept/widgets/queue_row.dart';
 import 'package:humanitl/features/sandbox/providers/sandbox_status_provider.dart';
 import 'package:humanitl/features/sandbox/widgets/sandbox_terminal.dart'
     show lastFloatingSessionProvider;
-import 'package:humanitl/features/settings/settings_overlay.dart';
+import 'package:humanitl/features/settings/settings_sheet.dart';
 import 'package:humanitl/features/shell/shell_screen.dart';
 import 'package:humanitl/features/shell/widgets/floating_terminal.dart'
     show FloatingTerminalLayer, terminalFloatLinger;
@@ -554,7 +554,7 @@ void main() {
     await tester.pump();
     await tester.pump(const Duration(milliseconds: 400));
     await settle(tester);
-    expect(find.byType(SettingsOverlay), findsOneWidget);
+    expect(find.byType(SettingsSheet), findsOneWidget);
     expect(floating, findsOneWidget, reason: 'it stays');
     expect(tester.getRect(floating), before, reason: 'where it was');
     expect(

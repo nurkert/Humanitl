@@ -21,7 +21,7 @@ import 'package:humanitl/core/ipc/fake_daemon_client.dart';
 import 'package:humanitl/core/ui/ui_scale.dart';
 import 'package:humanitl/features/settings/registry/settings_registry.dart';
 import 'package:humanitl/features/settings/registry/settings_search.dart';
-import 'package:humanitl/features/settings/settings_overlay.dart';
+import 'package:humanitl/features/settings/settings_sheet.dart';
 import 'package:humanitl/features/shell/providers/language.dart';
 import 'package:humanitl/l10n/l10n.dart';
 
@@ -362,13 +362,9 @@ void main() {
 
     await press(tester, LogicalKeyboardKey.escape);
     expect(query(tester), isEmpty, reason: 'the first Esc empties the search');
-    expect(find.byType(SettingsOverlay), findsOneWidget);
+    expect(find.byType(SettingsSheet), findsOneWidget);
     await press(tester, LogicalKeyboardKey.escape);
-    expect(
-      find.byType(SettingsOverlay),
-      findsNothing,
-      reason: 'then it closes',
-    );
+    expect(find.byType(SettingsSheet), findsNothing, reason: 'then it closes');
   }, variant: linux);
 
   testWidgets('Ctrl+F puts the cursor into the search from anywhere inside', (
@@ -390,21 +386,21 @@ void main() {
     final Finder gear = find.byKey(const Key('header-settings-button'));
     await tester.tap(gear);
     await tester.pumpAndSettle();
-    expect(find.byType(SettingsOverlay), findsOneWidget);
+    expect(find.byType(SettingsSheet), findsOneWidget);
     final Rect panel = tester.getRect(
       find.byKey(const Key('settings-overlay')),
     );
     // Über der Tafel, in der abgedunkelten Fläche.
     await tester.tapAt(Offset(panel.center.dx, panel.top / 2));
     await tester.pumpAndSettle();
-    expect(find.byType(SettingsOverlay), findsNothing);
+    expect(find.byType(SettingsSheet), findsNothing);
     expect(focusIsWithin(const Key('header-settings-button')), isTrue);
 
     await tester.tap(gear);
     await tester.pumpAndSettle();
     await tester.tap(find.byKey(const Key('settings-close')));
     await tester.pumpAndSettle();
-    expect(find.byType(SettingsOverlay), findsNothing);
+    expect(find.byType(SettingsSheet), findsNothing);
     expect(focusIsWithin(const Key('header-settings-button')), isTrue);
   }, variant: linux);
 
@@ -461,8 +457,8 @@ void main() {
     WidgetTester tester,
   ) async {
     await open(tester);
-    final SettingsOverlay overlay = tester.widget<SettingsOverlay>(
-      find.byType(SettingsOverlay),
+    final SettingsSheet overlay = tester.widget<SettingsSheet>(
+      find.byType(SettingsSheet),
     );
     expect(overlay.focusKey, isNull);
     // Der Weg eines `ChangeSetting` (HUM-275) ist in
@@ -541,7 +537,7 @@ void main() {
             daemonClientProvider.overrideWithValue(client),
             ?info,
           ],
-          child: SettingsOverlay(onClose: () {}, focusKey: key),
+          child: SettingsSheet(onClose: () {}, focusKey: key),
         );
 
     Future<void> frames(WidgetTester tester, int count) async {
@@ -657,7 +653,7 @@ void main() {
     await tester.pumpAndSettle();
     await pressCtrl(tester, LogicalKeyboardKey.comma);
     await tester.pumpAndSettle();
-    expect(find.byType(SettingsOverlay), findsNothing, reason: 'palette');
+    expect(find.byType(SettingsSheet), findsNothing, reason: 'palette');
     await press(tester, LogicalKeyboardKey.escape);
 
     await tester.tap(find.byKey(const Key('header-intercept-badge')));
@@ -665,7 +661,7 @@ void main() {
     expect(find.byKey(const Key('intercept-pause-modal')), findsOneWidget);
     await pressCtrl(tester, LogicalKeyboardKey.comma);
     await tester.pumpAndSettle();
-    expect(find.byType(SettingsOverlay), findsNothing, reason: 'pause');
+    expect(find.byType(SettingsSheet), findsNothing, reason: 'pause');
   }, variant: linux);
 
   testWidgets('the daemon page offers the restart of the status bar, and the '
@@ -727,7 +723,7 @@ void main() {
     await tester.pump();
     await tester.sendKeyEvent(LogicalKeyboardKey.keyC);
     await tester.pump();
-    expect(find.byType(SettingsOverlay), findsOneWidget, reason: 'closing');
+    expect(find.byType(SettingsSheet), findsOneWidget, reason: 'closing');
     expect(query(tester), isEmpty);
     await tester.pumpAndSettle();
   }, variant: linux);

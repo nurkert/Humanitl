@@ -16,7 +16,7 @@ import 'package:humanitl/core/domain/domain.dart';
 import 'package:humanitl/core/ui/ui.dart';
 import 'package:humanitl/features/intercept/providers/flows.dart';
 import 'package:humanitl/features/intercept/providers/now.dart';
-import 'package:humanitl/features/settings/settings_overlay.dart';
+import 'package:humanitl/features/settings/settings_sheet.dart';
 import 'package:humanitl/features/shell/section.dart';
 import 'package:humanitl/features/shell/widgets/header_bar.dart';
 import 'package:humanitl/features/shell/widgets/icon_rail.dart';
@@ -216,7 +216,7 @@ void main() {
     final Rect panel = tester.getRect(
       find.byKey(const Key('settings-overlay')),
     );
-    final double height = tester.getSize(find.byType(SettingsOverlay)).height;
+    final double height = tester.getSize(find.byType(SettingsSheet)).height;
     expect(panel.bottom, moreOrLessEquals(height), reason: 'flush at the foot');
     expect(panel.height, moreOrLessEquals(height * 0.75));
     expect(panel.left, moreOrLessEquals(HSpace.x4));

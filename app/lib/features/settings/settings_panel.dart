@@ -1,29 +1,30 @@
-/// The settings, as an overlay from below with categories and a search
-/// (HUM-404; before that a sheet from the right, HUM-069).
+/// The settings as one component: the head with the search, the column of
+/// categories on the left and the rows or hits on the right (HUM-535, before
+/// that the content of the overlay, HUM-404).
 ///
-/// # Shape
+/// # Hosts
 ///
-/// A panel over three quarters of the window height, the full width but a
-/// margin, the application dimmed behind it. On top: the title, the search
-/// field and the close button. Below: the categories in a column on the
-/// left ([SettingsNav]) and the rows of the chosen one on the right
-/// ([SettingsCategoryPage]); while the search holds text, the hits replace
-/// the rows ([SettingsSearchResults]). What stands where comes from the
-/// settings catalog of the daemon (HUM-534, `registry/settings_registry.dart`).
+/// Two hosts draw the panel, each only a frame around it: `SettingsSheet`
+/// in a session, the overlay from below, and `SettingsTab`, a tab of the
+/// start window (ADR-0024). A host decides the frame, whether the panel can
+/// be closed and what `Esc` does once the search is empty; everything else
+/// belongs to the panel: the content, the search, the jump of a
+/// `ChangeSetting` fix and the chosen category. A row that changes here
+/// changes in both hosts without a line in either.
+///
+/// The host hands its frame in as a [SettingsFrameBuilder] instead of
+/// wrapping the panel from outside: the keys of the panel (`Ctrl+F`, `Esc`)
+/// stand above the frame, as they stood above the overlay, so they still
+/// work when the keyboard rests on the focus scope of a sheet
+/// (`HLayerScope`) and not on a control of the panel.
 ///
 /// # Keys
 ///
 /// `Tab` goes search, categories, page, close button; the arrow keys move
 /// between the categories. `Ctrl+F` puts the cursor into the search, and so
 /// does typing anywhere outside a text field. `Esc` empties the search
-/// first and closes the overlay after that, as does a click on the dimmed
-/// application and the close button. The overlay holds the keyboard while it
-/// is open (`HLayerScope`) and gives it back when it closes.
-///
-/// # Motion
-///
-/// It slides in from below over [HMotion.arrive] on the `enter` curve and
-/// out on `exit`; under reduced motion it only fades.
+/// first; after that it calls [SettingsPanel.onClose], and without one it
+/// lets the key pass to whoever stands around the host.
 ///
 /// # Writing
 ///
@@ -31,7 +32,7 @@
 /// says "Saved" for a moment; a refusal of the daemon stands at the row
 /// instead. Endpoint, model and key stand in the detail view of a server
 /// (`ServerDetail`, HUM-405).
-/// The overlay decides nothing about what a value means (ADR-018).
+/// The panel decides nothing about what a value means (ADR-018).
 library;
 
 import 'dart:async';
@@ -55,36 +56,83 @@ import 'widgets/settings_header.dart';
 import 'widgets/settings_nav.dart';
 import 'widgets/settings_search_results.dart';
 
-/// Puts the cursor into the search field of the overlay.
+/// Draws the frame of a host around [panel].
+///
+/// [close] closes through the panel, so a form that holds a change asks
+/// first (HUM-414); a host that closes on a click outside the panel calls
+/// it. A host that cannot be closed ignores it.
+typedef SettingsFrameBuilder = Widget Function(
+  BuildContext context,
+  Widget panel,
+  VoidCallback close,
+);
+
+/// Puts the cursor into the search field of the panel.
 class _FocusSearchIntent extends Intent {
   const _FocusSearchIntent();
 }
 
-/// The settings overlay.
-class SettingsOverlay extends ConsumerStatefulWidget {
-  /// Creates the overlay; [onClose] asks to close it, [onClosed] reports
-  /// that it has slid out and may be taken away.
-  const SettingsOverlay({
-    required this.onClose,
-    this.onClosed,
+/// `Esc` in the panel: the search first, then the host.
+///
+/// An intent of its own and not `DismissIntent`: a host without
+/// [SettingsPanel.onClose] lets `Esc` pass, and a `DismissIntent` binding
+/// around the host must then find its own action and not the disabled one
+/// of the panel.
+class _EscapeIntent extends Intent {
+  const _EscapeIntent();
+}
+
+/// The action behind [_EscapeIntent]; enabled only while it has something
+/// to do, so that an unused `Esc` passes on.
+class _EscapeAction extends Action<_EscapeIntent> {
+  _EscapeAction(this._state);
+
+  final _SettingsPanelState _state;
+
+  @override
+  bool isEnabled(_EscapeIntent intent) =>
+      _state._query.text.isNotEmpty || _state.widget.onClose != null;
+
+  @override
+  Object? invoke(_EscapeIntent intent) {
+    _state._escape();
+    return null;
+  }
+}
+
+/// The settings: head with search, categories, rows or hits.
+class SettingsPanel extends ConsumerStatefulWidget {
+  /// Creates the panel inside the frame [frame] of its host.
+  const SettingsPanel({
+    required this.frame,
+    this.onClose,
     this.closing = false,
+    this.autofocus = true,
     this.focusKey,
     this.focusSerial = 0,
     this.daemonRestart,
     super.key,
   });
 
-  /// Asks the owner to close the overlay; the owner then sets [closing].
-  final VoidCallback onClose;
+  /// The frame of the host around the panel.
+  final SettingsFrameBuilder frame;
 
-  /// Invoked once the overlay has slid out after [closing] turned true.
-  final VoidCallback? onClosed;
+  /// Asks the host to close, after a form that holds a change agreed
+  /// (HUM-414); null for a host that does not close. With it the head shows
+  /// a close button and `Esc` on an empty search closes; without it neither.
+  final VoidCallback? onClose;
 
-  /// Whether the overlay is on its way out.
+  /// Whether the host is taking the panel away: no jump and no search
+  /// starts any more.
   final bool closing;
 
-  /// The setting the overlay opens at, or null (HUM-275): a diagnostic's
-  /// `ChangeSetting` fix names its key. The overlay opens its category,
+  /// Whether the search takes the keyboard when the panel is built. A sheet
+  /// holds the keyboard and passes true; a tab beside other tabs must not
+  /// pull the keyboard to itself and passes false.
+  final bool autofocus;
+
+  /// The setting the panel opens at, or null (HUM-275): a diagnostic's
+  /// `ChangeSetting` fix names its key. The panel opens its category,
   /// scrolls to the row, focuses its control and lights it briefly.
   final String? focusKey;
 
@@ -99,12 +147,6 @@ class SettingsOverlay extends ConsumerStatefulWidget {
   /// (ARCHITECTURE 5); the shell hands its control in, and the category
   /// Daemon draws it in a row of its own.
   final Widget? daemonRestart;
-
-  /// The share of the window height the panel covers.
-  static const double heightFraction = 0.75;
-
-  /// The margin left and right of the panel.
-  static const double sideMargin = HSpace.x4;
 
   /// The width of the column of categories, and the narrower one below
   /// [narrowBelow] of panel width.
@@ -121,30 +163,32 @@ class SettingsOverlay extends ConsumerStatefulWidget {
   static const double pageMaxWidth = 760;
 
   @override
-  ConsumerState<SettingsOverlay> createState() => _SettingsOverlayState();
+  ConsumerState<SettingsPanel> createState() => _SettingsPanelState();
 }
 
-class _SettingsOverlayState extends ConsumerState<SettingsOverlay>
-    with SingleTickerProviderStateMixin {
+class _SettingsPanelState extends ConsumerState<SettingsPanel> {
   // Ein Feld, kein Ausdruck in `build`: Eine Map, die jeder Build neu baut,
   // ist für jeden Nachfahren, der von ihr abhängt, ein neues Objekt
   // (`docs/UX.md` 7).
   late final Map<ShortcutActivator, Intent> _shortcuts =
       AppShortcut.bind<Intent>(const <AppShortcut, Intent>{
-        AppShortcut.settingsClose: DismissIntent(),
+        AppShortcut.settingsClose: _EscapeIntent(),
         AppShortcut.settingsSearch: _FocusSearchIntent(),
       });
 
-  late final AnimationController _motion = AnimationController(
-    vsync: this,
-    duration: HMotion.arrive,
-  )..addStatusListener(_motionChanged);
-
-  late final CurvedAnimation _curve = CurvedAnimation(
-    parent: _motion,
-    curve: HMotion.enter,
-    reverseCurve: HMotion.exit,
-  );
+  late final Map<Type, Action<Intent>> _actions = <Type, Action<Intent>>{
+    _EscapeIntent: _EscapeAction(this),
+    _FocusSearchIntent: CallbackAction<_FocusSearchIntent>(
+      onInvoke: (_FocusSearchIntent _) {
+        _searchNode.requestFocus();
+        _query.selection = TextSelection(
+          baseOffset: 0,
+          extentOffset: _query.text.length,
+        );
+        return null;
+      },
+    ),
+  };
 
   late final SettingsController _settings = SettingsController(
     (String key, String value) =>
@@ -168,9 +212,9 @@ class _SettingsOverlayState extends ConsumerState<SettingsOverlay>
 
   /// The setting a jump wants to land on until its row stands (HUM-275).
   ///
-  /// A fix can open the overlay before `GetConfig` or `GetInfo` answered;
+  /// A fix can open the panel before `GetConfig` or `GetInfo` answered;
   /// then the row comes later. The target waits for it, and every build
-  /// tries again, because the overlay rebuilds as soon as either answers.
+  /// tries again, because the panel rebuilds as soon as either answers.
   /// It goes once the row was revealed, or when the daemon really does not
   /// offer the setting.
   String? _pending;
@@ -182,28 +226,18 @@ class _SettingsOverlayState extends ConsumerState<SettingsOverlay>
   void initState() {
     super.initState();
     _query.addListener(_queryChanged);
-    if (widget.closing) {
-      _motion.value = 0;
-    } else {
-      unawaited(_motion.forward());
-    }
-    if (!_jumpTo(widget.focusKey)) {
+    if (!_jumpTo(widget.focusKey) && widget.autofocus) {
       _afterLayer(_searchNode.requestFocus);
     }
   }
 
   @override
-  void didUpdateWidget(SettingsOverlay oldWidget) {
+  void didUpdateWidget(SettingsPanel oldWidget) {
     super.didUpdateWidget(oldWidget);
-    if (widget.closing != oldWidget.closing) {
-      if (widget.closing) {
-        // Auf dem Weg hinaus nimmt kein Sprungziel mehr die Tastatur.
-        _pending = null;
-        _settings.want(null);
-        unawaited(_motion.reverse());
-      } else {
-        unawaited(_motion.forward());
-      }
+    if (widget.closing && !oldWidget.closing) {
+      // Auf dem Weg hinaus nimmt kein Sprungziel mehr die Tastatur.
+      _pending = null;
+      _settings.want(null);
     }
     if (widget.focusKey != oldWidget.focusKey ||
         widget.focusSerial != oldWidget.focusSerial) {
@@ -218,25 +252,8 @@ class _SettingsOverlayState extends ConsumerState<SettingsOverlay>
       ..dispose();
     _searchNode.dispose();
     _scroll.dispose();
-    _curve.dispose();
-    _motion.dispose();
     _settings.dispose();
     super.dispose();
-  }
-
-  void _motionChanged(AnimationStatus status) {
-    if (status != AnimationStatus.dismissed || !widget.closing) {
-      return;
-    }
-    // Nach dem Bild und nicht im Rückruf: Ohne Weg steht die Bewegung schon
-    // im Bau des Bildes am Ende, und der Besitzer darf dann nicht bauen.
-    WidgetsBinding.instance
-      ..addPostFrameCallback((Duration _) {
-        if (mounted && widget.closing && _motion.isDismissed) {
-          widget.onClosed?.call();
-        }
-      })
-      ..ensureVisualUpdate();
   }
 
   void _queryChanged() => setState(() {
@@ -314,9 +331,10 @@ class _SettingsOverlayState extends ConsumerState<SettingsOverlay>
     }
   }
 
-  /// Runs [action] once the layer around the overlay has taken the
-  /// keyboard: after the frame that builds it, and behind the request of the
-  /// layer itself, which is queued in the same frame (`HLayerScope`).
+  /// Runs [action] once a layer around the panel has taken the keyboard:
+  /// after the frame that builds it, and behind the request of the layer
+  /// itself, which is queued in the same frame (`HLayerScope`). Without a
+  /// layer the same moment does no harm.
   void _afterLayer(VoidCallback action) {
     WidgetsBinding.instance.addPostFrameCallback((Duration _) {
       scheduleMicrotask(() {
@@ -327,8 +345,14 @@ class _SettingsOverlayState extends ConsumerState<SettingsOverlay>
     });
   }
 
-  /// Closes the overlay; a form that holds a change asks first (HUM-414).
-  void _close() => _settings.leave(widget.onClose);
+  /// Closes through the host; a form that holds a change asks first
+  /// (HUM-414). Nothing without [SettingsPanel.onClose].
+  void _close() {
+    final VoidCallback? onClose = widget.onClose;
+    if (onClose != null) {
+      _settings.leave(onClose);
+    }
+  }
 
   void _choose(String category) {
     if (_query.text.isEmpty && category == _category) {
@@ -361,8 +385,8 @@ class _SettingsOverlayState extends ConsumerState<SettingsOverlay>
     _searchNode.requestFocus();
   }
 
-  /// `Esc`: the search first, then the overlay.
-  void _dismiss() {
+  /// `Esc`: the search first, then the host.
+  void _escape() {
     if (_query.text.isNotEmpty) {
       _clearSearch();
     } else {
@@ -416,11 +440,8 @@ class _SettingsOverlayState extends ConsumerState<SettingsOverlay>
 
   @override
   Widget build(BuildContext context) {
-    final HTokens tokens = HTheme.of(context);
-    final AppLocalizations l10n = context.l10n;
-    final bool reduced = HReducedMotion.of(context);
     // Die Antworten, auf die ein Sprungziel wartet: Kommt eine, baut das
-    // Overlay neu, und der nächste Versuch findet die Zeile.
+    // Panel neu, und der nächste Versuch findet die Zeile.
     ref
       ..watch(configProvider)
       ..watch(daemonInfoProvider);
@@ -433,7 +454,9 @@ class _SettingsOverlayState extends ConsumerState<SettingsOverlay>
         _land(entry);
       } else {
         _wanted = null;
-        _afterLayer(_searchNode.requestFocus);
+        if (widget.autofocus) {
+          _afterLayer(_searchNode.requestFocus);
+        }
       }
     }
     if (view.categories.isNotEmpty &&
@@ -446,92 +469,22 @@ class _SettingsOverlayState extends ConsumerState<SettingsOverlay>
     return Shortcuts(
       shortcuts: _shortcuts,
       child: Actions(
-        actions: <Type, Action<Intent>>{
-          DismissIntent: CallbackAction<DismissIntent>(
-            onInvoke: (DismissIntent _) {
-              _dismiss();
-              return null;
-            },
-          ),
-          _FocusSearchIntent: CallbackAction<_FocusSearchIntent>(
-            onInvoke: (_FocusSearchIntent _) {
-              _searchNode.requestFocus();
-              _query.selection = TextSelection(
-                baseOffset: 0,
-                extentOffset: _query.text.length,
-              );
-              return null;
-            },
-          ),
-        },
+        actions: _actions,
         child: HTheme.host(
           context,
-          HLayerScope(
-            child: Focus(
-              canRequestFocus: false,
-              skipTraversal: true,
-              onKeyEvent: _typeToSearch,
-              child: IgnorePointer(
-                ignoring: widget.closing,
-                child: Stack(
-                  fit: StackFit.expand,
-                  children: <Widget>[
-                    FadeTransition(
-                      opacity: _curve,
-                      child: Semantics(
-                        button: true,
-                        label: l10n.settingsClose,
-                        child: GestureDetector(
-                          key: const Key('settings-dim'),
-                          behavior: HitTestBehavior.opaque,
-                          onTap: _close,
-                          child: ColoredBox(
-                            color: HColorDerivation.fade(
-                              tokens.colors.bg0,
-                              0.72,
-                            ),
-                          ),
-                        ),
-                      ),
-                    ),
-                    LayoutBuilder(
-                      builder: (BuildContext context, BoxConstraints box) {
-                        final Widget panel = _panel(
-                          context,
-                          tokens,
-                          l10n,
-                          width: box.maxWidth - 2 * SettingsOverlay.sideMargin,
-                        );
-                        return Align(
-                          alignment: Alignment.bottomCenter,
-                          child: Padding(
-                            padding: const EdgeInsets.symmetric(
-                              horizontal: SettingsOverlay.sideMargin,
-                            ),
-                            child: SizedBox(
-                              height:
-                                  box.maxHeight *
-                                  SettingsOverlay.heightFraction,
-                              child: reduced
-                                  ? FadeTransition(
-                                      opacity: _curve,
-                                      child: panel,
-                                    )
-                                  : SlideTransition(
-                                      position: Tween<Offset>(
-                                        begin: const Offset(0, 1),
-                                        end: Offset.zero,
-                                      ).animate(_curve),
-                                      child: panel,
-                                    ),
-                            ),
-                          ),
-                        );
-                      },
-                    ),
-                  ],
+          Builder(
+            builder: (BuildContext context) => widget.frame(
+              context,
+              Focus(
+                canRequestFocus: false,
+                skipTraversal: true,
+                onKeyEvent: _typeToSearch,
+                child: LayoutBuilder(
+                  builder: (BuildContext context, BoxConstraints box) =>
+                      _content(context, width: box.maxWidth),
                 ),
               ),
+              _close,
             ),
           ),
         ),
@@ -539,15 +492,12 @@ class _SettingsOverlayState extends ConsumerState<SettingsOverlay>
     );
   }
 
-  Widget _panel(
-    BuildContext context,
-    HTokens tokens,
-    AppLocalizations l10n, {
-    required double width,
-  }) {
-    final double nav = width < SettingsOverlay.narrowBelow
-        ? SettingsOverlay.navWidthNarrow
-        : SettingsOverlay.navWidth;
+  Widget _content(BuildContext context, {required double width}) {
+    final HTokens tokens = HTheme.of(context);
+    final AppLocalizations l10n = context.l10n;
+    final double nav = width < SettingsPanel.narrowBelow
+        ? SettingsPanel.navWidthNarrow
+        : SettingsPanel.navWidth;
     final SettingsView view = _view ?? SettingsView.of(context, ref);
     final AsyncValue<ConfigValues> config = ref.watch(configProvider);
     final LlmKeyStatus status =
@@ -609,95 +559,78 @@ class _SettingsOverlayState extends ConsumerState<SettingsOverlay>
             ),
           );
 
-    return DecoratedBox(
-      key: const Key('settings-overlay'),
-      decoration: BoxDecoration(
-        color: tokens.colors.bg1,
-        border: Border.all(
-          color: tokens.colors.lineStrong,
-          width: HSize.hairline,
-        ),
-        borderRadius: const BorderRadius.vertical(
-          top: Radius.circular(HRadius.card),
-        ),
-      ),
-      child: ClipRRect(
-        borderRadius: const BorderRadius.vertical(
-          top: Radius.circular(HRadius.card),
-        ),
-        child: SettingsScope(
-          controller: _settings,
-          child: FocusTraversalGroup(
-            policy: OrderedTraversalPolicy(),
-            child: Column(
-              crossAxisAlignment: CrossAxisAlignment.stretch,
-              children: <Widget>[
-                SettingsHeader(
-                  textEdge: textEdge,
-                  pageMaxWidth: SettingsOverlay.pageMaxWidth,
-                  searchController: _query,
-                  searchFocus: _searchNode,
-                  onSubmitSearch: _submitSearch,
-                  onClose: _close,
-                ),
-                const HHairline(),
-                Expanded(
-                  child: Row(
-                    crossAxisAlignment: CrossAxisAlignment.stretch,
-                    children: <Widget>[
-                      SizedBox(
-                        width: nav,
-                        child: FocusTraversalOrder(
-                          order: const NumericFocusOrder(2),
-                          child: FocusTraversalGroup(
-                            child: Padding(
-                              padding: EdgeInsets.only(top: tokens.spacing.x2),
-                              child: SettingsNav(
-                                categories: view.categories,
-                                selected: searching ? null : _category,
-                                onSelect: _choose,
-                              ),
-                            ),
-                          ),
-                        ),
-                      ),
-                      const HHairline(vertical: true),
-                      Expanded(
-                        child: FocusTraversalOrder(
-                          order: const NumericFocusOrder(3),
-                          child: FocusTraversalGroup(
-                            child: SingleChildScrollView(
-                              key: ValueKey<String>(
-                                searching
-                                    ? 'settings-scroll-search'
-                                    : 'settings-scroll-$_category',
-                              ),
-                              controller: _scroll,
-                              padding: EdgeInsets.fromLTRB(
-                                tokens.spacing.x4,
-                                tokens.spacing.x4,
-                                tokens.spacing.x4,
-                                tokens.spacing.x8,
-                              ),
-                              child: Align(
-                                alignment: AlignmentDirectional.topStart,
-                                child: ConstrainedBox(
-                                  constraints: const BoxConstraints(
-                                    maxWidth: SettingsOverlay.pageMaxWidth,
-                                  ),
-                                  child: page,
-                                ),
-                              ),
-                            ),
-                          ),
-                        ),
-                      ),
-                    ],
-                  ),
-                ),
-              ],
+    return SettingsScope(
+      key: const Key('settings-panel'),
+      controller: _settings,
+      child: FocusTraversalGroup(
+        policy: OrderedTraversalPolicy(),
+        child: Column(
+          crossAxisAlignment: CrossAxisAlignment.stretch,
+          children: <Widget>[
+            SettingsHeader(
+              textEdge: textEdge,
+              pageMaxWidth: SettingsPanel.pageMaxWidth,
+              searchController: _query,
+              searchFocus: _searchNode,
+              onSubmitSearch: _submitSearch,
+              onClose: widget.onClose == null ? null : _close,
             ),
-          ),
+            const HHairline(),
+            Expanded(
+              child: Row(
+                crossAxisAlignment: CrossAxisAlignment.stretch,
+                children: <Widget>[
+                  SizedBox(
+                    width: nav,
+                    child: FocusTraversalOrder(
+                      order: const NumericFocusOrder(2),
+                      child: FocusTraversalGroup(
+                        child: Padding(
+                          padding: EdgeInsets.only(top: tokens.spacing.x2),
+                          child: SettingsNav(
+                            categories: view.categories,
+                            selected: searching ? null : _category,
+                            onSelect: _choose,
+                          ),
+                        ),
+                      ),
+                    ),
+                  ),
+                  const HHairline(vertical: true),
+                  Expanded(
+                    child: FocusTraversalOrder(
+                      order: const NumericFocusOrder(3),
+                      child: FocusTraversalGroup(
+                        child: SingleChildScrollView(
+                          key: ValueKey<String>(
+                            searching
+                                ? 'settings-scroll-search'
+                                : 'settings-scroll-$_category',
+                          ),
+                          controller: _scroll,
+                          padding: EdgeInsets.fromLTRB(
+                            tokens.spacing.x4,
+                            tokens.spacing.x4,
+                            tokens.spacing.x4,
+                            tokens.spacing.x8,
+                          ),
+                          child: Align(
+                            alignment: AlignmentDirectional.topStart,
+                            child: ConstrainedBox(
+                              constraints: const BoxConstraints(
+                                maxWidth: SettingsPanel.pageMaxWidth,
+                              ),
+                              child: page,
+                            ),
+                          ),
+                        ),
+                      ),
+                    ),
+                  ),
+                ],
+              ),
+            ),
+          ],
         ),
       ),
     );
