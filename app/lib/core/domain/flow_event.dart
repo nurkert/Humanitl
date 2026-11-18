@@ -141,6 +141,18 @@ sealed class FlowEvent with _$FlowEvent {
     required InterceptStatus status,
   }) = FlowEventInterceptChanged;
 
+  /// The resolution of the configuration may have changed (HUM-534): after
+  /// `SetConfig`, a saved project choice, a cleanup, a change of the model
+  /// servers, keys or agents, or an edited `config.toml`. Belongs to no flow;
+  /// clients read the configuration and the settings catalog again. [keys]
+  /// empty means any key may have changed; [projectId] names the project
+  /// whose choice changed, empty for the global level.
+  const factory FlowEvent.configChanged({
+    required DateTime at,
+    @Default(<String>[]) List<String> keys,
+    @Default('') String projectId,
+  }) = FlowEventConfigChanged;
+
   const FlowEvent._();
 
   /// The flow this event is about, or null for session-wide events.
@@ -165,7 +177,8 @@ sealed class FlowEvent with _$FlowEvent {
     FlowEventLagged() ||
     FlowEventRulesChanged() ||
     FlowEventAgentAsk() ||
-    FlowEventInterceptChanged() => null,
+    FlowEventInterceptChanged() ||
+    FlowEventConfigChanged() => null,
   };
 }
 

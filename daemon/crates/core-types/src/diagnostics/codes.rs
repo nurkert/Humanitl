@@ -1938,9 +1938,11 @@ registry! {
     /// write of `agents.source` or `agents.<id>.source` with `host`, through
     /// `humanitl agents source`, `humanitl config set`, the settings of the
     /// app or `ChangeSetting`. The `why` names the policy as the source; there
-    /// is deliberately no fix that goes around it (HUM-518).
+    /// is deliberately no fix that goes around it (HUM-518). The same code
+    /// refuses a write of any key a company policy fixes to one value, through
+    /// `SetConfig` or `humanitl config set` (HUM-534).
     AGENT_010 => "agent", "Agent source fixed by a company policy", "#agent_010",
-        "A company policy fixes the source of this agent to the depot. Starting it from the host and setting its source back to `host` are refused, on every way: a start, `humanitl agents source`, `humanitl config set`, the settings of the app and `ChangeSetting`. A policy may only name the depot; one that names the host is refused itself.",
+        "A company policy fixes the source of this agent to the depot. Starting it from the host and setting its source back to `host` are refused, on every way: a start, `humanitl agents source`, `humanitl config set`, the settings of the app and `ChangeSetting`. A policy may only name the depot; one that names the host is refused itself. The same code refuses a write of any other setting a company policy fixes to one value, through `SetConfig` or `humanitl config set`; such a setting is read only in every client, and the sentence names the key and the policy.",
         "None. The policy decides; ask whoever manages it.";
     /// The depot of the agent cannot be used: a directory or file of it is
     /// owned by another user, writable by others, a symbolic link leads out of

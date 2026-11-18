@@ -19,7 +19,6 @@ import 'package:humanitl/core/ipc/generated/humanitl/v1/humanitl.pb.dart' as pb;
 import 'package:humanitl/core/ui/ui.dart';
 import 'package:humanitl/features/history/history_view.dart';
 import 'package:humanitl/features/sandbox/widgets/isolation_panel.dart';
-import 'package:humanitl/features/settings/registry/setting_entry.dart';
 import 'package:humanitl/l10n/l10n.dart';
 
 import '../../harness/app_harness.dart';

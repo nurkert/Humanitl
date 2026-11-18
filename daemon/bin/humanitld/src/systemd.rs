@@ -480,6 +480,9 @@ pub async fn serve(
     );
     notify("READY=1");
 
+    // Eine von Hand oder von `humanitl config set` geänderte `config.toml`
+    // erreicht App und TUI als `FlowEvent.config_changed` (HUM-534).
+    let config_watch = server.watch_config_file();
     let service =
         v1::humanitl_server::HumanitlServer::with_interceptor(server, auth::TokenAuth::new(token));
     let (fired, started) = oneshot::channel();
@@ -497,6 +500,7 @@ pub async fn serve(
         result = &mut serving => result,
         _ = started => drain(&mut serving).await,
     };
+    config_watch.abort();
     let result = outcome.map_err(|error| {
         Diagnostic::builder(codes::DAEMON_001, Severity::Blocking)
             .title("gRPC-Server abgebrochen")

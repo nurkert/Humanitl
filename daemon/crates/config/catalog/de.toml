@@ -1,0 +1,179 @@
+# Texte des Einstellungskatalogs, Deutsch (Übersetzung von `en.toml`). HUM-534.
+#
+# Ein Text, der hier fehlt, gilt auf Englisch. Keine Steuerzeichen, kein
+# Markup; `tests/catalog.rs` prüft, dass jeder Eintrag hier einen Titel hat.
+
+[categories]
+models = "Modelle"
+agent = "Agent"
+sandbox = "Sandbox"
+requests = "Anfragen"
+interface = "Ansicht"
+shortcuts = "Tastenkürzel"
+network = "Netz"
+egress = "Entscheidungs-Proxy"
+daemon = "Daemon"
+
+[entries."llm.servers"]
+title = "Modellserver"
+help = "Jeder Server hat eigene Adresse, Modelle und Zugangsschlüssel. Der Standard bedient jede Sitzung, außer ein Projekt oder ein Profil wählt einen anderen."
+keywords = ["Server", "Modellserver", "Ollama", "LLM", "Standard", "hinzufügen", "entfernen", "umbenennen"]
+
+[entries."llm.endpoint"]
+title = "Endpunkt"
+help = "OpenAI-kompatible Adresse des Modells. Verkehr dorthin wird aufgezeichnet, nie angehalten."
+keywords = ["Server", "URL", "Adresse", "Ollama", "LLM", "OpenAI", "Host"]
+
+[entries."llm.models"]
+title = "Modell"
+keywords = ["Modell", "LLM", "Name", "Vorgabe"]
+
+[entries."llm.api_key_ref"]
+title = "Zugangsschlüssel"
+help = "Nur, wenn der Endpunkt einen verlangt. Er bleibt im Schlüsselbund des Systems."
+details = "Nur, wenn der Endpunkt einen verlangt. Der Schlüssel kommt in den Schlüsselbund des Systems. Er steht nie in config.toml, in keiner Kommandozeile, in keinem Log und in keiner Aufzeichnung, und dieses Formular zeigt ihn nie wieder."
+keywords = ["API-Schlüssel", "Token", "Geheimnis", "Passwort", "Schlüsselbund", "Zugangsdaten"]
+
+[entries."llm.server"]
+title = "Wer nutzt welchen Server"
+help = "Ein Projekt oder ein Profil kann einen anderen gespeicherten Server nutzen als den Standard. Eine Änderung gilt ab der nächsten Sitzung."
+keywords = ["zuordnen", "Projekt", "Profil", "nutzt", "Zuordnung"]
+
+[entries."agent.adapter"]
+title = "Coding-Agent"
+help = "Der Agent, den eine neue Sitzung in der Sandbox startet."
+details = "Der Agent, den die nächste Sitzung in der Sandbox startet. Humanitl schreibt ihm Konfiguration, Endpunkt, Modelle und Schlüssel."
+keywords = ["Agent", "OpenCode", "pi", "programmieren", "Assistent"]
+
+[entries."sandbox.work_dir"]
+title = "Projektordner"
+help = "Wird als /work eingehängt. Ohne ihn der Ordner, in dem Humanitl startet."
+help_macos = "Der Agent arbeitet hier unter dem echten Pfad. Ohne ihn der Ordner, in dem Humanitl startet."
+keywords = ["Ordner", "Verzeichnis", "Projekt", "Arbeitsordner", "Pfad"]
+
+[entries."sandbox.mode"]
+title = "Wohin der Agent schreibt"
+help = "Wegwerf lässt den Projektordner unberührt, bis du die Änderungen übernimmst."
+details = "Wegwerf lässt den Projektordner unberührt, bis du die Änderungen übernimmst. Automatisch läuft als Wegwerf-Sandbox, wo dieses System es kann, sonst direkt."
+keywords = ["Wegwerf", "direkt", "automatisch", "Kopie", "übernehmen", "Änderungen", "schreiben"]
+
+[entries."sandbox.backend"]
+title = "Sandbox-Backend"
+help = "In welcher Isolation die nächste Sitzung läuft. Automatisch nimmt das Backend des Systems."
+keywords = ["Backend", "Isolation", "Container", "Namensräume", "Kernel", "Micro-VM", "virtuelle Maschine"]
+
+[entries."hold.timeout_secs"]
+title = "Haltefrist"
+help = "Sekunden, die eine angehaltene Anfrage auf eine Entscheidung wartet, bevor die Zeit abläuft."
+keywords = ["halten", "warten", "Sekunden", "Frist", "Zeitlimit", "Ablauf"]
+
+[entries."hold.ask_mode"]
+title = "Fragen"
+help = "Wo eine angehaltene Anfrage gefragt wird."
+keywords = ["fragen", "Rückfrage", "Terminal", "wo", "Entscheidung"]
+
+[entries."ui.language"]
+title = "Sprache"
+keywords = ["Sprache", "Deutsch", "Englisch", "English", "Übersetzung"]
+
+[entries."ui.theme"]
+title = "Erscheinungsbild"
+keywords = ["Design", "Thema", "dunkel", "hell", "System", "Farbe", "Modus"]
+
+[entries."ui.scale"]
+title = "Skalierung"
+help = "Text und Bedienelemente wachsen gemeinsam."
+details = "Text und Bedienelemente wachsen gemeinsam. Strg+Plus und Strg+Minus ändern sie in Schritten von 10 %, Strg+0 kehrt zu 100 % zurück."
+keywords = ["Zoom", "Größe", "größer", "kleiner", "Schriftgröße", "Schrift"]
+
+[entries."ui.notifications"]
+title = "Meldungen des Desktops"
+help = "Wenn eine Anfrage wartet und das Fenster nicht vorn ist"
+keywords = ["benachrichtigen", "Benachrichtigung", "Desktop", "Hinweis", "Meldung"]
+
+[entries.shortcuts]
+title = "Tastenkürzel"
+help = "Jedes Tastenkürzel der Anwendung, nur zum Lesen."
+keywords = ["Kürzel", "Tasten", "Tastatur", "Hotkey"]
+
+[entries."tls.trust_system_store"]
+title = "Zertifikate des Systems"
+help = "Zertifikaten dieses Systems vertrauen, z. B. einer Firmen-CA"
+details = "Aus: Es gelten nur die öffentlichen Wurzeln, die Humanitl mitbringt, und ein Server mit einem Firmen- oder selbst installierten Zertifikat wird abgelehnt. Die Sandbox ist davon nicht betroffen. Wirkt, wenn der Hintergrunddienst neu startet (Daemon, Neustart)."
+keywords = ["TLS", "Zertifikat", "CA", "Firma", "Proxy", "HTTPS", "Wurzel"]
+
+[entries."egress.proxy"]
+title = "Adresse"
+help = "Ein abfangender Proxy von dir als http://HOST:PORT. Jede Anfrage, die Humanitl erlaubt, geht dann über ihn hinaus. Leer: Anfragen gehen direkt hinaus."
+details = "Humanitl entscheidet weiter zuerst: Regeln, angehaltene Anfragen und die Aufzeichnung bleiben, und eine blockierte Anfrage erreicht den Proxy nie. Der Proxy sieht den entschlüsselten Verkehr, auch Geheimnisse, die Humanitl nicht blockiert hat. Ist er nicht erreichbar, scheitert eine Anfrage, statt direkt hinauszugehen. Anfragen des Hintergrunddienstes selbst, etwa die Suche nach Modellservern und die Update-Prüfung, bleiben direkt. Wirkt nach dem Neustart des Hintergrunddienstes."
+keywords = ["mitmproxy", "Burp", "Proxy", "Upstream", "Abfangen", "Egress", "HTTP-Proxy", "CONNECT"]
+
+[entries."egress.proxy_ca"]
+title = "CA-Zertifikat"
+help = "Die PEM-Datei der CA des Proxys, bei mitmproxy ~/.mitmproxy/mitmproxy-ca-cert.pem. Ihr wird nur auf dem Weg über diesen Proxy vertraut, nie direkt."
+keywords = ["mitmproxy", "Burp", "Proxy", "Upstream", "Abfangen", "Egress", "HTTP-Proxy", "CONNECT"]
+
+[entries."egress.proxy_resolve"]
+title = "Wer Namen auflöst"
+help = "Der Proxy: Humanitl fragt keinen DNS-Server, bevor dort entschieden ist. Humanitl: Jede Adresse wird vorher auf private Netze geprüft."
+details = "Löst der Proxy auf, lehnt Humanitl weiter localhost, lokale Namen und private Adressen in Ziffern ab, aber ein öffentlicher Name, der in dein Netz zeigt, ist Sache des Proxys. Löst Humanitl auf, ist diese Prüfung vollständig, und der Name geht als DNS-Frage hinaus, bevor am Proxy entschieden ist."
+keywords = ["mitmproxy", "Burp", "Proxy", "Upstream", "Abfangen", "Egress", "HTTP-Proxy", "CONNECT"]
+
+[entries."egress.proxy_auth_ref"]
+title = "Zugangsdaten"
+help = "Nur wenn der Proxy eine Anmeldung verlangt: NUTZER:PASSWORT, im Schlüsselbund des Systems abgelegt (oder in einer privaten Datei, wenn er nicht antwortet) und nur an diesen Proxy geschickt."
+keywords = ["mitmproxy", "Burp", "Proxy", "Upstream", "Abfangen", "Egress", "HTTP-Proxy", "CONNECT"]
+
+[entries."egress.check"]
+title = "Verbindung"
+help = "Baut über den Proxy einen Tunnel und darin den TLS-Handschlag auf, so wie die Einstellungen jetzt stehen. Sendet keine Anfrage, damit am Proxy niemand etwas entscheiden muss."
+keywords = ["mitmproxy", "Burp", "Proxy", "Upstream", "Abfangen", "Egress", "HTTP-Proxy", "CONNECT"]
+
+[entries."daemon.version"]
+title = "Version"
+help = "Der Hintergrunddienst, mit dem dieses Fenster verbunden ist."
+keywords = ["Version", "Daemon", "über", "Build", "Dienst"]
+
+[entries."daemon.restart"]
+title = "Neustart"
+help = "Startet den Hintergrunddienst dieses Benutzers neu. Während einer Sitzung des Agenten nie ohne Rückfrage."
+keywords = ["Neustart", "neu starten", "Dienst", "systemctl", "Daemon", "neu laden"]
+
+[entries."update.check"]
+title = "Update-Prüfung"
+help = "Höchstens einmal am Tag, bei GitHub. Installiert wird nichts ohne deinen Klick."
+details = "Höchstens einmal am Tag fragt der Daemon bei GitHub nach einem neueren Release: api.github.com nach dem letzten Release, github.com nach dessen Dateien und den Speicher von GitHub, auf den ein Download umgeleitet wird (objects.githubusercontent.com, release-assets.githubusercontent.com). Er prüft die Signatur des Releases, sendet nichts, was ein gewöhnlicher Download nicht auch sendet, und installiert nichts ohne deinen Klick."
+keywords = ["Update", "Aktualisierung", "Release", "Version", "GitHub", "neu"]
+
+[entries."daemon.config_file"]
+title = "config.toml"
+help = "Alle anderen Einstellungen bleiben in dieser Datei."
+keywords = ["config.toml", "Datei", "bearbeiten", "Pfad", "TOML", "erweitert"]
+
+[choices."agent.adapter"]
+opencode = "OpenCode"
+pi = "pi"
+
+[choices."sandbox.mode"]
+auto = "Automatisch"
+direct = "Direkt"
+disposable = "Wegwerf"
+
+[choices."hold.ask_mode"]
+ui = "In der App"
+terminal = "Im Terminal"
+none = "Nirgends"
+upstream = "Proxy dahinter"
+
+[choices."ui.language"]
+en = "English"
+de = "Deutsch"
+
+[choices."ui.theme"]
+dark = "Dunkel"
+light = "Hell"
+system = "System"
+
+[choices."egress.proxy_resolve"]
+proxy = "Proxy"
+humanitl = "Humanitl"

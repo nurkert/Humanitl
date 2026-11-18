@@ -174,6 +174,13 @@ pub struct IpcServer {
     /// Der Weg hinaus des Verkehrs des Agenten seit dem Start des Daemons
     /// (HUM-511): direkt, oder über `egress.proxy`.
     egress: v1::EgressRoute,
+    /// Die Änderungen der Konfiguration für `FlowEvent.config_changed`
+    /// (HUM-534).
+    config_events: crate::config_events::ConfigEvents,
+    /// Die Sperren einer Firmenvorgabe; `None` heißt die Vorgabe an den
+    /// Pfaden dieses Dienstes ([`humanitl_config::PolicyLocks::of_policy`]).
+    /// Tests setzen eine.
+    policy_locks: Option<humanitl_config::PolicyLocks>,
 }
 
 /// Woraus der Update-RPC liest (HUM-382).
@@ -349,7 +356,44 @@ impl IpcServer {
             keys: None,
             intercept: None,
             egress: crate::egress::route(&config.egress),
+            config_events: crate::config_events::ConfigEvents::new(),
+            policy_locks: None,
         }
+    }
+
+    /// Derselbe Dienst mit diesen Sperren einer Firmenvorgabe (HUM-534); für
+    /// Tests, bis es die Vorgabedatei gibt.
+    #[must_use]
+    pub fn with_policy_locks(mut self, locks: humanitl_config::PolicyLocks) -> Self {
+        self.policy_locks = Some(locks);
+        self
+    }
+
+    /// Der Sender von `FlowEvent.config_changed` (HUM-534); der Daemon hängt
+    /// an ihn die Beobachtung von `config.toml`
+    /// ([`crate::config_events::watch_file`]).
+    #[must_use]
+    pub fn config_events(&self) -> crate::config_events::ConfigEvents {
+        self.config_events.clone()
+    }
+
+    /// Beobachtet die `config.toml` dieses Dienstes und meldet jede Änderung
+    /// auf der Platte als `FlowEvent.config_changed` (HUM-534); etwa
+    /// `humanitl config set`, das die Datei selbst schreibt. Läuft, bis der
+    /// Rückgabewert abgebrochen wird oder die Laufzeit endet.
+    #[must_use]
+    pub fn watch_config_file(&self) -> tokio::task::JoinHandle<()> {
+        crate::config_events::watch_file(
+            self.config_events.clone(),
+            self.doctor.paths.config_path(),
+        )
+    }
+
+    /// Die Sperren einer Firmenvorgabe, gesetzt oder aus den Pfaden.
+    fn policy_locks(&self) -> humanitl_config::PolicyLocks {
+        self.policy_locks
+            .clone()
+            .unwrap_or_else(|| humanitl_config::PolicyLocks::of_policy(&self.doctor.paths))
     }
 
     /// Derselbe Dienst mit diesem Speicher für den Zugangsschlüssel; für
@@ -367,7 +411,7 @@ impl IpcServer {
         crate::projects::Context {
             recorder: self.recorder.clone(),
             paths: self.doctor.paths.clone(),
-            locks: humanitl_config::PolicyLocks::of_policy(&self.doctor.paths),
+            locks: self.policy_locks(),
             activity: self
                 .sandbox
                 .as_ref()
@@ -893,6 +937,10 @@ impl IpcServer {
                     live.merge(rules_changed_stream(Arc::clone(store)).map(|event| vec![event])),
                 ),
             };
+        // Die Änderungen der Konfiguration (HUM-534) reisen im selben Strom
+        // wie die der Regeln: ein Abonnement je Client.
+        let merged: Pin<Box<dyn tokio_stream::Stream<Item = Vec<_>> + Send>> =
+            Box::pin(merged.merge(self.config_events.stream().map(|event| vec![event])));
         Box::pin(tokio_stream::iter(self.backlog(request)).chain(Flatten::new(merged)))
     }
 
@@ -1438,6 +1486,32 @@ fn refused(flow_id: &str, diagnostic: Diagnostic) -> (v1::DecideResult, Option<D
     (result, Some(diagnostic))
 }
 
+/// `FlowEvent.config_changed` nach einem erfolgreichen `Projects` (HUM-534):
+/// für `save_choice` die Schlüssel der Projektwahl mit dem Projekt, für
+/// `cleanup` je Projekt, dessen Wahl oder Registereintrag gelöscht wurde.
+pub(crate) fn publish_project_changes(
+    events: &crate::config_events::ConfigEvents,
+    saved: Option<&str>,
+    response: &v1::ProjectsResponse,
+) {
+    if let Some(project) = saved {
+        events.publish(humanitl_config::PROJECT_CHOICE_KEYS, project.trim());
+    }
+    let Some(cleaned) = &response.cleaned else {
+        return;
+    };
+    let mut seen = std::collections::BTreeSet::new();
+    for outcome in &cleaned.outcomes {
+        if outcome.deleted
+            && matches!(outcome.kind.as_str(), "project_choice" | "register_entry")
+            && !outcome.project_id.is_empty()
+            && seen.insert(outcome.project_id.clone())
+        {
+            events.publish(humanitl_config::PROJECT_CHOICE_KEYS, &outcome.project_id);
+        }
+    }
+}
+
 /// Der Strom der Regeländerungen als Ereignis des Vertrags.
 ///
 /// Eine Regeländerung ist kein Flow-Ereignis; sie hat weder Flow noch Zustand.
@@ -1969,39 +2043,43 @@ impl v1::humanitl_server::Humanitl for IpcServer {
         let v1::GetConfigRequest {
             include_schema,
             project_id,
+            include_catalog,
+            language,
         } = request.into_inner();
         let paths = self.doctor.paths.clone();
-        // Die Konfiguration eines Projekts aus dem Register (HUM-532): sein
-        // Ordner und seine Projektwahl mit der Herkunft `project-choice`.
-        let project = if project_id.trim().is_empty() {
-            None
-        } else {
-            let recorder = self.recorder.as_ref().ok_or_else(|| {
-                diagnostic_to_status(
-                    &Diagnostic::builder(codes::IPC_006, Severity::Error)
-                        .why(
-                            "this daemon runs without a recording, so it keeps no project \
-                             register"
-                                .to_owned(),
-                        )
-                        .build(),
-                )
-            })?;
-            Some(
-                crate::projects::lookup(recorder, &project_id)
-                    .await
-                    .map_err(|diagnostic| diagnostic_to_status(&diagnostic))?,
-            )
+        // Die Konfiguration eines Projekts aus dem Register (HUM-532) oder
+        // eines Ordners (HUM-534): sein Projekt-Profil und, im Register,
+        // seine Projektwahl mit der Herkunft `project-choice`. Ein
+        // unbekanntes Projekt löst ohne Wahl auf, ohne Fehler.
+        let target = crate::projects::config_target(self.recorder.as_ref(), &project_id)
+            .await
+            .map_err(|diagnostic| diagnostic_to_status(&diagnostic))?;
+        let locks = self.policy_locks();
+        let scope = config_rpc::CatalogScope {
+            policy: locks.clone(),
+            source_lock: self.source_lock(),
+            offers_disposable: self
+                .info
+                .capabilities
+                .iter()
+                .any(|name| name == "sandbox.disposable"),
         };
-        let locks = humanitl_config::PolicyLocks::of_policy(&paths);
-        let mut snapshot = tokio::task::spawn_blocking(move || match project {
-            Some(row) => config_rpc::project_snapshot(&paths, &locks, &row),
-            None => config_rpc::snapshot(&paths),
+        let mut snapshot = tokio::task::spawn_blocking(move || match target {
+            crate::projects::ConfigTarget::Project(row) => {
+                config_rpc::project_snapshot(&paths, &locks, &row)
+            }
+            crate::projects::ConfigTarget::Folder(folder) => {
+                config_rpc::folder_snapshot(&paths, &locks, &folder)
+            }
+            crate::projects::ConfigTarget::Global => config_rpc::snapshot_with(&paths, &locks),
         })
         .await
         .map_err(|error| diagnostic_to_status(&unfinished("GetConfig", &error)))?;
         if include_schema {
             snapshot.json_schema = humanitl_config::json_schema().to_string();
+        }
+        if include_catalog {
+            snapshot.catalog = Some(config_rpc::catalog_for(&snapshot, &language, &scope));
         }
         Ok(Response::new(snapshot))
     }
@@ -2022,12 +2100,16 @@ impl v1::humanitl_server::Humanitl for IpcServer {
         } = request.into_inner();
         let paths = self.doctor.paths.clone();
         let lock = self.source_lock();
+        let policy = self.policy_locks();
+        let written = key.clone();
         let snapshot = tokio::task::spawn_blocking(move || {
-            config_rpc::set_locked(&paths, &key, &value, &expected_server, &lock)
+            config_rpc::set_locked(&paths, &key, &value, &expected_server, &lock, &policy)
         })
         .await
         .map_err(|error| diagnostic_to_status(&unfinished("SetConfig", &error)))?
         .map_err(|diagnostic| diagnostic_to_status(&diagnostic))?;
+        // Nur die globale Ebene: `SetConfig` schreibt nie eine Projektwahl.
+        self.config_events.publish([written], "");
         Ok(Response::new(snapshot))
     }
 
@@ -2304,10 +2386,21 @@ impl v1::humanitl_server::Humanitl for IpcServer {
         let request = request.into_inner();
         let paths = self.doctor.paths.clone();
         let keys = self.key_store();
+        let changes = !matches!(request.op, Some(v1::llm_key_request::Op::Status(_)) | None);
+        // Eine Sperre der Firmenvorgabe gilt vor dem Schlüsselbund (HUM-534).
+        crate::policy_guard::refuse(
+            crate::policy_guard::of_llm_key(&request),
+            &self.policy_locks(),
+        )
+        .map_err(|diagnostic| diagnostic_to_status(&diagnostic))?;
         let status = tokio::task::spawn_blocking(move || llm_key::answer(&paths, &keys, request))
             .await
             .map_err(|error| diagnostic_to_status(&unfinished("LlmKey", &error)))?
             .map_err(|diagnostic| diagnostic_to_status(&diagnostic))?;
+        if changes {
+            self.config_events
+                .publish(["llm.api_key_ref", "llm.servers"], "");
+        }
         Ok(Response::new(status))
     }
 
@@ -2338,6 +2431,15 @@ impl v1::humanitl_server::Humanitl for IpcServer {
             None
         };
         let op = request.op.take();
+        crate::policy_guard::refuse(
+            crate::policy_guard::of_egress(op.as_ref()),
+            &self.policy_locks(),
+        )
+        .map_err(|diagnostic| diagnostic_to_status(&diagnostic))?;
+        let changes = matches!(
+            op,
+            Some(v1::egress_request::Op::SetAuth(_) | v1::egress_request::Op::RemoveAuth(_))
+        );
         let mut status =
             tokio::task::spawn_blocking(move || crate::egress::answer(&paths, &keys, &active, op))
                 .await
@@ -2353,6 +2455,9 @@ impl v1::humanitl_server::Humanitl for IpcServer {
                     .insert(0, convert::diagnostic_to_proto(&diagnostic)),
             }
         }
+        if changes {
+            self.config_events.publish(["egress.proxy_auth_ref"], "");
+        }
         Ok(Response::new(status))
     }
 
@@ -2363,6 +2468,19 @@ impl v1::humanitl_server::Humanitl for IpcServer {
         request: Request<v1::AgentsRequest>,
     ) -> Result<Response<v1::AgentsStatus>, Status> {
         let op = request.into_inner().op;
+        // Der Schlüssel, den `SetSource` schreibt (Review HUM-534): Er reist
+        // mit `config_changed`; eine leere Liste bleibt dem Unbekannten.
+        let written = match &op {
+            Some(v1::agents_request::Op::SetSource(set)) => {
+                Some(format!("agents.{}.source", set.agent.trim()))
+            }
+            _ => None,
+        };
+        crate::policy_guard::refuse(
+            crate::policy_guard::of_agents(op.as_ref()),
+            &self.policy_locks(),
+        )
+        .map_err(|diagnostic| diagnostic_to_status(&diagnostic))?;
         let paths = self.doctor.paths.clone();
         let lock = self.source_lock();
         let in_use = self.sandbox.as_ref().and_then(SandboxService::depot_in_use);
@@ -2372,6 +2490,9 @@ impl v1::humanitl_server::Humanitl for IpcServer {
         .await
         .map_err(|error| diagnostic_to_status(&unfinished("Agents", &error)))?
         .map_err(|diagnostic| diagnostic_to_status(&diagnostic))?;
+        if let Some(key) = written {
+            self.config_events.publish([key], "");
+        }
         Ok(Response::new(status))
     }
 
@@ -2381,10 +2502,16 @@ impl v1::humanitl_server::Humanitl for IpcServer {
         &self,
         request: Request<v1::ProjectsRequest>,
     ) -> Result<Response<v1::ProjectsResponse>, Status> {
-        crate::projects::answer(self.projects_context(), request.into_inner())
+        let request = request.into_inner();
+        let saved = match &request.op {
+            Some(v1::projects_request::Op::SaveChoice(save)) => Some(save.project_id.clone()),
+            _ => None,
+        };
+        let response = crate::projects::answer(self.projects_context(), request)
             .await
-            .map(Response::new)
-            .map_err(|diagnostic| diagnostic_to_status(&diagnostic))
+            .map_err(|diagnostic| diagnostic_to_status(&diagnostic))?;
+        publish_project_changes(&self.config_events, saved.as_deref(), &response);
+        Ok(Response::new(response))
     }
 
     /// Die Pause des Abfangens (HUM-407, [`crate::intercept`]): lesen,
@@ -2482,6 +2609,15 @@ impl v1::humanitl_server::Humanitl for IpcServer {
         request: Request<v1::LlmServersRequest>,
     ) -> Result<Response<v1::LlmServerList>, Status> {
         let request = request.into_inner();
+        let changes = !matches!(
+            request.op,
+            Some(v1::llm_servers_request::Op::List(_)) | None
+        );
+        crate::policy_guard::refuse(
+            crate::policy_guard::of_llm_servers(&request),
+            &self.policy_locks(),
+        )
+        .map_err(|diagnostic| diagnostic_to_status(&diagnostic))?;
         let paths = self.doctor.paths.clone();
         let keys = self.key_store();
         let sandbox = self.sandbox.clone();
@@ -2505,6 +2641,19 @@ impl v1::humanitl_server::Humanitl for IpcServer {
         .await
         .map_err(|error| diagnostic_to_status(&unfinished("LlmServers", &error)))?
         .map_err(|diagnostic| diagnostic_to_status(&diagnostic))?;
+        if changes {
+            self.config_events.publish(
+                [
+                    "llm.servers",
+                    "llm.active",
+                    "llm.server",
+                    "llm.endpoint",
+                    "llm.models",
+                    "llm.api_key_ref",
+                ],
+                "",
+            );
+        }
         Ok(Response::new(list))
     }
 

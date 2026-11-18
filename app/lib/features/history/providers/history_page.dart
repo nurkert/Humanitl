@@ -575,7 +575,8 @@ class HistoryPageNotifier extends Notifier<HistoryPageState> {
       case FlowEventDiagnostic() ||
           FlowEventRulesChanged() ||
           FlowEventAgentAsk() ||
-          FlowEventInterceptChanged():
+          FlowEventInterceptChanged() ||
+          FlowEventConfigChanged():
         break;
     }
   }

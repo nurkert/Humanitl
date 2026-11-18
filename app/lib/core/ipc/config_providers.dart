@@ -11,6 +11,8 @@
 /// While no daemon answers, a reader gets the defaults of [ConfigValues].
 library;
 
+import 'dart:async';
+
 import 'package:flutter_riverpod/flutter_riverpod.dart';
 import 'package:riverpod_annotation/riverpod_annotation.dart';
 
@@ -18,6 +20,7 @@ import '../domain/domain.dart';
 import 'client_providers.dart';
 import 'connection.dart';
 import 'daemon_client.dart';
+import 'flow_events.dart';
 
 part 'config_providers.g.dart';
 
@@ -59,6 +62,38 @@ class ConfigSetting extends _$ConfigSetting {
     await refresh();
   }
 }
+
+/// The settings catalog of the daemon in one language (HUM-534): categories,
+/// order, titles, help, keywords and controls, with origin and lock per
+/// entry. The argument is the language of the window, `en` or `de`, so the
+/// texts match the rest of it.
+///
+/// Read again with the configuration: a write changes origins, and a
+/// `config_changed` refreshes [configProvider] ([configChangesProvider]).
+final settingsCatalogProvider = FutureProvider.family<SettingsCatalog, String>((
+  Ref ref,
+  String language,
+) {
+  ref
+    ..watch(linkLiveProvider)
+    ..watch(configProvider);
+  return ref.watch(daemonClientProvider).getSettingsCatalog(language: language);
+}, retry: noConfigRetry);
+
+/// Follows `FlowEvent.config_changed` (HUM-534): another client, the CLI or
+/// an editor changed what the configuration resolves to, and every reader of
+/// [configProvider] (and so of [settingsCatalogProvider]) asks again. The
+/// shell keeps it alive; it holds no state of its own.
+final Provider<void> configChangesProvider = Provider<void>((Ref ref) {
+  ref.listen(flowEventsProvider, (
+    AsyncValue<FlowEvent>? previous,
+    AsyncValue<FlowEvent> next,
+  ) {
+    if (next.value is FlowEventConfigChanged) {
+      unawaited(ref.read(configProvider.notifier).refresh());
+    }
+  });
+});
 
 /// Whether an access key is stored, and where (`LlmKey`, HUM-140).
 ///

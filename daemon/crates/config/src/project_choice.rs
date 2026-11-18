@@ -22,7 +22,8 @@
 //! verworfen:
 //!
 //! 1. ein Schlüssel außerhalb der Liste,
-//! 2. ein Wert, den eine Firmenvorgabe sperrt ([`PolicyLocks`]),
+//! 2. ein Schlüssel, den eine Firmenvorgabe sperrt ([`PolicyLocks`]), mit
+//!    welchem Wert auch immer,
 //! 3. ein `sandbox.min_isolation` unter der Untergrenze der Ebenen darunter;
 //!    die Wahl hebt die Untergrenze, sie senkt sie nie.
 
@@ -32,7 +33,7 @@ use humanitl_core::diagnostics::codes::CONFIG_024;
 use humanitl_core::{Diagnostic, Severity};
 
 use crate::model::{Config, MinIsolation};
-use crate::paths::Paths;
+pub use crate::policy::{LockedValue, PolicyLocks};
 
 /// Die Schlüssel, die eine Projektwahl tragen darf: genau die des
 /// Erststart-Bildschirms (ADR-0024 Punkt 1).
@@ -139,64 +140,6 @@ impl ProjectChoice {
     }
 }
 
-/// Ein Wert, den eine Firmenvorgabe festlegt.
-#[derive(Debug, Clone, PartialEq, Eq)]
-pub struct LockedValue {
-    /// Der einzige Wert, den der Schlüssel haben darf.
-    pub value: String,
-    /// Wer sperrt, so wie die Clients es nennen: die Vorgabedatei.
-    pub by: String,
-}
-
-/// Die Sperren einer Firmenvorgabe über Schlüssel der Projektwahl.
-///
-/// Die Vorgabedatei gibt es noch nicht (BACKLOG Abschnitt 9, Punkt 21); bis
-/// dahin ist das immer leer, wie [`crate::agents::SourceLock::of_policy`].
-/// Tests setzen eine Sperre mit [`PolicyLocks::with`].
-#[derive(Debug, Clone, Default, PartialEq, Eq)]
-pub struct PolicyLocks {
-    locks: BTreeMap<String, LockedValue>,
-}
-
-impl PolicyLocks {
-    /// Keine Sperre.
-    #[must_use]
-    pub fn none() -> Self {
-        Self::default()
-    }
-
-    /// Die Sperren aus der Firmen-Vorgabedatei; heute keine.
-    #[must_use]
-    pub fn of_policy(paths: &Paths) -> Self {
-        let _ = paths;
-        Self::none()
-    }
-
-    /// Fügt eine Sperre hinzu.
-    #[must_use]
-    pub fn with(
-        mut self,
-        key: impl Into<String>,
-        value: impl Into<String>,
-        by: impl Into<String>,
-    ) -> Self {
-        self.locks.insert(
-            key.into(),
-            LockedValue {
-                value: value.into(),
-                by: by.into(),
-            },
-        );
-        self
-    }
-
-    /// Die Sperre eines Schlüssels.
-    #[must_use]
-    pub fn get(&self, key: &str) -> Option<&LockedValue> {
-        self.locks.get(key)
-    }
-}
-
 /// Prüft eine Wahl gegen die Konfiguration ohne sie (`below`) und gegen die
 /// Sperren einer Firmenvorgabe.
 ///
@@ -214,12 +157,12 @@ pub fn check_choice(
     locks: &PolicyLocks,
 ) -> Result<(), Diagnostic> {
     for (key, value) in choice.iter() {
-        if let Some(locked) = locks.get(key)
-            && locked.value != value
-        {
+        // Ein gesperrter Schlüssel ist nur lesbar, auch mit dem Wert der
+        // Vorgabe (HUM-534, wie `SetConfig`): Die Wahl trägt ihn nie.
+        if let Some(locked) = locks.get(key) {
             return Err(refused(format!(
                 "the project choice sets {key} = {value:?}, and the company policy {} fixes it \
-                 to {:?}",
+                 to {:?}; a locked key is read only and stays out of the choice",
                 locked.by, locked.value
             )));
         }
@@ -317,7 +260,12 @@ mod tests {
             "{}",
             refused.why
         );
+        // Auch der Wert der Vorgabe ist abgelehnt (HUM-534). Mutationsbeweis:
+        // Prüfte die Schleife wieder `locked.value != value`, ginge er durch.
         let same = ProjectChoice::from_pairs([("hold.ask_mode", "terminal")]).unwrap();
-        check_choice(&same, &below, &locks).unwrap();
+        let refused = check_choice(&same, &below, &locks).unwrap_err();
+        assert_eq!(refused.code.as_str(), "CONFIG_024");
+        let other_key = ProjectChoice::from_pairs([("sandbox.work_mode", "ro")]).unwrap();
+        check_choice(&other_key, &below, &locks).unwrap();
     }
 }

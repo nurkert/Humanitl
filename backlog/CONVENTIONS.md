@@ -3832,3 +3832,65 @@ forget PATH [--yes]` zeigen den Plan des Daemons als Tabelle, die Warnungen,
 was bleibt, und die Zeile `NOT_DELETED`, und fragen. Ohne Terminal (oder mit
 `--json`) und ohne `--yes` löscht nichts, der Plan steht auf stdout, Exit 1.
 Ohne `PATH` und ohne `--unassigned` gilt `all`.
+
+### 4.53 Aus der Umsetzung des Einstellungskatalogs (HUM-534, 2026-11-18)
+
+**Ein Katalog, im Crate `humanitl-config`.** `humanitl_config::catalog` trägt
+die Struktur (`CATEGORIES`, `DEFS`: Kennung, Kategorie, Bedienart
+`switch|choice|text|number|secret_ref|path|special`, `next_session`,
+`client`), die Texte stehen je Sprache in `daemon/crates/config/catalog/en.toml`
+(Quelle) und `de.toml` (Übersetzung, Rückfall auf Englisch), beim Bau
+eingebettet. `catalog/hidden.toml` nennt jedes Blatt des Schemas ohne Zeile
+einzeln mit Grund, auch die Felder der Backends: als Daten, damit kein
+Rust-Code ein Backend nennt (`tools/check_coupling.py`). Aus demselben Grund
+nennen die Stichwörter keine Backend-Namen; die erzeugte Vorlage des Fakes ist
+Dart und wird gezählt. `tests/catalog.rs` hält Schema, Einträge
+und Gründe gegeneinander, und ein neues Feld ohne beides färbt ihn rot. Wer eine Einstellung in App und TUI
+bringt, ergänzt `DEFS` und beide Sprachdateien; die ARB-Dateien tragen nur
+noch die Texte der App selbst. Auswahlwerte kommen aus der Aufzählung des
+Schemas, für `agent.adapter` aus `catalog::AGENT_ADAPTERS`, das ein Test der
+IPC-Crate gegen das Register der Adapter hält. Ein Text, der nur auf macOS
+anders lautet, steht als `help_macos`.
+
+**Auf der Leitung.** `GetConfigRequest.include_catalog` füllt
+`ConfigSnapshot.catalog` (`SettingsCatalog`); die Sprache aus
+`GetConfigRequest.language`, sonst `ui.language`. Je Eintrag kommen im Daemon
+`origin` (aus `ConfigSnapshot.origins`), `lock` (`SettingLock`, gesetzt nur
+bei einer Sperre) und `in_project_choice` dazu
+(`humanitl_ipc::config_rpc::catalog_for`). Einträge, die der Daemon nicht
+anbietet, fehlen (heute `sandbox.mode` ohne `sandbox.disposable`); ein Client
+blendet nichts selbst aus. `client = "app"` markiert Einstellungen des
+App-Fensters (`ui.scale`, `shortcuts`), die die TUI nicht zeigt.
+`GetConfigRequest.project_id` nimmt eine Kennung des Registers oder einen
+absoluten Ordner; Unbekanntes löst ohne Projektwahl auf, ohne Fehler. Die
+Vorlage des Fakes der App, `app/lib/core/ipc/fake/generated/settings_catalog.dart`,
+erzeugt `cargo xtask docs` aus demselben Katalog.
+
+**Sperren sind eine Ebene.** `humanitl_config::PolicyLocks` (jetzt in
+`policy.rs`) legt beliebige Schlüssel auf einen Wert fest und liegt als
+oberste Ebene in `Sources.policy` (Herkunft `Origin::Policy`, auf der Leitung
+`policy`). `PolicyLocks::of_policy` ist bis zur Vorgabedatei leer; Tests und
+`IpcServer::with_policy_locks` setzen Sperren. `SetConfig` und `humanitl
+config set` lehnen einen gesperrten Schlüssel mit `AGENT_010` ab
+(`humanitl_config::policy::refuse_locked_write`); `LlmServers`, `LlmKey`,
+`Egress` und `Agents` fragen vor jedem Schreiben
+`humanitl_ipc::policy_guard`, das die berührten Schlüssel nennt
+(`refuse_locked_keys`). Eine Sperre gilt auch für jeden Schlüssel unter dem
+gesperrten Pfad (`PolicyLocks::covering`: `sandbox.env` deckt
+`sandbox.env.NAME`); `SetConfig` prüft jeden Schlüssel, den es berührt,
+also für Endpunkt und Modelle auch `llm.servers`. Die Einträge `llm.servers`
+und `llm.server` tragen im Katalog die Sperre jedes Schlüssels aus
+`policy_guard::SERVER_KEYS`, auch der ohne Zeile wie `llm.active`. Die Projektwahl trägt keinen gesperrten Schlüssel,
+auch nicht mit dem Wert der Vorgabe (`CONFIG_024`). Eine Sperre auf
+`sandbox.min_isolation` senkt die Untergrenze nie: Gleich ist sie die
+Herkunft, darunter ein `CONFIG_003` (Warning).
+
+**`FlowEvent.config_changed`** reist im Strom `Subscribe` (wie
+`RulesChanged`: ein Abonnement je Client, auch ohne Sitzung) mit den
+Schlüsseln und, für eine Projektwahl, der Projekt-Kennung. Gesendet von
+`SetConfig`, `Projects.save_choice`, `Projects.cleanup` (je Projekt, dessen
+Wahl oder Registereintrag fiel), den ändernden Operationen von `LlmServers`,
+`LlmKey`, `Egress` und `Agents`, und von `IpcServer::watch_config_file`, das
+`config.toml` alle zwei Sekunden an Zeitpunkt und Größe misst (leere
+Schlüsselliste: alles kann sich geändert haben). Der Daemon selbst lädt
+dadurch nichts neu.

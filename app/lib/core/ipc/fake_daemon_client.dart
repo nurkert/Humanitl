@@ -16,6 +16,7 @@ import 'dart:typed_data';
 import '../domain/domain.dart';
 import 'client_diagnostics.dart';
 import 'daemon_client.dart';
+import 'fake/generated/settings_catalog.dart';
 
 /// One step of a script: after [after] from the start of the subscription,
 /// [build] produces the event, or null when the state no longer calls for it
@@ -1562,6 +1563,16 @@ class FakeDaemonClient
     if (setConfigFailure case final Diagnostic failure) {
       throw DaemonException(failure);
     }
+    // Wie der Daemon (HUM-534): ein gesperrter Schluessel ist nur lesbar.
+    if (policyLocks[key] case final String lockedBy) {
+      throw DaemonException(
+        Diagnostic(
+          code: 'AGENT_010',
+          severity: Severity.blocking,
+          why: 'the company policy $lockedBy fixes $key; writing it is refused',
+        ),
+      );
+    }
     // Dieselbe Pruefung wie der Daemon (HUM-289): ein Wert fuer die Ansicht
     // eines Servers geht nicht in die eines anderen.
     final bool view = key == FormKeys.llmEndpoint || key == FormKeys.llmModels;
@@ -1591,6 +1602,8 @@ class FakeDaemonClient
       if (key == FormKeys.sandboxWorkDir && !sandbox.isUp) {
         sandbox = sandbox.copyWith(workDirHost: value == '-' ? null : value);
       }
+      // Wie der Daemon (HUM-534): jeder Abonnent erfaehrt die Aenderung.
+      _emit(FlowEvent.configChanged(at: _clock(), keys: <String>[key]));
       return;
     }
     const String prefix = 'sandbox.env.';
@@ -2171,7 +2184,8 @@ class FakeDaemonClient
           FlowEventDiagnostic() ||
           FlowEventRulesChanged() ||
           FlowEventAgentAsk() ||
-          FlowEventInterceptChanged():
+          FlowEventInterceptChanged() ||
+          FlowEventConfigChanged():
         break;
     }
   }
@@ -2593,6 +2607,103 @@ class FakeDaemonClient
   Future<ConfigValues> getConfig() async {
     _check();
     return configValues;
+  }
+
+  /// The locks of a company policy this fake plays (HUM-534): the key and
+  /// who locks it. A locked entry carries its lock in the catalog, and
+  /// `SetConfig` on it is refused with `AGENT_010`, as by the daemon.
+  final Map<String, String> policyLocks = <String, String>{};
+
+  /// The languages the catalog was asked in, in call order.
+  final List<String> catalogLanguages = <String>[];
+
+  @override
+  Future<SettingsCatalog> getSettingsCatalog({String language = ''}) async {
+    _check();
+    catalogLanguages.add(language);
+    final String configured = configValues.values['ui'] is Map<String, Object?>
+        ? ((configValues.values['ui']! as Map<String, Object?>)['language']
+                  as String? ??
+              'en')
+        : 'en';
+    final String code = language.isEmpty
+        ? configured
+        : (language.toLowerCase().startsWith('de') ? 'de' : 'en');
+    final Map<String, Object?> all =
+        jsonDecode(fakeSettingsCatalogJson) as Map<String, Object?>;
+    final Map<String, Object?> json =
+        (all[code] ?? all['en'])! as Map<String, Object?>;
+    return SettingsCatalog(
+      language: json['language']! as String,
+      categories: <SettingsCatalogCategory>[
+        for (final Object? item in json['categories']! as List<Object?>)
+          if (item case final Map<String, Object?> category)
+            SettingsCatalogCategory(
+              id: category['id']! as String,
+              order: category['order']! as int,
+              title: category['title']! as String,
+            ),
+      ],
+      entries: <SettingsCatalogEntry>[
+        for (final Object? item in json['entries']! as List<Object?>)
+          if (item case final Map<String, Object?> entry)
+            // Wie der Daemon: ohne Wegwerf-Sandbox kein `sandbox.mode`.
+            if (entry['id'] != FormKeys.sandboxMode || info.offersDisposable)
+              _catalogEntry(entry),
+      ],
+    );
+  }
+
+  SettingsCatalogEntry _catalogEntry(Map<String, Object?> entry) {
+    final String id = entry['id']! as String;
+    // Wie der Daemon (`config_rpc::lock_of`): Die Zeilen der Server tragen
+    // die Sperre jedes Schlüssels, den `LlmServers` berührt.
+    const List<String> serverKeys = <String>[
+      'llm.servers',
+      'llm.active',
+      'llm.server',
+      'llm.endpoint',
+      'llm.models',
+      'llm.api_key_ref',
+    ];
+    final String? lockedBy = id == 'llm.servers' || id == 'llm.server'
+        ? serverKeys.map((String key) => policyLocks[key]).nonNulls.firstOrNull
+        : policyLocks[id];
+    return SettingsCatalogEntry(
+      id: id,
+      category: entry['category']! as String,
+      order: entry['order']! as int,
+      title: entry['title']! as String,
+      help: entry['help']! as String,
+      details: entry['details']! as String,
+      keywords: <String>[
+        for (final Object? word in entry['keywords']! as List<Object?>)
+          word! as String,
+      ],
+      control: SettingControl.parse(entry['control']! as String),
+      choices: <SettingsChoice>[
+        for (final Object? item in entry['choices']! as List<Object?>)
+          if (item case final Map<String, Object?> choice)
+            SettingsChoice(
+              value: choice['value']! as String,
+              title: choice['title']! as String,
+            ),
+      ],
+      nextSession: entry['nextSession']! as bool,
+      tier: entry['tier']! as String,
+      client: entry['client']! as String,
+      origin: lockedBy != null
+          ? 'policy'
+          : configValues.origins[id] ??
+                ((entry['isKey']! as bool) ? 'default' : ''),
+      lock: lockedBy == null
+          ? null
+          : SettingsLock(
+              lockedBy: lockedBy,
+              reason: 'the company policy fixes this value',
+            ),
+      inProjectChoice: entry['inProjectChoice']! as bool,
+    );
   }
 
   @override

@@ -408,6 +408,11 @@ extension FlowEventToDomain on pb.FlowEvent {
         at: when,
         status: intercept.status.toDomain(),
       ),
+      pb.FlowEvent_Event.configChanged => FlowEvent.configChanged(
+        at: when,
+        keys: List<String>.unmodifiable(configChanged.keys),
+        projectId: configChanged.projectId,
+      ),
       pb.FlowEvent_Event.notSet => null,
     };
   }
@@ -1180,4 +1185,50 @@ extension UpdateEventToDomain on pb.UpdateEvent {
     ),
     pb.UpdateEvent_Event.notSet => null,
   };
+}
+
+/// `SettingsCatalog` to [SettingsCatalog] (HUM-534).
+extension SettingsCatalogToDomain on pb.SettingsCatalog {
+  /// The domain form, entries in the order the daemon sent them.
+  SettingsCatalog toDomain() => SettingsCatalog(
+    language: language,
+    categories: <SettingsCatalogCategory>[
+      for (final pb.SettingsCategory category in categories)
+        SettingsCatalogCategory(
+          id: category.id,
+          order: category.order,
+          title: category.title,
+        ),
+    ],
+    entries: <SettingsCatalogEntry>[
+      for (final pb.SettingsEntry entry in entries) entry.toDomain(),
+    ],
+  );
+}
+
+/// `SettingsEntry` to [SettingsCatalogEntry] (HUM-534).
+extension SettingsEntryToDomain on pb.SettingsEntry {
+  /// The domain form; a lock only when the daemon sent one.
+  SettingsCatalogEntry toDomain() => SettingsCatalogEntry(
+    id: id,
+    category: category,
+    order: order,
+    title: title,
+    help: help,
+    details: details,
+    keywords: List<String>.unmodifiable(keywords),
+    control: SettingControl.parse(control),
+    choices: <SettingsChoice>[
+      for (final pb.SettingsChoice choice in choices)
+        SettingsChoice(value: choice.value, title: choice.title),
+    ],
+    nextSession: nextSession,
+    tier: tier,
+    client: client,
+    origin: origin,
+    lock: hasLock()
+        ? SettingsLock(lockedBy: lock.lockedBy, reason: lock.reason)
+        : null,
+    inProjectChoice: inProjectChoice,
+  );
 }

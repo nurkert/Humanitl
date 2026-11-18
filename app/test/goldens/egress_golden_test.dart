@@ -13,7 +13,8 @@ import 'package:humanitl/core/domain/domain.dart';
 import 'package:humanitl/core/ipc/client_providers.dart';
 import 'package:humanitl/core/ipc/fake_daemon_client.dart';
 import 'package:humanitl/features/sandbox/widgets/isolation_panel.dart';
-import 'package:humanitl/features/settings/registry/setting_entry.dart';
+
+import '../harness/settings_harness.dart' show SettingsCategory;
 
 import 'settings_golden_test.dart' show category, configured, sheet;
 import 'support/golden_variants.dart';

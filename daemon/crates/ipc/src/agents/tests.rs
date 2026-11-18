@@ -150,7 +150,15 @@ fn under_the_lock_no_way_writes_host_and_the_file_stays() {
     );
     assert!(refused.fix.is_none());
     for key in ["agents.claude.source", "agents.source"] {
-        let refused = crate::config_rpc::set_locked(&paths, key, "host", "", &lock).unwrap_err();
+        let refused = crate::config_rpc::set_locked(
+            &paths,
+            key,
+            "host",
+            "",
+            &lock,
+            &humanitl_config::PolicyLocks::none(),
+        )
+        .unwrap_err();
         assert_eq!(refused.code.as_str(), "AGENT_010", "{key}");
     }
     assert_eq!(
@@ -169,8 +177,15 @@ fn under_the_lock_no_way_writes_host_and_the_file_stays() {
 fn set_config_writes_the_source_without_a_lock() {
     let dir = tempfile::tempdir().unwrap();
     let paths = paths(dir.path());
-    crate::config_rpc::set_locked(&paths, "agents.source", "depot", "", &SourceLock::none())
-        .unwrap();
+    crate::config_rpc::set_locked(
+        &paths,
+        "agents.source",
+        "depot",
+        "",
+        &SourceLock::none(),
+        &humanitl_config::PolicyLocks::none(),
+    )
+    .unwrap();
     assert!(crate::config_rpc::is_form_key(
         "agents.codex.credential_writeback"
     ));

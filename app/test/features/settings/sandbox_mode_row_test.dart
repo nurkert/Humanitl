@@ -8,7 +8,6 @@ import 'package:flutter_test/flutter_test.dart';
 import 'package:humanitl/core/domain/domain.dart';
 import 'package:humanitl/core/ipc/fake_daemon_client.dart';
 import 'package:humanitl/core/ui/ui.dart';
-import 'package:humanitl/features/settings/registry/setting_entry.dart';
 
 import '../../harness/app_harness.dart';
 import '../../harness/settings_harness.dart';

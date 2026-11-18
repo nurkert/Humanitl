@@ -64,7 +64,116 @@ pub async fn run(ctx: &Context, cmd: &ConfigCmd) -> Result<u8, Failure> {
             Ok(EXIT_OK)
         }
         ConfigCmd::Edit => edit(ctx),
+        ConfigCmd::Catalog { project, language } => {
+            catalog(ctx, project.as_deref(), language.as_deref()).await
+        }
     }
+}
+
+/// `config catalog`: der Einstellungskatalog des laufenden Daemons
+/// (HUM-534), wie App und TUI ihn bekommen. Ein Aufruf von
+/// `GetConfig(include_catalog)` und sonst nichts: Kategorien, Texte,
+/// Herkunft und Sperre entscheidet der Daemon (ADR-018).
+///
+/// # Errors
+///
+/// `DAEMON_001`, wenn kein Daemon antwortet, und der Befund des Daemons.
+async fn catalog(
+    ctx: &Context,
+    project: Option<&Path>,
+    language: Option<&str>,
+) -> Result<u8, Failure> {
+    let mut client = ctx.connect().await?;
+    let project_id = project
+        .map(|path| {
+            let path = if path.is_absolute() {
+                path.to_path_buf()
+            } else {
+                ctx.cwd.join(path)
+            };
+            path.display().to_string()
+        })
+        .unwrap_or_default();
+    let snapshot = client
+        .get_config(humanitl_ipc::v1::GetConfigRequest {
+            include_schema: false,
+            project_id,
+            include_catalog: true,
+            language: language.unwrap_or_default().to_owned(),
+        })
+        .await
+        .map_err(|status| Failure::new(crate::cmd::status_diagnostic(&status, "GetConfig")))?
+        .into_inner();
+    let catalog = snapshot.catalog.unwrap_or_default();
+    if ctx.render.is_json() {
+        ctx.render.value(&catalog_json(&catalog));
+        return Ok(EXIT_OK);
+    }
+    for category in &catalog.categories {
+        ctx.render.line(&category.title);
+        for entry in catalog
+            .entries
+            .iter()
+            .filter(|entry| entry.category == category.id)
+        {
+            ctx.render.line(&catalog_line(entry));
+        }
+    }
+    Ok(EXIT_OK)
+}
+
+/// Eine Zeile des Katalogs: Name, Kennung, Bedienart, Herkunft und Sperre.
+fn catalog_line(entry: &humanitl_ipc::v1::SettingsEntry) -> String {
+    let mut parts = vec![
+        format!("  {}", entry.title),
+        format!("[{}]", entry.id),
+        entry.control.clone(),
+    ];
+    if !entry.origin.is_empty() {
+        parts.push(format!("from {}", entry.origin));
+    }
+    if entry.client == "app" {
+        parts.push("(app only)".to_owned());
+    }
+    if let Some(lock) = &entry.lock {
+        parts.push(format!("locked by {}, read only", lock.locked_by));
+    }
+    parts.join("  ")
+}
+
+fn catalog_json(catalog: &humanitl_ipc::v1::SettingsCatalog) -> Value {
+    json!({
+        "language": catalog.language,
+        "categories": catalog.categories.iter().map(|category| json!({
+            "id": category.id,
+            "order": category.order,
+            "title": category.title,
+        })).collect::<Vec<_>>(),
+        "entries": catalog.entries.iter().map(|entry| json!({
+            "id": entry.id,
+            "category": entry.category,
+            "order": entry.order,
+            "title": entry.title,
+            "help": entry.help,
+            "details": entry.details,
+            "keywords": entry.keywords,
+            "control": entry.control,
+            "choices": entry.choices.iter().map(|choice| json!({
+                "value": choice.value,
+                "title": choice.title,
+            })).collect::<Vec<_>>(),
+            "next_session": entry.next_session,
+            "tier": entry.tier,
+            "client": entry.client,
+            "origin": entry.origin,
+            "lock": entry.lock.as_ref().map(|lock| json!({
+                "locked_by": lock.locked_by,
+                "read_only": lock.read_only,
+                "reason": lock.reason,
+            })),
+            "in_project_choice": entry.in_project_choice,
+        })).collect::<Vec<_>>(),
+    })
 }
 
 /// `config schema --profiles`: was `--profile` wählen kann.
@@ -377,6 +486,13 @@ async fn set(ctx: &Context, key: &str, text: &str, project: bool) -> Result<u8, 
     // `SetConfig` und `humanitl agents source`.
     humanitl_config::agents::refuse_locked_write(&path, value.as_str(), &ctx.source_lock)
         .map_err(Failure::new)?;
+    // Ein Schlüssel, den eine Firmenvorgabe sperrt, ist auch hier nur lesbar
+    // (HUM-534); dieselbe Prüfung wie `SetConfig`.
+    humanitl_config::policy::refuse_locked_write(
+        &path,
+        &humanitl_config::PolicyLocks::of_policy(&ctx.paths),
+    )
+    .map_err(Failure::new)?;
     let value = resolved_work_dir(&path, value);
     let toml_value = to_toml(field, &value).map_err(Failure::new)?;
 

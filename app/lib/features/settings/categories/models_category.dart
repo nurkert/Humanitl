@@ -361,53 +361,68 @@ class _ModelsCategoryState extends ConsumerState<ModelsCategory> {
                 children: <Widget>[
                   anchored(
                     SettingIds.llmServers,
-                    Column(
-                      key: const ValueKey<String>(
-                        'setting-row-${SettingIds.llmServers}',
-                      ),
-                      crossAxisAlignment: CrossAxisAlignment.stretch,
-                      children: <Widget>[
-                        ServerSectionHead(
-                          title: l10n.settingsServersSection,
-                          help: l10n.settingsServersIntro,
-                        ),
-                        SizedBox(height: tokens.spacing.x3),
-                        // Der gewählte Endpunkt führt zu einem Anbieter
-                        // außerhalb dieses Rechners (HUM-516).
-                        if (ref.watch(plannedCloudInferenceProvider).value
-                            case final CloudInference cloud) ...<Widget>[
-                          CloudInferenceNote(cloud: cloud),
-                          SizedBox(height: tokens.spacing.x3),
-                        ],
-                        if (shown == null)
-                          ServerEmptyState(
-                            onAdd: () => _choose(serverAddRow, list),
-                          )
-                        else
-                          LayoutBuilder(
-                            builder:
-                                (BuildContext context, BoxConstraints box) =>
-                                    _servers(
-                                      context,
-                                      list,
-                                      shown,
-                                      ghost: ghost,
-                                      sideBySide:
-                                          box.maxWidth >= serverListSideBySide,
-                                    ),
-                          ),
+                    // Gesperrt nur lesbar, mit der Vorgabe (HUM-534).
+                    SettingLockGuard(
+                      settingId: SettingIds.llmServers,
+                      alsoLockedBy: const <String>[
+                        FormKeys.llmEndpoint,
+                        FormKeys.llmModels,
+                        FormKeys.llmApiKeyRef,
+                        SettingIds.llmServerUsage,
                       ],
+                      child: Column(
+                        key: const ValueKey<String>(
+                          'setting-row-${SettingIds.llmServers}',
+                        ),
+                        crossAxisAlignment: CrossAxisAlignment.stretch,
+                        children: <Widget>[
+                          ServerSectionHead(
+                            title: l10n.settingsServersSection,
+                            help: l10n.settingsServersIntro,
+                          ),
+                          SizedBox(height: tokens.spacing.x3),
+                          // Der gewählte Endpunkt führt zu einem Anbieter
+                          // außerhalb dieses Rechners (HUM-516).
+                          if (ref.watch(plannedCloudInferenceProvider).value
+                              case final CloudInference cloud) ...<Widget>[
+                            CloudInferenceNote(cloud: cloud),
+                            SizedBox(height: tokens.spacing.x3),
+                          ],
+                          if (shown == null)
+                            ServerEmptyState(
+                              onAdd: () => _choose(serverAddRow, list),
+                            )
+                          else
+                            LayoutBuilder(
+                              builder:
+                                  (BuildContext context, BoxConstraints box) =>
+                                      _servers(
+                                        context,
+                                        list,
+                                        shown,
+                                        ghost: ghost,
+                                        sideBySide:
+                                            box.maxWidth >=
+                                            serverListSideBySide,
+                                      ),
+                            ),
+                        ],
+                      ),
                     ),
                   ),
                   if (list.servers.isNotEmpty) ...<Widget>[
                     SizedBox(height: tokens.spacing.x8),
                     anchored(
                       SettingIds.llmServerUsage,
-                      KeyedSubtree(
-                        key: const ValueKey<String>(
-                          'setting-row-${SettingIds.llmServerUsage}',
+                      SettingLockGuard(
+                        settingId: SettingIds.llmServerUsage,
+                        alsoLockedBy: const <String>[SettingIds.llmServers],
+                        child: KeyedSubtree(
+                          key: const ValueKey<String>(
+                            'setting-row-${SettingIds.llmServerUsage}',
+                          ),
+                          child: ServerUsage(servers: list),
                         ),
-                        child: ServerUsage(servers: list),
                       ),
                     ),
                   ],

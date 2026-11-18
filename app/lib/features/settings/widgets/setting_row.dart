@@ -7,6 +7,7 @@ import 'dart:math' as math;
 
 import 'package:flutter/rendering.dart';
 import 'package:flutter/widgets.dart';
+import 'package:flutter_riverpod/flutter_riverpod.dart';
 
 import '../../../core/domain/domain.dart';
 import '../../../core/ui/ui.dart';
@@ -38,11 +39,13 @@ abstract final class SettingRowGrid {
 /// A row with the name, help and control of the entry [settingId].
 ///
 /// Name, help, longer explanation and whether a running session keeps the old
-/// value come from the register ([settingsRegistry]), so the row says what
-/// the search finds. The refusal is the daemon's own sentence (`why`), never
+/// value come from the catalog of the daemon ([SettingsView], HUM-534), so
+/// the row says what the search finds. A value a company policy locks is
+/// read only: the control takes neither pointer nor focus, and the row names
+/// the policy. The refusal is the daemon's own sentence (`why`), never
 /// one of this form: the side that read the schema knows why a value is
 /// wrong (`docs/UX.md` 4.4). It stands where the problem is, at the row.
-class SettingRow extends StatefulWidget {
+class SettingRow extends ConsumerStatefulWidget {
   /// Creates the row of [settingId] around [child].
   const SettingRow({
     required this.settingId,
@@ -58,7 +61,7 @@ class SettingRow extends StatefulWidget {
     super.key,
   });
 
-  /// The id of the entry in the register.
+  /// The id of the entry in the catalog.
   final String settingId;
 
   /// The control.
@@ -96,10 +99,10 @@ class SettingRow extends StatefulWidget {
   final Key? refusalKey;
 
   @override
-  State<SettingRow> createState() => _SettingRowState();
+  ConsumerState<SettingRow> createState() => _SettingRowState();
 }
 
-class _SettingRowState extends State<SettingRow> {
+class _SettingRowState extends ConsumerState<SettingRow> {
   bool _detailsOpen = false;
 
   @override
@@ -107,12 +110,14 @@ class _SettingRowState extends State<SettingRow> {
     final HTokens tokens = HTheme.of(context);
     final AppLocalizations l10n = context.l10n;
     final SettingsController? scope = SettingsScope.maybeOf(context);
-    final SettingEntry? entry = widget.title == null
-        ? settingEntry(widget.settingId)
-        : settingEntryOrNull(widget.settingId);
-    final String title = widget.title ?? entry?.title(l10n) ?? '';
-    final String? help = widget.help ?? entry?.help?.call(l10n);
-    final String? details = widget.details ?? entry?.details?.call(l10n);
+    final SettingEntry? entry = SettingsView.of(
+      context,
+      ref,
+    ).entry(widget.settingId);
+    final String title = widget.title ?? entry?.title ?? '';
+    final String? help = widget.help ?? entry?.help;
+    final String? details = widget.details ?? entry?.details;
+    final SettingsLock? lock = entry?.lock;
     final Diagnostic? refused =
         widget.refusal ?? scope?.refusal(widget.settingId);
     final bool saved = scope?.saved(widget.settingId) ?? false;
@@ -168,6 +173,11 @@ class _SettingRowState extends State<SettingRow> {
               style: tokens.typography.ui12.tinted(tokens.colors.fg1),
             ),
           ),
+        if (lock != null)
+          Padding(
+            padding: EdgeInsets.only(top: tokens.spacing.x1),
+            child: SettingLockNote(lock: lock, settingId: widget.settingId),
+          ),
         for (final Widget line in widget.status)
           Padding(
             padding: EdgeInsets.only(top: tokens.spacing.x1),
@@ -185,9 +195,14 @@ class _SettingRowState extends State<SettingRow> {
       ],
     );
 
-    final Widget anchored = scope == null
+    // Gesperrt heißt nur lesbar (HUM-534): Das Bedienelement nimmt weder
+    // Zeiger noch Fokus, und die Zeile nennt die Vorgabe.
+    final Widget own = lock == null
         ? widget.child
-        : Focus(focusNode: scope.anchor(widget.settingId), child: widget.child);
+        : ReadOnlySetting(settingId: widget.settingId, child: widget.child);
+    final Widget anchored = scope == null
+        ? own
+        : Focus(focusNode: scope.anchor(widget.settingId), child: own);
     final Widget control = switch (widget.leading) {
       final Widget leading => Row(
         mainAxisSize: MainAxisSize.min,
@@ -221,6 +236,103 @@ class _SettingRowState extends State<SettingRow> {
         text: text,
         control: control,
       ),
+    );
+  }
+}
+
+/// The sentence under a setting a company policy locks (HUM-534).
+class SettingLockNote extends StatelessWidget {
+  /// Creates the note for [lock] of [settingId].
+  const SettingLockNote({
+    required this.lock,
+    required this.settingId,
+    super.key,
+  });
+
+  /// The lock.
+  final SettingsLock lock;
+
+  /// The id of the locked entry.
+  final String settingId;
+
+  @override
+  Widget build(BuildContext context) {
+    final HTokens tokens = HTheme.of(context);
+    return Text(
+      context.l10n.settingsLockedBy(lock.lockedBy),
+      key: ValueKey<String>('setting-lock-$settingId'),
+      style: tokens.typography.ui12.tinted(tokens.colors.fg1),
+    );
+  }
+}
+
+/// A control that takes neither pointer nor focus: a value a company policy
+/// locks is read only in every client (HUM-534).
+class ReadOnlySetting extends StatelessWidget {
+  /// Creates the read-only wrapper of [child].
+  const ReadOnlySetting({
+    required this.settingId,
+    required this.child,
+    super.key,
+  });
+
+  /// The id of the locked entry.
+  final String settingId;
+
+  /// The control.
+  final Widget child;
+
+  @override
+  Widget build(BuildContext context) => Semantics(
+    readOnly: true,
+    child: ExcludeFocus(
+      child: IgnorePointer(
+        key: ValueKey<String>('setting-locked-$settingId'),
+        child: Opacity(opacity: 0.5, child: child),
+      ),
+    ),
+  );
+}
+
+/// A row with a control of its own (the model servers, HUM-405) under the
+/// lock of a company policy: the note above, the row read only below.
+/// Without a lock it is [child] as it stands (HUM-534).
+class SettingLockGuard extends ConsumerWidget {
+  /// Creates the guard of [settingId] around [child].
+  const SettingLockGuard({
+    required this.settingId,
+    required this.child,
+    this.alsoLockedBy = const <String>[],
+    super.key,
+  });
+
+  /// The id of the entry in the catalog.
+  final String settingId;
+
+  /// Entries whose lock locks this row as well: the daemon refuses every
+  /// change of the servers while one of their keys is locked.
+  final List<String> alsoLockedBy;
+
+  /// The row.
+  final Widget child;
+
+  @override
+  Widget build(BuildContext context, WidgetRef ref) {
+    final SettingsView view = SettingsView.of(context, ref);
+    SettingsLock? lock;
+    for (final String id in <String>[settingId, ...alsoLockedBy]) {
+      lock ??= view.entry(id)?.lock;
+    }
+    if (lock == null) {
+      return child;
+    }
+    return Column(
+      crossAxisAlignment: CrossAxisAlignment.stretch,
+      children: <Widget>[
+        SettingLockNote(lock: lock, settingId: settingId),
+        SizedBox(height: HTheme.of(context).spacing.x2),
+        ReadOnlySetting(settingId: settingId, child: child),
+      ],
     );
   }
 }

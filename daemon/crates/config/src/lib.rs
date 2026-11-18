@@ -23,6 +23,8 @@
 //! - [`mod@load`] die sieben Ebenen der Präzedenz
 //! - [`profile`] Profile: `default`, `llm-only`, eigene und das des Projekts
 //! - [`project_choice`] die Projektwahl, die der Daemon je Projekt hält
+//! - [`policy`] die Sperren einer Firmenvorgabe, die oberste Ebene
+//! - [`catalog`] der Einstellungskatalog, aus dem App und TUI zeichnen
 //! - [`mod@resolve`] welche Profile gelten und woher sie kommen
 //! - [`origin`] die Herkunft je Feld
 //! - [`edit`] der eine Wert, den der Daemon in `config.toml` schreibt
@@ -53,6 +55,7 @@
 pub mod agents;
 pub mod alias;
 pub mod assign;
+pub mod catalog;
 pub mod edit;
 pub mod env;
 pub mod inference;
@@ -63,6 +66,7 @@ pub mod origin;
 pub mod pasted;
 pub mod paths;
 pub mod pending;
+pub mod policy;
 pub mod private_dir;
 pub mod profile;
 pub mod project_choice;

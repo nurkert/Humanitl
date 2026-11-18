@@ -150,6 +150,7 @@ pub fn config_snapshot_to_proto(
         // täte es das, bliebe das Feld leer, und `toml` trüge die Werte.
         values_json: serde_json::to_string(&resolved.config).unwrap_or_default(),
         config_path: String::new(),
+        catalog: None,
     })
 }
 

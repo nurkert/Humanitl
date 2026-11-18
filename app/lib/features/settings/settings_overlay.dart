@@ -8,8 +8,8 @@
 /// field and the close button. Below: the categories in a column on the
 /// left ([SettingsNav]) and the rows of the chosen one on the right
 /// ([SettingsCategoryPage]); while the search holds text, the hits replace
-/// the rows ([SettingsSearchResults]). What stands where comes from one
-/// register (`registry/settings_registry.dart`).
+/// the rows ([SettingsSearchResults]). What stands where comes from the
+/// settings catalog of the daemon (HUM-534, `registry/settings_registry.dart`).
 ///
 /// # Keys
 ///
@@ -155,7 +155,16 @@ class _SettingsOverlayState extends ConsumerState<SettingsOverlay>
   final FocusNode _searchNode = FocusNode(debugLabel: 'settings-search');
   final ScrollController _scroll = ScrollController();
 
-  SettingsCategory _category = SettingsCategory.values.first;
+  /// The id of the category of the page; null until the catalog answered,
+  /// then its first one.
+  String? _category;
+
+  /// The view of the catalog of the last build.
+  SettingsView? _view;
+
+  /// A setting a jump asked for before the catalog answered (HUM-534); the
+  /// build that has the catalog turns it into [_category] and [_pending].
+  String? _wanted;
 
   /// The setting a jump wants to land on until its row stands (HUM-275).
   ///
@@ -234,23 +243,39 @@ class _SettingsOverlayState extends ConsumerState<SettingsOverlay>
     // Wer sucht, ist weiter als ein Sprungziel, das noch wartet.
     if (_query.text.isNotEmpty) {
       _pending = null;
+      _wanted = null;
       _settings.want(null);
     }
   });
 
   /// Opens the category of [key] and lets [_pending] wait for its row.
-  /// False for a key the register does not know.
+  /// Before the catalog answered the key waits in [_wanted]; a key the
+  /// catalog does not know is dropped once it answered.
   bool _jumpTo(String? key) {
-    final SettingEntry? entry = key == null ? null : settingEntryOrNull(key);
-    if (entry == null) {
+    if (key == null) {
       return false;
     }
+    final SettingEntry? entry = _view?.entry(key);
+    if (entry == null) {
+      if (_view?.entries.isNotEmpty ?? false) {
+        return false;
+      }
+      _query.clear();
+      _wanted = key;
+      return true;
+    }
     _query.clear();
+    _land(entry);
+    return true;
+  }
+
+  /// Opens the category of [entry] and lets [_pending] wait for its row.
+  void _land(SettingEntry entry) {
+    _wanted = null;
     _category = entry.category;
     _pending = entry.id;
     _settings.want(entry.id);
     _queueTry();
-    return true;
   }
 
   void _queueTry() {
@@ -275,8 +300,10 @@ class _SettingsOverlayState extends ConsumerState<SettingsOverlay>
       _pending = null;
       return;
     }
-    final DaemonInfo? info = ref.read(daemonInfoProvider).value;
-    if (info != null && !settingEntry(id).shownFor(info)) {
+    // Ein Katalog, der den Eintrag nicht nennt, bietet ihn nicht an: Es gibt
+    // nichts, worauf zu warten wäre (HUM-534).
+    final SettingsView? view = _view;
+    if (view != null && view.entries.isNotEmpty && view.entry(id) == null) {
       _pending = null;
       return;
     }
@@ -303,14 +330,14 @@ class _SettingsOverlayState extends ConsumerState<SettingsOverlay>
   /// Closes the overlay; a form that holds a change asks first (HUM-414).
   void _close() => _settings.leave(widget.onClose);
 
-  void _choose(SettingsCategory category) {
+  void _choose(String category) {
     if (_query.text.isEmpty && category == _category) {
       return;
     }
     _settings.leave(() => _show(category));
   }
 
-  void _show(SettingsCategory category) {
+  void _show(String category) {
     if (!mounted) {
       return;
     }
@@ -376,12 +403,12 @@ class _SettingsOverlayState extends ConsumerState<SettingsOverlay>
   }
 
   /// `Enter` in the search takes the first hit.
-  void _submitSearch(AppLocalizations l10n) {
-    final List<SettingsSearchGroup> groups = searchSettings(
-      _query.text,
-      l10n,
-      ref.read(daemonInfoProvider).value,
-    );
+  void _submitSearch() {
+    final SettingsView? view = _view;
+    if (view == null) {
+      return;
+    }
+    final List<SettingsSearchGroup> groups = searchSettings(_query.text, view);
     if (groups.isNotEmpty) {
       _chooseHit(groups.first.entries.first.id);
     }
@@ -397,6 +424,22 @@ class _SettingsOverlayState extends ConsumerState<SettingsOverlay>
     ref
       ..watch(configProvider)
       ..watch(daemonInfoProvider);
+    final SettingsView view = _view = SettingsView.of(context, ref);
+    if (_wanted case final String wanted when view.entries.isNotEmpty) {
+      // Ein Ziel, das der Katalog nicht nennt, bietet der Daemon nicht an:
+      // Die Suche bekommt die Tastatur, wie beim Öffnen ohne Ziel. Im Bau
+      // wird die Suche nicht geleert; das tat schon der Sprung.
+      if (view.entry(wanted) case final SettingEntry entry) {
+        _land(entry);
+      } else {
+        _wanted = null;
+        _afterLayer(_searchNode.requestFocus);
+      }
+    }
+    if (view.categories.isNotEmpty &&
+        (_category == null || view.category(_category!) == null)) {
+      _category = view.categories.first.id;
+    }
     if (_pending != null) {
       _queueTry();
     }
@@ -505,6 +548,7 @@ class _SettingsOverlayState extends ConsumerState<SettingsOverlay>
     final double nav = width < SettingsOverlay.narrowBelow
         ? SettingsOverlay.navWidthNarrow
         : SettingsOverlay.navWidth;
+    final SettingsView view = _view ?? SettingsView.of(context, ref);
     final AsyncValue<ConfigValues> config = ref.watch(configProvider);
     final LlmKeyStatus status =
         ref.watch(llmKeyProvider).value ?? LlmKeyStatus.unset;
@@ -515,30 +559,49 @@ class _SettingsOverlayState extends ConsumerState<SettingsOverlay>
     // Einzug der Zeile, und auf dieser Kante beginnt auch das Suchfeld.
     final double textEdge = nav + HSize.hairline + tokens.spacing.x4;
 
-    final Widget page = values == null
+    final AsyncValue<SettingsCatalog> catalog = ref.watch(
+      settingsCatalogProvider(l10n.localeName),
+    );
+    final Widget page = values == null || catalog.value == null
         ? Padding(
             padding: const EdgeInsets.symmetric(
               horizontal: SettingRowGrid.inset,
             ),
-            child: Text(
-              config.hasError ? l10n.settingsLoadFailed : l10n.settingsLoading,
-              key: const Key('settings-loading'),
-              style: tokens.typography.ui13.tinted(tokens.colors.fg1),
+            child: Column(
+              crossAxisAlignment: CrossAxisAlignment.start,
+              children: <Widget>[
+                Text(
+                  config.hasError || catalog.hasError
+                      ? l10n.settingsLoadFailed
+                      : l10n.settingsLoading,
+                  key: const Key('settings-loading'),
+                  style: tokens.typography.ui13.tinted(tokens.colors.fg1),
+                ),
+                // Ohne Wiederholung bliebe ein einmal gescheiterter Abruf bis
+                // zur nächsten Änderung stehen (HUM-534).
+                if (config.hasError || catalog.hasError) ...<Widget>[
+                  SizedBox(height: tokens.spacing.x3),
+                  HButton(
+                    key: const Key('settings-load-retry'),
+                    onPressed: () {
+                      ref.invalidate(settingsCatalogProvider);
+                      unawaited(ref.read(configProvider.notifier).refresh());
+                    },
+                    child: Text(l10n.settingsLoadRetry),
+                  ),
+                ],
+              ],
             ),
           )
         : searching
         ? SettingsSearchResults(
             query: query,
-            groups: searchSettings(
-              query,
-              l10n,
-              ref.watch(daemonInfoProvider).value,
-            ),
+            groups: searchSettings(query, view),
             onChoose: _chooseHit,
             onClear: _clearSearch,
           )
         : SettingsCategoryPage(
-            category: _category,
+            category: _category ?? '',
             data: SettingsPageData(
               config: values,
               status: status,
@@ -574,7 +637,7 @@ class _SettingsOverlayState extends ConsumerState<SettingsOverlay>
                   pageMaxWidth: SettingsOverlay.pageMaxWidth,
                   searchController: _query,
                   searchFocus: _searchNode,
-                  onSubmitSearch: () => _submitSearch(l10n),
+                  onSubmitSearch: _submitSearch,
                   onClose: _close,
                 ),
                 const HHairline(),
@@ -590,6 +653,7 @@ class _SettingsOverlayState extends ConsumerState<SettingsOverlay>
                             child: Padding(
                               padding: EdgeInsets.only(top: tokens.spacing.x2),
                               child: SettingsNav(
+                                categories: view.categories,
                                 selected: searching ? null : _category,
                                 onSelect: _choose,
                               ),
@@ -606,7 +670,7 @@ class _SettingsOverlayState extends ConsumerState<SettingsOverlay>
                               key: ValueKey<String>(
                                 searching
                                     ? 'settings-scroll-search'
-                                    : 'settings-scroll-${_category.name}',
+                                    : 'settings-scroll-$_category',
                               ),
                               controller: _scroll,
                               padding: EdgeInsets.fromLTRB(

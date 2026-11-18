@@ -19,9 +19,9 @@
 //! in der Tabelle untereinander.
 //!
 //! Nur Unterkommandos, die die RPC wirklich über gRPC aufrufen, stehen hier.
-//! `GetConfig` und `SetConfig` fehlen deshalb: `config get` und `config set`
-//! lesen und schreiben die Konfiguration lokal; sie stehen als Ausnahme in
-//! `daemon/xtask/parity_exempt.toml`.
+//! `SetConfig` fehlt deshalb: `config set` schreibt die Konfiguration lokal;
+//! es steht als Ausnahme in `daemon/xtask/parity_exempt.toml`. `GetConfig`
+//! bedient `config catalog` (HUM-534); `config get` liest weiter lokal.
 //!
 //! Im Binary selbst hat die Tabelle keine Aufgabe; das Modul wird nur für die
 //! Tests übersetzt.
@@ -42,6 +42,9 @@ pub static PARITY: &[(&str, &str)] = &[
     ("Humanitl.Egress", "egress status"),
     ("Humanitl.Exec", "sandbox exec"),
     ("Humanitl.GetBody", "flows show --body"),
+    // Der Einstellungskatalog (HUM-534): die Grundlage der TUI.
+    ("Humanitl.GetConfig", "config catalog"),
+    ("Humanitl.GetConfig", "config catalog --project"),
     ("Humanitl.GetFlow", "flows show"),
     ("Humanitl.GetInfo", "daemon status"),
     ("Humanitl.GetSessionSummary", "sessions summary"),

@@ -1,0 +1,182 @@
+# Texts of the settings catalog, English (the source). HUM-534.
+#
+# Structure, order and controls live in `src/catalog.rs`; this file holds only
+# what a person reads. `de.toml` translates it; a text missing there falls
+# back to this one. No control characters, no markup: clients show the text
+# as it stands. `tests/catalog.rs` checks every entry has a title here and in
+# `de.toml`, and that no text names an entry or choice the catalog lacks.
+
+[categories]
+models = "Models"
+agent = "Agent"
+sandbox = "Sandbox"
+requests = "Requests"
+interface = "Interface"
+shortcuts = "Keyboard shortcuts"
+network = "Network"
+egress = "Decision proxy"
+daemon = "Daemon"
+
+[entries."llm.servers"]
+title = "Model servers"
+help = "Each server keeps its own address, models and access key. The default serves every session unless a project or a profile picks another one."
+keywords = ["server", "servers", "ollama", "llm", "default", "standard", "add", "remove", "rename"]
+
+[entries."llm.endpoint"]
+title = "Endpoint"
+help = "OpenAI-compatible address of the model. Traffic to it is logged, never held."
+keywords = ["server", "URL", "address", "Ollama", "LLM", "OpenAI", "host"]
+
+[entries."llm.models"]
+title = "Model"
+keywords = ["model", "LLM", "name", "default"]
+
+[entries."llm.api_key_ref"]
+title = "Access key"
+help = "Only if the endpoint asks for one. It stays in the system keyring."
+details = "Only if the endpoint asks for one. The key goes into the system keyring. It never stands in config.toml, on a command line, in a log or in the recording, and this form never shows it again."
+keywords = ["API key", "token", "secret", "password", "keyring", "credential"]
+
+[entries."llm.server"]
+title = "Who uses which server"
+help = "A project or a profile can use another saved server than the default. A change applies to the next session."
+keywords = ["assign", "project", "profile", "uses", "assignment"]
+
+[entries."agent.adapter"]
+title = "Coding agent"
+help = "The agent a new session starts in the sandbox."
+details = "The agent the next session starts in the sandbox. Humanitl writes its configuration, endpoint, models and key for it."
+keywords = ["agent", "OpenCode", "pi", "coding", "assistant"]
+
+[entries."sandbox.work_dir"]
+title = "Project folder"
+help = "Mounted as /work. Without one, the folder Humanitl starts in."
+help_macos = "The agent works here under its real path. Without one, the folder Humanitl starts in."
+keywords = ["folder", "directory", "project", "work", "mount", "path"]
+
+[entries."sandbox.mode"]
+title = "Where the agent writes"
+help = "Disposable keeps the project folder untouched until you apply the changes."
+details = "Disposable keeps the project folder untouched until you apply the changes. Automatic runs disposable where this system allows it and direct otherwise."
+keywords = ["disposable", "direct", "automatic", "copy", "apply", "changes", "write"]
+
+[entries."sandbox.backend"]
+title = "Sandbox backend"
+help = "Which isolation the next session runs in. Automatic takes the backend of the system."
+keywords = ["backend", "isolation", "container", "namespaces", "kernel", "micro VM", "virtual machine"]
+
+[entries."hold.timeout_secs"]
+title = "Hold timeout"
+help = "Seconds a held request waits for a decision before its time runs out."
+keywords = ["hold", "wait", "seconds", "time out", "deadline", "countdown"]
+
+[entries."hold.ask_mode"]
+title = "Ask"
+help = "Where a held request is asked."
+keywords = ["ask", "prompt", "terminal", "where", "decision"]
+
+[entries."ui.language"]
+title = "Language"
+keywords = ["language", "English", "German", "Deutsch", "locale", "translation"]
+
+[entries."ui.theme"]
+title = "Appearance"
+keywords = ["theme", "dark", "light", "system", "colour", "color", "mode"]
+
+[entries."ui.scale"]
+title = "Scale"
+help = "Text and controls grow together."
+details = "Text and controls grow together. Ctrl+Plus and Ctrl+Minus change it in steps of 10 %, Ctrl+0 goes back to 100 %."
+keywords = ["zoom", "size", "bigger", "smaller", "text size", "font"]
+
+[entries."ui.notifications"]
+title = "Desktop notifications"
+help = "When a request waits and the window is not in front"
+keywords = ["notify", "notification", "desktop", "alert", "popup", "tray"]
+
+[entries.shortcuts]
+title = "Keyboard shortcuts"
+help = "Every keyboard shortcut of the application, read only."
+keywords = ["shortcut", "keys", "hotkey", "keyboard"]
+
+[entries."tls.trust_system_store"]
+title = "System certificates"
+help = "Trust the certificates of this system, for example a company CA"
+details = "Off: only the public roots built into Humanitl count, and a server with a company or self-installed certificate is refused. The sandbox is not affected. Takes effect when the background service restarts (Daemon, Restart)."
+keywords = ["TLS", "certificate", "CA", "company", "proxy", "HTTPS", "root"]
+
+[entries."egress.proxy"]
+title = "Address"
+help = "An intercepting proxy of yours as http://HOST:PORT. Every request Humanitl allows then leaves through it. Empty: requests leave directly."
+details = "Humanitl still decides first: rules, held requests and the recording stay as they are, and a blocked request never reaches the proxy. The proxy sees the decrypted traffic, including secrets Humanitl did not block. If it cannot be reached, a request fails instead of leaving directly. Requests of the background service itself, such as the search for model servers and the update check, stay direct. Takes effect after the background service restarts."
+keywords = ["mitmproxy", "Burp", "proxy", "upstream", "intercept", "egress", "HTTP proxy", "CONNECT"]
+
+[entries."egress.proxy_ca"]
+title = "CA certificate"
+help = "The PEM file of the proxy's CA, for mitmproxy ~/.mitmproxy/mitmproxy-ca-cert.pem. Trusted only on the way through this proxy, never directly."
+keywords = ["mitmproxy", "Burp", "proxy", "upstream", "intercept", "egress", "HTTP proxy", "CONNECT"]
+
+[entries."egress.proxy_resolve"]
+title = "Who resolves names"
+help = "The proxy: Humanitl asks no DNS server before the decision there. Humanitl: every address is checked for private networks first."
+details = "With the proxy resolving, Humanitl still refuses localhost, local names and private addresses written as numbers, but a public name that points into your network is the proxy's to refuse. With Humanitl resolving, that check is complete, and the name leaves as a DNS question before the person at the proxy decides."
+keywords = ["mitmproxy", "Burp", "proxy", "upstream", "intercept", "egress", "HTTP proxy", "CONNECT"]
+
+[entries."egress.proxy_auth_ref"]
+title = "Credentials"
+help = "Only if the proxy asks for a login: USER:PASSWORD, kept in the system keyring (or a private file if it does not answer) and sent only to this proxy."
+keywords = ["mitmproxy", "Burp", "proxy", "upstream", "intercept", "egress", "HTTP proxy", "CONNECT"]
+
+[entries."egress.check"]
+title = "Connection"
+help = "Opens a tunnel through the proxy and the TLS handshake in it, as the settings stand now. Sends no request, so nobody has to decide anything at the proxy."
+keywords = ["mitmproxy", "Burp", "proxy", "upstream", "intercept", "egress", "HTTP proxy", "CONNECT"]
+
+[entries."daemon.version"]
+title = "Version"
+help = "The background service this window is connected to."
+keywords = ["version", "daemon", "about", "build", "service"]
+
+[entries."daemon.restart"]
+title = "Restart"
+help = "Starts the background service of this user again. Never while an agent session runs without asking."
+keywords = ["restart", "reload", "service", "systemctl", "daemon", "start again"]
+
+[entries."update.check"]
+title = "Update check"
+help = "At most once a day, from GitHub. Nothing is installed without your click."
+details = "At most once a day the daemon asks GitHub for a newer release: api.github.com for the latest release, github.com for its files, and the GitHub storage a download is redirected to (objects.githubusercontent.com, release-assets.githubusercontent.com). It checks the signature of the release, sends nothing a plain download would not send, and installs nothing without your click."
+keywords = ["update", "upgrade", "release", "version", "GitHub", "new"]
+
+[entries."daemon.config_file"]
+title = "config.toml"
+help = "Every other setting stays in this file."
+keywords = ["config.toml", "file", "edit", "path", "TOML", "advanced"]
+
+[choices."agent.adapter"]
+opencode = "OpenCode"
+pi = "pi"
+
+[choices."sandbox.mode"]
+auto = "Automatic"
+direct = "Direct"
+disposable = "Disposable"
+
+[choices."hold.ask_mode"]
+ui = "In the app"
+terminal = "In the terminal"
+none = "Nowhere"
+upstream = "Proxy behind"
+
+[choices."ui.language"]
+en = "English"
+de = "Deutsch"
+
+[choices."ui.theme"]
+dark = "Dark"
+light = "Light"
+system = "System"
+
+[choices."egress.proxy_resolve"]
+proxy = "Proxy"
+humanitl = "Humanitl"

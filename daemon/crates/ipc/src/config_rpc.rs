@@ -32,8 +32,9 @@
 use std::path::{Path, PathBuf};
 
 use humanitl_config::agents::SourceLock;
+use humanitl_config::catalog;
 use humanitl_config::value::{check_value, parse_value, to_toml};
-use humanitl_config::{Paths, ProfileSelection, Resolved, schema};
+use humanitl_config::{Language, Paths, PolicyLocks, ProfileSelection, Resolved, schema};
 use humanitl_core::diagnostics::codes::{CONFIG_003, CONFIG_014};
 use humanitl_core::{Diagnostic, FixAction, Severity};
 use humanitl_sandbox::profile::CA_CERT_DST;
@@ -125,24 +126,39 @@ pub fn set_expecting(
         value,
         expected_server,
         &SourceLock::of_policy(paths),
+        &PolicyLocks::of_policy(paths),
     )
 }
 
 /// Wie [`set_expecting`], mit der Sperre der Quelle der Agenten, die der
-/// Daemon hält (HUM-518). Jeder Schreibweg von `agents.source` und
-/// `agents.<id>.source` endet hier oder in `humanitl config set`, und beide
-/// fragen [`humanitl_config::agents::refuse_locked_write`].
+/// Daemon hält (HUM-518), und den Sperren einer Firmenvorgabe (HUM-534).
+/// Jeder Schreibweg von `agents.source` und `agents.<id>.source` endet hier
+/// oder in `humanitl config set`, und beide fragen
+/// [`humanitl_config::agents::refuse_locked_write`]; ein Schlüssel, den die
+/// Vorgabe sperrt, wird mit keinem Wert geschrieben.
+///
+/// `SetConfig` schreibt nur die globale `config.toml`, nie eine Projektwahl:
+/// Die schreibt allein `Projects.save_choice` (HUM-534, Spezifikation 2b).
 ///
 /// # Errors
 ///
-/// Wie [`set_expecting`], dazu `AGENT_010` für `host` unter einer Sperre.
+/// Wie [`set_expecting`], dazu `AGENT_010` für `host` unter einer Sperre der
+/// Quelle und für jeden Schlüssel, den die Vorgabe sperrt.
 pub fn set_locked(
     paths: &Paths,
     key: &str,
     value: &str,
     expected_server: &str,
     lock: &SourceLock,
+    policy: &PolicyLocks,
 ) -> Result<v1::ConfigSnapshot, Diagnostic> {
+    // Jeder Schlüssel, den das Schreiben berührt (Review HUM-534): Endpunkt
+    // und Modelle des aktiven Servers gehen auch in seinen Eintrag unter
+    // `llm.servers` (`servers::mirror_of`), eine Sperre dort gilt also auch
+    // hier. Sperren eines Vorfahren decken die Kinder (`PolicyLocks::covering`).
+    let mirrored = humanitl_config::servers::is_server_setting(key)
+        .then_some(humanitl_config::servers::SERVERS);
+    humanitl_config::policy::refuse_locked_keys(std::iter::once(key).chain(mirrored), policy)?;
     humanitl_config::agents::refuse_locked_write(key, Some(value.trim()), lock)?;
     if key.starts_with(SANDBOX_ENV_PREFIX) {
         let name = accepted(key, value)?;
@@ -160,7 +176,7 @@ pub fn set_locked(
             shown(key)
         )));
     }
-    Ok(snapshot(paths))
+    Ok(snapshot_with(paths, policy))
 }
 
 /// Liest und prüft einen Wert des Formulars nach dem Schema, ohne zu
@@ -488,17 +504,18 @@ fn refused(reason: &str) -> Diagnostic {
 /// verloren.
 #[must_use]
 pub fn snapshot(paths: &Paths) -> v1::ConfigSnapshot {
-    let resolved = humanitl_config::resolve(&ProfileSelection::default(), None, paths.env(), &[]);
-    let mut snapshot =
-        match resolved.and_then(|resolved| convert::config_snapshot_to_proto(&resolved, false)) {
-            Ok(snapshot) => snapshot,
-            Err(diagnostic) => v1::ConfigSnapshot {
-                diagnostics: vec![convert::diagnostic_to_proto(&diagnostic)],
-                ..v1::ConfigSnapshot::default()
-            },
-        };
-    snapshot.config_path = paths.config_path().display().to_string();
-    snapshot
+    snapshot_with(paths, &PolicyLocks::of_policy(paths))
+}
+
+/// [`snapshot`] mit diesen Sperren einer Firmenvorgabe als oberster Ebene
+/// (HUM-534).
+#[must_use]
+pub fn snapshot_with(paths: &Paths, policy: &PolicyLocks) -> v1::ConfigSnapshot {
+    let resolved =
+        humanitl_config::sources_for(&ProfileSelection::default(), None, paths.env(), &[])
+            .map(|sources| sources.with_policy(policy.clone()))
+            .and_then(|sources| humanitl_config::load(&sources));
+    finish(paths, resolved, None)
 }
 
 /// [`snapshot`] für ein Projekt aus dem Register (HUM-532,
@@ -509,10 +526,29 @@ pub fn snapshot(paths: &Paths) -> v1::ConfigSnapshot {
 #[must_use]
 pub fn project_snapshot(
     paths: &Paths,
-    locks: &humanitl_config::PolicyLocks,
+    locks: &PolicyLocks,
     row: &humanitl_recorder::ProjectRow,
 ) -> v1::ConfigSnapshot {
     let (resolved, found) = crate::projects::resolve_for(paths, locks, row);
+    finish(paths, resolved, found)
+}
+
+/// [`snapshot`] für einen Ordner, den das Register nicht kennt (HUM-534):
+/// wie ein Start dort, mit seinem Projekt-Profil und ohne Projektwahl.
+#[must_use]
+pub fn folder_snapshot(paths: &Paths, locks: &PolicyLocks, folder: &str) -> v1::ConfigSnapshot {
+    finish(
+        paths,
+        crate::projects::resolve_folder(paths, locks, folder),
+        None,
+    )
+}
+
+fn finish(
+    paths: &Paths,
+    resolved: Result<Resolved, Diagnostic>,
+    found: Option<Diagnostic>,
+) -> v1::ConfigSnapshot {
     let mut snapshot =
         match resolved.and_then(|resolved| convert::config_snapshot_to_proto(&resolved, false)) {
             Ok(snapshot) => snapshot,
@@ -528,6 +564,136 @@ pub fn project_snapshot(
     }
     snapshot.config_path = paths.config_path().display().to_string();
     snapshot
+}
+
+/// Was der Katalog einer Antwort außer den Werten braucht (HUM-534).
+#[derive(Debug, Clone, Default)]
+pub struct CatalogScope {
+    /// Die Sperren einer Firmenvorgabe.
+    pub policy: PolicyLocks,
+    /// Die Sperre der Quelle der Agenten (HUM-518).
+    pub source_lock: SourceLock,
+    /// Ob der Daemon Wegwerf-Sandboxen kann (`sandbox.disposable`); ohne
+    /// steht `sandbox.mode` nicht im Katalog, denn es gäbe nichts zu wählen.
+    pub offers_disposable: bool,
+}
+
+/// Der Einstellungskatalog zu einer Antwort von `GetConfig` (HUM-534): die
+/// Texte in der Sprache der Anfrage, sonst in `ui.language` der Antwort, und
+/// je Eintrag die Herkunft aus `snapshot.origins`, die Sperre und ob der
+/// Schlüssel auf der Erlaubnisliste der Projektwahl steht.
+#[must_use]
+pub fn catalog_for(
+    snapshot: &v1::ConfigSnapshot,
+    asked_language: &str,
+    scope: &CatalogScope,
+) -> v1::SettingsCatalog {
+    let configured = serde_json::from_str::<serde_json::Value>(&snapshot.values_json)
+        .ok()
+        .and_then(|values| {
+            values
+                .pointer("/ui/language")
+                .and_then(serde_json::Value::as_str)
+                .map(|text| catalog::language_of(text, Language::En))
+        })
+        .unwrap_or(Language::En);
+    let language = catalog::language_of(asked_language, configured);
+    let built = catalog::catalog(language);
+    let origin_of = |id: &str| {
+        snapshot
+            .origins
+            .iter()
+            .find(|origin| origin.key == id)
+            .map(|origin| origin.origin.clone())
+            .unwrap_or_default()
+    };
+    v1::SettingsCatalog {
+        language: match language {
+            Language::En => "en",
+            Language::De => "de",
+        }
+        .to_owned(),
+        categories: built
+            .categories
+            .into_iter()
+            .map(|category| v1::SettingsCategory {
+                id: category.id.to_owned(),
+                order: category.order,
+                title: category.title,
+            })
+            .collect(),
+        entries: built
+            .entries
+            .into_iter()
+            .filter(|entry| entry.id != "sandbox.mode" || scope.offers_disposable)
+            .map(|entry| v1::SettingsEntry {
+                id: entry.id.to_owned(),
+                category: entry.category.to_owned(),
+                order: entry.order,
+                origin: origin_of(entry.id),
+                lock: lock_of(entry.id, scope),
+                in_project_choice: humanitl_config::is_choice_key(entry.id),
+                title: entry.title,
+                help: entry.help,
+                details: entry.details,
+                keywords: entry.keywords,
+                control: entry.control.as_str().to_owned(),
+                choices: entry
+                    .choices
+                    .into_iter()
+                    .map(|choice| v1::SettingsChoice {
+                        value: choice.value,
+                        title: choice.title,
+                    })
+                    .collect(),
+                next_session: entry.next_session,
+                tier: entry.tier.as_str().to_owned(),
+                client: entry.client.as_str().to_owned(),
+            })
+            .collect(),
+    }
+}
+
+/// Die Sperre eines Eintrags: eine der Firmenvorgabe, sonst die der Quelle
+/// eines Agenten (HUM-518), die `agents.source` und `agents.<id>.source`
+/// auf `depot` hält.
+fn lock_of(id: &str, scope: &CatalogScope) -> Option<v1::SettingLock> {
+    // Die Zeilen der Server stehen für alle Schlüssel, die `LlmServers`
+    // berührt, auch für die ohne eigene Zeile wie `llm.active`: Ist einer
+    // gesperrt, lehnt der Dienst jede Änderung der Server ab, und die Zeile
+    // sagt es (Review HUM-534, `policy_guard::SERVER_KEYS`).
+    let watched: &[&str] =
+        if id == humanitl_config::servers::SERVERS || id == humanitl_config::servers::SERVER {
+            &crate::policy_guard::SERVER_KEYS
+        } else {
+            std::slice::from_ref(&id)
+        };
+    if let Some((path, locked)) = watched.iter().find_map(|key| scope.policy.covering(key)) {
+        let reason = if path == id {
+            format!("the company policy fixes this to {}", locked.value)
+        } else {
+            format!("the company policy fixes {path}, which this setting writes")
+        };
+        return Some(v1::SettingLock {
+            locked_by: humanitl_core::block::sanitize_note(&locked.by),
+            read_only: true,
+            reason: humanitl_core::block::sanitize_note(&reason),
+        });
+    }
+    let agent_lock = if id == "agents.source" {
+        humanitl_config::agents::KNOWN_AGENTS
+            .iter()
+            .find_map(|agent| scope.source_lock.for_agent(agent))
+    } else {
+        id.strip_prefix("agents.")
+            .and_then(|rest| rest.strip_suffix(".source"))
+            .and_then(|agent| scope.source_lock.for_agent(agent))
+    };
+    agent_lock.map(|locked| v1::SettingLock {
+        locked_by: humanitl_core::block::sanitize_note(&locked.by),
+        read_only: true,
+        reason: "the company policy fixes the source of this agent to the depot".to_owned(),
+    })
 }
 
 #[cfg(test)]

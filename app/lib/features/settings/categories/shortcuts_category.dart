@@ -16,32 +16,37 @@ import '../registry/setting_entry.dart';
 import '../settings_scope.dart';
 import '../widgets/setting_row.dart';
 
-/// The register entries of the category: per scope one entry that draws the
-/// group, and per shortcut one that the group draws along with it.
+/// The entries of the catalog row `shortcuts` (HUM-534): per scope one entry
+/// that draws the group, and per shortcut one that the group draws along with
+/// it, all in [category]. The catalog names the category and places it; the
+/// shortcuts themselves are the app's own key bindings, which the daemon does
+/// not know, so the app lists them here.
 ///
 /// A shortcut entry is found by its name, by its keys as text (`Ctrl+K`) and
-/// by its scope, and the hit names the scope and the keys under the name.
-List<SettingEntry> shortcutEntries() => <SettingEntry>[
+/// by its scope, and the hit names the scope and the keys under the name. A
+/// shortcut that does not exist on this platform is neither listed nor
+/// found.
+List<SettingEntry> shortcutEntries(
+  AppLocalizations l10n, {
+  required String category,
+}) => <SettingEntry>[
   for (final ShortcutScope scope in ShortcutScope.values) ...<SettingEntry>[
     SettingEntry(
       id: SettingIds.shortcutGroup(scope),
-      category: SettingsCategory.shortcuts,
-      title: scope.title,
-      keywords: (AppLocalizations l10n) => l10n.settingsKeywordsShortcuts,
+      category: category,
+      title: scope.title(l10n),
+      keywords: l10n.settingsKeywordsShortcuts,
       build: (SettingsPageData data) => ShortcutGroup(scope: scope),
     ),
     for (final AppShortcut shortcut in AppShortcut.of(scope))
-      SettingEntry(
-        id: SettingIds.shortcut(shortcut),
-        category: SettingsCategory.shortcuts,
-        title: shortcut.label,
-        help: (AppLocalizations l10n) =>
-            '${scope.title(l10n)} · ${shortcutText(shortcut, l10n)}',
-        keywords: (AppLocalizations l10n) => shortcutText(shortcut, l10n),
-        // Ein Kürzel, das es auf dieser Plattform nicht gibt, steht weder in
-        // der Übersicht noch in der Suche.
-        shownWhen: (_) => shortcut.appliesOn(),
-      ),
+      if (shortcut.appliesOn())
+        SettingEntry(
+          id: SettingIds.shortcut(shortcut),
+          category: category,
+          title: shortcut.label(l10n),
+          help: '${scope.title(l10n)} · ${shortcutText(shortcut, l10n)}',
+          keywords: shortcutText(shortcut, l10n),
+        ),
   ],
 ];
 

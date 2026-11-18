@@ -17,8 +17,9 @@ import 'package:flutter_test/flutter_test.dart';
 import 'package:humanitl/core/domain/domain.dart';
 import 'package:humanitl/core/ipc/client_providers.dart';
 import 'package:humanitl/core/ipc/fake_daemon_client.dart';
-import 'package:humanitl/features/settings/registry/setting_entry.dart';
 import 'package:humanitl/features/settings/settings_overlay.dart';
+
+import '../harness/settings_harness.dart' show SettingsCategory;
 
 import 'support/golden_variants.dart';
 
@@ -92,12 +93,10 @@ Future<void> probe(WidgetTester tester) async {
 }
 
 /// Die Kategorie [category].
-Future<void> Function(WidgetTester) category(SettingsCategory category) =>
+Future<void> Function(WidgetTester) category(String category) =>
     (WidgetTester tester) async {
       await settleSheet(tester);
-      await tester.tap(
-        find.byKey(ValueKey<String>('settings-nav-${category.name}')),
-      );
+      await tester.tap(find.byKey(ValueKey<String>('settings-nav-$category')));
       await tester.pumpAndSettle();
     };
 

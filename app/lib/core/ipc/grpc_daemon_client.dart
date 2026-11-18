@@ -542,6 +542,19 @@ class GrpcDaemonClient implements DaemonClient {
   }
 
   @override
+  Future<SettingsCatalog> getSettingsCatalog({String language = ''}) async {
+    final pb.ConfigSnapshot snapshot = await _unary(
+      (CallOptions options) => _stub.getConfig(
+        pb.GetConfigRequest()
+          ..includeCatalog = true
+          ..language = language,
+        options: options,
+      ),
+    );
+    return snapshot.catalog.toDomain();
+  }
+
+  @override
   Future<LlmKeyStatus> llmKeyStatus({String? server}) => _llmKey(
     pb.LlmKeyRequest()
       ..status = pb.LlmKeyRequest_Status()

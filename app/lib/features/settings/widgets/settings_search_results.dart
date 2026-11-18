@@ -74,7 +74,7 @@ class SettingsSearchResults extends StatelessWidget {
             child: Semantics(
               header: true,
               child: Text(
-                groups[g].category.title(l10n),
+                groups[g].category.title,
                 style: tokens.typography.ui12.semibold.tinted(
                   tokens.colors.fg1,
                 ),
@@ -84,8 +84,8 @@ class SettingsSearchResults extends StatelessWidget {
           for (final SettingEntry entry in groups[g].entries)
             SettingsListItem(
               key: ValueKey<String>('settings-hit-${entry.id}'),
-              title: entry.title(l10n),
-              subtitle: entry.help?.call(l10n),
+              title: entry.title,
+              subtitle: entry.help,
               onTap: () => onChoose(entry.id),
             ),
         ],

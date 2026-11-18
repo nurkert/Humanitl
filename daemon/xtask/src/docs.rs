@@ -46,6 +46,18 @@ pub const GENERATED: &[Generated] = &[
         selector: &["--test", "diag_docs"],
         update_env: "UPDATE_DIAG_DOCS",
     },
+    // Kein Dokument, aber erzeugt wie eines: der Einstellungskatalog als
+    // Vorlage des Fakes der App (HUM-534).
+    Generated {
+        file: "app/lib/core/ipc/fake/generated/settings_catalog.dart",
+        package: "humanitl-config",
+        selector: &[
+            "--test",
+            "catalog",
+            "the_fake_catalog_of_the_app_is_the_catalog",
+        ],
+        update_env: "UPDATE_SETTINGS_CATALOG",
+    },
     Generated {
         file: "docs/reference/cli.md",
         package: "humanitl",

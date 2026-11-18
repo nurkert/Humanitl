@@ -1,17 +1,23 @@
-/// The register of every setting the overlay shows (HUM-404).
+/// What the overlay shows, from the settings catalog of the daemon (HUM-404,
+/// HUM-534).
 ///
-/// One list instead of a hand-written column: the left column, the search
-/// and the jump of a `ChangeSetting` fix all read it, and a page draws its
-/// entries in this order. A new setting is one entry here and one row
-/// widget in the file of its category; nothing else needs to know of it.
+/// Categories, order, names, help and keywords come from the catalog
+/// (`GetConfig` with `include_catalog`); the app keeps no list of settings.
+/// This file holds only the builders of rows that need a control of their
+/// own, found by the id of their catalog entry ([settingRowSpecs]). An entry
+/// without a builder is drawn generically by its control
+/// ([GenericSettingRow]); a new entry of the catalog appears without a change
+/// here.
 ///
 /// Every value comes from `GetConfig` and goes back through `SetConfig` and
 /// `LlmKey`; the rows decide nothing about what a value means (ADR-018).
 library;
 
+import 'package:flutter/widgets.dart';
+import 'package:flutter_riverpod/flutter_riverpod.dart';
+
 import '../../../core/domain/domain.dart';
-import '../../../core/ipc/client_diagnostics.dart';
-import '../../../core/ui/ui.dart';
+import '../../../core/ipc/config_providers.dart';
 import '../../../l10n/l10n.dart';
 import '../categories/agent_category.dart';
 import '../categories/daemon_category.dart';
@@ -24,269 +30,183 @@ import '../categories/sandbox_category.dart';
 import '../categories/shortcuts_category.dart';
 import '../widgets/sandbox_backend_row.dart';
 import '../widgets/sandbox_mode_row.dart';
+import '../widgets/generic_setting_row.dart';
 import '../widgets/update_row.dart';
 import 'setting_entry.dart';
 
 export 'setting_entry.dart';
 
-/// Every entry, by category in the order of [SettingsCategory] and within
-/// one in the order of its page.
-final List<SettingEntry> settingsRegistry = <SettingEntry>[
-  // Modelle (HUM-405): Die Karten der Server, die Detailansicht eines
-  // Servers und die Tabelle „Wer nutzt welchen Server" zeichnet
-  // `ModelsCategory` in einem Stück. Endpunkt, Modell und Schlüssel sind
-  // Zeilen der Detailansicht; ein Sprung dorthin öffnet die des Standards.
-  SettingEntry(
-    id: SettingIds.llmServers,
-    category: SettingsCategory.models,
-    title: (AppLocalizations l10n) => l10n.settingsServersLabel,
-    help: (AppLocalizations l10n) => l10n.settingsServersIntro,
-    keywords: (AppLocalizations l10n) => l10n.settingsKeywordsServers,
-    build: buildModelsCategory,
-  ),
-  SettingEntry(
-    id: FormKeys.llmEndpoint,
-    category: SettingsCategory.models,
-    title: (AppLocalizations l10n) => l10n.settingsEndpointLabel,
-    help: (AppLocalizations l10n) => l10n.settingsEndpointHelp,
-    keywords: (AppLocalizations l10n) => l10n.settingsKeywordsEndpoint,
-    nextSession: true,
-  ),
-  SettingEntry(
-    id: FormKeys.llmModels,
-    category: SettingsCategory.models,
-    title: (AppLocalizations l10n) => l10n.settingsModelLabel,
-    keywords: (AppLocalizations l10n) => l10n.settingsKeywordsModel,
-    nextSession: true,
-  ),
-  SettingEntry(
-    id: FormKeys.llmApiKeyRef,
-    category: SettingsCategory.models,
-    title: (AppLocalizations l10n) => l10n.settingsKeyLabel,
-    help: (AppLocalizations l10n) => l10n.settingsKeyHelpShort,
-    details: (AppLocalizations l10n) => l10n.settingsKeyHelp,
-    keywords: (AppLocalizations l10n) => l10n.settingsKeywordsKey,
-    nextSession: true,
-  ),
-  SettingEntry(
-    id: SettingIds.llmServerUsage,
-    category: SettingsCategory.models,
-    title: (AppLocalizations l10n) => l10n.settingsServerUsageTitle,
-    help: (AppLocalizations l10n) => l10n.settingsServerUsageHelp,
-    keywords: (AppLocalizations l10n) => l10n.settingsKeywordsServerUsage,
-  ),
-  SettingEntry(
-    id: FormKeys.agentAdapter,
-    category: SettingsCategory.agent,
-    title: (AppLocalizations l10n) => l10n.settingsAgentLabel,
-    help: (AppLocalizations l10n) => l10n.settingsAgentHelpShort,
-    details: (AppLocalizations l10n) => l10n.settingsAgentHelp,
-    keywords: (AppLocalizations l10n) => l10n.settingsKeywordsAgent,
-    nextSession: true,
+/// The builders of the rows with a control of their own, by catalog id.
+///
+/// Endpoint, model and key have no builder of their own: the detail view of
+/// a server draws them (HUM-405), and a jump there opens the default's.
+final Map<String, SettingRowSpec> settingRowSpecs = <String, SettingRowSpec>{
+  SettingIds.llmServers: const SettingRowSpec(build: buildModelsCategory),
+  FormKeys.llmEndpoint: const SettingRowSpec(),
+  FormKeys.llmModels: const SettingRowSpec(),
+  FormKeys.llmApiKeyRef: const SettingRowSpec(),
+  SettingIds.llmServerUsage: const SettingRowSpec(),
+  FormKeys.agentAdapter: SettingRowSpec(
     build: (SettingsPageData data) => AgentRow(config: data.config),
   ),
-  SettingEntry(
-    id: FormKeys.sandboxWorkDir,
-    category: SettingsCategory.sandbox,
-    title: (AppLocalizations l10n) => l10n.settingsWorkDirLabel,
-    help: (AppLocalizations l10n) => sandboxUsesRealPaths
-        ? l10n.settingsWorkDirHelpPolicy
-        : l10n.settingsWorkDirHelp,
-    keywords: (AppLocalizations l10n) => l10n.settingsKeywordsWorkDir,
-    nextSession: true,
+  FormKeys.sandboxWorkDir: SettingRowSpec(
     build: (SettingsPageData data) => WorkDirRow(config: data.config),
   ),
-  SettingEntry(
-    id: FormKeys.sandboxMode,
-    category: SettingsCategory.sandbox,
-    title: (AppLocalizations l10n) => l10n.settingsSandboxModeLabel,
-    help: (AppLocalizations l10n) => l10n.settingsSandboxModeHelpShort,
-    details: (AppLocalizations l10n) => l10n.settingsSandboxModeHelp,
-    keywords: (AppLocalizations l10n) => l10n.settingsKeywordsSandboxMode,
-    nextSession: true,
-    // Nur wo es mehr als einen Modus gibt (HUM-357); auf macOS weder Zeile
-    // noch Treffer.
-    shownWhen: (DaemonInfo? info) => info?.offersDisposable ?? false,
+  FormKeys.sandboxMode: SettingRowSpec(
     build: (SettingsPageData data) => SandboxModeRow(config: data.config),
   ),
-  // Das Backend der nächsten Sitzung (HUM-440). Welche es gibt und welche
-  // wählbar sind, sagt `SandboxBackends`; unter macOS steht nur Seatbelt
-  // da, und die Zeile nennt es ohne Wahl.
-  SettingEntry(
-    id: FormKeys.sandboxBackend,
-    category: SettingsCategory.sandbox,
-    title: (AppLocalizations l10n) => l10n.settingsSandboxBackendLabel,
-    help: (AppLocalizations l10n) => l10n.settingsSandboxBackendHelp,
-    keywords: (AppLocalizations l10n) => l10n.settingsKeywordsSandboxBackend,
-    nextSession: true,
+  // Welche Backends es gibt und welche wählbar sind, sagt `SandboxBackends`
+  // (HUM-440); unter macOS steht nur Seatbelt da, ohne Wahl.
+  FormKeys.sandboxBackend: SettingRowSpec(
     build: (SettingsPageData data) => SandboxBackendRow(config: data.config),
   ),
-  SettingEntry(
-    id: FormKeys.holdTimeoutSecs,
-    category: SettingsCategory.requests,
-    title: (AppLocalizations l10n) => l10n.settingsTimeoutLabel,
-    help: (AppLocalizations l10n) => l10n.settingsTimeoutHelp,
-    keywords: (AppLocalizations l10n) => l10n.settingsKeywordsTimeout,
+  FormKeys.holdTimeoutSecs: SettingRowSpec(
     build: (SettingsPageData data) => TimeoutRow(config: data.config),
   ),
-  SettingEntry(
-    id: FormKeys.holdAskMode,
-    category: SettingsCategory.requests,
-    title: (AppLocalizations l10n) => l10n.settingsAskModeLabel,
-    help: (AppLocalizations l10n) => l10n.settingsAskModeHelp,
-    keywords: (AppLocalizations l10n) => l10n.settingsKeywordsAskMode,
+  FormKeys.holdAskMode: SettingRowSpec(
     build: (SettingsPageData data) => AskModeRow(config: data.config),
   ),
-  SettingEntry(
-    id: FormKeys.uiLanguage,
-    category: SettingsCategory.interface,
-    title: (AppLocalizations l10n) => l10n.settingsLanguageLabel,
-    keywords: (AppLocalizations l10n) => l10n.settingsKeywordsLanguage,
+  FormKeys.uiLanguage: SettingRowSpec(
     build: (SettingsPageData data) => LanguageRow(config: data.config),
   ),
-  SettingEntry(
-    id: FormKeys.uiTheme,
-    category: SettingsCategory.interface,
-    title: (AppLocalizations l10n) => l10n.settingsThemeLabel,
-    keywords: (AppLocalizations l10n) => l10n.settingsKeywordsTheme,
+  FormKeys.uiTheme: SettingRowSpec(
     build: (SettingsPageData data) => ThemeRow(config: data.config),
   ),
-  SettingEntry(
-    id: SettingIds.uiScale,
-    category: SettingsCategory.interface,
-    title: (AppLocalizations l10n) => l10n.settingsScaleLabel,
-    help: (AppLocalizations l10n) => l10n.settingsScaleHelpShort,
-    details: (AppLocalizations l10n) =>
-        l10n.settingsScaleHelp(l10n.shellScalePercent(100)),
-    keywords: (AppLocalizations l10n) => l10n.settingsKeywordsScale,
+  SettingIds.uiScale: SettingRowSpec(
     build: (SettingsPageData data) => const ScaleRow(),
   ),
-  SettingEntry(
-    id: FormKeys.uiNotifications,
-    category: SettingsCategory.interface,
-    title: (AppLocalizations l10n) => l10n.settingsNotificationsLabel,
-    help: (AppLocalizations l10n) => l10n.settingsNotificationsHint,
-    keywords: (AppLocalizations l10n) => l10n.settingsKeywordsNotifications,
+  FormKeys.uiNotifications: SettingRowSpec(
     build: (SettingsPageData data) => NotificationsRow(config: data.config),
   ),
-  // Tastenkürzel (HUM-420): eine Gruppe je Bereich, darin jedes Kürzel des
-  // Katalogs, nur zum Lesen.
-  ...shortcutEntries(),
-  SettingEntry(
-    id: FormKeys.tlsTrustSystemStore,
-    category: SettingsCategory.network,
-    title: (AppLocalizations l10n) => l10n.settingsTrustSystemStoreLabel,
-    help: (AppLocalizations l10n) => l10n.settingsTrustSystemStoreHint,
-    details: (AppLocalizations l10n) =>
-        l10n.settingsTrustSystemStoreHelp(ClientDiagnostics.restartUnitCommand),
-    keywords: (AppLocalizations l10n) => l10n.settingsKeywordsTrust,
+  FormKeys.tlsTrustSystemStore: SettingRowSpec(
     build: (SettingsPageData data) => TrustStoreRow(config: data.config),
   ),
-  // Entscheidungs-Proxy (HUM-511): ein eigener Abschnitt, erst ab einem
-  // Daemon mit `Egress`. Adresse, CA und Auflösung über `SetConfig`, die
-  // Zugangsdaten und die Prüfung über `Egress`.
-  SettingEntry(
-    id: FormKeys.egressProxy,
-    category: SettingsCategory.egress,
-    title: (AppLocalizations l10n) => l10n.settingsEgressProxyLabel,
-    help: (AppLocalizations l10n) => l10n.settingsEgressProxyHelp,
-    details: (AppLocalizations l10n) => l10n.settingsEgressProxyDetails,
-    keywords: (AppLocalizations l10n) => l10n.settingsKeywordsEgress,
-    shownWhen: (DaemonInfo? info) => info?.offersEgress ?? false,
+  // Entscheidungs-Proxy (HUM-511): Adresse, CA und Auflösung über
+  // `SetConfig`, die Zugangsdaten und die Prüfung über `Egress`.
+  FormKeys.egressProxy: SettingRowSpec(
     build: (SettingsPageData data) => EgressProxyRow(config: data.config),
   ),
-  SettingEntry(
-    id: FormKeys.egressProxyCa,
-    category: SettingsCategory.egress,
-    title: (AppLocalizations l10n) => l10n.settingsEgressCaLabel,
-    help: (AppLocalizations l10n) => l10n.settingsEgressCaHelp(mitmproxyCaHint),
-    keywords: (AppLocalizations l10n) => l10n.settingsKeywordsEgress,
-    shownWhen: (DaemonInfo? info) => info?.offersEgress ?? false,
+  FormKeys.egressProxyCa: SettingRowSpec(
     build: (SettingsPageData data) => EgressCaRow(config: data.config),
   ),
-  SettingEntry(
-    id: FormKeys.egressProxyResolve,
-    category: SettingsCategory.egress,
-    title: (AppLocalizations l10n) => l10n.settingsEgressResolveLabel,
-    help: (AppLocalizations l10n) => l10n.settingsEgressResolveHelp,
-    details: (AppLocalizations l10n) => l10n.settingsEgressResolveDetails,
-    keywords: (AppLocalizations l10n) => l10n.settingsKeywordsEgress,
-    shownWhen: (DaemonInfo? info) => info?.offersEgress ?? false,
+  FormKeys.egressProxyResolve: SettingRowSpec(
     build: (SettingsPageData data) => EgressResolveRow(config: data.config),
   ),
-  SettingEntry(
-    id: FormKeys.egressProxyAuthRef,
-    category: SettingsCategory.egress,
-    title: (AppLocalizations l10n) => l10n.settingsEgressAuthLabel,
-    help: (AppLocalizations l10n) => l10n.settingsEgressAuthHelp,
-    keywords: (AppLocalizations l10n) => l10n.settingsKeywordsEgress,
-    shownWhen: (DaemonInfo? info) => info?.offersEgress ?? false,
+  FormKeys.egressProxyAuthRef: SettingRowSpec(
     build: (SettingsPageData data) => const EgressAuthRow(),
   ),
-  SettingEntry(
-    id: SettingIds.egressCheck,
-    category: SettingsCategory.egress,
-    title: (AppLocalizations l10n) => l10n.settingsEgressCheckLabel,
-    help: (AppLocalizations l10n) => l10n.settingsEgressCheckHelp,
-    keywords: (AppLocalizations l10n) => l10n.settingsKeywordsEgress,
-    shownWhen: (DaemonInfo? info) => info?.offersEgress ?? false,
+  SettingIds.egressCheck: SettingRowSpec(
     build: (SettingsPageData data) => const EgressCheckRow(),
   ),
-  SettingEntry(
-    id: SettingIds.daemonVersion,
-    category: SettingsCategory.daemon,
-    title: (AppLocalizations l10n) => l10n.settingsVersionLabel,
-    help: (AppLocalizations l10n) => l10n.settingsVersionHelp,
-    keywords: (AppLocalizations l10n) => l10n.settingsKeywordsVersion,
+  SettingIds.daemonVersion: SettingRowSpec(
     build: (SettingsPageData data) => const VersionRow(),
   ),
-  SettingEntry(
-    id: SettingIds.daemonRestart,
-    category: SettingsCategory.daemon,
-    title: (AppLocalizations l10n) => l10n.settingsRestartLabel,
-    help: (AppLocalizations l10n) => l10n.settingsRestartHelp,
-    keywords: (AppLocalizations l10n) => l10n.settingsKeywordsRestart,
+  SettingIds.daemonRestart: SettingRowSpec(
     drawnWhen: (SettingsPageData data) => data.daemonRestart != null,
     build: (SettingsPageData data) => RestartRow(control: data.daemonRestart),
   ),
-  SettingEntry(
-    id: FormKeys.updateCheck,
-    category: SettingsCategory.daemon,
-    title: (AppLocalizations l10n) => l10n.settingsUpdateCheckLabel,
-    help: (AppLocalizations l10n) => l10n.settingsUpdateCheckHelpShort,
-    details: (AppLocalizations l10n) => l10n.settingsUpdateCheckHelp,
-    keywords: (AppLocalizations l10n) => l10n.settingsKeywordsUpdate,
+  FormKeys.updateCheck: SettingRowSpec(
     build: (SettingsPageData data) => UpdateRow(config: data.config),
   ),
-  SettingEntry(
-    id: SettingIds.configFile,
-    category: SettingsCategory.daemon,
-    title: (AppLocalizations l10n) => l10n.settingsFileLabel,
-    help: (AppLocalizations l10n) => l10n.settingsFileHelp,
-    keywords: (AppLocalizations l10n) => l10n.settingsKeywordsConfigFile,
+  SettingIds.configFile: SettingRowSpec(
     build: (SettingsPageData data) => ConfigFileRow(config: data.config),
   ),
-];
+};
 
-/// The entry with [id]. Throws for an id the register does not know: a row
-/// without an entry would be a row the search cannot find.
-SettingEntry settingEntry(String id) =>
-    settingsRegistry.firstWhere((SettingEntry entry) => entry.id == id);
+/// The entries of the overlay for one catalog, in one language.
+///
+/// The catalog decides categories, order and texts. The app adds the
+/// builders of [settingRowSpecs] and expands the row [SettingIds.shortcuts]
+/// into its keyboard shortcuts, which the daemon does not know.
+class SettingsView {
+  /// The view of [catalog]; [l10n] names the shortcuts.
+  SettingsView(this.catalog, AppLocalizations l10n)
+    : categories = <SettingsCatalogCategory>[...catalog.categories]
+        ..sort(
+          (SettingsCatalogCategory a, SettingsCatalogCategory b) =>
+              a.order.compareTo(b.order),
+        ),
+      entries = <SettingEntry>[
+        for (final SettingsCatalogCategory category in catalog.categories)
+          for (final SettingsCatalogEntry entry in catalog.entriesOf(
+            category.id,
+          ))
+            if (entry.id == SettingIds.shortcuts)
+              ...shortcutEntries(l10n, category: category.id)
+            else
+              SettingEntry.fromCatalog(entry, _specOf(entry)),
+      ];
 
-/// The entry with [id], or null.
-SettingEntry? settingEntryOrNull(String id) {
-  for (final SettingEntry entry in settingsRegistry) {
-    if (entry.id == id) {
-      return entry;
+  /// The catalog the view was made of.
+  final SettingsCatalog catalog;
+
+  /// The categories in the order of the left column.
+  final List<SettingsCatalogCategory> categories;
+
+  /// Every entry, by category in column order and within one in page order.
+  final List<SettingEntry> entries;
+
+  /// The view of the catalog the daemon answered in the language of
+  /// [context], or of an empty one while none answered.
+  static SettingsView of(BuildContext context, WidgetRef ref) {
+    final AppLocalizations l10n = context.l10n;
+    final SettingsCatalog catalog =
+        ref.watch(settingsCatalogProvider(l10n.localeName)).value ??
+        SettingsCatalog.empty;
+    final SettingsView? last = _last;
+    if (last != null &&
+        identical(last.catalog, catalog) &&
+        identical(_lastL10n, l10n)) {
+      return last;
     }
+    _lastL10n = l10n;
+    return _last = SettingsView(catalog, l10n);
   }
-  return null;
-}
 
-/// The entries of [category] a daemon described by [info] offers, in page
-/// order.
-List<SettingEntry> settingsOf(SettingsCategory category, DaemonInfo? info) =>
-    <SettingEntry>[
-      for (final SettingEntry entry in settingsRegistry)
-        if (entry.category == category && entry.shownFor(info)) entry,
-    ];
+  static SettingsView? _last;
+  static AppLocalizations? _lastL10n;
+
+  /// The entry with [id], or null.
+  SettingEntry? entry(String id) {
+    for (final SettingEntry entry in entries) {
+      if (entry.id == id) {
+        return entry;
+      }
+    }
+    return null;
+  }
+
+  /// The category with [id], or null.
+  SettingsCatalogCategory? category(String id) {
+    for (final SettingsCatalogCategory category in categories) {
+      if (category.id == id) {
+        return category;
+      }
+    }
+    return null;
+  }
+
+  /// The entries of [category], in page order.
+  List<SettingEntry> inCategory(String category) => <SettingEntry>[
+    for (final SettingEntry entry in entries)
+      if (entry.category == category) entry,
+  ];
+
+  /// The builder of [entry]: the app's own, or a generic row for a key the
+  /// catalog describes well enough; a special row without a builder of the
+  /// app is not drawn.
+  static SettingRowSpec? _specOf(SettingsCatalogEntry entry) {
+    if (settingRowSpecs[entry.id] case final SettingRowSpec spec) {
+      return spec;
+    }
+    if (entry.control == SettingControl.special ||
+        entry.control == SettingControl.secretRef ||
+        (entry.client.isNotEmpty && entry.client != 'app')) {
+      return null;
+    }
+    return SettingRowSpec(
+      build: (SettingsPageData data) =>
+          GenericSettingRow(entry: entry, config: data.config),
+    );
+  }
+}

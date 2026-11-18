@@ -1312,6 +1312,20 @@ pub enum ConfigCmd {
 
     /// Open config.toml in $VISUAL or $EDITOR and check it afterwards.
     Edit,
+
+    /// Print the settings catalog of the running daemon: categories, titles,
+    /// controls, origin and lock of every setting, the source the app and the
+    /// settings TUI draw from.
+    Catalog {
+        /// Resolve as a start in this project folder would, with its project
+        /// choice.
+        #[arg(long, value_name = "PATH")]
+        project: Option<PathBuf>,
+
+        /// The language of the texts, `en` or `de`; without it `ui.language`.
+        #[arg(long, value_name = "LANG")]
+        language: Option<String>,
+    },
 }
 
 /// Die Unterkommandos von `humanitl daemon`.

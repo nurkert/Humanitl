@@ -232,7 +232,8 @@ class Flows extends _$Flows {
           FlowEventDiagnostic() ||
           FlowEventRulesChanged() ||
           FlowEventAgentAsk() ||
-          FlowEventInterceptChanged():
+          FlowEventInterceptChanged() ||
+          FlowEventConfigChanged():
         break;
     }
   }

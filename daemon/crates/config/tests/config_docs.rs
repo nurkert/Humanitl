@@ -96,8 +96,7 @@ fn render_preamble(out: &mut String) {
         "Von unten nach oben; die obere Ebene gewinnt. Jedes Feld merkt sich, aus welcher Ebene\n\
          sein Wert stammt, und die Oberfläche zeigt es an.\n\n",
     );
-    out.push_str("| Ebene | Quelle |\n|---|---|\n");
-    out.push_str("| 1 | eingebaute Vorgabewerte |\n");
+    out.push_str("| Ebene | Quelle |\n|---|---|\n| 1 | eingebaute Vorgabewerte |\n");
     out.push_str("| 2 | `$XDG_CONFIG_HOME/humanitl/config.toml` |\n");
     out.push_str(
         "| 3 | Profil `default`: `$XDG_CONFIG_HOME/humanitl/profiles/default.toml`, sonst die \
@@ -113,7 +112,8 @@ fn render_preamble(out: &mut String) {
     out.push_str(
         "| 6 | die Projektwahl, die der Daemon je Projekt auf dem Host hält (HUM-532); nur die \
          Schlüssel des Erststart-Bildschirms, Herkunft `project-choice` |\n\
-         | 7 | Umgebungsvariablen `HUMANITL_*` |\n| 8 | Argumente der Kommandozeile |\n\n",
+         | 7 | Umgebungsvariablen `HUMANITL_*` |\n| 8 | Argumente der Kommandozeile |\n| 9 | \
+         Sperren einer Firmenvorgabe (HUM-534), nur lesbar, Herkunft `policy` |\n\n",
     );
     out.push_str(
         "Ein Profil hat neben `[config]` nur `name`, `description` und `[rules]` (HUM-066,\n\

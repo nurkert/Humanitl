@@ -29,7 +29,6 @@ import 'package:humanitl/features/intercept/providers/coach_mark.dart';
 import 'package:humanitl/features/intercept/providers/flows.dart';
 import 'package:humanitl/features/intercept/providers/now.dart';
 import 'package:humanitl/features/sandbox/providers/terminal_provider.dart';
-import 'package:humanitl/features/settings/registry/setting_entry.dart';
 import 'package:humanitl/features/shell/section.dart';
 import 'package:humanitl/features/shell/widgets/header_bar.dart';
 import 'package:humanitl/features/shell/widgets/window_frame.dart';

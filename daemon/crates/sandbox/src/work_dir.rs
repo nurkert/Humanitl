@@ -82,7 +82,10 @@ impl WorkDirSource {
             Some(Origin::Cli) => Self::Flag,
             // Die Projektwahl trägt keinen Ordner (HUM-532); stünde er doch
             // dort, hätte ein Mensch ihn gewählt.
+            // Eine Firmenvorgabe, die den Ordner festlegt (HUM-534), steht
+            // in ihrer Datei; wie `config.toml` ist sie die Quelle.
             Some(Origin::ProjectChoice) => Self::Chosen,
+            Some(Origin::Policy(by)) => Self::ConfigFile(PathBuf::from(by)),
             Some(Origin::Default) | None => Self::CurrentDir,
         }
     }

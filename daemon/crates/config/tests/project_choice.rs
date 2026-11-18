@@ -151,3 +151,88 @@ fn a_choice_below_the_floor_is_config_024_at_load() {
         Some(&Origin::ProjectChoice)
     );
 }
+
+/// Die Sperre einer Firmenvorgabe ist die oberste Ebene (HUM-534): Weder
+/// Datei noch Projektwahl, Umgebung oder Kommandozeile ändern den Wert, und
+/// die Herkunft nennt die Vorgabe. Mutationsbeweis: Läge die Ebene unter der
+/// Kommandozeile, gälte `none`, und der Test wird rot.
+#[test]
+fn a_policy_lock_beats_every_layer_and_names_the_policy() {
+    let scratch = Scratch::new();
+    let global = scratch.write("config.toml", "[hold]\nask_mode = \"none\"\n");
+    let locks = humanitl_config::PolicyLocks::none().with(
+        "hold.ask_mode",
+        "terminal",
+        "/etc/humanitl/policy.toml",
+    );
+    let sources = Sources {
+        global_toml: Some(global),
+        ..Sources::empty()
+    }
+    .with_project_choice(Some(choice(&[("hold.ask_mode", "ui")])))
+    .with_env(Env::from_pairs([("HUMANITL_HOLD__ASK_MODE", "ui")]))
+    .with_cli([("hold.ask_mode", "none")])
+    .with_policy(locks);
+    let resolved = load(&sources).unwrap();
+    assert_eq!(
+        resolved.config.hold.ask_mode,
+        humanitl_config::AskMode::Terminal
+    );
+    let origin = resolved.origin("hold.ask_mode").unwrap();
+    assert_eq!(origin.kind(), "policy");
+    assert_eq!(
+        origin,
+        &Origin::Policy("/etc/humanitl/policy.toml".to_owned())
+    );
+}
+
+/// Eine Sperre auf `sandbox.min_isolation` (Review HUM-534): Die strengere
+/// Untergrenze bleibt. Gleich: die Herkunft ist die Vorgabe. Darunter: ein
+/// Befund nennt es, statt die Sperre still neben `global` stehen zu lassen.
+#[test]
+fn a_policy_floor_keeps_the_stronger_value_and_says_so() {
+    let scratch = Scratch::new();
+    let lock = |value: &str| {
+        humanitl_config::PolicyLocks::none().with(
+            "sandbox.min_isolation",
+            value,
+            "/etc/humanitl/policy.toml",
+        )
+    };
+    let global = scratch.write("config.toml", "[sandbox]\nmin_isolation = \"kernel\"\n");
+    let weaker = load(
+        &Sources {
+            global_toml: Some(global),
+            ..Sources::empty()
+        }
+        .with_policy(lock("namespaces")),
+    )
+    .unwrap();
+    assert_eq!(
+        weaker.config.sandbox.min_isolation,
+        humanitl_config::MinIsolation::Kernel
+    );
+    assert!(
+        weaker
+            .diagnostics
+            .iter()
+            .any(|found| found.code.as_str() == "CONFIG_003"
+                && found.why.contains("/etc/humanitl/policy.toml")),
+        "{:?}",
+        weaker.diagnostics
+    );
+
+    let same = scratch.write("same.toml", "[sandbox]\nmin_isolation = \"kernel\"\n");
+    let equal = load(
+        &Sources {
+            global_toml: Some(same),
+            ..Sources::empty()
+        }
+        .with_policy(lock("kernel")),
+    )
+    .unwrap();
+    assert_eq!(
+        equal.origin("sandbox.min_isolation").map(Origin::kind),
+        Some("policy")
+    );
+}

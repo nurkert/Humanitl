@@ -879,6 +879,9 @@ class _ShellScreenState extends ConsumerState<ShellScreen> {
     // Daemons zeigen (`docs/UX.md` 4.2, Fall 4). Die eine Frage danach steht
     // in [linkLiveProvider] und wird hier nicht ein zweites Mal gestellt; der
     // Zustand selbst wird nur noch für den Grund im Banner gelesen.
+    // Eine Änderung der Konfiguration durch einen anderen Client, die CLI
+    // oder einen Editor lädt sie neu (HUM-534, `config_changed`).
+    ref.watch(configChangesProvider);
     final bool live = ref.watch(linkLiveProvider);
     final ConnectionStatus link = ref.watch(connectionStateProvider);
     final Section section = ref.watch(navigationProvider);

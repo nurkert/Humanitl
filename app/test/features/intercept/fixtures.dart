@@ -119,6 +119,10 @@ Header header(String name, String value) =>
 /// den jüngsten, [breakStream] lässt ihn scheitern. So sind Reconnect und
 /// Resync ohne echte Zeit prüfbar.
 class TestDaemonClient implements DaemonClient {
+  @override
+  Future<SettingsCatalog> getSettingsCatalog({String language = ''}) async =>
+      SettingsCatalog.empty;
+
   /// Jeder bisher ausgegebene Strom, ältester zuerst.
   final List<StreamController<FlowEvent>> streams =
       <StreamController<FlowEvent>>[];

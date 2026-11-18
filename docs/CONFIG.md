@@ -60,6 +60,7 @@ sein Wert stammt, und die Oberfläche zeigt es an.
 | 6 | die Projektwahl, die der Daemon je Projekt auf dem Host hält (HUM-532); nur die Schlüssel des Erststart-Bildschirms, Herkunft `project-choice` |
 | 7 | Umgebungsvariablen `HUMANITL_*` |
 | 8 | Argumente der Kommandozeile |
+| 9 | Sperren einer Firmenvorgabe (HUM-534), nur lesbar, Herkunft `policy` |
 
 Ein Profil hat neben `[config]` nur `name`, `description` und `[rules]` (HUM-066,
 `docs/profiles.md`). Jeder andere Block auf der obersten Ebene ist `CONFIG_002`; eine

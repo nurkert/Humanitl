@@ -136,8 +136,11 @@ abstract final class ProtoVersion {
   /// reads `SandboxEvent.Status.cloud_inference` for its orange tag, and the
   /// first start per agent and provider confirms through
   /// `SandboxRequest.acknowledge_cloud_inference` (HUM-516).
+  /// Raised to 47 with the settings catalog: the settings draw categories,
+  /// order, names and help from `ConfigSnapshot.catalog` and reload on
+  /// `FlowEvent.config_changed` (HUM-534). 44 to 46 have no reader here.
   /// Raising the number without a reader would claim otherwise.
-  static const int minor = 43;
+  static const int minor = 47;
 
   /// `major.minor` as text.
   static const String text = '$major.$minor';

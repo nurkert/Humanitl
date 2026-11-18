@@ -51,7 +51,14 @@ pub fn answer(
                 ))
             })?;
             let key = format!("agents.{}.source", agent.id);
-            crate::config_rpc::set_locked(paths, &key, source.as_str(), "", lock)?;
+            crate::config_rpc::set_locked(
+                paths,
+                &key,
+                source.as_str(),
+                "",
+                lock,
+                &humanitl_config::PolicyLocks::of_policy(paths),
+            )?;
         }
         Some(v1::agents_request::Op::Remove(remove)) => {
             let agent = known(&remove.agent)?;

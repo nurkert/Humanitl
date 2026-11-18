@@ -7,7 +7,6 @@
 
 import 'package:flutter/widgets.dart';
 import 'package:flutter_test/flutter_test.dart';
-import 'package:humanitl/core/ipc/fake_daemon_client.dart';
 import 'package:humanitl/core/shortcuts/shortcut_catalog.dart';
 import 'package:humanitl/core/ui/ui.dart';
 import 'package:humanitl/features/settings/registry/settings_registry.dart';
@@ -26,23 +25,30 @@ void main() {
   );
 
   group('the register', () {
-    test('every shortcut has an entry in its category, once', () {
+    test('every shortcut has an entry in its category, once', () async {
+      final SettingsView view = await fakeSettingsView();
       for (final AppShortcut shortcut in AppShortcut.values) {
-        final SettingEntry entry = settingEntry(SettingIds.shortcut(shortcut));
+        if (!shortcut.appliesOn()) {
+          continue;
+        }
+        final SettingEntry entry = view.entry(SettingIds.shortcut(shortcut))!;
         expect(entry.category, SettingsCategory.shortcuts);
       }
       for (final ShortcutScope scope in ShortcutScope.values) {
         expect(
-          settingEntry(SettingIds.shortcutGroup(scope)).build,
+          view.entry(SettingIds.shortcutGroup(scope))!.build,
           isNotNull,
           reason: 'the group of $scope draws its rows',
         );
       }
     });
 
-    test('search_finds_shortcut_by_label in English and German', () {
+    test('search_finds_shortcut_by_label in English and German', () async {
       for (final Locale locale in const <Locale>[Locale('en'), Locale('de')]) {
         final AppLocalizations l10n = lookupAppLocalizations(locale);
+        final SettingsView view = await fakeSettingsView(
+          language: locale.languageCode,
+        );
         for (final AppShortcut shortcut in AppShortcut.values) {
           if (!shortcut.appliesOn()) {
             continue;
@@ -50,8 +56,7 @@ void main() {
           final List<String> hits = <String>[
             for (final SettingsSearchGroup group in searchSettings(
               shortcut.label(l10n),
-              l10n,
-              FakeDaemonClient.defaultInfo,
+              view,
             ))
               for (final SettingEntry entry in group.entries) entry.id,
           ];
@@ -66,14 +71,10 @@ void main() {
       }
     });
 
-    test('the keys and the word for shortcuts find them too', () {
-      final AppLocalizations de = lookupAppLocalizations(const Locale('de'));
+    test('the keys and the word for shortcuts find them too', () async {
+      final SettingsView de = await fakeSettingsView(language: 'de');
       List<String> ids(String query) => <String>[
-        for (final SettingsSearchGroup group in searchSettings(
-          query,
-          de,
-          FakeDaemonClient.defaultInfo,
-        ))
+        for (final SettingsSearchGroup group in searchSettings(query, de))
           for (final SettingEntry entry in group.entries) entry.id,
       ];
       expect(ids('strg+k'), contains(SettingIds.shortcut(AppShortcut.palette)));
