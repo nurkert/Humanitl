@@ -2917,11 +2917,106 @@ message ProjectsRequest {
     string project_id = 1;
     repeated ChoiceValue values = 2;
   }
+  // Einen Aufraeumplan berechnen (HUM-533). Loescht nichts.
+  message CleanupPlan {
+    CleanupSelection selection = 1;
+  }
+  // Einen Plan ausfuehren: `selection` wie in `CleanupPlanView.selection`
+  // zurueckgegeben, `digest` aus demselben Plan. Der Daemon berechnet den
+  // Plan in der loeschenden Transaktion neu und loescht nur bei gleichem
+  // Digest; sonst `SANDBOX_054`.
+  message Cleanup {
+    CleanupSelection selection = 1;
+    string digest = 2;
+  }
   oneof op {
     List list = 1;
     Get get = 2;
     SaveChoice save_choice = 3;
+    CleanupPlan cleanup_plan = 4;
+    Cleanup cleanup = 5;
   }
+}
+
+// Wessen Daten ein Aufraeumplan betrifft (HUM-533). Genau eine Auswahl:
+// Projekte (`project_ids` oder `paths`), `all`, `unassigned` oder `forget`.
+message CleanupSelection {
+  // Projekte an ihrer Kennung, auch ersetzte.
+  repeated string project_ids = 1;
+  // Projekte an ihrem Ordner, absolut; der Plan gibt sie als `project_ids`
+  // zurueck.
+  repeated string paths = 2;
+  // Jedes Projekt des Registers; was in Gebrauch ist, bleibt.
+  bool all = 3;
+  // Nur die Sitzungen ohne Projekt.
+  bool unassigned = 4;
+  // Projektwahl und Registereintrag dieses einen Projekts (Kennung).
+  string forget = 5;
+  // Nur, was aelter ist: Fluesse, die davor ankamen, und Wahl und Eintrag
+  // von Projekten, deren letzter Start davor liegt. Der Plan rechnet
+  // `older_than_days` in diesen Zeitpunkt um und gibt ihn zurueck.
+  google.protobuf.Timestamp before = 6;
+  uint32 older_than_days = 7;
+  // Die wartenden Aenderungen einer Wegwerf-Sandbox gehoeren dazu; nur mit
+  // dieser ausdruecklichen Wahl.
+  bool include_waiting_changes = 8;
+}
+
+// Ein Eintrag eines Aufraeumplans.
+message CleanupItem {
+  // `recorded_flows`, `waiting_changes`, `project_choice` oder
+  // `register_entry`; die Arten, die der Daemon kennt, stehen in
+  // `CleanupPlanView.kinds`.
+  string kind = 1;
+  // Leer fuer die Sitzungen ohne Projekt.
+  string project_id = 2;
+  // Der Ordner des Projekts, gesaeubert fuer die Anzeige.
+  string path = 3;
+  // Ein Satz, was faellt.
+  string description = 4;
+  // Ungefaehr so viele Bytes werden frei (Zeilen und Body-Dateien).
+  uint64 bytes = 5;
+  // Wie viele Dinge fallen.
+  uint64 count = 6;
+  // Die Warnung, die jeder Client vor der Frage zeigt; bei
+  // `waiting_changes`, dass nicht uebernommene Aenderungen endgueltig
+  // verloren sind.
+  string warning = 7;
+}
+
+// Ein Aufraeumplan.
+message CleanupPlanView {
+  repeated CleanupItem items = 1;
+  // Bindet Identitaet und Fassung jedes Eintrags; `Projects.cleanup` nimmt
+  // ihn zurueck.
+  string digest = 2;
+  // Die feste Zeile, was nie geloescht wird; jeder Client zeigt sie.
+  string not_deleted = 3;
+  // Die Auswahl in der Form, die `cleanup` zuruecknimmt.
+  CleanupSelection selection = 4;
+  // Was die Auswahl traefe, aber bleibt, je ein Satz.
+  repeated string kept = 5;
+  // Die Arten, die dieser Daemon kennt.
+  repeated string kinds = 6;
+}
+
+// Was mit einem Eintrag geschah.
+message CleanupOutcome {
+  string kind = 1;
+  string project_id = 2;
+  string path = 3;
+  bool deleted = 4;
+  uint64 count = 5;
+  uint64 bytes_freed = 6;
+  // Warum nicht oder nicht ganz; leer, wenn alles fiel.
+  string reason = 7;
+}
+
+// Das Ergebnis von `cleanup`.
+message CleanupResult {
+  repeated CleanupOutcome outcomes = 1;
+  uint64 bytes_freed = 2;
+  string not_deleted = 3;
 }
 
 // Ein Schluessel der Projektwahl mit seinem Wert als Text.
@@ -2987,4 +3082,8 @@ message ProjectsResponse {
   // Was die Aufloesung fuer dieses Projekt zu sagen hat, etwa `CONFIG_024`
   // fuer eine gespeicherte Wahl, die nicht mehr gilt.
   repeated Diagnostic diagnostics = 5;
+  // `cleanup_plan`: der Plan.
+  CleanupPlanView plan = 6;
+  // `cleanup`: was geloescht wurde.
+  CleanupResult cleaned = 7;
 }

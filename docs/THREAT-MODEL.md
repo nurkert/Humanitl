@@ -991,6 +991,24 @@ daemon's working directory, which a desktop launcher may have set to anything. *
 other processes of the same user can change the store, as they can `config.toml`; a client on the
 daemon socket can save any choice the allow-list admits, as it can call `SetConfig`.
 
+**Cleanup and forgetting** (HUM-533, ADR-0024 point 14). The register can delete recorded flows
+and bodies of a project, the waiting changes of a disposable run (only on explicit choice, with the
+warning that changes not applied are lost for good), and the project choice with its register entry;
+forgetting a project is such a plan limited to choice and entry. **Attacker:** a client or a race
+that would delete more than the person saw, or a stale confirmation. **Defence:** nothing is deleted
+that the daemon did not list item by item first (`Projects.cleanup_plan`) and the person confirmed;
+`Projects.cleanup` takes the digest of that plan, computes the plan again inside the deleting
+transaction and deletes only when the digest is the same. The digest binds identity and version of
+every item (session and flow ids with the rows of each flow, blob hashes and whether each falls,
+the id and listing of the waiting layer,
+project id with version, the hash of the choice), not sizes or counts; a new session, a changed
+choice of the same length or a session that started makes it `SANDBOX_054`, and nothing is deleted.
+The running session is never part of a plan. The project folder, the audit chain (`audit.jsonl`,
+`audit_anchors`), rules, the global configuration and the agent depot are never part of one; each
+run leaves one `projects.cleaned` record with kinds and amounts only. *Residual risk:* a client on
+the daemon socket can request and confirm a plan without a human, as it can call `SetConfig`; the
+plan still lists what goes, and the audit chain records that it went.
+
 ## Assumptions
 
 | ID | Assumption | How to check it | If it breaks |
@@ -1110,6 +1128,7 @@ These attackers are not defended against, and Humanitl does not claim to:
 | 2026-11-17 | K-02: cloud inference named; an endpoint outside this machine and its network shows an orange tag, a start line and a doctor line, and asks once per agent and provider, confirmed in the daemon's data directory; blocks nothing | HUM-516 |
 | 2026-11-17 | K-36 added (first part): the agent depot as the agent's origin, the read-only version directory and the scratch copy of its configuration, one guard on every backend's plan (`AGENT_017`), masks of host installs (empty read-only mounts only where they exist, Seatbelt deny rules), the limit of the company lock | HUM-518 |
 | 2026-11-18 | K-37 added: the project choice as a host-side layer that neither a clone nor the agent writes, its allow-list, the isolation floor only raised, company locks, recognition by device and inode; a start without a project folder is refused | HUM-532 |
+| 2026-11-18 | K-37: cleanup and forgetting only through a listed, confirmed plan whose digest binds identity and version of every item and is checked again in the deleting transaction (`SANDBOX_054`); never the project folder, the audit chain or the running session | HUM-533 |
 
 Every security-relevant change to the shim, the mount allowlist, the filter or the passthrough gets
 a line here. Vulnerabilities are reported as described in

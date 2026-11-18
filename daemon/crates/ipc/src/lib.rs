@@ -51,7 +51,12 @@ pub const PROTO_MAJOR: u32 = 1;
 /// Minor-Version des Vertrags. Steigt bei jeder additiven Änderung
 /// (`Info.proto_minor`).
 ///
-/// `45` seit dem Projektregister (HUM-532): die RPC `Projects` mit
+/// `46` seit dem Aufräumen (HUM-533): `ProjectsRequest.cleanup_plan` und
+/// `ProjectsRequest.cleanup` mit `CleanupSelection`, die Antworten
+/// `ProjectsResponse.plan` (`CleanupPlanView` mit Einträgen, Digest, der
+/// Zeile, was nie gelöscht wird, und den bekannten Arten) und
+/// `ProjectsResponse.cleaned` (`CleanupResult`).
+/// `45` war das Projektregister (HUM-532): die RPC `Projects` mit
 /// `ProjectsRequest` (`list`, `get`, `save_choice`) und `ProjectsResponse`,
 /// `GetConfigRequest.project_id` und die Herkunft `project-choice` in
 /// `FieldOrigin`.
@@ -242,7 +247,7 @@ pub const PROTO_MAJOR: u32 = 1;
 /// Spiegelung in `app/lib/core/ipc/proto_version.dart` darf nachziehen: eine
 /// abweichende Minor ist verabredetermaßen kein Grund, die Verbindung
 /// abzulehnen (`docs/PROTOCOL.md`).
-pub const PROTO_MINOR: u32 = 45;
+pub const PROTO_MINOR: u32 = 46;
 
 /// Metadata-Schlüssel für das Session-Token aus
 /// `$XDG_RUNTIME_DIR/humanitl/token` (CONVENTIONS.md 3.6).

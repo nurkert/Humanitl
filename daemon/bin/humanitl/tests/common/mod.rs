@@ -191,26 +191,51 @@ type TerminalInputs = Arc<std::sync::Mutex<Vec<&'static str>>>;
 impl FakeServer {
     /// Startet den Dienst und wartet, bis Socket und Token da sind.
     pub fn start(harness: &Harness) -> Self {
-        Self::start_with(harness, false, None, false, false, None)
+        Self::start_with(harness, false, None, false, false, None, None)
+    }
+
+    /// Wie [`FakeServer::start`], aber `Projects.cleanup_plan` liefert einen
+    /// Plan mit Einträgen, und der Zähler sagt, wie oft `cleanup` kam
+    /// (HUM-533).
+    pub fn start_with_cleanup(harness: &Harness) -> (Self, Cleanups) {
+        let cleanups = Cleanups::default();
+        let server = Self::start_with(
+            harness,
+            false,
+            None,
+            false,
+            false,
+            None,
+            Some(Arc::clone(&cleanups)),
+        );
+        (server, cleanups)
     }
 
     /// Wie [`FakeServer::start`], aber `GetInfo` nennt `version` als Fassung
     /// des Daemons (HUM-210): ein älterer Daemon, der nach einem Update noch
     /// antwortet.
     pub fn start_with_version(harness: &Harness, version: &str) -> Self {
-        Self::start_with(harness, false, Some(version.to_owned()), false, false, None)
+        Self::start_with(
+            harness,
+            false,
+            Some(version.to_owned()),
+            false,
+            false,
+            None,
+            None,
+        )
     }
 
     /// Wie [`FakeServer::start`], aber `GetInfo` nennt diese Minor des
     /// Vertrags: ein älterer Daemon (HUM-436).
     pub fn start_with_proto_minor(harness: &Harness, minor: u32) -> Self {
-        Self::start_with(harness, false, None, false, false, Some(minor))
+        Self::start_with(harness, false, None, false, false, Some(minor), None)
     }
 
     /// Wie [`FakeServer::start`], aber ohne Sitzung: `retire_if_idle` sagt
     /// `retired` (HUM-382). Der Standard-Fake spielt eine laufende Sitzung.
     pub fn start_idle(harness: &Harness) -> Self {
-        Self::start_with(harness, false, None, false, true, None)
+        Self::start_with(harness, false, None, false, true, None, None)
     }
 
     /// Wie [`FakeServer::start`], aber `Audit(Export)` meldet Erfolg und
@@ -218,7 +243,7 @@ impl FakeServer {
     /// schreibt, die der Aufrufer nicht hat, etwa ein eigenes `/tmp` unter
     /// `PrivateTmp`.
     pub fn start_with_silent_export(harness: &Harness) -> Self {
-        Self::start_with(harness, true, None, false, false, None)
+        Self::start_with(harness, true, None, false, false, None, None)
     }
 
     /// Wie [`FakeServer::start`], aber `Terminal` liest nach dem `Open` keine
@@ -226,7 +251,7 @@ impl FakeServer {
     /// Strom bleibt offen, bis der Client geht, und alles, was er schickt,
     /// staut sich im Transport.
     pub fn start_with_stalled_terminal(harness: &Harness) -> Self {
-        Self::start_with(harness, false, None, true, false, None)
+        Self::start_with(harness, false, None, true, false, None, None)
     }
 
     fn start_with(
@@ -236,6 +261,7 @@ impl FakeServer {
         stall_terminal: bool,
         idle: bool,
         proto_minor: Option<u32>,
+        cleanups: Option<Cleanups>,
     ) -> Self {
         let paths = harness.paths();
         let socket = paths.daemon_socket();
@@ -275,6 +301,7 @@ impl FakeServer {
                             stall_terminal,
                             idle,
                             proto_minor,
+                            cleanups,
                         }),
                         token,
                     ));
@@ -423,6 +450,52 @@ struct SilentExport {
     idle: bool,
     /// Die Minor, die `GetInfo` statt der eigenen nennt (HUM-436).
     proto_minor: Option<u32>,
+    /// Mit einem Zähler: `Projects` antwortet auf `cleanup_plan` mit einem
+    /// Plan mit Einträgen ([`cleanup_plan`]) und zählt jedes `cleanup`
+    /// (HUM-533). Der Fake selbst plant nichts, weil seine Sitzung läuft.
+    cleanups: Option<Cleanups>,
+}
+
+/// Wie oft `Projects.cleanup` ankam (HUM-533).
+pub type Cleanups = Arc<std::sync::atomic::AtomicUsize>;
+
+/// Ein Plan mit je einem Eintrag jeder Art, die wartenden Änderungen mit der
+/// Warnung aus dem Daemon.
+fn cleanup_plan(selection: Option<v1::CleanupSelection>) -> v1::CleanupPlanView {
+    let item = |kind: &str, description: &str, warning: &str| v1::CleanupItem {
+        kind: kind.to_owned(),
+        project_id: "0190a6d4-0000-7000-8000-000000000001".to_owned(),
+        path: "/home/nik/projects/shop-frontend".to_owned(),
+        description: description.to_owned(),
+        bytes: 2048,
+        count: 1,
+        warning: warning.to_owned(),
+    };
+    v1::CleanupPlanView {
+        items: vec![
+            item(
+                "recorded_flows",
+                "1 recorded request with responses and bodies from 1 session of shop-frontend",
+                "",
+            ),
+            item(
+                "waiting_changes",
+                "1 change of the disposable run in shop-frontend that waits",
+                humanitl_ipc::projects::WAITING_WARNING,
+            ),
+            item("register_entry", "The register entry of shop-frontend", ""),
+        ],
+        digest: "ab".repeat(32),
+        not_deleted: humanitl_ipc::projects::NOT_DELETED.to_owned(),
+        selection,
+        kept: Vec::new(),
+        kinds: vec![
+            "recorded_flows".to_owned(),
+            "waiting_changes".to_owned(),
+            "project_choice".to_owned(),
+            "register_entry".to_owned(),
+        ],
+    }
 }
 
 #[tonic::async_trait]
@@ -552,6 +625,35 @@ impl DaemonApi for SilentExport {
         &self,
         request: v1::ProjectsRequest,
     ) -> Result<v1::ProjectsResponse, Diagnostic> {
+        if let Some(cleanups) = &self.cleanups {
+            match request.op {
+                Some(v1::projects_request::Op::CleanupPlan(asked)) => {
+                    return Ok(v1::ProjectsResponse {
+                        plan: Some(cleanup_plan(asked.selection)),
+                        ..v1::ProjectsResponse::default()
+                    });
+                }
+                Some(v1::projects_request::Op::Cleanup(_)) => {
+                    cleanups.fetch_add(1, std::sync::atomic::Ordering::SeqCst);
+                    return Ok(v1::ProjectsResponse {
+                        cleaned: Some(v1::CleanupResult {
+                            outcomes: vec![v1::CleanupOutcome {
+                                kind: "recorded_flows".to_owned(),
+                                path: "/home/nik/projects/shop-frontend".to_owned(),
+                                deleted: true,
+                                count: 1,
+                                bytes_freed: 2048,
+                                ..v1::CleanupOutcome::default()
+                            }],
+                            bytes_freed: 2048,
+                            not_deleted: humanitl_ipc::projects::NOT_DELETED.to_owned(),
+                        }),
+                        ..v1::ProjectsResponse::default()
+                    });
+                }
+                _ => {}
+            }
+        }
         self.inner.projects(request).await
     }
     async fn set_config(

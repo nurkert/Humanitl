@@ -52,7 +52,9 @@ use humanitl_core::{
 use rusqlite::Connection;
 use tokio::sync::oneshot;
 
+use crate::blob::BlobRemoval;
 use crate::blob::BlobStore;
+use crate::cleanup::{CleanupPlan, CleanupScope, Executed, LiveState};
 use crate::error::{RecorderError, storage_failed, unavailable_at};
 use crate::health::Reporter;
 use crate::hostkey::host_key;
@@ -64,14 +66,6 @@ pub const BATCH_INTERVAL: Duration = Duration::from_millis(50);
 
 /// So viele Kommandos passen höchstens in eine Transaktion.
 pub const BATCH_COMMANDS: usize = 100;
-
-/// So lange bleibt ein angemeldeter Blob vor dem Aufräumen geschützt.
-///
-/// Ein Blob wird geschrieben, bevor seine Zeile entsteht (siehe `blob`-Modul).
-/// Zwischen beidem darf ein Aufräumlauf ihn nicht für verwaist halten. Die
-/// Anmeldung fällt nach dieser Frist von selbst, damit ein abgebrochener
-/// Vorgang den Schutz nicht ewig hält.
-pub const RESERVATION_GRACE: Duration = Duration::from_secs(300);
 
 /// Der Kanal zum Schreib-Thread samt dem Thread selbst.
 ///
@@ -228,9 +222,6 @@ pub enum WriterCmd {
         /// Wohin der Bericht geht.
         reply: oneshot::Sender<Result<PurgeReport, RecorderError>>,
     },
-    /// Ein Blob ist geschrieben oder wird gerade geschrieben; seine Zeile
-    /// kommt gleich. Bis dahin fasst ihn kein Aufräumlauf an.
-    ReserveBlob([u8; 32]),
     /// Ein Start im Projektregister, in einer eigenen Transaktion (HUM-532).
     RegisterProject {
         /// Was der Start über sein Projekt weiß.
@@ -248,6 +239,26 @@ pub enum WriterCmd {
         at: SystemTime,
         /// Wohin die Zeile danach geht; `None`, wenn es keine aktuelle gibt.
         reply: oneshot::Sender<Result<Option<ProjectRow>, RecorderError>>,
+    },
+    /// Einen Aufräumplan berechnen (HUM-533), nach dem offenen Bündel.
+    CleanupPlan {
+        /// Die Auswahl.
+        scope: Box<CleanupScope>,
+        /// Was läuft und wartet.
+        live: Box<LiveState>,
+        /// Wohin der Plan geht.
+        reply: oneshot::Sender<Result<CleanupPlan, RecorderError>>,
+    },
+    /// Einen Aufräumplan ausführen, wenn sein Digest noch gilt (HUM-533).
+    Cleanup {
+        /// Die Auswahl des Plans.
+        scope: Box<CleanupScope>,
+        /// Was läuft und wartet.
+        live: Box<LiveState>,
+        /// Der Digest des bestätigten Plans.
+        digest: String,
+        /// Wohin das Ergebnis geht.
+        reply: oneshot::Sender<Result<Executed, RecorderError>>,
     },
     /// Statistiken für den Abfrageplaner neu erheben.
     Analyze(oneshot::Sender<Result<(), RecorderError>>),
@@ -275,6 +286,10 @@ pub struct MessageWrite {
     pub inline: Option<Bytes>,
     /// Der Verweis in den Blob-Speicher, falls er dort steht.
     pub blob: Option<[u8; 32]>,
+    /// Die Anmeldung des Blobs ([`crate::BlobStore::reserve`]). Sie lebt mit
+    /// diesem Auftrag und fällt, wenn der Schreib-Thread ihn nach dem
+    /// Schreiben der Zeile fallen lässt, oder wenn der Auftrag nie ankommt.
+    pub reservation: Option<Arc<crate::blob::BlobReservation>>,
     /// Länge des Bodys, wie er gesendet wurde.
     pub size: u64,
     /// Wahr, wenn nur ein Anfang gespeichert wurde.
@@ -322,7 +337,6 @@ pub struct Writer {
     opened_at: Instant,
     pending: usize,
     restricted: bool,
-    reserved: HashMap<[u8; 32], Instant>,
     held: HashMap<FlowId, i64>,
     session: Option<SessionId>,
 }
@@ -340,7 +354,6 @@ impl Writer {
             opened_at: Instant::now(),
             pending: 0,
             restricted: false,
-            reserved: HashMap::new(),
             held: HashMap::new(),
             session: None,
         }
@@ -376,6 +389,20 @@ impl Writer {
                     let report = self.purge(before);
                     let _ignored = self.analyze();
                     let _ignored = reply.send(report);
+                }
+                WriterCmd::CleanupPlan { scope, live, reply } => {
+                    self.commit();
+                    let _ignored =
+                        reply.send(crate::cleanup::plan(&self.conn, &self.blobs, &scope, &live));
+                }
+                WriterCmd::Cleanup {
+                    scope,
+                    live,
+                    digest,
+                    reply,
+                } => {
+                    self.commit();
+                    let _ignored = reply.send(self.cleanup(&scope, &live, &digest));
                 }
                 WriterCmd::Analyze(reply) => {
                     self.commit();
@@ -504,15 +531,13 @@ impl Writer {
                 json,
             } => self.write_session_summary(session, sandbox, at, &json),
             WriterCmd::RuleDeleted { id, at } => self.write_rule_deleted(&id, at),
-            WriterCmd::ReserveBlob(sha256) => {
-                self.reserved.insert(sha256, Instant::now());
-                Ok(())
-            }
             WriterCmd::Flush(_)
             | WriterCmd::Purge { .. }
             | WriterCmd::Analyze(_)
             | WriterCmd::RegisterProject { .. }
-            | WriterCmd::SaveProjectChoice { .. } => Ok(()),
+            | WriterCmd::SaveProjectChoice { .. }
+            | WriterCmd::CleanupPlan { .. }
+            | WriterCmd::Cleanup { .. } => Ok(()),
         };
         if let Err(err) = result {
             self.report(err);
@@ -795,38 +820,35 @@ impl Writer {
 
     /// Schreibt eine Nachricht und, bei einer Antwort, ihre Kennzahlen.
     fn write_message(&mut self, message: &MessageWrite) -> Result<(), RecorderError> {
-        if let Some(sha256) = message.blob {
-            // Die Zeile steht jetzt; der Blob braucht keinen Schutz mehr.
-            self.reserved.remove(&sha256);
-        }
         let flow = message.flow.to_string();
-        self.conn
-            .execute(
-                "INSERT INTO messages (flow_id, dir, headers_json, content_type, \
+        let inserted = self.conn.execute(
+            "INSERT INTO messages (flow_id, dir, headers_json, content_type, \
                  content_encoding, body_inline, blob_sha256, size, truncated) VALUES (?1, ?2, ?3, \
                  ?4, ?5, ?6, ?7, ?8, ?9) ON CONFLICT(flow_id, dir) DO UPDATE SET \
                  headers_json = excluded.headers_json, content_type = excluded.content_type, \
                  content_encoding = excluded.content_encoding, body_inline = excluded.body_inline, \
                  blob_sha256 = excluded.blob_sha256, size = excluded.size, \
                  truncated = excluded.truncated",
-                rusqlite::params![
-                    flow,
-                    message.dir.as_str(),
-                    message.headers_json,
-                    message.content_type,
-                    message.content_encoding,
-                    message.inline.as_ref().map(AsRef::as_ref),
-                    message.blob.as_ref().map(<[u8; 32]>::as_slice),
-                    i64::try_from(message.size).unwrap_or(i64::MAX),
-                    i64::from(message.truncated),
-                ],
-            )
-            .map_err(|err| {
-                storage_failed(format!(
-                    "could not record the {} of the flow {flow} ({err})",
-                    message.dir
-                ))
-            })?;
+            rusqlite::params![
+                flow,
+                message.dir.as_str(),
+                message.headers_json,
+                message.content_type,
+                message.content_encoding,
+                message.inline.as_ref().map(AsRef::as_ref),
+                message.blob.as_ref().map(<[u8; 32]>::as_slice),
+                i64::try_from(message.size).unwrap_or(i64::MAX),
+                i64::from(message.truncated),
+            ],
+        );
+        // Die Anmeldung des Blobs fällt mit dem Auftrag, gleich nach diesem
+        // Schritt; eine Datei ohne Zeile räumt `sweep_orphans` weg.
+        inserted.map_err(|err| {
+            storage_failed(format!(
+                "could not record the {} of the flow {flow} ({err})",
+                message.dir
+            ))
+        })?;
 
         if matches!(message.dir, Dir::Request | Dir::RequestEdited) {
             // `FlowEvent::Received` entsteht, bevor der Body gelesen ist; seine
@@ -1095,9 +1117,6 @@ impl Writer {
     /// Abfrage zeigt, dass keine Zeile mehr auf ihn zeigt.
     fn purge(&mut self, before: i64) -> Result<PurgeReport, RecorderError> {
         let mut report = PurgeReport::default();
-        let now = Instant::now();
-        self.reserved
-            .retain(|_sha256, at| now.duration_since(*at) < RESERVATION_GRACE);
 
         self.conn
             .execute_batch(
@@ -1204,6 +1223,69 @@ impl Writer {
             .map_err(|err| storage_failed(format!("could not delete old rows ({err}): {sql}")))
     }
 
+    /// Führt einen Aufräumplan aus ([`crate::cleanup::execute`]) und
+    /// entfernt danach die Blob-Dateien, die der Plan nennt und auf die
+    /// keine Zeile mehr zeigt. Ein Blob, dessen Zeile gerade unterwegs ist
+    /// (angemeldet), bleibt; der Eintrag sagt es.
+    fn cleanup(
+        &mut self,
+        scope: &CleanupScope,
+        live: &LiveState,
+        digest: &str,
+    ) -> Result<Executed, RecorderError> {
+        let executed = crate::cleanup::execute(&self.conn, &self.blobs, scope, live, digest)?;
+        let Executed::Done { plan, mut outcomes } = executed else {
+            return Ok(executed);
+        };
+        for (item, outcome) in plan.items.iter().zip(outcomes.iter_mut()) {
+            for (sha256, len) in item.blobs() {
+                match self.drop_one(sha256) {
+                    Ok(true) => outcome.bytes = outcome.bytes.saturating_add(*len),
+                    Ok(false) => {}
+                    Err(why) => outcome.reason = Some(why),
+                }
+            }
+        }
+        let _ignored = self.analyze();
+        Ok(Executed::Done { plan, outcomes })
+    }
+
+    /// Entfernt eine Blob-Datei, wenn keine Zeile mehr auf sie zeigt und sie
+    /// nicht angemeldet ist; `Ok(false)`, wenn sie bleibt oder schon fehlte.
+    fn drop_one(&self, sha256: &[u8; 32]) -> Result<bool, String> {
+        match self
+            .blobs
+            .remove_if_unused(sha256, || self.unreferenced(sha256))
+        {
+            Ok(BlobRemoval::Removed) => Ok(true),
+            Ok(BlobRemoval::Used | BlobRemoval::Absent) => Ok(false),
+            Ok(BlobRemoval::Reserved) => Err(
+                "a body file stays because a request with the same content is being recorded"
+                    .to_owned(),
+            ),
+            Err(err) => Err(format!(
+                "a body file could not be removed: {}",
+                err.into_diagnostic().why
+            )),
+        }
+    }
+
+    /// Wahr, wenn keine Zeile in `messages` den Blob nennt.
+    fn unreferenced(&self, sha256: &[u8; 32]) -> Result<bool, RecorderError> {
+        self.conn
+            .query_row(
+                "SELECT COUNT(*) FROM messages WHERE blob_sha256 = ?1",
+                rusqlite::params![sha256.as_slice()],
+                |row| row.get::<_, i64>(0),
+            )
+            .map(|used| used == 0)
+            .map_err(|err| {
+                storage_failed(format!(
+                    "could not check whether a blob is still referenced ({err})"
+                ))
+            })
+    }
+
     /// Entfernt die Blobs, auf die nach dem Aufräumen niemand mehr zeigt.
     ///
     /// Ein angemeldeter Blob bleibt liegen, auch wenn gerade keine Zeile auf
@@ -1213,24 +1295,13 @@ impl Writer {
     fn drop_unreferenced(&mut self, candidates: &[[u8; 32]]) -> u64 {
         let mut removed = 0;
         for sha256 in candidates {
-            if self.reserved.contains_key(sha256) {
-                continue;
-            }
-            let still_used: Result<i64, _> = self.conn.query_row(
-                "SELECT COUNT(*) FROM messages WHERE blob_sha256 = ?1",
-                rusqlite::params![sha256.as_slice()],
-                |row| row.get(0),
-            );
-            match still_used {
-                Ok(0) => match self.blobs.remove(sha256) {
-                    Ok(true) => removed += 1,
-                    Ok(false) => {}
-                    Err(err) => self.report(err),
-                },
+            match self
+                .blobs
+                .remove_if_unused(sha256, || self.unreferenced(sha256))
+            {
+                Ok(BlobRemoval::Removed) => removed += 1,
                 Ok(_) => {}
-                Err(err) => self.report(storage_failed(format!(
-                    "could not check whether a blob is still referenced ({err})"
-                ))),
+                Err(err) => self.report(err),
             }
         }
         removed

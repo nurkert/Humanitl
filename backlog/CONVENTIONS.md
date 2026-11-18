@@ -3755,3 +3755,80 @@ Ordner in der Anfrage und ohne `sandbox.work_dir` lehnt `Sandbox(Start)` mit
 `SANDBOX_053` ab; ein Plan nennt dann den leeren Pfad, und das Setup verlangt
 eine Auswahl (`CONFIG_013`).
 
+
+### 4.52 Aus der Umsetzung des Aufräumens (HUM-533, 2026-11-18)
+
+**Gelöscht wird nur ein Plan, nie am Plan vorbei.** `Projects.cleanup_plan`
+nimmt eine `CleanupSelection` mit genau einem Ziel (Projekte über Kennung oder
+Ordner, `all`, `unassigned`, `forget`) und antwortet mit `CleanupPlanView`:
+Einträge je Art und Projekt, die Sätze, die Warnung bei wartenden Änderungen
+(`humanitl_ipc::projects::WAITING_WARNING`), was in Gebrauch bleibt (`kept`),
+die feste Zeile `humanitl_ipc::projects::NOT_DELETED`, die Arten des Daemons
+(`humanitl_recorder::CleanupKind::ALL`) und die Auswahl in der Form, die
+`Projects.cleanup` zurücknimmt (Kennungen statt Ordner, die Grenze als
+Zeitpunkt statt in Tagen). `cleanup` berechnet den Plan im Schreib-Thread der
+Aufzeichnung in **einer** Transaktion neu (`cleanup::execute` in `humanitl-recorder`),
+vergleicht den Digest und löscht nur bei Gleichheit; sonst `SANDBOX_054`. Auch
+der Plan selbst entsteht im Schreib-Thread, damit er dieselben Zeilen sieht wie
+die Ausführung danach. Ein Projekt vergessen ist `forget` und plant genau
+`project_choice` und `register_entry`; ein eigenes `forget` ohne Plan gibt es
+nicht.
+
+**Der Digest** ist SHA-256 über eine Fassungszeile, die Auswahl und je Eintrag
+Art, Projekt und Identität: `project <id> version <n>`, `session <id>`,
+`flow <id> state … decision … messages … findings … diagnostics …` (je
+Nachricht Richtung, Größe, Blob-Hash oder SHA-256 des Bodys inline, SHA-256 der
+Kopfzeilen, Kürzung; je Tabelle der Funde und Befunde Anzahl und höchster Index),
+`blob <sha256> drop|keep`, `layer <sandbox-id> count … bytes … complete …`,
+`choice <sha256 des Textes>`. Größen der Einträge stehen nicht darin. Wer eine
+Art ergänzt, ergänzt ihre Identitätszeilen und erhöht die Fassungszeile.
+
+**Eine unvollständige Schicht verwirft kein Aufräumen.** Ist die Liste der
+wartenden Änderungen gekürzt, hat sie Stellen, die sich nicht lesen ließen,
+oder lässt sich die Schicht gar nicht lesen (`complete = false`), ist ein
+Plan oder eine Ausführung mit `include_waiting_changes` über dieses Projekt
+`SANDBOX_054`; geprüft beim Plan und noch einmal unter der Sperre der Schicht.
+
+**Blob-Anmeldungen liegen im `BlobStore`.** Wer eine Body-Datei schreibt
+(`store_message`, `ResponseSink`), meldet sie vorher an: `reserve` gibt eine
+`BlobReservation` zurück, die mit `MessageWrite.reservation` zum
+Schreib-Thread reist und fällt, wenn der Auftrag nach dem Schreiben der Zeile
+fallen gelassen wird, bei einem Fehler, bei einem verworfenen Auftrag oder
+einer Panik (`Drop`). Eine Frist gibt es nicht mehr (`RESERVATION_GRACE`
+entfiel): Eine Anfrage, die lange hängt, behält ihren Schutz. Aufräumen und
+Aufbewahrung entfernen eine Datei nur über `BlobStore::remove_if_unused`, das
+Anmeldung und Zeilen unter derselben Sperre prüft, unter der angemeldet wird.
+
+**Audit nach dem Löschen.** `projects.cleaned` wird nach dem Commit geschrieben
+und mit `AuditHandle::sync` bestätigt; nimmt der Schreiber ihn nicht mehr an,
+trägt die Antwort `AUDIT_006` als Warnung in `ProjectsResponse.diagnostics`.
+
+**Die Arten.** `recorded_flows` löscht Flüsse, Nachrichten, Funde und Befunde
+der Sitzungen eines Projekts (mit Grenze nur Flüsse mit `ts` davor) und die
+Blob-Dateien, auf die danach keine Zeile mehr zeigt; die Zeilen in `sessions`
+und `session_summaries` bleiben. `register_entry` setzt `sessions.project_id`
+seines Projekts auf `NULL` (die Sitzungen gelten danach als nicht zugeordnet)
+und löscht die Zeile in `projects`. `project_choice` leert die Wahl und zählt
+`version` hoch. `waiting_changes` liegt nicht in der Datenbank: Der Dienst der
+Sandbox nennt die Schicht in `LiveState`, hält ihre Sperre während der ganzen
+Ausführung (`SandboxService::with_cleanup_lock`) und verwirft sie nach dem
+Commit, nur wenn der ausgeführte Plan sie nannte. Wahl und Eintrag eines
+Projekts fallen mit `clean` nur, wenn sein letzter Start vor der Grenze liegt
+(ohne Grenze immer) und es nicht in Gebrauch ist.
+
+**In Gebrauch** ist die laufende Sitzung (ihre Flüsse nie im Plan) und ein
+Projekt, dessen Sitzung läuft oder dessen Änderungen ohne
+`include_waiting_changes` warten (Wahl und Eintrag bleiben). `forget` eines
+Projekts in Gebrauch ist schon beim Plan `SANDBOX_054`. `VACUUM` läuft nicht im
+Pfad der Antwort; die Antwort nennt die Bytes der Zeilen und der entfernten
+Blob-Dateien, nicht die Dateigröße der Datenbank.
+
+**Audit.** Jede Ausführung schreibt einen Record `projects.cleaned` mit der Art
+der Auswahl und je Art Menge und Bytes, ohne Pfade, Hosts und Kennungen.
+
+**CLI.** `humanitl projects clean [PATH...] [--older-than DAYS]
+[--include-waiting-changes] [--unassigned] [--yes]` und `humanitl projects
+forget PATH [--yes]` zeigen den Plan des Daemons als Tabelle, die Warnungen,
+was bleibt, und die Zeile `NOT_DELETED`, und fragen. Ohne Terminal (oder mit
+`--json`) und ohne `--yes` löscht nichts, der Plan steht auf stdout, Exit 1.
+Ohne `PATH` und ohne `--unassigned` gilt `all`.

@@ -218,6 +218,23 @@ pub fn list(conn: &Connection, limit: u32, offset: u32) -> Result<Vec<ProjectRow
     )
 }
 
+/// Jede Zeile, aktuell und ersetzt, der jüngste Start zuerst (für das
+/// Aufräumen mit der Auswahl „alles", HUM-533).
+///
+/// # Errors
+///
+/// [`RecorderError::Storage`] bei einem Fehler der Datenbank.
+pub(crate) fn all_rows(conn: &Connection) -> Result<Vec<ProjectRow>, RecorderError> {
+    select(
+        conn,
+        &format!(
+            "SELECT {COLUMNS} FROM projects \
+             ORDER BY COALESCE(last_started, first_seen) DESC, id DESC"
+        ),
+        [],
+    )
+}
+
 /// Die Sitzungen eines Projekts, die jüngste zuerst; ausgewählt über
 /// `project_id`, nie über den Pfad.
 ///

@@ -27,11 +27,12 @@
 //! Anfrage, die der Nutzer moderiert hat; niemand sonst auf dem Rechner soll
 //! ihn lesen.
 
-use std::collections::HashSet;
+use std::collections::{HashMap, HashSet};
 use std::fs::{self, File};
 use std::io::{ErrorKind, Write as _};
 use std::os::unix::fs::PermissionsExt as _;
 use std::path::{Path, PathBuf};
+use std::sync::{Arc, Mutex, MutexGuard};
 use std::time::{Duration, SystemTime};
 
 use bytes::Bytes;
@@ -69,6 +70,67 @@ pub(crate) fn hex_encode(bytes: &[u8]) -> String {
 #[derive(Debug)]
 pub struct BlobStore {
     root: PathBuf,
+    /// Blobs, deren Datei geschrieben ist oder gerade entsteht und deren
+    /// Zeile in `messages` noch unterwegs ist: je Blob wie viele
+    /// Anmeldungen ([`BlobReservation`]) leben. Ein Aufräumlauf entfernt keinen davon, und er prüft und entfernt
+    /// unter derselben Sperre, unter der ein Schreiber anmeldet (HUM-533):
+    /// Entweder ist die Anmeldung vor dem Entfernen da, dann bleibt die
+    /// Datei, oder die Datei ist schon weg, dann schreibt `put` sie neu.
+    reserved: Reservations,
+}
+
+/// Je angemeldetem Blob, wie viele Anmeldungen leben.
+type Reservations = Arc<Mutex<HashMap<[u8; 32], usize>>>;
+
+fn lock_reservations(
+    reserved: &Mutex<HashMap<[u8; 32], usize>>,
+) -> MutexGuard<'_, HashMap<[u8; 32], usize>> {
+    reserved
+        .lock()
+        .unwrap_or_else(std::sync::PoisonError::into_inner)
+}
+
+/// Eine lebende Anmeldung eines Blobs ([`BlobStore::reserve`]). Fällt sie,
+/// zählt die Anmeldung herunter; die letzte gibt den Blob frei. Kein
+/// Zeitablauf: Eine Anfrage, die lange hängt, behält ihren Schutz, und jeder
+/// Weg, auf dem ihre Zeile nicht kommt, lässt die Anmeldung fallen.
+#[derive(Debug)]
+pub struct BlobReservation {
+    sha256: [u8; 32],
+    reserved: Reservations,
+}
+
+impl PartialEq for BlobReservation {
+    fn eq(&self, other: &Self) -> bool {
+        self.sha256 == other.sha256
+    }
+}
+
+impl Eq for BlobReservation {}
+
+impl Drop for BlobReservation {
+    fn drop(&mut self) {
+        let mut reserved = lock_reservations(&self.reserved);
+        if let Some(count) = reserved.get_mut(&self.sha256) {
+            *count = count.saturating_sub(1);
+            if *count == 0 {
+                reserved.remove(&self.sha256);
+            }
+        }
+    }
+}
+
+/// Was [`BlobStore::remove_if_unused`] mit einer Datei tat.
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+pub enum BlobRemoval {
+    /// Entfernt.
+    Removed,
+    /// Angemeldet: Ihre Zeile ist unterwegs; sie bleibt.
+    Reserved,
+    /// Eine Zeile nennt sie noch; sie bleibt.
+    Used,
+    /// Sie fehlte schon.
+    Absent,
 }
 
 impl BlobStore {
@@ -82,6 +144,63 @@ impl BlobStore {
         create_dir(root)?;
         Ok(Self {
             root: root.to_path_buf(),
+            reserved: Arc::new(Mutex::new(HashMap::new())),
+        })
+    }
+
+    fn reservations(&self) -> MutexGuard<'_, HashMap<[u8; 32], usize>> {
+        lock_reservations(&self.reserved)
+    }
+
+    /// Meldet einen Blob an, bevor seine Datei geschrieben wird oder als
+    /// schon da gilt. Solange die zurückgegebene Anmeldung lebt, entfernt
+    /// kein Aufräumlauf die Datei; sie fällt, wenn ihr Halter sie fallen
+    /// lässt: nach dem Schreiben der Zeile, bei einem Fehler, bei einem
+    /// verworfenen Auftrag an den Schreib-Thread und bei einer Panik.
+    #[must_use = "the reservation protects the blob only while it lives"]
+    pub fn reserve(&self, sha256: &[u8; 32]) -> BlobReservation {
+        let mut reserved = self.reservations();
+        let count = reserved.entry(*sha256).or_insert(0);
+        *count = count.saturating_add(1);
+        drop(reserved);
+        BlobReservation {
+            sha256: *sha256,
+            reserved: Arc::clone(&self.reserved),
+        }
+    }
+
+    /// Wahr, solange eine Anmeldung des Blobs lebt.
+    #[must_use]
+    pub fn is_reserved(&self, sha256: &[u8; 32]) -> bool {
+        self.reservations().contains_key(sha256)
+    }
+
+    /// Entfernt die Datei, wenn sie nicht angemeldet ist und `unused` sagt,
+    /// dass keine Zeile sie nennt; Prüfung und Entfernen geschehen unter der
+    /// Sperre der Anmeldungen.
+    ///
+    /// # Errors
+    ///
+    /// Der Fehler von `unused`, oder [`RecorderError::Blob`], wenn die Datei
+    /// sich nicht löschen lässt.
+    pub fn remove_if_unused(
+        &self,
+        sha256: &[u8; 32],
+        unused: impl FnOnce() -> Result<bool, RecorderError>,
+    ) -> Result<BlobRemoval, RecorderError> {
+        let reserved = self.reservations();
+        if reserved.contains_key(sha256) {
+            return Ok(BlobRemoval::Reserved);
+        }
+        if !unused()? {
+            return Ok(BlobRemoval::Used);
+        }
+        let removed = self.remove(sha256)?;
+        drop(reserved);
+        Ok(if removed {
+            BlobRemoval::Removed
+        } else {
+            BlobRemoval::Absent
         })
     }
 
@@ -428,7 +547,51 @@ mod tests {
 
     use humanitl_core::http::sha256;
 
-    use super::{BlobStore, sha_from_path};
+    use super::{BlobRemoval, BlobStore, sha_from_path};
+
+    /// HUM-533: Ein angemeldeter Blob bleibt, auch wenn keine Zeile ihn
+    /// nennt, und zwar ohne Frist, solange eine Anmeldung lebt; fällt die
+    /// letzte (auch durch eine Panik), ist er frei.
+    ///
+    /// Mutationsbeweis: Ohne die Prüfung der Anmeldung in
+    /// `remove_if_unused` fällt die Datei sofort, und der Test wird rot;
+    /// ebenso ohne das Herunterzählen in `Drop`.
+    #[test]
+    fn a_reserved_blob_survives_a_removal() {
+        let (_dir, store) = store();
+        let hash = sha256(b"body of another project");
+        store.put(&hash, b"body of another project").unwrap();
+        let first = store.reserve(&hash);
+        let second = store.reserve(&hash);
+        assert!(store.is_reserved(&hash));
+        assert_eq!(
+            store.remove_if_unused(&hash, || Ok(true)).unwrap(),
+            BlobRemoval::Reserved
+        );
+        assert!(store.contains(&hash));
+        drop(first);
+        assert_eq!(
+            store.remove_if_unused(&hash, || Ok(true)).unwrap(),
+            BlobRemoval::Reserved,
+            "two writers reserved it, one released"
+        );
+        // Eine Panik beim Halter gibt die Anmeldung frei.
+        let unwound = std::panic::catch_unwind(std::panic::AssertUnwindSafe(move || {
+            let _held = second;
+            panic!("the request failed");
+        }));
+        assert!(unwound.is_err());
+        assert!(!store.is_reserved(&hash));
+        assert_eq!(
+            store.remove_if_unused(&hash, || Ok(false)).unwrap(),
+            BlobRemoval::Used
+        );
+        assert_eq!(
+            store.remove_if_unused(&hash, || Ok(true)).unwrap(),
+            BlobRemoval::Removed
+        );
+        assert!(!store.contains(&hash));
+    }
 
     fn store() -> (tempfile::TempDir, BlobStore) {
         let dir = tempfile::tempdir().unwrap_or_else(|err| panic!("{err}"));
