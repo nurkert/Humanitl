@@ -124,6 +124,53 @@ case("lenient_partial_warns", "false", {"push": 4, "workflow_dispatch": 3}, 0,
      ["push", "workflow_dispatch"], want_text="::warning::")
 case("lenient_not_on_main_skips_gate", "false", {}, 0, [], on_main=False, want_text="::warning::")
 
+
+# HUM-531: Der Schalter des Probelaufs. Der Schritt "Version from the tag, ..."
+# setzt macos_main=false nur fuer release-dry/hum-NNN-macos-fallback; ein Tag
+# und release-dry/0.Y.Z kennen ihn nicht, und ein Tag mit der Endung bleibt
+# ungueltig.
+VERSION_STEP = [s for s in wf["jobs"]["guard"]["steps"] if s.get("id") == "version"]
+if len(VERSION_STEP) != 1:
+    sys.exit("release_guard_test: guard has no single step with id version")
+VERSION_STEP = VERSION_STEP[0]
+
+
+def switch_case(name, event, ref_type, ref_name, want_rc, want_outputs):
+    global fails
+    with tempfile.TemporaryDirectory(prefix="release-guard-test.") as tmp:
+        out = os.path.join(tmp, "output")
+        open(out, "w").close()
+        env = dict(os.environ, EVENT=event, REF_TYPE=ref_type, REF_NAME=ref_name, INPUT_VERSION="",
+                   SHA="0123456789abcdef0123456789abcdef01234567", LC_ALL="C", GITHUB_OUTPUT=out)
+        r = subprocess.run(["bash", "--noprofile", "--norc", "-eo", "pipefail", "-c", VERSION_STEP["run"]],
+                           cwd=tmp, env=env, capture_output=True, text=True)
+        got = dict(line.split("=", 1) for line in open(out).read().splitlines() if "=" in line)
+        problems = []
+        if r.returncode != want_rc:
+            problems.append("exit %d, expected %d" % (r.returncode, want_rc))
+        for key, value in want_outputs.items():
+            if got.get(key) != value:
+                problems.append("%s=%r, expected %r" % (key, got.get(key), value))
+        if problems:
+            fails += 1
+            print("FAIL %s: %s" % (name, "; ".join(problems)))
+            print("    " + (r.stdout + r.stderr).strip().replace("\n", "\n    "))
+        else:
+            print("ok   %s" % name)
+
+
+switch_case("switch_tag_runs_main_path", "push", "tag", "v0.4.1", 0,
+            {"macos_main": "true", "publish": "true", "version": "0.4.1"})
+switch_case("switch_release_dry_runs_main_path", "push", "branch", "release-dry/0.4.1", 0,
+            {"macos_main": "true", "publish": "false"})
+switch_case("switch_issue_dry_runs_main_path", "push", "branch", "release-dry/hum-531", 0,
+            {"macos_main": "true", "version": "0.0.531"})
+switch_case("switch_issue_dry_fallback_skips_main_path", "push", "branch", "release-dry/hum-531-macos-fallback", 0,
+            {"macos_main": "false", "publish": "false", "version": "0.0.531"})
+switch_case("switch_on_release_dry_version_refused", "push", "branch", "release-dry/0.4.1-macos-fallback", 1, {})
+switch_case("switch_on_tag_refused", "push", "tag", "v0.4.1-macos-fallback", 1, {})
+switch_case("switch_other_suffix_refused", "push", "branch", "release-dry/hum-531-macos", 1, {})
+
 if fails:
     print("release_guard_test: %d Fall/Faelle rot" % fails, file=sys.stderr)
     sys.exit(1)

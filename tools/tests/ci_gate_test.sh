@@ -282,6 +282,59 @@ JOBS="$jobs_ci_ok_skipped" case_ ci_ok_skipped_is_red 1 'ci-ok: skipped' 60 -- "
 jobs_neutral='{"jobs": [{"name": "lint", "conclusion": "neutral", "steps": []}]}'
 JOBS="$jobs_neutral" case_ neutral_is_green 0 'gruen' 60 -- "$green_run"
 EVERY=1 JOBS="$jobs_neutral" case_ every_job_neutral_is_red 1 'lint: neutral' 60 -- "$green_run"
+
+# HUM-531: Rueckfall-Paare <job> und <job>-fallback in release.yml. Genau
+# einer gruen, der andere uebersprungen oder ohne Runner (cancelled, kein
+# runner_name, kein begonnener Schritt). Ein Lauf, in dem ein Job ohne Runner
+# blieb, endet bei GitHub mit failure; mit gruenem Rueckfall zaehlt er unter
+# HUMANITL_CI_EVERY_JOB=1 als gruen.
+# fb_jobs <build-macos> <build-macos-fallback> <check-macos> <check-macos-fallback>
+#   jedes Ergebnis ist success, skipped, failure, lost (cancelled ohne Runner)
+#   oder began (cancelled ohne Runner, aber ein Schritt hatte begonnen)
+fb_job() {
+  case "$2" in
+    lost) printf '{"name": "%s", "conclusion": "cancelled", "runner_name": "", "steps": []}' "$1" ;;
+    began) printf '{"name": "%s", "conclusion": "cancelled", "runner_name": "", "steps": [{"number": 1, "name": "Set up job", "conclusion": "cancelled", "started_at": "2026-11-17T16:00:01Z"}]}' "$1" ;;
+    *) printf '{"name": "%s", "conclusion": "%s", "runner_name": "GitHub Actions 1", "steps": []}' "$1" "$2" ;;
+  esac
+}
+fb_jobs() {
+  printf '{"jobs": [{"name": "guard", "conclusion": "success", "steps": []},
+  {"name": "classify-macos", "conclusion": "success", "steps": []},
+  %s, %s, %s, %s,
+  {"name": "release", "conclusion": "%s", "steps": []}]}' \
+    "$(fb_job build-macos "$1")" "$(fb_job build-macos-fallback "$2")" \
+    "$(fb_job check-macos "$3")" "$(fb_job check-macos-fallback "$4")" "${5:-skipped}"
+}
+EVERY=1 SKIP=release JOBS="$(fb_jobs success skipped success skipped)" case_ fallback_unused_is_green 0 'gruen' 60 -- "$green_run"
+# Der Tag-Lauf von v0.4.0 mit Rueckfall: rot bei GitHub, gruen hier, und der
+# Job ohne Runner wird als solcher genannt.
+EVERY=1 JOBS="$(fb_jobs lost success skipped success success)" case_ fallback_rescues_red_run 0 \
+  'gruen ist der Rueckfall fuer: build-macos check-macos' 60 -- "$red_run"
+EVERY=1 JOBS="$(fb_jobs lost success skipped success success)" case_ fallback_names_lost_job 0 \
+  'build-macos: cancelled, ohne Runner' 60 -- "$red_run"
+# Nur die Pruefung fiel auf den Rueckfall.
+EVERY=1 JOBS="$(fb_jobs success skipped lost success success)" case_ fallback_check_only_is_green 0 'gruen' 60 -- "$red_run"
+# Schalter des Probelaufs: Hauptpfad uebersprungen, der Lauf ist gruen.
+EVERY=1 SKIP=release JOBS="$(fb_jobs skipped success skipped success)" case_ fallback_forced_is_green 0 'gruen' 60 -- "$green_run"
+# Ohne Runner und ohne Rueckfall (Abbruch von Hand in der Schlange): rot.
+EVERY=1 JOBS="$(fb_jobs lost skipped skipped skipped)" case_ lost_without_fallback_is_red 1 \
+  'rot \(failure\)' 60 -- "$red_run"
+# Codefehler auf macOS: rot, auch wenn ein Rueckfall gruen waere.
+EVERY=1 JOBS="$(fb_jobs failure success skipped success success)" case_ failure_with_fallback_is_red 1 \
+  'rot \(failure\)' 60 -- "$red_run"
+# Abgebrochen, nachdem ein Schritt begann: kein Fall fuer den Rueckfall.
+EVERY=1 JOBS="$(fb_jobs began success skipped success success)" case_ began_with_fallback_is_red 1 \
+  'rot \(failure\)' 60 -- "$red_run"
+# Beide Pfade gruen ist kein Rueckfall, sondern ein Fehler im Workflow.
+EVERY=1 SKIP=release JOBS="$(fb_jobs success success success skipped)" case_ both_paths_green_is_red 1 \
+  'build-macos/build-macos-fallback: success/success' 60 -- "$green_run"
+# Der Rueckfall scheitert: rot.
+EVERY=1 JOBS="$(fb_jobs lost failure skipped skipped)" case_ fallback_failed_is_red 1 'rot \(failure\)' 60 -- "$red_run"
+# Ein anderer Job ist rot: Der Rueckfall rettet den Lauf nicht.
+EVERY=1 JOBS="$(fb_jobs lost success skipped success failure)" case_ fallback_other_red_is_red 1 'rot \(failure\)' 60 -- "$red_run"
+# Ohne HUMANITL_CI_EVERY_JOB bleibt ein roter Lauf rot.
+JOBS="$(fb_jobs lost success skipped success success)" case_ fallback_needs_every_job 1 'rot \(failure\)' 60 -- "$red_run"
 # Der volle Lauf von Hand: HUMANITL_CI_EVENT waehlt die Laeufe.
 EVENT=workflow_dispatch case_ event_dispatch 0 'gruen' 60 -- "$green_run"
 if grep -q "runs?head_sha=$sha&event=workflow_dispatch&" "$work/event_dispatch/urls"; then

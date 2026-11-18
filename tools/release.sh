@@ -36,9 +36,22 @@
 # Commits ist dann ein No-op). War es ein Fehler, kommt die Behebung auf main,
 # und der erneute Aufruf prueft den neuen Commit.
 #
-# Scheitert der Tag-Lauf trotz gruenem Probelauf (ein Ausreisser), sagt das
-# Skript es und verweist auf genau diesen Lauf: dort in der Actions-Oberflaeche
-# "Re-run failed jobs". Der Tag bleibt, wo er ist; er wird nie verschoben.
+# Scheitert der Tag-Lauf trotz gruenem Probelauf (ein Ausreisser), nennt das
+# Skript die roten Jobs mit ihrem Ergebnis und verweist auf genau diesen Lauf:
+# dort in der Actions-Oberflaeche "Re-run failed jobs". Der Tag bleibt, wo er
+# ist; er wird nie verschoben.
+#
+# Bekam ein macOS-Job keinen Runner (cancelled ohne Runner, HUM-531; so ging
+# es v0.4.0 am 2026-11-17), baut und prueft release.yml selbst auf
+# macos-15-intel weiter, und das Tor zaehlt den Lauf als gruen, wenn der
+# Rueckfall gruen ist. Blieb auch er ohne Erfolg, sagt das Skript, dass es
+# kein Fehler im Code ist, und nennt diese Schritte:
+#
+#   1. Den Lauf oeffnen (die Adresse steht in der Ausgabe).
+#   2. Oben rechts "Re-run jobs", dann "Re-run failed jobs". Das startet nur
+#      die roten und abgebrochenen Jobs; die gruenen bleiben.
+#   3. Warten, bis der Job `release` gruen ist.
+#   4. Den Tag nie verschieben.
 #
 # Exit-Codes: 0 Release veroeffentlicht; 1 abgelehnt oder rot; 2 Aufruf
 # falsch; 3 kein Urteil binnen der Frist (dann erneut aufrufen oder den Lauf
@@ -158,9 +171,12 @@ fi
 # (HUM-060). Ein fehlender Abschnitt oder ein Entwurf ohne Datum im Commit
 # liesse erst den Probelauf scheitern; hier faellt er auf, bevor etwas
 # gepusht wird. Geprueft wird die Datei im Commit, nicht im Arbeitsbaum.
+# Die Ausgabe des letzten Tors, fuer die Auskunft nach einem roten Tag-Lauf.
+gate_log="$(mktemp)"
+changelog_tmp=""
+trap 'rm -f "$gate_log" ${changelog_tmp:+"$changelog_tmp"}' EXIT
 if [[ "$version" != 0.0.* ]]; then
   changelog_tmp="$(mktemp)"
-  trap 'rm -f "$changelog_tmp"' EXIT
   git show "$sha:CHANGELOG.md" > "$changelog_tmp" 2> /dev/null || die "${sha:0:12} has no CHANGELOG.md; $version needs a section in it"
   packaging/release/changelog-section.sh "$version" "$changelog_tmp" > /dev/null \
     || die "CHANGELOG.md in ${sha:0:12} has no dated section for $version (see above); commit '## [$version] - YYYY-MM-DD' to main first, nothing was pushed"
@@ -168,13 +184,48 @@ fi
 echo "release: $version on ${sha:0:12}, the tip of $remote/main"
 
 # run_gate <frist> [VAR=wert ...]: ruft das Tor mit der Umgebung
-# auf und gibt seinen Exit-Code zurueck, ohne unter set -e abzubrechen.
+# auf und gibt seinen Exit-Code zurueck, ohne unter set -e abzubrechen. Seine
+# Ausgabe (stdout und stderr) geht wie bisher ins Terminal und zugleich nach
+# $gate_log.
 gate_rc=0
 run_gate() {
   local frist="$1"
   shift
   gate_rc=0
-  env "$@" $gate "$sha" "$frist" || gate_rc=$?
+  set +e
+  env "$@" $gate "$sha" "$frist" 2>&1 | tee "$gate_log"
+  gate_rc="${PIPESTATUS[0]}"
+  set -e
+}
+
+# Nach einem roten Tag-Lauf: die roten Jobs aus der Ausgabe von
+# tools/ci-gate.sh ("  <job>: <ergebnis>", HUM-531) und, wenn ein macOS-Job
+# ohne Runner blieb, die Schritte zum neuen Anlauf.
+explain_red_tag_run() {
+  local link red lost
+  link="$(sed -nE 's/^ci-gate: Lauf [0-9]+: [a-z_]+ \((https:[^ ]+)\)$/\1/p' "$gate_log" | tail -n 1)"
+  if [[ -z "$link" ]]; then
+    link="https://github.com/${repo:-<owner>/<name>}/actions/workflows/release.yml"
+  fi
+  red="$(grep -E '^  [A-Za-z0-9_.-]+: ' "$gate_log" | grep -vE ': (success|skipped|neutral)$' || true)"
+  lost="$(sed -nE 's/^  ([A-Za-z0-9_.-]*macos[A-Za-z0-9_.-]*): cancelled, ohne Runner$/\1/p' "$gate_log" | tr '\n' ' ')"
+  lost="${lost% }"
+  if [[ -n "$red" ]]; then
+    echo "release: red jobs of the release run of $tag:" >&2
+    sed 's/^  /release:   /' <<< "$red" >&2
+  fi
+  if [[ -n "$lost" ]]; then
+    echo "release: $lost got no macOS runner (cancelled before a runner was assigned). Usually GitHub had no runner free; a cancel by hand while queued looks the same here. Either way it is not a fault in the code." >&2
+    echo "release: to finish the release of $tag:" >&2
+    echo "release:   1. Open the run: $link" >&2
+    echo "release:   2. Top right \"Re-run jobs\", then \"Re-run failed jobs\". It starts only the red and cancelled jobs; the green ones stay." >&2
+    echo "release:   3. Wait until the job release is green." >&2
+    echo "release:   4. Never move the tag $tag." >&2
+    return
+  fi
+  echo "release: the release run of $tag failed although its dry run was green (a flake?)." >&2
+  echo "release: open that run in the Actions UI ($link) and choose \"Re-run failed jobs\"." >&2
+  echo "release: the tag $tag stays where it is; never move or re-push it." >&2
 }
 
 # Jeder Job von ci.yml muss gelaufen sein (HUM-424). Hat die Pfadregel im
@@ -247,9 +298,7 @@ case "$gate_rc" in
     fi
     ;;
   1)
-    echo "release: the release run of $tag failed although its dry run was green (a flake?)." >&2
-    echo "release: open that run in the Actions UI (link above) and choose \"Re-run failed jobs\"." >&2
-    echo "release: the tag $tag stays where it is; never move or re-push it." >&2
+    explain_red_tag_run
     exit 1
     ;;
   3)

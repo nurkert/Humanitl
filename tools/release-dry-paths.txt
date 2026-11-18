@@ -39,3 +39,4 @@ daemon/rust-toolchain.toml
 daemon/.cargo/
 tests/escape/macos/
 tools/release-dry-paths.txt
+tools/ci/

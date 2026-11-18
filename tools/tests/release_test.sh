@@ -61,6 +61,8 @@ if [[ "$kind" == dry && -f "$GATE_DIR/race-main" ]]; then
   new="$(git -C "$o" commit-tree "$tree" -p "$parent" -m moved)"
   git -C "$o" update-ref refs/heads/main "$new"
 fi
+# out-<kind>: was das Tor ausgibt, etwa die Jobliste wie tools/ci-gate.sh.
+[[ -f "$GATE_DIR/out-$kind" ]] && cat "$GATE_DIR/out-$kind"
 exit "$(cat "$GATE_DIR/rc-$kind" 2> /dev/null || echo 0)"
 EOF
 chmod +x "$work/gate"
@@ -296,6 +298,65 @@ check redtag_exits_1 same "$rc" 1
 check redtag_tag_stays on_origin "$d" refs/tags/v0.0.3
 check redtag_says_rerun grep -q "Re-run failed jobs" "$d/out"
 check redtag_says_never_move grep -q "never move" "$d/out"
+
+# 6b. HUM-531: Ein Tag-Lauf, dessen Jobliste (so wie tools/ci-gate.sh sie
+#     ausgibt) einen gescheiterten Schritt zeigt: die roten Jobs mit ihrem
+#     Ergebnis und die bisherige Auskunft, keine Schritte fuer fehlende Runner.
+d="$(setup redstep)"
+echo 1 > "$d/rc-tag"
+cat > "$d/out-tag" << 'GATE'
+ci-gate: Lauf 44120430252: failure (https://github.com/owner/name/actions/runs/44120430252)
+  build: success
+  build-macos: failure
+    step 9 "Build universal humanitld, humanitl and humanitl-shim": failure
+  build-macos-fallback: skipped
+  check-deb: success
+  check-macos: skipped
+  check-macos-fallback: skipped
+  classify-macos: success
+  release: skipped
+ci-gate: rot (failure); nicht mergen
+GATE
+rc=0
+rel "$d" 0.0.3 > "$d/out" 2>&1 || rc=$?
+check redstep_exits_1 same "$rc" 1
+check redstep_lists_red_job grep -q "^release:   build-macos: failure$" "$d/out"
+check redstep_lists_only_red not grep -q "^release:   check-deb" "$d/out"
+check redstep_says_flake grep -q "failed although its dry run was green" "$d/out"
+check redstep_names_run grep -q "Actions UI (https://github.com/owner/name/actions/runs/44120430252)" "$d/out"
+check redstep_no_runner_steps not grep -q "1. Open the run" "$d/out"
+
+# 6c. HUM-531: build-macos blieb ohne Runner (cancelled, wie v0.4.0 am
+#     2026-11-17), und der Rueckfall rettete den Lauf nicht. Das Skript sagt
+#     es ausdruecklich und nennt die vier Schritte in dieser Reihenfolge.
+d="$(setup lostmac)"
+echo 1 > "$d/rc-tag"
+cat > "$d/out-tag" << 'GATE'
+ci-gate: Lauf 44120430252: failure (https://github.com/owner/name/actions/runs/44120430252)
+  build: success
+  build-macos: cancelled, ohne Runner
+  build-macos-fallback: cancelled, ohne Runner
+  check-deb: success
+  check-macos: skipped
+  check-macos-fallback: skipped
+  classify-macos: success
+  release: skipped
+ci-gate: rot (failure); nicht mergen
+GATE
+rc=0
+rel "$d" 0.0.3 > "$d/out" 2>&1 || rc=$?
+check lostmac_exits_1 same "$rc" 1
+check lostmac_tag_stays on_origin "$d" refs/tags/v0.0.3
+check lostmac_lists_red_job grep -q "^release:   build-macos: cancelled, ohne Runner$" "$d/out"
+check lostmac_says_no_runner grep -q "build-macos build-macos-fallback got no macOS runner" "$d/out"
+check lostmac_not_a_flake not grep -q "a flake" "$d/out"
+steps_in_order() {
+  sed -nE 's/^release:   ([1-4])\. ([A-Za-z]+ [A-Za-z]+).*/\1 \2/p' "$1" > "$1.steps"
+  printf '%s\n' '1 Open the' '2 Top right' '3 Wait until' '4 Never move' | cmp -s - "$1.steps"
+}
+check lostmac_four_steps_in_order steps_in_order "$d/out"
+check lostmac_step1_link grep -q "1. Open the run: https://github.com/owner/name/actions/runs/44120430252$" "$d/out"
+check lostmac_step2_rerun_failed grep -q '"Re-run jobs", then "Re-run failed jobs"' "$d/out"
 
 # 7. Waehrend des Probelaufs vergibt jemand anderes die Nummer: kein zweiter
 #    Tag, kein Ueberschreiben.

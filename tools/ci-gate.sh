@@ -75,6 +75,13 @@
 #                         trotzdem gruen (HUM-363). Auch ein nach der
 #                         Pfadregel uebersprungener Job zaehlt dann nicht
 #                         (Exit 4): Ein Release verlangt den vollen Lauf.
+#                         Rueckfall-Paare `<job>` und `<job>-fallback`
+#                         (release.yml, HUM-531) zaehlen gemeinsam: genau
+#                         einer gruen, der andere uebersprungen oder ohne
+#                         Runner. Ein Lauf, den GitHub nur deshalb mit failure
+#                         beendet, weil ein Job ohne Runner blieb und sein
+#                         Rueckfall gruen ist, gilt dann als gruen (siehe
+#                         judge_jobs).
 #   HUMANITL_CI_MAY_SKIP  Jobnamen, durch Leerzeichen getrennt, die unter
 #                         HUMANITL_CI_EVERY_JOB=1 uebersprungen sein duerfen,
 #                         etwa `release` im Probelauf.
@@ -219,7 +226,9 @@ jobs = json.load(sys.stdin).get("jobs") or []
 for j in sorted(jobs, key=lambda j: j.get("name", "")):
     name = j.get("name", "?")
     conclusion = j.get("conclusion") or j.get("status") or "-"
-    print("  %s: %s" % (name, conclusion))
+    lost = conclusion == "cancelled" and not (j.get("runner_name") or "") \
+        and not any(s.get("started_at") for s in j.get("steps") or [])
+    print("  %s: %s%s" % (name, conclusion, ", ohne Runner" if lost else ""))
     if conclusion in ("success", "skipped", "neutral"):
         continue
     for s in j.get("steps") or []:
@@ -234,6 +243,12 @@ for j in sorted(jobs, key=lambda j: j.get("name", "")):
 # `path`, wenn der Job `changes` mit success endete und sein Schritt
 # `skip <job>` mit success lief. HUMANITL_CI_MAY_SKIP gilt nur unter
 # HUMANITL_CI_EVERY_JOB=1. Exit 4, wenn die Liste leer ist.
+#
+# Rueckfall-Paare (HUM-531), nur unter HUMANITL_CI_EVERY_JOB=1: Zu einem Job
+# `<job>` gibt es einen Job `<job>-fallback`. Das Paar ist gruen, wenn genau
+# einer von beiden mit success endete und der andere uebersprungen wurde oder
+# ohne Runner blieb (cancelled, `runner_name` leer, kein Schritt begonnen).
+# Lief der Rueckfall, steht dazu `fallback <job>` in der Ausgabe.
 judge_jobs() {
   CI_GATE_MAY_SKIP="$may_skip" CI_GATE_EVERY="$every_job" python3 -I -c '
 import json, os, sys
@@ -250,9 +265,40 @@ if len(changes) == 1 and changes[0].get("conclusion") == "success":
         if name.startswith("skip ") and s.get("conclusion") == "success":
             plan.add(name[len("skip "):])
 fine = ("success",) if every else ("success", "neutral")
+def result(j):
+    return j.get("conclusion") or j.get("status") or "-"
+def stood_aside(j):
+    c = result(j)
+    if c == "skipped":
+        return True
+    return c == "cancelled" and not (j.get("runner_name") or "") \
+        and not any(s.get("started_at") for s in j.get("steps") or [])
+by_name = {}
+for j in jobs:
+    by_name.setdefault(j.get("name", "?"), []).append(j)
+paired = set()
+if every:
+    for fb in sorted(by_name):
+        base = fb[:-len("-fallback")]
+        if not fb.endswith("-fallback") or base not in by_name:
+            continue
+        paired.update((base, fb))
+        if len(by_name[base]) != 1 or len(by_name[fb]) != 1:
+            print("bad %s/%s: mehrere Jobs dieses Namens" % (base, fb))
+            continue
+        a, b = by_name[base][0], by_name[fb][0]
+        if result(a) == "success" and stood_aside(b):
+            continue
+        if result(b) == "success" and stood_aside(a):
+            print("fallback %s" % base)
+            continue
+        print("bad %s/%s: %s/%s, genau einer muss gruen sein, der andere uebersprungen oder ohne Runner"
+              % (base, fb, result(a), result(b)))
 for j in sorted(jobs, key=lambda j: j.get("name", "")):
     name = j.get("name", "?")
     conclusion = j.get("conclusion") or j.get("status") or "-"
+    if name in paired:
+        continue
     if conclusion in fine:
         continue
     if conclusion == "skipped" and name in may_skip:
@@ -371,6 +417,21 @@ if ((frc == 0)); then
   fi
 else
   echo "ci-gate: Jobs des Laufs $run_id nicht lesbar; Einzelheiten auf $html" >&2
+fi
+
+# Ein Lauf, in dem ein Job ohne Runner blieb, endet bei GitHub mit failure,
+# auch wenn sein Rueckfall gruen ist (HUM-531; so endete der Tag-Lauf von
+# v0.4.0). Unter HUMANITL_CI_EVERY_JOB=1 zaehlt er dann wie ein gruener, wenn
+# die Jobliste nichts anderes findet: jedes Rueckfall-Paar gruen, mindestens
+# ein Rueckfall gelaufen, jeder andere Job success.
+if [[ "$every_job" == 1 && ("$conclusion" == failure || "$conclusion" == cancelled) ]] && ((jobs_ok)); then
+  rescue="$(judge_jobs <<< "$jobs_body" 2> /dev/null)" || rescue=""
+  rescued="$(sed -n 's/^fallback //p' <<< "$rescue" | tr '\n' ' ')"
+  rescued="${rescued% }"
+  if [[ -n "$rescued" ]] && ! grep -qE '^(bad|path) ' <<< "$rescue"; then
+    echo "ci-gate: der Lauf ist $conclusion nur, weil ein Job keinen Runner bekam; gruen ist der Rueckfall fuer: $rescued"
+    conclusion=success
+  fi
 fi
 
 # Fuer einen gruenen Lauf entscheidet auch die Jobliste. Ohne sie gibt es
