@@ -122,6 +122,7 @@ Diagnose-Codes, hier nur geplant (registriert vom genannten Issue in `codes.rs` 
 | HUM-525 | Abhängigkeiten: `chrono` als nicht gepflegt gemeldet, Ausnahme mit Frist | S | – |
 | HUM-526 | Abhängigkeiten: von `chrono` auf `jiff` | M | HUM-525 |
 | HUM-527 | Website: `astro` auf 7.4.7 oder neuer (zwei Dependabot-Meldungen) | S | – |
+| HUM-551 | Website: `picomatch` ≤ 4.0.7 (ReDoS, Dependabot #3), noch ohne Fix | S | HUM-527 |
 | HUM-528 | Ein Installationsskript für alle Systeme unter `humanitl.de/install` | M | – |
 | HUM-550 | Ein Deinstallationsskript für alle Systeme unter `humanitl.de/uninstall` | M | HUM-528 |
 | HUM-529 | Kernel-Stufe startet unter der gehärteten Unit nicht (Module unsichtbar) | S | – |
@@ -4393,6 +4394,48 @@ unreferenziertes Originalbild `_astro/intercept.*.png`. Kein Adapter,
 `@astrojs/node` nicht im Lock. Review: Sonnet als Ersatz für Antigravity
 keine Befunde am Update, ein minor (Node-Untergrenze) übernommen; zum Text
 von HUM-528 drei major und sieben minor, alle eingearbeitet.
+
+---
+
+## HUM-551 · Website: `picomatch` ≤ 4.0.7 (ReDoS, Dependabot #3), noch ohne Fix
+
+### Kontext
+Dependabot meldet am 2026-11-18 (Alarm #3, „high") `picomatch` 4.0.7 in
+`website/package-lock.json`, transitiv über `astro` 7.4.12 und
+`@astrojs/markdown-remark` 7.3.9: Ein Glob wie `+(*)` oder `+(*a)` läuft in
+`analyzeRepeatedExtglob` (`lib/parse.js`) in exponentielles Backtracking und
+blockiert die Event-Loop. Betroffen ist alles bis 4.0.7; eine behobene
+Fassung gibt es laut Meldung noch nicht.
+
+Einschätzung: `picomatch` läuft bei uns nur im Build der Website (Astro
+erzeugt statische Seiten für GitHub Pages, ohne Node.js zur Laufzeit), und
+die Globs dort stammen aus unserem eigenen Code und der Astro-Konfiguration,
+nicht von Besuchern. Ein Angreifer bräuchte Schreibzugriff auf das Repo, um
+einen solchen Glob einzuschleusen, und hätte dann ohnehin mehr in der Hand.
+Für das Produkt (Daemon, CLI, App) spielt das Paket keine Rolle. Die
+Meldung ist damit kein ausnutzbarer Fehler, bleibt aber offen, bis es eine
+behobene Fassung gibt.
+
+### Spezifikation
+1. Diese Einschätzung als Begründung festhalten; der Eigentümer schließt
+   den Alarm in GitHub mit „Vulnerable code is not actually used" oder
+   „Risk is tolerable" und verweist auf dieses Issue (nur er kann das, die
+   API braucht Anmeldung).
+2. Sobald `picomatch` eine behobene Fassung (> 4.0.7) veröffentlicht:
+   `astro` bzw. die Lock-Datei so aktualisieren, dass sie greift, wie in
+   HUM-527; falls Astro sie noch nicht zieht, über `overrides` in
+   `website/package.json`, mit Kommentar und Verweis hierher.
+3. Kein Patch und keine eigene Kopie von `picomatch` (CLAUDE.md: keine
+   Abstraktion über Fremdbibliotheken).
+
+### Tests
+- Nach dem Update: `npm ci`, `npm run build` und die Website-Checks der CI
+  grün; `npm ls picomatch` zeigt keine Fassung ≤ 4.0.7 mehr.
+
+### Akzeptanzkriterien
+1. Bis zu einer behobenen Fassung ist die Einschätzung dokumentiert und
+   der Alarm mit Begründung geschlossen.
+2. Danach liegt keine betroffene Fassung mehr in `website/package-lock.json`.
 
 ---
 
