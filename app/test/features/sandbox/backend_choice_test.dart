@@ -13,6 +13,7 @@ import 'package:flutter/widgets.dart';
 import 'package:flutter_test/flutter_test.dart';
 import 'package:flutter_riverpod/flutter_riverpod.dart';
 import 'package:humanitl/core/domain/domain.dart';
+import 'package:humanitl/core/ipc/config_providers.dart';
 import 'package:humanitl/core/ipc/sandbox_backends_feed.dart';
 import 'package:humanitl/core/ipc/fake_daemon_client.dart';
 import 'package:humanitl/core/ui/ui.dart';
@@ -98,6 +99,41 @@ Future<void> startAndStop(WidgetTester tester) async {
   await tester.tap(find.byKey(const Key('sandbox-stop')));
   await settle(tester);
   await tester.tap(find.byKey(const Key('sandbox-stop-confirm')));
+  await settle(tester);
+}
+
+/// Linux und macOS: Der Abschnitt hängt an keiner Plattform, das Laden
+/// gilt auf beiden (HUM-510).
+final TargetPlatformVariant linuxAndMac = TargetPlatformVariant(
+  <TargetPlatform>{TargetPlatform.linux, TargetPlatform.macOS},
+);
+
+/// Container in Prüfung (`DOCTOR_012`, HUM-502): Die Liste fragt nach
+/// [sandboxBackendsCheckingRetry] wieder.
+const SandboxBackendInfo stillChecking = SandboxBackendInfo(
+  name: 'container',
+  isolation: IsolationLevel.namespaces,
+  diagnostics: <Diagnostic>[
+    Diagnostic(
+      code: DiagnosticCodes.doctorNotPerformed,
+      severity: Severity.warning,
+      why: 'still being checked',
+    ),
+  ],
+);
+
+/// Die Farbe des Texts unter [key].
+Color? lineColor(WidgetTester tester, String key) =>
+    tester.widget<Text>(find.byKey(Key(key))).style?.color;
+
+/// Wählt ein anderes Projekt, wie der Ordnerwähler es tut: `SetConfig` auf
+/// `sandbox.work_dir`, danach liest die App die Konfiguration neu.
+Future<void> switchProject(WidgetTester tester, Finder section) async {
+  unawaited(
+    ProviderScope.containerOf(tester.element(section))
+        .read(configProvider.notifier)
+        .write(FormKeys.sandboxWorkDir, '/home/dev/other-project'),
+  );
   await settle(tester);
 }
 
@@ -559,14 +595,177 @@ void main() {
     await settle(tester);
     expect(section, findsNothing);
   }, variant: TargetPlatformVariant.only(TargetPlatform.linux));
+
+  // HUM-510: Das erneute Fragen nach einem Backend in Prüfung (HUM-502)
+  // frischt dasselbe Mitglied mit demselben Plan auf. Die stehende Liste ist
+  // die aktuelle: nicht gedämpft, die Wahl bleibt bedienbar, nichts flackert
+  // alle 2 s. Mutationsbeweis: `sandboxBackendsOutdated` als `isLoading`
+  // macht diesen Test rot.
+  testWidgets('asking again for a backend still being checked neither dims '
+      'the list nor locks the choice', (WidgetTester tester) async {
+    final _HeldBackendsClient client = _HeldBackendsClient()
+      ..sandboxBackendList = listWith(stillChecking);
+    await openIsolation(tester, client);
+    final Finder section = find.byKey(const Key('sandbox-backend'));
+    final HTokens tokens = HTheme.of(tester.element(section));
+    expect(
+      find.byKey(const Key('sandbox-backend-checking-container')),
+      findsOneWidget,
+    );
+
+    final Completer<SandboxBackendList> held = Completer<SandboxBackendList>();
+    client.held[null] = held;
+    final int asked = client.sandboxBackendsAsked.length;
+    await tester.pump(sandboxBackendsCheckingRetry);
+    await settle(tester);
+    expect(client.sandboxBackendsAsked.length, greaterThan(asked));
+    expect(held.isCompleted, isFalse);
+
+    // Die Frage ist unterwegs, die Liste gilt weiter.
+    expect(tester.widget<HSegmented<String>>(choice).enabled, isTrue);
+    expect(
+      lineColor(tester, 'sandbox-backend-level-container'),
+      tokens.colors.fg1,
+    );
+    expect(lineColor(tester, 'sandbox-backend-minimum'), tokens.colors.fg1);
+    expect(
+      find.byKey(const Key('sandbox-backend-checking-container')),
+      findsOneWidget,
+    );
+
+    held.complete(listWith(availableContainer));
+    await settle(tester);
+    expect(
+      find.byKey(const Key('sandbox-backend-checking-container')),
+      findsNothing,
+    );
+    expect(tester.widget<HSegmented<String>>(choice).enabled, isTrue);
+    expect(segment(tester, 'container').option.enabled, isTrue);
+  }, variant: linuxAndMac);
+
+  // HUM-510: Ein anderes Projekt ist eine Änderung der Konfiguration;
+  // Riverpod lädt dasselbe Mitglied neu und behält die alte Liste. Sie
+  // gehört zum vorigen Plan: gedämpft und ohne Wahl wie in HUM-504, bis die
+  // Antwort für das neue Projekt da ist. Mutationsbeweis:
+  // `sandboxBackendsOutdated` als `false` macht diesen Test rot.
+  testWidgets('a project switch shows the previous list muted and locks the '
+      'choice until the answer for the new project is there', (
+    WidgetTester tester,
+  ) async {
+    final _HeldBackendsClient client = _HeldBackendsClient()
+      ..sandboxBackendList = listWith(availableContainer);
+    await openIsolation(tester, client);
+    final Finder section = find.byKey(const Key('sandbox-backend'));
+    final HTokens tokens = HTheme.of(tester.element(section));
+    expect(tester.widget<HSegmented<String>>(choice).enabled, isTrue);
+    final Size before = tester.getSize(section);
+
+    final Completer<SandboxBackendList> held = Completer<SandboxBackendList>();
+    client.held[null] = held;
+    await switchProject(tester, section);
+    expect(held.isCompleted, isFalse);
+
+    expect(section, findsOneWidget);
+    expect(tester.getSize(section), before);
+    expect(tester.widget<HSegmented<String>>(choice).enabled, isFalse);
+    expect(
+      lineColor(tester, 'sandbox-backend-level-container'),
+      tokens.colors.fg2,
+    );
+    expect(lineColor(tester, 'sandbox-backend-minimum'), tokens.colors.fg2);
+
+    // Das neue Projekt hebt die Untergrenze: Container liegt darunter.
+    held.complete(
+      listWith(
+        const SandboxBackendInfo(
+          name: 'container',
+          isolation: IsolationLevel.namespaces,
+          diagnostics: <Diagnostic>[belowMinimum],
+        ),
+        minimum: IsolationLevel.kernel,
+      ),
+    );
+    await settle(tester);
+    expect(tester.widget<HSegmented<String>>(choice).enabled, isTrue);
+    expect(segment(tester, 'container').option.enabled, isFalse);
+    expect(
+      lineColor(tester, 'sandbox-backend-level-container'),
+      tokens.colors.fg1,
+    );
+    expect(lineColor(tester, 'sandbox-backend-minimum'), tokens.colors.fg1);
+  }, variant: linuxAndMac);
+
+  // HUM-510, Spezifikation 2: Die Gründe, warum ein Backend nicht starten
+  // kann, stehen während des Ladens gedämpft da, nicht als aktuelle Warnung,
+  // und danach wieder in der Farbe der Warnung; ebenso der Satz eines
+  // Backends ohne Grund. Mutationsbeweis: `warningColor` ohne `pending`
+  // macht diesen Test rot.
+  testWidgets('the reasons stand muted while the list loads and in the '
+      'warning colour once it is there', (WidgetTester tester) async {
+    final _HeldBackendsClient client = _HeldBackendsClient()
+      ..sandboxBackendList = SandboxBackendList(
+        minIsolation: IsolationLevel.policy,
+        autoBackend: DoctorCheckId.sandboxTool,
+        backends: <SandboxBackendInfo>[
+          ...listWith(
+            const SandboxBackendInfo(
+              name: 'container',
+              isolation: IsolationLevel.namespaces,
+              diagnostics: <Diagnostic>[containerMissing],
+            ),
+          ).backends,
+          const SandboxBackendInfo(
+            name: 'other',
+            isolation: IsolationLevel.namespaces,
+          ),
+        ],
+      );
+    await openIsolation(tester, client);
+    final Finder section = find.byKey(const Key('sandbox-backend'));
+    final HTokens tokens = HTheme.of(tester.element(section));
+    const String reason = 'sandbox-backend-reason-container';
+    const String noReason = 'sandbox-backend-reason-other';
+    expect(lineColor(tester, reason), tokens.colors.warningText);
+    expect(lineColor(tester, noReason), tokens.colors.warningText);
+
+    final Completer<SandboxBackendList> held = Completer<SandboxBackendList>();
+    client.held[null] = held;
+    await switchProject(tester, section);
+    expect(lineColor(tester, reason), tokens.colors.fg2);
+    expect(lineColor(tester, noReason), tokens.colors.fg2);
+
+    held.complete(client.sandboxBackendList);
+    await settle(tester);
+    expect(lineColor(tester, reason), tokens.colors.warningText);
+    expect(lineColor(tester, noReason), tokens.colors.warningText);
+  }, variant: linuxAndMac);
+
+  // HUM-510, Review: Scheitert das Neuladen nach einem Wechsel des Projekts,
+  // hält Riverpod die alte Liste neben dem Fehler; der Abschnitt zeigt sie
+  // nicht als aktuell, sondern verschwindet wie bei jedem Fehler (HUM-504).
+  // Mutationsbeweis: die Liste ohne Prüfung von `hasError` macht diesen Test
+  // rot.
+  testWidgets('a failed reload after a project switch hides the previous '
+      'list', (WidgetTester tester) async {
+    final SandboxTestClient client = SandboxTestClient()
+      ..sandboxBackendList = listWith(availableContainer);
+    await openIsolation(tester, client);
+    final Finder section = find.byKey(const Key('sandbox-backend'));
+    expect(section, findsOneWidget);
+
+    client.sandboxBackendsFailure = containerMissing;
+    await switchProject(tester, section);
+    expect(section, findsNothing);
+  }, variant: linuxAndMac);
 }
 
 /// Ein Fake, der die Liste für ein Backend in [held] erst nennt, wenn der
 /// Test den Completer erfüllt; alle anderen Listen kommen sofort.
 class _HeldBackendsClient extends SandboxTestClient {
-  /// Die zurückgehaltenen Antworten je Backend der Sitzung.
-  final Map<String, Completer<SandboxBackendList>> held =
-      <String, Completer<SandboxBackendList>>{};
+  /// Die zurückgehaltenen Antworten je Backend der Sitzung; `null` für die
+  /// Liste ohne gewähltes Backend.
+  final Map<String?, Completer<SandboxBackendList>> held =
+      <String?, Completer<SandboxBackendList>>{};
 
   @override
   Future<SandboxBackendList> sandboxBackends({String? backend}) {

@@ -24,7 +24,7 @@ import 'setting_row.dart';
 /// The row. While the daemon has not answered it shows name and help only;
 /// a daemon that cannot list its backends gets its reason under the help
 /// and no control.
-class SandboxBackendRow extends ConsumerWidget {
+class SandboxBackendRow extends ConsumerStatefulWidget {
   /// Creates the row for [config].
   const SandboxBackendRow({required this.config, super.key});
 
@@ -37,7 +37,48 @@ class SandboxBackendRow extends ConsumerWidget {
   static const Key rowKey = Key('settings-sandbox-backend-row');
 
   @override
-  Widget build(BuildContext context, WidgetRef ref) {
+  ConsumerState<SandboxBackendRow> createState() => _SandboxBackendRowState();
+}
+
+class _SandboxBackendRowState extends ConsumerState<SandboxBackendRow> {
+  /// Umschließt die Segmente: Hat einer von ihnen den Fokus, hat ihn auch
+  /// dieser Knoten.
+  final FocusNode _choice = FocusNode(
+    debugLabel: 'sandbox-backend-choice',
+    canRequestFocus: false,
+    skipTraversal: true,
+  );
+
+  /// Ob die Segmente den Fokus hatten, als das Neuladen sie sperrte.
+  bool _refocusAfterReload = false;
+
+  @override
+  void dispose() {
+    _choice.dispose();
+    super.dispose();
+  }
+
+  /// Gibt den Fokus nach dem Neuladen dem gewählten Segment zurück, oder
+  /// dem ersten, wenn keines gewählt ist.
+  void _restoreFocus() {
+    final List<FocusNode> segments = _choice.traversalDescendants.toList();
+    if (segments.isEmpty) {
+      return;
+    }
+    final FocusNode target = segments.firstWhere(
+      (FocusNode node) =>
+          node.context
+              ?.findAncestorWidgetOfExactType<HSegment<String>>()
+              ?.selected ??
+          false,
+      orElse: () => segments.first,
+    );
+    target.requestFocus();
+  }
+
+  @override
+  Widget build(BuildContext context) {
+    final ConfigValues config = widget.config;
     final HTokens tokens = HTheme.of(context);
     final AppLocalizations l10n = context.l10n;
     // Die Liste für die Einstellung: ohne Backend der Sitzung (HUM-440).
@@ -51,6 +92,22 @@ class SandboxBackendRow extends ConsumerWidget {
       AsyncValue<SandboxBackendList>? before,
       AsyncValue<SandboxBackendList> now,
     ) {
+      // Das Neuladen nach einer Änderung der Konfiguration sperrt die
+      // Segmente, und ein gesperrtes Segment verliert den Fokus; wer eben
+      // mit der Tastatur gewählt hat, bekommt ihn danach zurück (HUM-510).
+      final bool wasOutdated =
+          before != null && sandboxBackendsOutdated(before);
+      final bool isOutdated = sandboxBackendsOutdated(now);
+      if (!wasOutdated && isOutdated) {
+        _refocusAfterReload = _choice.hasFocus;
+      } else if (wasOutdated && !isOutdated && _refocusAfterReload) {
+        _refocusAfterReload = false;
+        WidgetsBinding.instance.addPostFrameCallback((_) {
+          if (mounted) {
+            _restoreFocus();
+          }
+        });
+      }
       if (before?.value == null && now.value != null) {
         final SettingsController? scope = SettingsScope.maybeOf(context);
         WidgetsBinding.instance.addPostFrameCallback((_) {
@@ -61,11 +118,14 @@ class SandboxBackendRow extends ConsumerWidget {
         });
       }
     });
-    final SandboxBackendList? list = answer.value;
+    // Ein Fehler gewinnt, auch wenn Riverpod nach einem gescheiterten
+    // Neuladen (etwa für ein anderes Projekt) die alte Liste noch hält: Sie
+    // gehört zum vorigen Plan und stünde sonst als aktuell da (HUM-510).
+    final SandboxBackendList? list = answer.hasError ? null : answer.value;
     if (list == null) {
       final Object? error = answer.error;
       return SettingRow(
-        key: rowKey,
+        key: SandboxBackendRow.rowKey,
         settingId: FormKeys.sandboxBackend,
         status: <Widget>[
           if (error != null)
@@ -84,8 +144,11 @@ class SandboxBackendRow extends ConsumerWidget {
       );
     }
     final String written = config.sandboxBackend.trim();
+    // Nach einer Änderung der Konfiguration steht bis zur neuen Antwort die
+    // Liste des vorigen Plans da: gedämpft und ohne Wahl (HUM-510).
+    final bool pending = sandboxBackendsOutdated(answer);
     return SettingRow(
-      key: rowKey,
+      key: SandboxBackendRow.rowKey,
       settingId: FormKeys.sandboxBackend,
       refusalKey: const Key('settings-sandbox-backend-refusal'),
       // Die Zeilen der Backends samt Grund und Befehl stehen unter Wahl und
@@ -93,18 +156,26 @@ class SandboxBackendRow extends ConsumerWidget {
       // ein Drittel der Zeile, der Grund lief über ein Dutzend Zeilen und
       // der Befehl zum Kopieren schrumpfte auf einen Streifen.
       footer: <Widget>[
-        SandboxBackendLines(list: list, keyPrefix: 'settings-sandbox-backend'),
+        SandboxBackendLines(
+          list: list,
+          keyPrefix: 'settings-sandbox-backend',
+          pending: pending,
+        ),
       ],
       child: offersBackendChoice(list)
-          ? HSegmented<String>(
-              key: const Key('settings-sandbox-backend'),
-              options: sandboxBackendOptions(l10n, list),
-              selected: written,
-              onSelect: (String backend) {
-                if (backend != written) {
-                  writeSetting(context, FormKeys.sandboxBackend, backend);
-                }
-              },
+          ? Focus(
+              focusNode: _choice,
+              child: HSegmented<String>(
+                key: const Key('settings-sandbox-backend'),
+                options: sandboxBackendOptions(l10n, list),
+                selected: written,
+                onSelect: (String backend) {
+                  if (backend != written) {
+                    writeSetting(context, FormKeys.sandboxBackend, backend);
+                  }
+                },
+                enabled: !pending,
+              ),
             )
           : const SizedBox.shrink(),
     );
