@@ -101,7 +101,7 @@ pub static AREAS: &[AreaInfo] = &[
                (Sprint 7), 045-047 die Kernel-Stufe (HUM-464), 050 Dienstverwalter des \
                Nutzers (HUM-434), 051 beschreibbare Erweiterung unter der Kernel-Stufe \
                (HUM-466), 053 Start ohne Projektordner (HUM-532), 054 Aufräumplan in Gebrauch \
-               oder veraltet (HUM-533)",
+               oder veraltet (HUM-533), 055 stummes vsock-Gerät der Kernel-Stufe (HUM-486)",
     },
     AreaInfo {
         area: "proxy",
@@ -2002,6 +2002,17 @@ registry! {
     SANDBOX_054 => "sandbox", "Cleanup plan in use or out of date", "#sandbox_054",
         "Cleanup deletes only a plan the daemon listed item by item and a person confirmed. `Projects.cleanup` computes the plan again in the deleting transaction and compares its digest, which binds the identity and version of every item (session and flow ids, blob hashes, the id of the waiting layer, project id with version, the hash of the project choice). A difference, a running session or changes that wait without the explicit choice stop it, and nothing is deleted. The project folder and the audit chain are never part of a plan.",
         "Show the plan again (`humanitl projects clean` or `humanitl projects forget`) and confirm the new one; stop the running session first (`humanitl sandbox stop`), or decide the waiting changes (`humanitl sandbox changes`, `apply`, `discard`) or include them explicitly with `--include-waiting-changes`.";
+
+    // HUM-486: the silent vsock device of the kernel level.
+    /// The guest of the kernel level said on the door that it listens, so
+    /// the vsock device had carried its line, and then a `CONNECT` of the
+    /// host stayed without any answer, neither `OK` nor a refusal, for ten
+    /// seconds. Version 0.3.0 of the vsock device program does this for
+    /// good once its event thread has ended; the process lives on. A missing
+    /// report like `SANDBOX_013`, with this cause named (HUM-486).
+    SANDBOX_055 => "sandbox", "Kernel level vsock device silent", "#sandbox_055",
+        "The daemon reaches the guest of the kernel level only through the vsock device of the session. The guest had said on the door that it listens, a line that travels through the device's queues, and then a `CONNECT` of the daemon to the guest's report port got no answer at all for ten seconds; a working device answers within milliseconds, with `OK` or a refusal. Version 0.3.0 of the vsock device program behaves like this after its event thread has ended (a request that reached it while the guest's driver was still setting up its queues; fixed in the upstream repository after 0.3.0); the process lives on and answers nothing. Without the report the guarantees are unproven, and the session does not start. A guest kernel that hangs right after its ready line looks the same from the host; the sentence names the stage and the time waited.",
+        "No automatic fix: start the session again. If it repeats, install a vsock device program newer than 0.3.0, or point the setting of the kernel level that names it at a build from the upstream repository that carries the fix, and report the sentence.";
 }
 
 /// Sucht einen Code im Register.

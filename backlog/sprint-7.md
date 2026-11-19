@@ -2571,6 +2571,56 @@ Gasts verbindet.
 1. Bericht upstream verlinkt im Spec; ein stummes Gerät hat eine eigene
    Aussage in der Diagnose oder eine begründete Entscheidung dagegen.
 
+### Stand nach der Umsetzung (2026-11-19)
+Upstream-Bericht: (Link folgt nach Freigabe des Eigentümers)
+
+Upstream ist der Fehler behoben, aber nicht veröffentlicht: Commit 112af055
+„vsock: Access virtqueues only if they are ready" im Repository
+rust-vmm/vhost-device (Teil von PR #936, eingespielt am 2026-10-29) lässt
+`process_rx`, `process_tx` und `process_raw_pkts` mit `Ok(())` zurückkehren,
+solange die Warteschlange nicht bereit ist; im Review von #936 ist genau das
+Ende des Ereignisfadens an `QueueNotReady` beschrieben. Ein eigenes Issue gab
+es nicht. Neueste Version auf crates.io bleibt 0.3.0 (2025-08-06). Der
+Entwurf bittet deshalb um eine Veröffentlichung mit diesem Commit und legt
+die Reproduktion aus HUM-471 bei, statt einen neuen Fehler zu melden. Ob ein
+Bau von `main` die Reproduktion besteht, ist nicht geprüft.
+
+Ein stummes Gerät ist eindeutig genug, um es zu benennen: Nach der
+Bereitschaftszeile lauscht der Shim, und die Zeile kam über die
+Warteschlangen des Geräts, also laufen sie. Auf ein `CONNECT` antwortet das
+Gerät dann binnen Millisekunden, mit `OK` oder einer Absage (beides
+gemessen in HUM-470). Bleibt eine Anfrage nach der Bereitschaft
+`SILENT_DEVICE_AFTER` (zehn Sekunden) ohne ein einziges Byte Antwort, hält
+der Faden zum Gast das fest (`Admission::note_silent_device`), und aus dem
+fehlenden Bericht wird `SANDBOX_055` („Kernel level vsock device silent")
+mit Stufe und Wartezeit im Grund, statt `SANDBOX_013`. Eine Absage ist kein
+Schweigen: Die Wartezeit zählt je Anfrage. Kommt doch noch eine Antwort,
+gleich welche (das erste Byte oder das Schließen der Verbindung durch das
+Gerät), hebt sie den Vermerk auf (Review Codex, blocking, übernommen: eine
+späte Absage ließ ihn zuerst stehen). Die Anfrage wird dabei nicht
+aufgegeben (HUM-470), die Frist der Sitzung bleibt, wie sie war. Was von
+außen nicht zu trennen ist: ein Gastkernel, der direkt nach seiner Zeile
+hängt, sieht genauso aus; der Text von `SANDBOX_055` sagt das. Die zehn
+Sekunden liegen vor den 30 Sekunden, nach denen der Shim ohne Verbindung
+abschaltet. `humanitl` endet bei `SANDBOX_055` wie bei `SANDBOX_013` mit
+Exit-Code 3.
+
+Tests (Unit, Gerät als Attrappe, im Test `SILENT_DEVICE_AFTER` = 1 s):
+`a_device_that_never_answers_after_the_ready_line_is_named_silent`,
+`a_device_that_refuses_is_not_silent`,
+`a_late_answer_undoes_the_silent_device`,
+`a_late_refusal_undoes_the_silent_device` (`qemu/session.rs`),
+`a_silent_vsock_device_is_sandbox_055` (`qemu/tests.rs`). Mutationsbeweise,
+je einzeln rot: ohne den Aufruf des Beobachters in `answer`; mit einer
+Wartezeit ab der ersten statt je Anfrage; ohne das Zurücksetzen in
+`Admission::note_link`; ohne die Meldung der Antwort an den Beobachter
+(`waiting(Duration::ZERO)` in `answer`); ohne den Zweig `silent` in
+`name_the_link`. Kein
+KVM-Test: Das echte Gerät verstummt nur über den Wettlauf, den HUM-471
+verhindert, und ein Zwischenstück am vhost-user-Socket kann den Datenweg
+nach der Bereitschaft nicht anhalten; ein solcher Test bewiese nur die
+Attrappe ein zweites Mal.
+
 ---
 
 ## HUM-487 · KVM test of the descriptor limit: the refusal count does not depend on the length of `/usr`
@@ -5115,6 +5165,12 @@ Durchgang mit der KI über die ganze Liste.
    - Ob der einzelne frühe TLS-Handschlag zum Ziel vor der Entscheidung
      (einmal in 16 angehaltenen Anfragen, in den 10 danach nicht)
      wieder auftaucht.
+2. HUM-486: über die Bitte um eine Veröffentlichung von vhost-device-vsock
+   mit dem Commit 112af055 an rust-vmm/vhost-device entscheiden und sie
+   gegebenenfalls einreichen (Entwurf im Scratchpad der Sitzung,
+   `hum-486-upstream-report.md`), danach den Platzhalter
+   „Upstream-Bericht: (Link folgt nach Freigabe des Eigentümers)" unter
+   HUM-486 durch den Link ersetzen.
 
 Weitere Punkte hängen spätere Issues hier an.
 

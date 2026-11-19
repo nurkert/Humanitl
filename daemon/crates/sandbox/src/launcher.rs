@@ -746,13 +746,15 @@ pub(crate) enum Teardown {
 /// Daneben steht hier, was die Tür der Sitzung einmal festhält (HUM-467):
 /// dass sie eine Verbindung über der Obergrenze abwies; und wohin die
 /// Sitzung meldet, was ins Audit-Log gehört ([`LaunchOptions::notices`],
-/// HUM-477).
+/// HUM-477); und ob das vsock-Gerät nach der Bereitschaft des Gasts
+/// verstummt ist (HUM-486).
 #[derive(Debug, Clone, Default)]
 pub(crate) struct Admission(
     std::sync::Arc<Mutex<Verdict>>,
     std::sync::Arc<Mutex<String>>,
     std::sync::Arc<std::sync::OnceLock<String>>,
     Option<SandboxNoticeSink>,
+    std::sync::Arc<std::sync::atomic::AtomicBool>,
 );
 
 /// Wo das Urteil einer Sitzung steht.
@@ -789,6 +791,7 @@ impl Admission {
             std::sync::Arc::default(),
             std::sync::Arc::default(),
             notices,
+            std::sync::Arc::default(),
         )
     }
 
@@ -810,10 +813,32 @@ impl Admission {
     /// Hält fest, wie weit der Weg zum Gast gekommen ist (HUM-471): Fehlt
     /// der Bericht, nennt der Befund diesen Stand.
     pub(crate) fn note_link(&self, what: String) {
-        *self.1.lock().unwrap_or_else(PoisonError::into_inner) = what;
+        let mut link = self.1.lock().unwrap_or_else(PoisonError::into_inner);
+        *link = what;
+        self.4.store(false, std::sync::atomic::Ordering::Release);
+    }
+
+    /// Hält fest, dass das vsock-Gerät ein `CONNECT` nach der Bereitschaft
+    /// des Gasts nicht beantwortet hat (HUM-486); `what` ist der Stand des
+    /// Wegs wie bei [`Self::note_link`]. Ein späterer Stand hebt es auf.
+    pub(crate) fn note_silent_device(&self, what: String) {
+        let mut link = self.1.lock().unwrap_or_else(PoisonError::into_inner);
+        *link = what;
+        self.4.store(true, std::sync::atomic::Ordering::Release);
+    }
+
+    /// Der zuletzt festgehaltene Stand des Wegs zum Gast und ob er ein
+    /// stummes vsock-Gerät ist, beides aus demselben Moment.
+    pub(crate) fn link_state(&self) -> (String, bool) {
+        let link = self.1.lock().unwrap_or_else(PoisonError::into_inner);
+        (
+            link.clone(),
+            self.4.load(std::sync::atomic::Ordering::Acquire),
+        )
     }
 
     /// Der zuletzt festgehaltene Stand des Wegs zum Gast; leer ohne einen.
+    #[cfg(test)]
     pub(crate) fn link(&self) -> String {
         self.1
             .lock()

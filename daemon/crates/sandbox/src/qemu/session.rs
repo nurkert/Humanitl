@@ -31,6 +31,16 @@
 //! aber erst, wenn die Warteschlangen laufen. Bis zur Zeile reicht die Tür
 //! nichts an den Proxy weiter: Vor ihr läuft im Gast noch kein Agent.
 //!
+//! **Ein stummes Gerät (HUM-486).** Nach der Bereitschaft lauscht der Shim,
+//! und das Gerät läuft nachweislich: Die Zeile kam über seine
+//! Warteschlangen. Auf ein `CONNECT` antwortet es dann binnen Millisekunden,
+//! mit `OK` oder mit einer Absage. Bleibt eine Anfrage länger als
+//! [`SILENT_DEVICE_AFTER`] ganz ohne Antwort, hält der Faden zum Gast ein
+//! stummes Gerät fest ([`crate::launcher::Admission::note_silent_device`]),
+//! und die Diagnose ist `SANDBOX_055` statt eines bloßen fehlenden Berichts.
+//! Aufgegeben wird die Anfrage dabei nicht (HUM-470); kommt die Antwort doch
+//! noch, gilt der neue Stand.
+//!
 //! **Eine Obergrenze an der Tür (HUM-467).** Jede weitergereichte Verbindung
 //! bindet zwei Fäden und vier Deskriptoren des Daemons. Mehr als
 //! [`MAX_DOOR_CONNECTIONS`] hält die Tür je Sitzung nicht offen: Eine
@@ -93,6 +103,18 @@ pub(crate) const GUEST_READY: &[u8] = b"HUMANITL-GUEST-READY\n";
 /// Wie lange die Tür vor der Bereitschaft auf die erste Zeile einer
 /// Verbindung wartet.
 const READY_LINE_WAIT: Duration = Duration::from_secs(1);
+
+/// Wie lange ein `CONNECT` nach der Bereitschaft des Gasts ganz ohne Antwort
+/// bleiben darf, bis der Faden zum Gast das vsock-Gerät stumm nennt
+/// (HUM-486). Gemessen antwortet das Gerät, sobald der Gast lauscht, binnen
+/// Millisekunden; zehn Sekunden lassen einem belasteten Runner Luft und
+/// liegen vor der Frist von 30 Sekunden, nach der der Shim ohne Verbindung
+/// abschaltet. Im Test eine Sekunde, damit er nicht zehn wartet.
+pub(crate) const SILENT_DEVICE_AFTER: Duration = if cfg!(test) {
+    Duration::from_secs(1)
+} else {
+    Duration::from_secs(10)
+};
 
 /// Wie viele Verbindungen die Tür einer Sitzung höchstens zugleich an den
 /// Proxy weiterreicht (HUM-467). Jede bindet zwei Fäden und vier
@@ -391,24 +413,51 @@ impl GuestLink {
             let _ = writeln!(report, "{NO_REPORT}");
             return;
         }
-        admission.note_link(format!(
-            "the guest said ready after {}; the report connection has no answer yet",
-            since()
-        ));
-        let Some(first) = connect(&device, report_port, deadline, &mut ended) else {
+        let ready_after = since();
+        let pending = format!(
+            "the guest said ready after {ready_after}; the report connection has no answer yet"
+        );
+        admission.note_link(pending.clone());
+        let Some(first) = connect_watching(
+            &device,
+            report_port,
+            deadline,
+            &mut ended,
+            &mut silence_watch(
+                &admission,
+                pending,
+                &format!(
+                    "the guest said ready after {ready_after}; the CONNECT for the report connection"
+                ),
+            ),
+        ) else {
             let _ = writeln!(report, "{NO_REPORT}");
             return;
         };
-        admission.note_link(format!(
+        let pending = format!(
             "report connection open after {}; the control stream has no answer yet",
             since()
-        ));
+        );
+        admission.note_link(pending.clone());
         // Auf der Verbindung des Berichts geht später das Urteil des Daemons
         // in den Gast (`ADMIT` oder `DENY`); ohne sie startet der Agent nie.
         if let Ok(verdict) = first.try_clone() {
             admission.offer(verdict);
         }
-        let second = connect(&device, report_port, deadline, &mut ended);
+        let second = connect_watching(
+            &device,
+            report_port,
+            deadline,
+            &mut ended,
+            &mut silence_watch(
+                &admission,
+                pending,
+                &format!(
+                    "the guest said ready after {ready_after}, the report connection is open; the \
+                     CONNECT for the control stream"
+                ),
+            ),
+        );
         match second {
             Some(stream) => {
                 admission.note_link(format!("both connections open after {}", since()));
@@ -451,6 +500,18 @@ pub(crate) fn copy_report(stream: impl Read, mut pipe: impl Write) {
     }
 }
 
+/// [`connect_watching`] ohne Beobachter, für die Tests und den Testpfad
+/// `test_vm`.
+#[cfg(test)]
+pub(crate) fn connect(
+    device: &Path,
+    port: u32,
+    deadline: Instant,
+    ended: &mut dyn FnMut() -> bool,
+) -> Option<UnixStream> {
+    connect_watching(device, port, deadline, ended, &mut |_| {})
+}
+
 /// Eine Verbindung zum Port des Shims über das vsock-Gerät: `CONNECT
 /// <port>`, dann `OK`. Antwortet das Gerät mit etwas anderem oder schließt
 /// es die Verbindung (der Gast lauscht noch nicht), wird es wiederholt, bis
@@ -470,11 +531,17 @@ pub(crate) fn copy_report(stream: impl Read, mut pipe: impl Write) {
 /// Vorsorge, keine belegte Ursache der Fehlschläge in der CI; die Ursache
 /// war ein `CONNECT` vor der Bereitschaft des Geräts (HUM-471, Kopf dieses
 /// Moduls), und [`GuestLink`] fragt deshalb erst nach [`GUEST_READY`].
-pub(crate) fn connect(
+///
+/// `waiting` bekommt, solange eine gestellte Anfrage noch kein einziges Byte
+/// Antwort hat, nach jedem Lesen, wie lange sie schon wartet (HUM-486), und
+/// [`Duration::ZERO`], sobald das Gerät antwortet: mit dem ersten Byte oder
+/// indem es die Verbindung schließt. Jede Anfrage zählt für sich.
+pub(crate) fn connect_watching(
     device: &Path,
     port: u32,
     deadline: Instant,
     ended: &mut dyn FnMut() -> bool,
+    waiting: &mut dyn FnMut(Duration),
 ) -> Option<UnixStream> {
     while Instant::now() < deadline && !ended() {
         let Ok(mut stream) = UnixStream::connect(device) else {
@@ -488,7 +555,7 @@ pub(crate) fn connect(
             thread::sleep(TICK / 2);
             continue;
         }
-        match answer(&mut stream, deadline, ended) {
+        match answer(&mut stream, deadline, ended, waiting) {
             Answer::Accepted => {
                 let _ = stream.set_read_timeout(None);
                 return Some(stream);
@@ -521,7 +588,10 @@ pub(crate) fn answer(
     stream: &mut UnixStream,
     deadline: Instant,
     ended: &mut dyn FnMut() -> bool,
+    waiting: &mut dyn FnMut(Duration),
 ) -> Answer {
+    let asked = Instant::now();
+    let mut heard = false;
     let _ = stream.set_read_timeout(Some(TICK));
     let mut first = Vec::new();
     let mut byte = [0u8; 1];
@@ -531,18 +601,38 @@ pub(crate) fn answer(
             return Answer::Over;
         }
         match stream.read(&mut byte) {
-            Ok(1) if byte[0] == b'\n' => break,
-            Ok(1) => first.push(byte[0]),
+            Ok(1) => {
+                // Das erste Byte ist eine Antwort, wie immer sie ausgeht:
+                // Das Gerät lebt (HUM-486).
+                if !heard {
+                    heard = true;
+                    waiting(Duration::ZERO);
+                }
+                if byte[0] == b'\n' {
+                    break;
+                }
+                first.push(byte[0]);
+            }
             Err(err)
                 if matches!(
                     err.kind(),
                     std::io::ErrorKind::WouldBlock
                         | std::io::ErrorKind::TimedOut
                         | std::io::ErrorKind::Interrupted
-                ) => {}
+                ) =>
+            {
+                if !heard {
+                    waiting(asked.elapsed());
+                }
+            }
             // Das Ende der Verbindung (`Ok(0)`) oder ein Fehler: Das Gerät
-            // hat abgesagt.
-            Ok(_) | Err(_) => return Answer::Refused,
+            // hat abgesagt, auch das ist eine Antwort.
+            Ok(_) | Err(_) => {
+                if !heard {
+                    waiting(Duration::ZERO);
+                }
+                return Answer::Refused;
+            }
         }
     }
     if over() {
@@ -552,6 +642,34 @@ pub(crate) fn answer(
         Answer::Accepted
     } else {
         Answer::Refused
+    }
+}
+
+/// Der Beobachter einer Anfrage nach der Bereitschaft des Gasts (HUM-486):
+/// Wartet sie länger als [`SILENT_DEVICE_AFTER`] ohne ein Byte Antwort, hält
+/// er das stumme Gerät fest, `stage` vorneweg. Antwortet das Gerät danach
+/// doch (eine Wartezeit unter der Schwelle, mindestens die
+/// [`Duration::ZERO`] der Antwort), lebt es; dann gilt wieder `pending`.
+fn silence_watch<'a>(
+    admission: &'a crate::launcher::Admission,
+    pending: String,
+    stage: &str,
+) -> impl FnMut(Duration) + 'a {
+    let stage = stage.to_owned();
+    let mut noted = false;
+    move |waited| {
+        if !noted && waited >= SILENT_DEVICE_AFTER {
+            noted = true;
+            admission.note_silent_device(format!(
+                "{stage} has had no answer from the vsock device for {:.1}s, although \
+                 the guest listens and the device carried its ready line; a live device \
+                 answers within milliseconds",
+                waited.as_secs_f64()
+            ));
+        } else if noted && waited < SILENT_DEVICE_AFTER {
+            noted = false;
+            admission.note_link(pending.clone());
+        }
     }
 }
 
@@ -1079,5 +1197,168 @@ mod tests {
         assert!(started.elapsed() < READY_LINE_WAIT + Duration::from_millis(500));
         drop(ours);
         dripper.join().unwrap();
+    }
+
+    /// Ein Faden zum Gast, dessen Gast schon bereit gemeldet hat, gegen ein
+    /// Gerät unter `device`; zurück kommen die Zulassung, das Leseende der
+    /// Berichts-Pipe und die Lebensleine.
+    fn ready_link(
+        device: PathBuf,
+    ) -> (
+        crate::launcher::Admission,
+        std::io::PipeReader,
+        crate::shim_fds::Lifeline,
+        OwnedFd,
+    ) {
+        let (reader, writer) = std::io::pipe().unwrap();
+        let (daemon, shim) = crate::shell::stream_pair(80, 24).unwrap();
+        let (lifeline, read) = crate::shim_fds::Lifeline::new().unwrap();
+        let admission = crate::launcher::Admission::default();
+        let ready = GuestReady::default();
+        ready.set();
+        GuestLink {
+            device,
+            report_port: 5001,
+            deadline: Instant::now() + Duration::from_secs(30),
+            report: writer,
+            control: shim,
+            lifeline: read,
+            admission: admission.clone(),
+            ready,
+        }
+        .start()
+        .unwrap();
+        (admission, reader, lifeline, daemon)
+    }
+
+    /// Wartet bis zu zehn Sekunden darauf, dass `done` für den Stand des
+    /// Wegs gilt; zurück kommt der letzte Stand.
+    fn link_until(
+        admission: &crate::launcher::Admission,
+        done: impl Fn(&(String, bool)) -> bool,
+    ) -> (String, bool) {
+        let started = Instant::now();
+        loop {
+            let state = admission.link_state();
+            if done(&state) || started.elapsed() > Duration::from_secs(10) {
+                return state;
+            }
+            thread::sleep(Duration::from_millis(20));
+        }
+    }
+
+    /// HUM-486: Ein Gerät, das nach der Bereitschaft des Gasts ein `CONNECT`
+    /// annimmt und nie beantwortet, nennt der Faden zum Gast nach
+    /// [`SILENT_DEVICE_AFTER`] stumm, nicht vorher; die Anfrage bleibt dabei
+    /// gestellt (HUM-470), und mit dem Ende der Sitzung steht [`NO_REPORT`]
+    /// in der Pipe. Mutationsbeweis: Ruft `answer` den Beobachter nicht
+    /// (`waiting(asked.elapsed())`), bleibt es bei „no answer yet", und der
+    /// Test wird rot.
+    #[test]
+    fn a_device_that_never_answers_after_the_ready_line_is_named_silent() {
+        let dir = tempfile::tempdir().unwrap();
+        let device = dir.path().join("door");
+        let seen = fake_device(&device, |_| {
+            Some((Duration::from_secs(60), b"OK 1\n".as_slice()))
+        });
+        let started = Instant::now();
+        let (admission, mut reader, lifeline, _daemon) = ready_link(device);
+        let (link, silent) = link_until(&admission, |(link, _)| link.contains("no answer yet"));
+        assert!(!silent, "silent before the wait: {link}");
+        let (link, silent) = link_until(&admission, |(_, silent)| *silent);
+        assert!(silent, "the silent device was not named: {link}");
+        assert!(started.elapsed() >= SILENT_DEVICE_AFTER, "{link}");
+        assert!(
+            link.contains(
+                "the CONNECT for the report connection has had no answer from the vsock device"
+            ),
+            "{link}"
+        );
+        assert!(link.starts_with("the guest said ready after "), "{link}");
+        assert_eq!(
+            seen.load(std::sync::atomic::Ordering::SeqCst),
+            1,
+            "the pending CONNECT was given up and asked again"
+        );
+        drop(lifeline);
+        let mut text = String::new();
+        reader.read_to_string(&mut text).unwrap();
+        assert_eq!(text, format!("{NO_REPORT}\n"));
+        assert!(
+            admission.link_state().1,
+            "the silent device was no longer named after the session ended"
+        );
+    }
+
+    /// Ein Gerät, das jede Anfrage absagt (der Shim lauscht nicht mehr),
+    /// lebt: Über [`SILENT_DEVICE_AFTER`] hinaus bleibt der Stand „no answer
+    /// yet", nie stumm. Mutationsbeweis: Misst `answer` die Wartezeit ab
+    /// der ersten Anfrage statt je Anfrage, nennt der Faden auch dieses
+    /// Gerät stumm.
+    #[test]
+    fn a_device_that_refuses_is_not_silent() {
+        let dir = tempfile::tempdir().unwrap();
+        let device = dir.path().join("door");
+        let seen = fake_device(&device, |_| {
+            Some((Duration::from_millis(50), b"NO\n".as_slice()))
+        });
+        let (admission, _reader, _lifeline, _daemon) = ready_link(device);
+        thread::sleep(SILENT_DEVICE_AFTER * 2);
+        let (link, silent) = admission.link_state();
+        assert!(!silent, "a refusing device was named silent: {link}");
+        assert!(link.contains("no answer yet"), "{link}");
+        assert!(seen.load(std::sync::atomic::Ordering::SeqCst) >= 3);
+    }
+
+    /// Sagt das Gerät erst nach [`SILENT_DEVICE_AFTER`] ab und danach jede
+    /// weitere Anfrage sofort, lebt es: Der Vermerk fällt mit der späten
+    /// Absage, nicht erst mit einer Verbindung. Mutationsbeweis: Meldet
+    /// `answer` die Antwort nicht an den Beobachter (`waiting(Duration::ZERO)`),
+    /// bleibt das Gerät stumm, obwohl es absagte.
+    #[test]
+    fn a_late_refusal_undoes_the_silent_device() {
+        let dir = tempfile::tempdir().unwrap();
+        let device = dir.path().join("door");
+        let seen = fake_device(&device, |number| {
+            (number == 0).then_some((
+                SILENT_DEVICE_AFTER + Duration::from_secs(2),
+                b"NO\n".as_slice(),
+            ))
+        });
+        let (admission, _reader, _lifeline, _daemon) = ready_link(device);
+        let (link, silent) = link_until(&admission, |(_, silent)| *silent);
+        assert!(silent, "{link}");
+        let (link, silent) = link_until(&admission, |(_, silent)| !*silent);
+        assert!(!silent, "a device that refused stayed silent: {link}");
+        assert!(link.contains("no answer yet"), "{link}");
+        thread::sleep(Duration::from_millis(500));
+        assert!(seen.load(std::sync::atomic::Ordering::SeqCst) >= 2);
+        assert!(!admission.link_state().1, "{}", admission.link_state().0);
+    }
+
+    /// Kommt die Antwort nach [`SILENT_DEVICE_AFTER`] doch noch, gilt der
+    /// neue Stand: Beide Verbindungen stehen, und das Gerät ist nicht mehr
+    /// stumm. Mutationsbeweis: Hebt `note_link` den Vermerk nicht auf,
+    /// bleibt das Gerät stumm, obwohl es antwortete.
+    #[test]
+    fn a_late_answer_undoes_the_silent_device() {
+        let dir = tempfile::tempdir().unwrap();
+        let device = dir.path().join("door");
+        let _seen = fake_device(&device, |number| {
+            let wait = if number == 0 {
+                SILENT_DEVICE_AFTER + Duration::from_secs(2)
+            } else {
+                Duration::ZERO
+            };
+            Some((wait, b"OK 3\n".as_slice()))
+        });
+        let (admission, _reader, _lifeline, _daemon) = ready_link(device);
+        let (link, silent) = link_until(&admission, |(_, silent)| *silent);
+        assert!(silent, "{link}");
+        let (link, silent) = link_until(&admission, |(link, _)| {
+            link.contains("both connections open")
+        });
+        assert!(link.contains("both connections open"), "{link}");
+        assert!(!silent, "{link}");
     }
 }

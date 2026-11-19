@@ -126,7 +126,10 @@ impl From<Diagnostic> for Failure {
 pub fn exit_code(diagnostic: &Diagnostic) -> u8 {
     match diagnostic.code.as_str() {
         "DAEMON_001" | "DAEMON_002" | "IPC_001" => EXIT_DAEMON,
-        "SANDBOX_004" | "SANDBOX_013" | "SANDBOX_014" | "SANDBOX_015" | "SANDBOX_016" => EXIT_CHECK,
+        // `SANDBOX_055` ist ein fehlender Bericht wie `SANDBOX_013`, mit dem
+        // stummen vsock-Gerät der Kernel-Stufe als benannter Ursache (HUM-486).
+        "SANDBOX_004" | "SANDBOX_013" | "SANDBOX_014" | "SANDBOX_015" | "SANDBOX_016"
+        | "SANDBOX_055" => EXIT_CHECK,
         "PROXY_002" => EXIT_SECURITY,
         _ => EXIT_USER,
     }
@@ -473,7 +476,7 @@ mod tests {
     #![allow(clippy::unwrap_used, clippy::expect_used, clippy::panic)]
 
     use humanitl_core::diagnostics::codes::{
-        CONFIG_002, DAEMON_001, IPC_001, PROXY_002, SANDBOX_011, SANDBOX_014,
+        CONFIG_002, DAEMON_001, IPC_001, PROXY_002, SANDBOX_011, SANDBOX_014, SANDBOX_055,
     };
     use humanitl_core::{Diagnostic, FixAction, Severity};
     use humanitl_ipc::diagnostic_to_proto;
@@ -494,6 +497,7 @@ mod tests {
         assert_eq!(exit_code(&diagnostic(DAEMON_001)), EXIT_DAEMON);
         assert_eq!(exit_code(&diagnostic(IPC_001)), EXIT_DAEMON);
         assert_eq!(exit_code(&diagnostic(SANDBOX_014)), EXIT_CHECK);
+        assert_eq!(exit_code(&diagnostic(SANDBOX_055)), EXIT_CHECK);
         assert_eq!(exit_code(&diagnostic(PROXY_002)), EXIT_SECURITY);
         assert_eq!(exit_code(&diagnostic(CONFIG_002)), EXIT_USER);
         assert_eq!(exit_code(&diagnostic(SANDBOX_011)), EXIT_USER);
