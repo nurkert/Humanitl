@@ -55,6 +55,7 @@ mod kvm_tests;
 mod limits;
 mod lines;
 mod prerequisites;
+mod programs;
 mod session;
 #[cfg(test)]
 mod test_machine;
@@ -222,9 +223,12 @@ impl VmBackend {
         }
     }
 
-    /// Die Frist bis zum Bericht des Gasts.
-    fn start_timeout(&self) -> Duration {
-        Duration::from_secs(self.config.start_timeout_secs.clamp(1, 600))
+    /// Die Frist bis zum Bericht des Gasts: die der Optionen, sonst die
+    /// eingestellte.
+    fn start_timeout(&self, options: &crate::LaunchOptions) -> Duration {
+        options
+            .report_timeout
+            .unwrap_or_else(|| Duration::from_secs(self.config.start_timeout_secs.clamp(1, 600)))
     }
 }
 
@@ -758,8 +762,14 @@ fn user_service_of(path: &str, uid: u32) -> Option<String> {
 /// die Unit außer dem Laufzeitverzeichnis beschreiben darf: der Projektordner
 /// in einer direkten Sitzung, das Verzeichnis der Schicht in einer
 /// Wegwerf-Sitzung (HUM-446), nie beide. `limits` sind ihre Grenzen an
-/// Speicher und Tasks (HUM-485).
-fn unit_properties(runtime: &str, writable: &[&str], limits: UnitLimits) -> Vec<String> {
+/// Speicher und Tasks (HUM-485), `programs` die einzigen Dateien, die ihre
+/// Prozesse ausführen dürfen (HUM-480, [`programs::exec_paths`]).
+fn unit_properties(
+    runtime: &str,
+    writable: &[&str],
+    limits: UnitLimits,
+    programs: &[String],
+) -> Vec<String> {
     let mut properties: Vec<String> = [
         "PrivateNetwork=yes",
         "PrivateUsers=yes",
@@ -795,6 +805,15 @@ fn unit_properties(runtime: &str, writable: &[&str], limits: UnitLimits) -> Vec<
     let mut paths = vec![runtime];
     paths.extend_from_slice(writable);
     properties.push(format!("ReadWritePaths={}", paths.join(" ")));
+    // Nur die Programme der Unit sind ausführbar (HUM-480): alles unter `/`
+    // ohne `exec`, jede Datei der Liste mit. Die Gefängnisse von bubblewrap
+    // erben das gesperrt; ein übernommener Helfer startet nach der Zulassung
+    // nichts anderes als sie. Jeder beschreibbare Pfad steht ausdrücklich
+    // dabei: `ReadWritePaths=` hängt ihn neu ein, und `NoExecPaths=/` allein
+    // erreicht diese Einhängung nicht (gemessen, systemd 262: eine Kopie von
+    // `id` im Projektordner lief).
+    properties.push(format!("NoExecPaths=/ {}", paths.join(" ")));
+    properties.push(format!("ExecPaths={}", programs.join(" ")));
     #[cfg(test)]
     properties.extend(test_machine::unit_properties());
     if let Some(daemon) = daemon_unit() {
@@ -852,6 +871,7 @@ fn unit_line(
     token: &str,
     writable: &[&str],
     limits: UnitLimits,
+    programs: &[String],
 ) -> Result<Vec<OsString>, Diagnostic> {
     let runtime = property_path(&layout.dir)?;
     let script = lines::script(lines, layout).map_err(setup_failed)?;
@@ -872,7 +892,7 @@ fn unit_line(
     units
         .session_argv(
             UNIT_DESCRIPTION,
-            &unit_properties(&runtime, writable, limits),
+            &unit_properties(&runtime, writable, limits, programs),
             unit,
             &session.shim_src,
             &args,
@@ -1005,6 +1025,7 @@ impl SandboxBackend for VmBackend {
             disposable,
             "hum-preview",
         );
+        let programs = programs::shown_in_preview(&self.resolved, &session.shim_src);
         let argv = user_units(&self.paths)
             .and_then(|units| {
                 let unit = unit_of(&units, session)?;
@@ -1024,6 +1045,7 @@ impl SandboxBackend for VmBackend {
                     PREVIEW_TOKEN,
                     writable,
                     limits,
+                    &programs,
                 )
             })
             .unwrap_or_else(|_| {
@@ -1547,6 +1569,7 @@ impl VmBackend {
             disposable,
             &group,
         );
+        let programs = programs::exec_paths(&self.resolved, &session.shim_src)?;
         let argv = unit_line(
             units,
             unit,
@@ -1556,6 +1579,7 @@ impl VmBackend {
             channels.handover.token(),
             &project.writable_paths(),
             unit_limits,
+            &programs,
         )?;
         let shares = project.shares();
         let project_fd = project.work.into_fd();
@@ -1564,9 +1588,7 @@ impl VmBackend {
             vec![&channels.root_socket, &project_fd, &channels.lifeline_read];
         handed.extend(layer_fd.as_ref());
         let fds = numbered(&handed);
-        let timeout = options
-            .report_timeout
-            .unwrap_or_else(|| self.start_timeout());
+        let timeout = self.start_timeout(options);
         let admission = crate::launcher::Admission::reporting_to(options.notices.clone());
         let link = session::GuestLink {
             device: layout.door_device(),

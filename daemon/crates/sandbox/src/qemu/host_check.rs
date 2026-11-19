@@ -8,6 +8,13 @@
 //!   des Skripts, bubblewrap, virtiofsd, das vsock-Gerät oder QEMU, erkannt
 //!   an `/proc/<pid>/exe`; ein anderes, ein gelöschtes oder ein unlesbares
 //!   Programm ist ein Fund;
+//! - jedes dieser Programme läuft so oft, wie das Skript es startet
+//!   (HUM-480, [`Roles`]): eine Shell mehr als die Helfer und die eine, die
+//!   auf die Lebensleine wartet, zwei bubblewrap je Helfer, ein virtiofsd je
+//!   Dienst der Dateien; ein zweites `bwrap` oder `sh` an der Stelle eines
+//!   Helfers ist ein Fund. Was nach der Zulassung startet, sieht diese
+//!   Prüfung nicht; dort hält die Unit selbst jedes andere Programm ab
+//!   (`NoExecPaths=/`, [`super::programs`]);
 //! - jeder Prozess der Unit hat in seinem Netz-Namensraum nur `lo`;
 //! - kein Prozess hält `/dev/vhost-vsock`, `/dev/vhost-net`, `/dev/net/tun`
 //!   oder ein tap-Gerät;
@@ -195,7 +202,12 @@ pub(crate) fn run(stop: &UnitStop, resolved: &Resolved, door_port: u32) -> Vec<F
         Ok(settled) => settled,
         Err(why) => return vec![finding(IsolationCheck::NoNetworkInterface, why)],
     };
+    let disposable = disposable(&stop.shares);
     let mut findings = judge(&processes, resolved);
+    let roles = Roles::of(disposable);
+    #[cfg(test)]
+    let roles = roles.with_extra_shells(super::test_machine::extra_shells());
+    findings.extend(count_roles(&processes, resolved, roles));
     if !settled {
         findings.push(finding(
             IsolationCheck::SingleSocket,
@@ -205,10 +217,6 @@ pub(crate) fn run(stop: &UnitStop, resolved: &Resolved, door_port: u32) -> Vec<F
         ));
     }
     findings.extend(shares_held(&processes, resolved, &stop.shares));
-    let disposable = stop
-        .shares
-        .iter()
-        .any(|share| share.jail_path == Path::new(super::lines::LAYER_SHARE));
     findings.extend(runtime_sockets(&stop.runtime, door_port, disposable));
     findings
 }
@@ -616,6 +624,116 @@ pub(crate) fn judge(processes: &[Process], resolved: &Resolved) -> Vec<Finding> 
             IsolationCheck::SingleSocket,
             format!("{devices} vsock device processes in the unit, expected exactly one"),
         ));
+    }
+    findings
+}
+
+/// Wie viele Prozesse das Skript der Unit je Programm startet (HUM-480).
+///
+/// Gemessen an einer echten Sitzung (Debian 14, dash 0.5, bubblewrap 0.13,
+/// `ps` über die cgroup der Unit): die Shell des Skripts, je Helfer eine
+/// Unterschale für `( … ) &`, die nach seinem Ende das Skript beendet, und
+/// eine, die auf die Lebensleine wartet; je Helfer zwei bubblewrap (der
+/// äußere wartet, der innere ist mit `--unshare-pid` der Init des
+/// Gefängnisses), darunter der Helfer. bash als `/bin/sh` forkt für dieses
+/// Skript genauso (gemessen mit derselben Form). Die Fäden eines Programms
+/// zählen nicht, `cgroup.procs` nennt nur Prozesse.
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+pub(crate) struct Roles {
+    /// Die Helfer, jeder in seinem Gefängnis: die Dienste der Dateien, das
+    /// vsock-Gerät und der Emulator.
+    helpers: usize,
+    /// Die Dienste der Dateien: Wurzel und `/work`, in einer
+    /// Wegwerf-Sitzung dazu die Schicht (HUM-446).
+    file_daemons: usize,
+    /// Shells, die ein KVM-Test neben dem Skript in der Unit hält (HUM-480,
+    /// [`super::test_machine::TestMachine::extra_shells`]); in der Endform 0.
+    extra_shells: usize,
+}
+
+/// Ob die Sitzung eine Wegwerf-Sitzung ist: Ein Dienst teilt die Schicht
+/// (HUM-446). Davon hängen die Rollen ([`Roles::of`]) und die erklärten
+/// Sockets ab.
+fn disposable(shares: &[SharedDir]) -> bool {
+    shares
+        .iter()
+        .any(|share| share.jail_path == Path::new(super::lines::LAYER_SHARE))
+}
+
+impl Roles {
+    /// Die Rollen einer direkten oder einer Wegwerf-Sitzung.
+    pub(crate) const fn of(disposable: bool) -> Self {
+        let file_daemons = if disposable { 3 } else { 2 };
+        Self {
+            helpers: file_daemons + 2,
+            file_daemons,
+            extra_shells: 0,
+        }
+    }
+
+    /// Dieselben Rollen mit `extra` Shells eines Tests.
+    #[cfg(test)]
+    pub(crate) const fn with_extra_shells(self, extra: usize) -> Self {
+        Self {
+            extra_shells: extra,
+            ..self
+        }
+    }
+}
+
+/// Die Namen eines Programms in `/proc/<pid>/exe`: der eingestellte Pfad und
+/// sein aufgelöstes Ziel (siehe [`unit_programs`]).
+fn names_of(path: &Path) -> Vec<String> {
+    let mut names = vec![path.to_string_lossy().into_owned()];
+    if let Ok(target) = std::fs::canonicalize(path) {
+        names.push(target.to_string_lossy().into_owned());
+    }
+    names
+}
+
+/// Ein Fund je Programm, das nicht so oft läuft, wie das Skript es startet
+/// ([`Roles`]). Emulator und vsock-Gerät zählt schon [`judge`].
+pub(crate) fn count_roles(
+    processes: &[Process],
+    resolved: &Resolved,
+    roles: Roles,
+) -> Vec<Finding> {
+    let expected = [
+        (
+            "the script's shell",
+            Path::new(super::lines::SCRIPT_SHELL),
+            roles.helpers + 2 + roles.extra_shells,
+        ),
+        (
+            "bubblewrap",
+            resolved.bubblewrap.as_path(),
+            roles.helpers * 2,
+        ),
+        (
+            "the file service",
+            resolved.file_daemon.as_path(),
+            roles.file_daemons,
+        ),
+    ];
+    let mut findings = Vec::new();
+    for (role, program, wanted) in expected {
+        let names = names_of(program);
+        let pids: Vec<String> = processes
+            .iter()
+            .filter(|process| process.program.as_ref().is_some_and(|p| names.contains(p)))
+            .map(|process| process.pid.to_string())
+            .collect();
+        if pids.len() != wanted {
+            findings.push(finding(
+                IsolationCheck::SingleSocket,
+                format!(
+                    "{} processes run {role} {}, the unit starts exactly {wanted} (pids {})",
+                    pids.len(),
+                    program.display(),
+                    pids.join(",")
+                ),
+            ));
+        }
     }
     findings
 }
@@ -1266,6 +1384,89 @@ mod tests {
             found.iter().any(|f| f.what.contains("is not a socket")),
             "{found:?}"
         );
+    }
+
+    /// Die Prozesse des Skripts je Rolle, wie in einer echten Sitzung
+    /// gemessen (HUM-480): Shells, bubblewrap und Dienste der Dateien.
+    fn script_tree(shells: u32, jails: u32, file_daemons: u32) -> Vec<Process> {
+        let process = |pid: u32, program: &str| Process {
+            pid,
+            program: Some(program.to_owned()),
+            ..Process::default()
+        };
+        (0..shells)
+            .map(|n| process(100 + n, "/bin/sh"))
+            .chain((0..jails).map(|n| process(200 + n, "/usr/bin/bwrap")))
+            .chain((0..file_daemons).map(|n| process(300 + n, "/usr/libexec/virtiofsd")))
+            .collect()
+    }
+
+    /// HUM-480: Jedes Programm läuft so oft, wie das Skript es startet; eine
+    /// Shell oder ein bubblewrap an der Stelle eines Helfers, ein fehlender
+    /// oder ein zusätzlicher Prozess ist je ein Fund der Garantie 2.
+    #[test]
+    fn every_program_runs_as_often_as_the_script_starts_it() {
+        let direct = Roles::of(false);
+        let layered_roles = Roles::of(true);
+        assert_eq!(
+            count_roles(&script_tree(6, 8, 2), &resolved(), direct),
+            Vec::new()
+        );
+        assert_eq!(
+            count_roles(&script_tree(7, 10, 3), &resolved(), layered_roles),
+            Vec::new()
+        );
+        // Eine direkte Sitzung hat den Dienst der Schicht nicht.
+        assert_eq!(
+            count_roles(&script_tree(6, 8, 2), &resolved(), layered_roles).len(),
+            3
+        );
+        // Eine Shell statt des zweiten virtiofsd.
+        let found = count_roles(&script_tree(7, 8, 1), &resolved(), direct);
+        assert_eq!(found.len(), 2, "{found:?}");
+        assert!(
+            found
+                .iter()
+                .all(|f| f.check == IsolationCheck::SingleSocket),
+            "{found:?}"
+        );
+        assert!(
+            found.iter().any(|f| f.what.starts_with(
+                "7 processes run the script's shell /bin/sh, the unit starts exactly 6"
+            )),
+            "{found:?}"
+        );
+        assert!(
+            found
+                .iter()
+                .any(|f| f.what.starts_with("1 processes run the file service")),
+            "{found:?}"
+        );
+        // Ein bubblewrap mehr, eine Shell weniger.
+        let found = count_roles(&script_tree(6, 9, 2), &resolved(), direct);
+        assert!(
+            found.len() == 1 && found[0].what.contains("run bubblewrap /usr/bin/bwrap"),
+            "{found:?}"
+        );
+        assert_eq!(
+            count_roles(&script_tree(5, 8, 2), &resolved(), direct).len(),
+            1
+        );
+
+        // Welche Rollen gelten, folgt aus den geteilten Ordnern der Unit:
+        // mit der Schicht die einer Wegwerf-Sitzung.
+        let share = |jail: &str| SharedDir {
+            jail_path: PathBuf::from(jail),
+            dev: 1,
+            ino: 2,
+        };
+        let work = [share(super::super::lines::WORK_SHARE)];
+        let layered = [
+            share(super::super::lines::WORK_SHARE),
+            share(super::super::lines::LAYER_SHARE),
+        ];
+        assert_eq!(Roles::of(disposable(&work)), direct);
+        assert_eq!(Roles::of(disposable(&layered)), layered_roles);
     }
 
     /// Ein Prozess, der nach dem ersten Lesen der cgroup startet, wird

@@ -1889,6 +1889,140 @@ gebunden (ein zweites `bwrap` oder `sh` statt eines Helfers besteht).
 1. Kein Prozess der Unit führt ein Programm außerhalb der Liste aus, auch
    nach der Zulassung.
 
+### Stand nach der Umsetzung (2026-11-19)
+Gemessen auf Debian 14 mit systemd 262, bubblewrap 0.13.1, dash 0.5.12,
+bash 5.3, QEMU 11.1.3, virtiofsd 1.14.0 und vhost-device-vsock 0.3.0, in
+Units `humanitl-test-*` des Dienstverwalters des Nutzers.
+
+**1. Erzwungen über den Dienstverwalter.** Die Unit trägt `NoExecPaths=/`
+und `ExecPaths=` (`daemon/crates/sandbox/src/qemu/programs.rs`,
+`exec_paths`, beim Planen jeder Sitzung). Auf der Liste stehen einzelne
+Dateien, je unter ihrem aufgelösten Pfad: `/usr/bin/env` (der erste Prozess
+der Unit, er leert die Umgebung; die Spezifikation nannte ihn nicht, ohne
+ihn endet die Unit mit `203/EXEC`), der Shim, die Shell des Skripts,
+`sleep` (das Skript wartet damit auf die Sockets der Dienste; dash und bash
+haben es nicht eingebaut), bubblewrap, virtiofsd, vhost-device-vsock und
+QEMU, dazu je dynamisch gebundenem Programm sein Lader und jede Bibliothek,
+die `<Lader> --list <Programm>` nennt; hier 61 Dateien. Keine Verzeichnisse:
+Unter `/usr/lib/x86_64-linux-gnu` liegen auf diesem Rechner 193 weitere
+Programme (`find -perm -u+x ! -name '*.so*'`). Was ein Programm erst zur
+Laufzeit mit `dlopen` lädt, käme nicht auf die Liste; gemessen über
+`/proc/<pid>/maps` aller Prozesse einer echten Sitzung bildet keiner eine
+Datei ab, die nicht darauf steht (außer `/dev/zero` und dem memfd des
+Gastspeichers). Ein Programm, das kein ELF ist (etwa ein Skript als Hülle in
+`sandbox.qemu.qemu`), lässt den Plan mit `SANDBOX_011` scheitern.
+
+Gemessen:
+- In der Unit endet `/usr/bin/id` mit `Permission denied` (126), auch über
+  den Lader (`ld.so /usr/bin/id`: „failed to map segment").
+- Die Gefängnisse erben das. Sie entstehen in einem Nutzer-Namensraum unter
+  dem der Unit, wo der Kernel das geerbte `noexec` sperrt, und
+  `--ro-bind /usr /usr` nimmt die Einhängungen der einzelnen Dateien
+  rekursiv mit. Die Helfer starten, ein fremdes Programm im Gefängnis endet
+  mit `EACCES`. bubblewrap braucht dafür nichts, was nicht auf der Liste
+  steht: Es führt nur die Helfer unter `/usr` (oder unter dem eingestellten
+  Pfad gebunden) aus.
+- Nach der Zulassung: Eine Unterschale, die der Befehl im Gefängnis des
+  Emulators vor dessen Start abzweigt und die an einer FIFO des Tests
+  wartet, bekommt das Zeichen erst, wenn der Agent läuft; dann scheitert
+  `/usr/bin/id` (126), und `qemu-system-x86_64 --version` startet dort. Die
+  Host-Prüfung zählt die wartende Shell über
+  `TestMachine::extra_shells` mit. Die erste Fassung trat mit `nsenter`
+  vom Host in die Namensräume des Gefängnisses; das ging lokal, auf dem
+  Runner der CI verweigerte der Kernel den Wiedereintritt in den
+  Mount-Namensraum (`EPERM`), der Test wurde deshalb umgebaut und läuft
+  jetzt überall gleich. Mutationsbeweis für diesen Teil: ohne
+  `ExecPaths=`/`NoExecPaths=` und mit den Prüfungen vor der Zulassung
+  abgeschaltet besteht die Host-Prüfung, und der Test wird erst nach der
+  Zulassung rot (`id` mit Status 0). Nebenbei der Beweis, dass die
+  Zählung je Rolle in der Prüfung wirkt: mit `extra_shells: 0` lehnt die
+  Host-Prüfung dieselbe Sitzung ab („7 processes run the script's shell
+  /bin/sh, the unit starts exactly 6", `SANDBOX_047`).
+- Kosten: Unit und fünf Gefängnisse brauchen 0,19 statt 0,08 s; ein ganzer
+  Start im KVM-Test 5,5 s mit und 5,6 bis 6,7 s ohne die Liste, also kein
+  messbarer Unterschied.
+
+**Nicht erreicht, ehrlich:** Das Kriterium gilt für jede Datei des Hosts,
+nicht für Code, den ein übernommener Prozess selbst mitbringt.
+- Eine Kopie in einem `memfd` läuft: In einer Test-Unit mit derselben Liste
+  startete `fexecve` eines memfd mit einem statischen Programm. Der memfd
+  liegt auf einer Einhängung des Kernels außerhalb jedes Namensraums;
+  `vm.memfd_noexec` ist 0, und kein Prozess der Unit darf es heben.
+- Eine Einhängung, die bubblewrap selbst in einem Gefängnis anlegt (dessen
+  Wurzel, die tmpfs-Masken über `/work`, `--file`), trägt kein `noexec`:
+  `bwrap --tmpfs /t --perms 0755 --file 3 /t/p /t/p` startete in der
+  Test-Unit ein statisches Programm. bubblewrap kennt keine Option dafür.
+Beides braucht einen Prozess, der schon Code eigener Wahl ausführt, oder
+Shell und bubblewrap der Liste zusammen. QEMU verbietet sich `execve` selbst
+(`-sandbox spawn=deny`), virtiofsd läuft unter seinem eigenen seccomp-Filter
+(Vorgabe `kill`), vhost-device-vsock unter keinem. Vorschlag für ein eigenes
+Issue, nicht angelegt.
+
+**2. Zählen je Rolle** (`host_check::count_roles`, `Roles`). Gemessen über
+die cgroup einer echten direkten Sitzung: sechs `dash` (das Skript, die
+Unterschale an der Lebensleine, je Helfer eine), acht `bwrap` (je Helfer der
+äußere und der Init des Gefängnisses), zwei virtiofsd, ein vsock-Gerät, ein
+QEMU; eine Wegwerf-Sitzung hat sieben, zehn und drei. Die Prüfung verlangt
+genau das: Shells gleich Helfer plus zwei, bubblewrap gleich zweimal die
+Helfer, virtiofsd gleich die Dienste der Dateien; Emulator und vsock-Gerät
+genau einer wie bisher. Eine Abweichung ist ein Fund an `single_socket`
+(`SANDBOX_047`). Robust, weil das Skript fest ist und die Prüfung erst nach
+dem Bericht des Gasts läuft, wenn das Warten mit `sleep` vorbei ist; alle
+26 KVM-Tests, darunter Wegwerf-Sitzungen, sind damit grün.
+
+**3. `/bin/sh` als bash.** Die Shell muss kein festes Programm sein.
+`ExecPaths=` nennt das aufgelöste Ziel von `/bin/sh`, die Host-Prüfung
+beide Namen. bash forkt für die Form des Skripts genauso wie dash (gemessen
+mit derselben Form: fünf Unterschalen, je eine mit einem Kind), die Zahlen
+aus Punkt 2 gelten also. Was bash mehr kann, erreicht kein anderes Programm:
+eine ladbare Erweiterung (`enable -f`) ist eine Bibliothek und scheitert am
+`noexec` wie jede andere Datei außerhalb der Liste.
+
+Tests: `the_loader_list_names_every_library_with_a_path`,
+`the_header_names_the_loader`, `a_program_brings_its_loader_and_libraries`,
+`the_shell_of_the_script_comes_with_its_libraries` (programs.rs),
+`the_unit_carries_the_hardening_of_the_spike` (tests.rs, `NoExecPaths=/`,
+`ExecPaths=`), `every_program_runs_as_often_as_the_script_starts_it`
+(host_check.rs); KVM `a_helper_that_starts_a_foreign_program_fails_at_exec`:
+Ein Befehl im Gefängnis der Maschine (ein neuer Eingriff
+`TestMachine::jailed_command`) und einer daneben in der Unit starten
+`/usr/bin/id`, beide enden mit 126 und `Permission denied`, die Prüfung ist
+grün, der Agent wird zugelassen, danach scheitert `id` in den Namensräumen
+des Gefängnisses, und der Emulator startet dort. Mutationsbeweise: ohne
+`NoExecPaths=/` und `ExecPaths=` läuft `id` an allen drei Stellen
+(Status 0, `uid=1000 ...`), der KVM-Test wird rot; ohne den Vergleich in
+`count_roles` wird der Unit-Test rot.
+
+Aus dem Review (Codex, Sonnet als Ersatz):
+- Blocking, übernommen: Eine Bibliothek, die der Lader nennt, wurde
+  aufgelöst, ohne zu prüfen, dass das Ziel eine Datei ist; ein Verweis auf
+  ein Verzeichnis (etwa `/usr/bin`) hätte das ganze Verzeichnis auf die
+  Liste gesetzt. Jeder Eintrag (Programm, Lader, Bibliothek) muss nach dem
+  Auflösen eine gewöhnliche Datei sein, sonst `SANDBOX_011`. Test mit
+  Verweisen auf ein Verzeichnis in allen drei Rollen.
+- Minor, übernommen, dabei gefunden: `ReadWritePaths=` hängt jeden
+  beschreibbaren Pfad neu ein, und `NoExecPaths=/` erreicht diese
+  Einhängung nicht. Gemessen in der KVM-Sitzung und in einer Test-Unit:
+  Eine Kopie von `id` im Ordner des Tests lief aus dem Gefängnis, in der
+  Test-Unit auch aus der Unit und mit `--bind` und `--ro-bind` aus einem
+  Gefängnis. Jetzt steht jeder beschreibbare Pfad (Laufzeitverzeichnis,
+  Projektordner, Schicht) zusätzlich in `NoExecPaths=`; er bleibt
+  beschreibbar. Der KVM-Test startet jetzt auch Kopien von `id` im
+  Projektordner und im Laufzeitverzeichnis (aus der Unit; dessen `root/`
+  aus dem Gefängnis), alle 126. Mutationsbeweis: mit `NoExecPaths=/`
+  allein läuft die Kopie im Laufzeitverzeichnis aus dem Gefängnis
+  (Status 0), der Test wird rot.
+- Minor, übernommen: `run_bounded` wartete nach dem Ende des Programms ohne
+  Frist auf das Ende seiner Ausgabe; ein Kind, das sie offen hält, hielt
+  den Aufruf fest. Jetzt lesen Fäden beide Kanäle bis zur selben Frist, das
+  Programm läuft in einer eigenen Prozessgruppe, und nach der Frist bekommt
+  die Gruppe `SIGKILL`. Test mit einem Lader, der ein `sleep 30` mit seiner
+  Ausgabe hinterlässt; Mutationsbeweis: mit dem alten Warten dauert er
+  30 s und wird rot.
+- Minor, übernommen: Die Vorschau (`programs::shown_in_preview`) und die
+  Ableitung der Rollen aus den geteilten Ordnern (`host_check::disposable`)
+  haben eigene Unit-Tests mit Mutationsbeweis.
+
 ---
 
 ## HUM-481 · Kernel level: masks in the guest over the overlay, `--xattrmap` for the layer daemon

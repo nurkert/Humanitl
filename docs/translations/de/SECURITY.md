@@ -2166,7 +2166,7 @@ Tiefenverteidigung; was jede Garantie trägt, liegt auf dem Host.
 | # | Garantie | Wie sie auf dem Host gilt | Geprüft durch |
 |---|---|---|---|
 | 1 | Kein Netzwerk-Interface | die Maschine hat kein Netzgerät (`-nic none`, kein `-netdev`); die Unit der Sitzung läuft mit `PrivateNetwork=yes`, jeder Hilfsprozess sieht nur `lo`; kein Prozess der Unit hält `/dev/net/tun`, `/dev/vhost-net` oder `/dev/vhost-vsock` | `no_interfaces` des Shims im Gast, und die Host-Prüfung: der Netz-Namensraum jedes Prozesses der Unit, die Deskriptoren jedes Prozesses, die Startzeile des laufenden Emulators |
-| 2 | Genau eine Tür | ein vsock-Geräteprozess je Sitzung (nie geteilt, HUM-442 Q9) mit einem Gerät, `--uds-path` im Laufzeitverzeichnis der Sitzung, nie `--forward-cid`; auf dem Host genau ein Lauscher `<uds>_5000`, den der Daemon an den Proxy-Socket der Sitzung weiterreicht; jeder andere Port des Hosts findet keinen Lauscher; die Wurzel des Gasts ist eine nur lesbare Freigabe ohne Laufzeitverzeichnis und ohne Socket des Hosts | `single_socket`, `bridge_listening`, `mounts_match` und `mounts_pinned` des Shims im Gast, und die Host-Prüfung: nur die erklärten Sockets im Laufzeitverzeichnis, genau ein vsock-Geräteprozess mit genau einem Gerät, die Deskriptoren des Emulators auf die des Plans begrenzt, ohne Konsole, jeder Prozess der Unit eines ihrer Programme (die Shell des Skripts, bubblewrap, ein Dateisystemdienst, das vsock-Gerät, der Emulator; HUM-468) |
+| 2 | Genau eine Tür | ein vsock-Geräteprozess je Sitzung (nie geteilt, HUM-442 Q9) mit einem Gerät, `--uds-path` im Laufzeitverzeichnis der Sitzung, nie `--forward-cid`; auf dem Host genau ein Lauscher `<uds>_5000`, den der Daemon an den Proxy-Socket der Sitzung weiterreicht; jeder andere Port des Hosts findet keinen Lauscher; die Wurzel des Gasts ist eine nur lesbare Freigabe ohne Laufzeitverzeichnis und ohne Socket des Hosts | `single_socket`, `bridge_listening`, `mounts_match` und `mounts_pinned` des Shims im Gast, und die Host-Prüfung: nur die erklärten Sockets im Laufzeitverzeichnis, genau ein vsock-Geräteprozess mit genau einem Gerät, die Deskriptoren des Emulators auf die des Plans begrenzt, ohne Konsole, jeder Prozess der Unit eines ihrer Programme (die Shell des Skripts, bubblewrap, ein Dateisystemdienst, das vsock-Gerät, der Emulator; HUM-468), jedes so oft, wie das Skript es startet (HUM-480) |
 | 3 | Keine neuen Türen | der Gastkernel lädt nur die Module des Plans und sperrt danach das Laden (`kernel.modules_disabled = 1`, das automatische Laden schon vorher aus); einer laufenden Maschine lässt sich kein Gerät hinzufügen (kein Monitor, kein QMP); der Emulator läuft unter seinem vollen `-sandbox` und in einem Gefängnis ohne Fähigkeiten | `seccomp_applied` und `families` des Shims im Gast; der Filter des Agenten verweigert `AF_VSOCK` und `AF_UNIX` |
 
 **Der Agent startet erst, wenn der Host ihn zulässt.** Im Gast schreibt PID 1 jede `CHECK`-Zeile
@@ -2202,6 +2202,32 @@ Host-Prüfung steht dort als `isolation.check`; an den Garantien ändert das nic
   `ProtectSystem=strict`, `ProtectHome=read-only`, beschreibbar nur das Laufzeitverzeichnis der
   Sitzung und der Projektordner, `RestrictAddressFamilies=AF_UNIX AF_NETLINK`, `LockPersonality`,
   `RestrictRealtime`, nur native Systemaufrufe.
+- **Nur die Programme der Unit laufen** (HUM-480). Die Unit trägt `NoExecPaths=/` und `ExecPaths=`
+  mit genau den Dateien, die ihre Prozesse starten oder als Code abbilden: `env`, das die Umgebung
+  leert, der Shim, die Shell des Skripts, `sleep` (das Warten des Skripts auf die Sockets),
+  bubblewrap, der Dateisystemdienst, das vsock-Gerät und der Emulator, je unter seinem aufgelösten
+  Pfad, und je dynamisch gebundenem Programm sein Lader und jede Bibliothek, die der Lader für es
+  nennt (`<Lader> --list <Programm>`, beim Planen der Sitzung). Die Liste nennt einzelne Dateien,
+  nicht das Verzeichnis der Bibliotheken, in dem viele weitere Programme liegen (193 auf dem
+  gemessenen Debian-Rechner). Jeder beschreibbare Pfad der Unit (das Laufzeitverzeichnis, der
+  Projektordner oder die Schicht) steht zusätzlich in `NoExecPaths=`: `ReadWritePaths=` hängt ihn
+  neu ein, und `NoExecPaths=/` allein erreicht diese Einhängung nicht (gemessen: eine Kopie von
+  `id` im Projektordner lief). Jede andere Datei, die über die Einhängungen der Unit erreichbar
+  ist, auch eine Kopie, die die Unit selbst geschrieben hat, scheitert am `execve` (`EACCES`) und
+  an einer Abbildung als Code (`EPERM`), so dass auch der Lader kein Umweg ist
+  (`ld.so /usr/bin/id`); gemessen mit `/usr/bin/id` und mit Kopien davon im Projektordner und im
+  Laufzeitverzeichnis, aus der Unit und aus einem Gefängnis. Die Ausnahme ist eine Einhängung,
+  die bubblewrap in einem Gefängnis anlegt, unten genannt. Die
+  bubblewrap-Gefängnisse erben das: Sie liegen in einem Nutzer-Namensraum unter dem der Unit, wo
+  der Kernel das geerbte `noexec` sperrt, und `--ro-bind /usr /usr` nimmt die Einhängungen der
+  Dateien mit. Es gilt nach der Zulassung, wo die einmalige Host-Prüfung nichts mehr sieht: Im
+  KVM-Test wartet ein Prozess im Gefängnis des Emulators, bis der Agent läuft, dann scheitert
+  dort `/usr/bin/id`, während der Emulator selbst startet. Ein Programm, das keine
+  ELF-Datei ist (ein Skript als Hülle), lässt den Plan scheitern (`SANDBOX_011`), denn die Liste
+  wüsste nicht, was es startet. Die Liste bindet Dateien des Hosts, nicht Code, den ein
+  übernommener Prozess mitbringt: Eine Kopie in einem `memfd` oder eine Datei auf einer
+  Einhängung, die bubblewrap in einem Gefängnis anlegt (dessen Wurzel, die Masken über dem
+  Projekt), läuft weiter (gemessen; `THREAT-MODEL.md` K-33).
 - **Vier Prozesse, vier Gefängnisse.** Der Dateisystemdienst der Wurzel, der Dateisystemdienst für
   `/work`, das vsock-Gerät und der Emulator laufen je in einem eigenen bubblewrap-Gefängnis mit
   allen Namensräumen getrennt und ohne jede Fähigkeit. Kein Gefängnis bindet das
