@@ -454,6 +454,7 @@ class FixControl extends ConsumerStatefulWidget {
     this.chooseFolderLocked,
     this.diagnosticCode,
     this.primary = false,
+    this.wrapText = false,
     super.key,
   });
 
@@ -536,6 +537,15 @@ class FixControl extends ConsumerStatefulWidget {
   /// `setup-fix-copy`, and a test that taps that key would not know which one
   /// it hit. Null keeps the shared key the single-card screens use.
   final Key? copyKey;
+
+  /// Whether a command or link to copy wraps onto further lines beside its
+  /// button instead of ending in an ellipsis (HUM-494).
+  ///
+  /// For a control in a column too narrow for the longest command, such as
+  /// the reasons under the backend choice of the settings: what someone is to
+  /// copy they should be able to read in full. The cards keep the single line,
+  /// where the ellipsis guards their height.
+  final bool wrapText;
 
   @override
   ConsumerState<FixControl> createState() => _FixControlState();
@@ -626,11 +636,13 @@ class _FixControlState extends ConsumerState<FixControl> {
         label: _copied ? l10n.setupFixCopied : l10n.setupFixCopyCommand,
         text: command,
         style: mono,
+        wrap: widget.wrapText,
       ),
       FixActionOpenUrl(:final url) => _copyRow(
         tokens,
         label: _copied ? l10n.setupFixCopied : l10n.setupFixCopyLink,
         text: url,
+        wrap: widget.wrapText,
         // Der Akzent ist eine Fläche und misst hell 3,42:1 bis 3,74:1; ein
         // Wort darauf braucht 4,5:1 (`docs/UX.md` 6).
         style: tokens.typography.mono12.tinted(tokens.colors.accentText),
@@ -730,12 +742,16 @@ class _FixControlState extends ConsumerState<FixControl> {
   /// Zeile aus Knopf und Befehl über den Rand (`docs/UX.md` 6). Was jemand
   /// kopieren soll, soll er auch lesen können, also bricht die schmale Form
   /// um, statt eine Ellipse zu setzen.
+  ///
+  /// [wrap] lässt den Text in der einzeiligen Form neben dem Knopf
+  /// umbrechen, statt ihn zu kürzen ([FixControl.wrapText], HUM-494).
   Widget _copyRow(
     HTokens tokens, {
     required String label,
     required String text,
     required TextStyle style,
     bool reflow = false,
+    bool wrap = false,
   }) {
     final Widget button = HButton(
       key: widget.copyKey ?? const Key('setup-fix-copy'),
@@ -758,7 +774,9 @@ class _FixControlState extends ConsumerState<FixControl> {
         button,
         SizedBox(width: tokens.spacing.x3),
         Expanded(
-          child: Text(text, style: style, overflow: TextOverflow.ellipsis),
+          child: wrap
+              ? Text(text, style: style)
+              : Text(text, style: style, overflow: TextOverflow.ellipsis),
         ),
       ],
     );

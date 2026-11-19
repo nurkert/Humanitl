@@ -214,6 +214,9 @@ class _Reason extends StatelessWidget {
               child: FixControl(
                 fix: fix,
                 diagnosticCode: reason.code,
+                // Was jemand kopieren soll, steht ganz da, auch ein langer
+                // Pfad zum Kernel-Abbild (HUM-494).
+                wrapText: true,
                 copyKey: ValueKey<String>('$keyPrefix-fix-$backend'),
               ),
             ),
