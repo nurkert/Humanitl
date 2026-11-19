@@ -2792,6 +2792,53 @@ nur ASCII faltet; APFS faltet nach Unicode (U+017F, U+212A), so dass
 ### Akzeptanzkriterien
 1. Keine Maske lässt sich unter macOS über die Schreibweise umgehen.
 
+### Stand nach der Umsetzung (2026-11-19)
+**Nachschlagen statt falten, nicht verweigern.** Verweigern wie unter Linux
+scheidet aus: APFS ohne Unterschied der Schreibweise ist die Vorgabe unter
+macOS, eine Weigerung schlösse die Wegwerf-Sandbox dort fast überall aus.
+Falten nachbauen scheidet ebenfalls aus: Apple nennt nur „Unicode 9.0" für
+Faltung und Normalisierung und dass ein Name „with any of its normalization
+variants" gefunden wird (Apple File System Guide, FAQ,
+<https://developer.apple.com/library/archive/documentation/FileManagement/Conceptual/APFS_Guide/FAQ/FAQ.html>);
+die Apple File System Reference (2020-06-22,
+<https://developer.apple.com/support/downloads/Apple-File-System-Reference.pdf>)
+nennt für den Hash eines Eintrags (`j_drec_hashed_key_t`) NFD und die
+Merkmale `APFS_INCOMPAT_CASE_INSENSITIVE` und
+`APFS_INCOMPAT_NORMALIZATION_INSENSITIVE`, aber keine Tabelle der Faltung. Eine
+eigene Tabelle wäre geraten. Der Klon liegt auf dem Volume des Projekts
+(`clonefile` kreuzt keine Volumes), also fragt `scan_clone` das Volume selbst:
+In jedem Verzeichnis auf dem Weg zu einer Maske schlägt es den Namen der Maske
+ohne Symlink nach (`statat` mit `AT_SYMLINK_NOFOLLOW`) und vergleicht Gerät
+und Inode des Gefundenen mit jedem Eintrag. Wer dort liegt, ist die Maske (auf
+ihr abgelehnt) oder auf dem Weg zu ihr (als Nicht-Verzeichnis abgelehnt, als
+Verzeichnis geht der Weg darunter weiter), wie immer er geschrieben ist. Ein
+Nachschlagen, das scheitert (außer `ENOENT`), passt auf jeden Eintrag und macht
+die Liste unvollständig. Der Vergleich in ASCII bleibt daneben stehen. Für das
+Projekt dasselbe beim Löschen: Hat der Mensch eine Maske anders geschrieben,
+entfernt `strip_masks` sie gefaltet aus dem Klon, und ihr Fehlen dort ist keine
+Löschung (`ProjectMasks`, nach Gerät und Inode im Projekt; scheitert dieses
+Nachschlagen, ob vorab für die Masken oder für einen einzelnen Eintrag, wird
+keine Löschung gelistet und die Liste ist unvollständig; Review: ein Fehler
+beim einzelnen Eintrag galt zuerst als „keine Maske"). Neuer Code in
+`daemon/crates/sandbox/src/disposable/spelling.rs`, verdrahtet in `scan.rs`.
+Kein neuer Diagnose-Code. Grenze: Ein anderes Volume, das im Projekt
+eingehängt ist und anders faltet, sieht der Klon nicht; für eine dort
+vorhandene Maske greift der Vergleich in ASCII, für eine fehlende nicht.
+
+**Tests.** `spelling::tests` (rein, drei Tests), in `clone_tests.rs` drei
+Tests auf jedem Dateisystem, bei denen ein harter Verweis das Falten nachspielt
+(Eintrag gleich Maske, gleich Weg zur Maske, Maske im Projekt anders
+geschrieben), `casefold_tests::a_clone_on_a_folding_volume_keeps_its_masks`
+auf einem tmpfs mit `casefold` im Nutzer-Namensraum (Kelvin-Zeichen, langes s,
+`cafe\u{301}` gegen `caf\u{e9}`; überspringt, wo das nicht geht), und unter
+macOS `real_clone::apfs_folding_never_bypasses_a_mask` auf einem echten Klon
+(überspringt auf einem Volume mit Unterschied der Schreibweise).
+`a_failed_lookup_in_the_project_lists_no_removal` gibt ein scheiterndes
+Nachschlagen im Projekt vor (`scan_clone_probed`).
+Mutationsbeweise: `standing.on_mask` weg, `toward` weg, die Schritte nicht
+weitergereicht, `holds` weg, ein Fehler von `holds` als „keine Maske"; jede
+Mutation färbt mindestens einen Test rot.
+
 ---
 
 ## HUM-492 · Kernel level: `humanitl-vm-<instance>` stays behind after the daemon

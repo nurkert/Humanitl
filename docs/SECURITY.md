@@ -2116,11 +2116,23 @@ a gap in the profile. The profile denies every configured mask in the clone, pre
 or not, so the agent cannot create anything in its place, and the existing folders above a mask
 can be neither renamed nor removed. So in a project without `.git` a disposable run has no working
 `git init`. The absence of a mask is not listed as a deletion. Anything found on a masked path, in
-any ASCII case, and anything but a directory on the way to one, is refused on apply. A mask that is
-a symbolic link takes its target along. The real files stay in the real project, which the agent
-cannot reach. A configured mask reached through a symbolic link inside the project cannot be held
-in a clone, so the clone counts as failed. In a direct run the profile denies the resolved target
-of such a mask as well and locks the folders above it, which also holds when `auto` falls back.
+any ASCII case, and anything but a directory on the way to one, is refused on apply. APFS on a
+case-insensitive volume (the default) folds names by Unicode and ignores their normalization, so
+`.git/hoo\u{212a}s` (Kelvin sign) or `cafe\u{301}` name the same entry as `.git/hooks` or
+`caf\u{e9}`. The scan does not rebuild that folding (Apple publishes no table); in every folder on
+the way to a mask it looks the mask's name up in the clone itself, without following a symbolic
+link, and an entry with the device and inode that lookup found is the mask, however it is spelled
+(HUM-491). The clone lies on the project's volume, so the apply would resolve the name in the
+project the same way. A mask the human spelled otherwise in the project is found the same way
+there, and its absence from the clone is no deletion. A lookup that fails counts as a mask, and a
+hard link that shares its inode with a mask in the project is no deletion either; both are the
+safe side. One limit: a volume that folds differently and is mounted inside the project is not
+seen by the clone; for a mask present there only the ASCII comparison applies, for a missing one
+nothing. A mask that is a symbolic link takes its target along. The real files stay in the real
+project, which the agent cannot reach. A configured mask reached through a symbolic link inside
+the project cannot be held in a clone, so the clone counts as failed. In a direct run the profile
+denies the resolved target of such a mask as well and locks the folders above it, which also holds
+when `auto` falls back.
 
 The root of the clone can be neither removed nor renamed, and the daemon opens it only by
 descriptor, without following a symbolic link, and compares device and inode with the values taken

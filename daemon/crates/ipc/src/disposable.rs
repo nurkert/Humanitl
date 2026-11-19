@@ -206,7 +206,8 @@ impl Waiting {
         disposable::refuse_case_folding_before_apply(self.lower.as_fd(), self.layer.masks())
     }
 
-    /// Unter macOS vergleicht der Klon-Scan die Masken gefaltet (HUM-374).
+    /// Unter macOS findet der Klon-Scan jede Maske über das Nachschlagen
+    /// ihres Namens im Volume selbst, wie APFS faltet (HUM-374, HUM-491).
     #[cfg(not(target_os = "linux"))]
     #[allow(clippy::unused_self, clippy::unnecessary_wraps)]
     fn refuse_case_folding(&self) -> Result<(), Diagnostic> {

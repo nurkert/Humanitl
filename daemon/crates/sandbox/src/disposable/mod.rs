@@ -62,6 +62,7 @@ mod casefold;
 mod clone;
 mod layer;
 mod scan;
+mod spelling;
 mod text_diff;
 
 use std::path::PathBuf;

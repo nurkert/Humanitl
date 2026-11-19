@@ -304,3 +304,123 @@ fn inside(root: &Path) {
         err.why
     );
 }
+
+/// Die Umgebungsvariable des Tests über den Klon auf einem faltenden Volume.
+const CLONE_INNER: &str = "HUMANITL_HUM491_CASEFOLD_DIR";
+
+/// Was das Skript sagt, wenn das tmpfs mit `casefold` für HUM-491 hängt.
+const CLONE_MOUNTED: &str = "hum491-casefold-mounted";
+
+/// Ein Klon auf einem Volume, das nach Unicode faltet und normalisiert, wie
+/// APFS ohne Unterschied der Schreibweise (HUM-491): Das tmpfs mit `casefold`
+/// faltet das Kelvin-Zeichen zu `k`, das lange s zu `s` und `e` mit
+/// Akut-Zeichen zu `é`. Was der Agent unter diesen Schreibweisen anlegt, ist
+/// die Maske und wird nie geschrieben; ein Vergleich in ASCII allein ließe
+/// alle drei durch.
+///
+/// Mutationsbeweis: `standing.on_mask` und `toward` im Lauf weggelassen, und
+/// `.git/hoo\u{212a}s/pre-commit`, `.\u{17f}sh` und `cafe\u{301}/x` stehen
+/// ohne Ablehnung da.
+#[test]
+fn a_clone_on_a_folding_volume_keeps_its_masks() {
+    if let Ok(dir) = std::env::var(CLONE_INNER) {
+        inside_clone(Path::new(&dir));
+        return;
+    }
+    let dir = tempfile::tempdir().unwrap();
+    let exe = std::env::current_exe().unwrap();
+    let ran = Command::new("unshare")
+        .args(["-Urm", "sh", "-c"])
+        .arg(
+            "mount -t tmpfs -o casefold none \"$1\" || exit 77; echo {MOUNTED}; exec \"$2\" \
+             --exact disposable::casefold_tests::a_clone_on_a_folding_volume_keeps_its_masks \
+             --test-threads=1"
+                .replace("{MOUNTED}", CLONE_MOUNTED),
+        )
+        .arg("sh")
+        .arg(dir.path())
+        .arg(&exe)
+        .env(CLONE_INNER, dir.path())
+        .output();
+    let out = match ran {
+        Ok(out) => out,
+        Err(err) => {
+            eprintln!("skipped: unshare cannot run ({err})");
+            return;
+        }
+    };
+    let stdout = String::from_utf8_lossy(&out.stdout);
+    let stderr = String::from_utf8_lossy(&out.stderr);
+    if !stdout.contains(CLONE_MOUNTED) {
+        eprintln!(
+            "skipped: no casefold tmpfs in a user namespace here ({})",
+            stderr.trim()
+        );
+        return;
+    }
+    assert!(out.status.success(), "{stdout}\n{stderr}");
+    assert!(stdout.contains("1 passed"), "{stdout}");
+}
+
+/// Der Teil im Namensraum: Projekt und Klon in einem gefalteten Ordner, wie
+/// Projekt und Klon unter macOS auf demselben Volume.
+fn inside_clone(root: &Path) {
+    use crate::disposable::{baseline_at, scan_clone};
+
+    const FS_CASEFOLD_FL: u32 = 0x4000_0000;
+    let volume = root.join("volume");
+    fs::create_dir(&volume).unwrap();
+    let fd = open_root(&volume).unwrap();
+    let flags = rustix::fs::ioctl_getflags(&fd).unwrap();
+    rustix::fs::ioctl_setflags(
+        &fd,
+        rustix::fs::IFlags::from_bits_retain(flags.bits() | FS_CASEFOLD_FL),
+    )
+    .unwrap();
+
+    let project = volume.join("project");
+    fs::create_dir_all(project.join(".git/hooks")).unwrap();
+    fs::create_dir_all(project.join("src")).unwrap();
+    fs::write(project.join(".git/hooks/pre-commit"), "#!/bin/sh\n").unwrap();
+    fs::write(project.join("src/main.rs"), "fn main() {}\n").unwrap();
+    let lower = open_root(&project).unwrap();
+    let baseline = baseline_at(lower.as_fd());
+    let clone = volume.join("clone");
+    let copied = Command::new("cp")
+        .arg("-Rp")
+        .arg(&project)
+        .arg(&clone)
+        .status()
+        .unwrap();
+    assert!(copied.success());
+    fs::remove_dir_all(clone.join(".git/hooks")).unwrap();
+
+    // Was der Agent anlegt: Jeder Name faltet auf eine Maske.
+    fs::create_dir(clone.join(".git/hoo\u{212a}s")).unwrap();
+    fs::write(clone.join(".git/hoo\u{212a}s/pre-commit"), "evil\n").unwrap();
+    fs::write(clone.join(".\u{17f}sh"), "evil\n").unwrap();
+    fs::create_dir(clone.join("cafe\u{301}")).unwrap();
+    fs::write(clone.join("cafe\u{301}/x"), "evil\n").unwrap();
+    fs::write(clone.join("src/new.rs"), "fine\n").unwrap();
+    assert!(clone.join(".git/hooks/pre-commit").is_file(), "Kelvin sign");
+    assert!(clone.join(".ssh").is_file(), "long s");
+    assert!(clone.join("caf\u{e9}/x").is_file(), "normalization");
+
+    let masks = masks(&[".git/hooks", ".ssh", "caf\u{e9}"]);
+    let upper = open_root(&clone).unwrap();
+    let set = scan_clone(upper.as_fd(), lower.as_fd(), &baseline, &masks);
+    assert!(!set.truncated, "{:?}", set.incomplete);
+    let refused = |rel: &str| {
+        set.changes
+            .iter()
+            .find(|change| change.rel == Path::new(rel))
+            .unwrap_or_else(|| panic!("{rel} is listed: {:?}", set.changes))
+            .refused
+            .is_some()
+    };
+    assert!(refused(".git/hoo\u{212a}s"), "{:?}", set.changes);
+    assert!(refused(".\u{17f}sh"), "{:?}", set.changes);
+    assert!(refused("cafe\u{301}"), "{:?}", set.changes);
+    assert!(!refused("src/new.rs"), "{:?}", set.changes);
+    println!("hum491 inside: all masks held");
+}
