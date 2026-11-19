@@ -13,7 +13,6 @@
 
 use std::io::{BufRead as _, IsTerminal as _};
 
-use chrono::{DateTime, Local};
 use humanitl_core::diagnostics::codes;
 use humanitl_core::{Diagnostic, Severity};
 use humanitl_ipc::v1;
@@ -594,14 +593,7 @@ fn entry_json(project: &v1::ProjectEntry) -> Value {
 
 /// Ein Zeitpunkt als lokale Zeit, oder `-`.
 fn local_time(seconds: i64) -> String {
-    DateTime::from_timestamp(seconds, 0).map_or_else(
-        || "-".to_owned(),
-        |time| {
-            DateTime::<Local>::from(time)
-                .format("%Y-%m-%d %H:%M")
-                .to_string()
-        },
-    )
+    crate::render::local_time(seconds, "%Y-%m-%d %H:%M")
 }
 
 #[cfg(test)]

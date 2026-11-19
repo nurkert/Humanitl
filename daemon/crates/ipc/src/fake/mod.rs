@@ -1280,7 +1280,7 @@ impl FakeDaemon {
         if v1::Upgrade::try_from(probe.upgrade) == Ok(v1::Upgrade::Websocket) {
             key = key.with_upgrade(humanitl_core::Upgrade::WebSocket);
         }
-        let verdict = set.evaluate(&key, chrono::Utc::now(), session);
+        let verdict = set.evaluate(&key, jiff::Timestamp::now(), session);
         let matching = verdict
             .rule()
             .and_then(|id| rules.iter().find(|rule| rule.rule_id == id.to_string()));

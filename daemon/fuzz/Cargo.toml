@@ -35,7 +35,9 @@ humanitl-audit = { path = "../crates/audit" }
 # Was die Prüfung des Proxys braucht: hyper genau so gebaut wie im Handler,
 # über einem `tokio::io::duplex` statt einem Socket.
 bytes = "1.12"
-chrono = { version = "0.4", default-features = false, features = ["std", "clock"] }
+# Die eingebundenen Pruefungen von Regeln und Proxy (`check.rs`) werten mit
+# einem festen `jiff::Timestamp` aus.
+jiff = { version = "0.2", default-features = false, features = ["std"] }
 http-body-util = "0.1"
 hyper = { version = "1.11", features = ["server", "http1"] }
 hyper-util = { version = "0.1", features = ["tokio"] }

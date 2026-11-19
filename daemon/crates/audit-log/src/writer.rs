@@ -66,12 +66,12 @@ use std::sync::mpsc::{self, RecvTimeoutError};
 use std::thread::JoinHandle;
 use std::time::{Duration, Instant, SystemTime};
 
-use chrono::{DateTime, Utc};
 use humanitl_core::diagnostics::codes::{
     AUDIT_001, AUDIT_002, AUDIT_003, AUDIT_004, AUDIT_006, AUDIT_007,
 };
 use humanitl_core::shell::shell_path;
 use humanitl_core::{Diagnostic, FixAction, SessionId, Severity};
+use jiff::Timestamp;
 use serde_json::{Value, json};
 use tokio::sync::broadcast;
 use zeroize::Zeroizing;
@@ -154,7 +154,7 @@ enum Command {
         reply: mpsc::Sender<Head>,
     },
     Prune {
-        cutoff: Option<DateTime<Utc>>,
+        cutoff: Option<Timestamp>,
         max_bytes: u64,
         anchors: Vec<Anchor>,
         reply: mpsc::Sender<Result<PruneOutcome, Diagnostic>>,
@@ -273,7 +273,7 @@ impl AuditHandle {
         };
         self.tx
             .send(Command::Prune {
-                cutoff: limits.before.map(DateTime::<Utc>::from),
+                cutoff: limits.before.map(humanitl_core::time::from_system_time),
                 max_bytes: limits.max_bytes,
                 anchors,
                 reply,
@@ -645,7 +645,7 @@ impl Chain {
         }
         let body = RecordBody {
             seq: self.last_seq + 1,
-            ts: format_ts(Utc::now()),
+            ts: format_ts(Timestamp::now()),
             session,
             kind: kind.to_owned(),
             data,
@@ -692,7 +692,7 @@ impl Chain {
     /// die Schritte auf der Datei in [`crate::retention`].
     fn prune(
         &mut self,
-        cutoff: Option<DateTime<Utc>>,
+        cutoff: Option<Timestamp>,
         max_bytes: u64,
         anchors: &[Anchor],
     ) -> Result<PruneOutcome, Diagnostic> {
@@ -800,7 +800,7 @@ impl Chain {
     /// Größe ([`crate::retention`]). `None`, wenn keine Grenze etwas fand.
     fn find_prune_cut(
         &self,
-        cutoff: Option<DateTime<Utc>>,
+        cutoff: Option<Timestamp>,
         max_bytes: u64,
     ) -> Result<Option<Cut>, Diagnostic> {
         let by_age = match cutoff {
@@ -825,7 +825,7 @@ impl Chain {
     /// belegen: beide mit den längsten Zahlen, die sie tragen können. Der
     /// Schnitt nach Bytes hält diesen Platz frei, damit die Datei nach dem
     /// Lauf samt beiden unter `audit.max_bytes` liegt (HUM-194).
-    fn prune_reserve(&self, cutoff: Option<DateTime<Utc>>, max_bytes: u64) -> u64 {
+    fn prune_reserve(&self, cutoff: Option<Timestamp>, max_bytes: u64) -> u64 {
         let widest_hash = "f".repeat(GENESIS_PREV.len());
         let pruned = RecordKind::AuditPruned(AuditPruned {
             through_seq: u64::MAX,
@@ -843,7 +843,7 @@ impl Chain {
             .map(|kind| {
                 let body = RecordBody {
                     seq: u64::MAX,
-                    ts: format_ts(Utc::now()),
+                    ts: format_ts(Timestamp::now()),
                     session: NO_SESSION.to_owned(),
                     kind: kind.name().to_owned(),
                     data: kind.data(),
@@ -994,7 +994,7 @@ fn set_aside_torn_tail(
     let mut aside = path.as_os_str().to_os_string();
     aside.push(format!(
         ".corrupt-{}",
-        Utc::now().format("%Y%m%dT%H%M%S%.6fZ")
+        humanitl_core::time::compact_micros(Timestamp::now())
     ));
     let aside = PathBuf::from(aside);
     let moved = (|| -> io::Result<()> {

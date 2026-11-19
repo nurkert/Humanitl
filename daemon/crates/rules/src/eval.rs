@@ -29,9 +29,9 @@
 
 use std::collections::BTreeSet;
 
-use chrono::{DateTime, Utc};
 use humanitl_core::rule::{Action, Expiry, Matcher, Rule};
 use humanitl_core::{HostName, Method, RuleId, Scheme, SessionId, Upgrade};
+use jiff::Timestamp;
 
 use crate::host;
 use crate::path::PathMatcher;
@@ -493,12 +493,7 @@ impl RuleSet {
     /// Sie bleibt im Satz stehen, damit der Rules-Screen sie samt Begründung
     /// zeigen kann; entscheiden darf sie nichts (HUM-038).
     #[must_use]
-    pub fn evaluate(
-        &self,
-        key: &RequestKey<'_>,
-        now: DateTime<Utc>,
-        session: SessionId,
-    ) -> Verdict {
+    pub fn evaluate(&self, key: &RequestKey<'_>, now: Timestamp, session: SessionId) -> Verdict {
         if !is_known_method(key.method) {
             return Verdict::Default;
         }
@@ -614,7 +609,7 @@ impl RuleSet {
     ///
     /// Abgelaufen ist eine Regel mit einem Zeitpunkt in der Vergangenheit und
     /// jede Sitzungsregel einer anderen Sitzung.
-    pub fn prune(&mut self, now: DateTime<Utc>, session: SessionId) -> Vec<RuleId> {
+    pub fn prune(&mut self, now: Timestamp, session: SessionId) -> Vec<RuleId> {
         let mut removed = Vec::new();
         self.rules.retain(|compiled| {
             if compiled.rule.is_expired(now, session) {

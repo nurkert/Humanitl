@@ -8,13 +8,13 @@ mod common;
 
 use std::fs;
 
-use chrono::{TimeZone as _, Utc};
 use humanitl_audit::kinds::{DaemonStarted, DaemonStopped};
 use humanitl_audit::{
     AuditKey, BreakReason, GENESIS_PREV, KeyOrigin, RecordBody, RecordKind, VerifyStatus,
     VerifyWarning, format_ts,
 };
 use humanitl_core::Severity;
+use jiff::{SignedDuration, Timestamp};
 
 use common::{Chain, decided};
 
@@ -38,10 +38,10 @@ fn genesis_prev_is_zeros() {
 #[test]
 fn hash_golden_vector() {
     let key: [u8; 32] = core::array::from_fn(|index| u8::try_from(index).unwrap());
-    let ts = Utc
-        .with_ymd_and_hms(2026, 9, 2, 10, 0, 0)
+    let ts = "2026-09-02T10:00:00Z"
+        .parse::<Timestamp>()
         .unwrap()
-        .checked_add_signed(chrono::Duration::microseconds(123_456))
+        .checked_add(SignedDuration::from_micros(123_456))
         .unwrap();
     assert_eq!(format_ts(ts), "2026-09-02T10:00:00.123456Z");
 

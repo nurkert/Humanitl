@@ -364,7 +364,7 @@ impl MetaEndpoint {
     ///
     /// Die letzte Zeile ist der Ausgang ohne Treffer: `ask` über alles.
     fn rule_rows(&self, session: SessionId) -> Vec<RuleRow> {
-        let now = chrono::Utc::now();
+        let now = jiff::Timestamp::now();
         let mut rows = Vec::new();
         let Ok(rules) = self.rules.read() else {
             // Ein vergifteter Regelsatz ist kein Grund, dem Agenten eine
@@ -830,7 +830,7 @@ fn expiry_of(expires: Expiry) -> String {
     match expires {
         Expiry::Never => "never".to_owned(),
         Expiry::Session(_) => "session".to_owned(),
-        Expiry::At(at) => format!("until {}", at.to_rfc3339()),
+        Expiry::At(at) => format!("until {}", humanitl_core::time::rfc3339_auto_offset(at)),
     }
 }
 
@@ -1154,6 +1154,24 @@ mod tests {
         );
     }
 
+    /// Der Ablauf einer Regel steht auf der Statusseite wie vor dem Wechsel
+    /// von `chrono` auf `jiff` (HUM-526): `+00:00` statt `Z`, Bruchteil in
+    /// Gruppen zu drei Stellen.
+    #[test]
+    fn status_names_the_expiry_as_before() {
+        let session = SessionId::new();
+        let until: jiff::Timestamp = "2999-09-03T10:00:00.5Z".parse().unwrap();
+        let timed =
+            rule(Action::Allow, "timed.example").with_expiry(humanitl_core::Expiry::At(until));
+        let out =
+            endpoint(RuleSet::from_rules(vec![timed])).respond(&get("/", session), &registry());
+        let body = out.reply.body;
+        assert!(
+            body.contains("until 2999-09-03T10:00:00.500+00:00"),
+            "{body}"
+        );
+    }
+
     #[test]
     fn status_skips_rules_that_decide_nothing() {
         let session = SessionId::new();
@@ -1161,7 +1179,7 @@ mod tests {
         let foreign = rule(Action::Allow, "foreign.example")
             .with_expiry(humanitl_core::Expiry::Session(SessionId::new()));
         let expired = rule(Action::Allow, "expired.example").with_expiry(
-            humanitl_core::Expiry::At(chrono::Utc::now() - chrono::Duration::hours(1)),
+            humanitl_core::Expiry::At(jiff::Timestamp::now() - jiff::SignedDuration::from_hours(1)),
         );
         let out = endpoint(RuleSet::from_rules(vec![disabled, foreign, expired]))
             .respond(&get("/", session), &registry());

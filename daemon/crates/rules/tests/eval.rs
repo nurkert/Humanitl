@@ -5,10 +5,10 @@
 
 #![allow(clippy::unwrap_used, clippy::expect_used, clippy::panic)]
 
-use chrono::{Duration, TimeZone, Utc};
 use humanitl_core::rule::{Action, Expiry, HostPattern, Matcher, PathPattern};
 use humanitl_core::{HostName, Method, Rule, RuleId, Scheme, SessionId, Upgrade};
 use humanitl_rules::{RequestKey, RuleSet, Verdict, parse_rules};
+use jiff::{SignedDuration, Timestamp};
 
 fn host(text: &str) -> HostName {
     HostName::parse(text).unwrap_or_else(|err| panic!("host {text:?}: {err}"))
@@ -25,10 +25,10 @@ fn rule(action: Action, host_pattern: &str) -> Rule {
     Rule::new(RuleId::new(), action, Matcher::host(pattern(host_pattern)))
 }
 
-fn now() -> chrono::DateTime<Utc> {
-    match Utc.with_ymd_and_hms(2026, 9, 3, 10, 0, 0).single() {
-        Some(stamp) => stamp,
-        None => panic!("fixed timestamp must exist"),
+fn now() -> Timestamp {
+    match "2026-09-03T10:00:00Z".parse::<Timestamp>() {
+        Ok(stamp) => stamp,
+        Err(err) => panic!("fixed timestamp must exist: {err}"),
     }
 }
 
@@ -93,8 +93,8 @@ fn a_session_rule_wins_over_a_persistent_one() {
 
 #[test]
 fn expired_at() {
-    let past =
-        rule(Action::Allow, "api.github.com").with_expiry(Expiry::At(now() - Duration::seconds(1)));
+    let past = rule(Action::Allow, "api.github.com")
+        .with_expiry(Expiry::At(now() - SignedDuration::from_secs(1)));
     let rules = RuleSet::from_rules([past]);
 
     let target = host("api.github.com");
@@ -299,10 +299,10 @@ fn prune_removes_what_no_longer_holds() {
     let keep = rule(Action::Allow, "a.example");
     let mine = rule(Action::Allow, "b.example").with_expiry(Expiry::Session(session));
     let foreign = rule(Action::Allow, "c.example").with_expiry(Expiry::Session(other));
-    let past =
-        rule(Action::Allow, "d.example").with_expiry(Expiry::At(now() - Duration::seconds(1)));
-    let future =
-        rule(Action::Allow, "e.example").with_expiry(Expiry::At(now() + Duration::seconds(1)));
+    let past = rule(Action::Allow, "d.example")
+        .with_expiry(Expiry::At(now() - SignedDuration::from_secs(1)));
+    let future = rule(Action::Allow, "e.example")
+        .with_expiry(Expiry::At(now() + SignedDuration::from_secs(1)));
 
     let (keep_id, mine_id, foreign_id, past_id, future_id) =
         (keep.id, mine.id, foreign.id, past.id, future.id);

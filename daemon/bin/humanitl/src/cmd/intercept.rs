@@ -37,8 +37,8 @@ pub async fn run(ctx: &Context, cmd: &InterceptCmd) -> Result<u8, Failure> {
 fn since_text(status: &v1::InterceptStatus) -> Option<String> {
     let since = status.paused_since.as_ref()?;
     let nanos = u32::try_from(since.nanos).unwrap_or(0);
-    chrono::DateTime::from_timestamp(since.seconds, nanos)
-        .map(|at| at.to_rfc3339_opts(chrono::SecondsFormat::Secs, true))
+    humanitl_core::time::from_unix_parts(since.seconds, nanos)
+        .map(humanitl_core::time::rfc3339_secs)
 }
 
 fn print_status(ctx: &Context, status: &v1::InterceptStatus, just_paused: bool) {
@@ -91,5 +91,19 @@ mod tests {
         };
         assert_eq!(since_text(&status).as_deref(), Some("2026-11-01T00:00:00Z"));
         assert_eq!(since_text(&v1::InterceptStatus::default()), None);
+
+        // Ganze Sekunden und `Z`, auch mit einem Rest darunter, wie vorher
+        // `to_rfc3339_opts(SecondsFormat::Secs, true)` (HUM-526).
+        let fraction = v1::InterceptStatus {
+            paused_since: Some(prost_types::Timestamp {
+                seconds: 1_793_491_200,
+                nanos: 999_999_999,
+            }),
+            ..status
+        };
+        assert_eq!(
+            since_text(&fraction).as_deref(),
+            Some("2026-11-01T00:00:00Z")
+        );
     }
 }

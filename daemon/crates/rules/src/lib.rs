@@ -37,14 +37,14 @@
 //! let host = HostName::parse("api.github.com")?;
 //! let key = RequestKey::new(&host, &Method::GET, "/repos", Scheme::Https, 443);
 //! assert!(matches!(
-//!     rules.evaluate(&key, chrono::Utc::now(), SessionId::new()),
+//!     rules.evaluate(&key, jiff::Timestamp::now(), SessionId::new()),
 //!     Verdict::Matched { .. }
 //! ));
 //!
 //! let other = HostName::parse("evil-github.com")?;
 //! let key = RequestKey::new(&other, &Method::GET, "/repos", Scheme::Https, 443);
 //! assert_eq!(
-//!     rules.evaluate(&key, chrono::Utc::now(), SessionId::new()),
+//!     rules.evaluate(&key, jiff::Timestamp::now(), SessionId::new()),
 //!     Verdict::Default
 //! );
 //! # Ok::<(), Box<dyn std::error::Error>>(())

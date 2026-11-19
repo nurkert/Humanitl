@@ -1543,7 +1543,7 @@ mod retention_record_tests {
         assert_eq!(data["deleted_flows"], 1);
         assert_eq!(data["deleted_blobs"], 0);
         let cutoff =
-            humanitl_audit::format_ts(chrono::DateTime::<chrono::Utc>::from(now - 180 * DAY));
+            humanitl_audit::format_ts(humanitl_core::time::from_system_time(now - 180 * DAY));
         assert_eq!(data["cutoff"], cutoff.as_str(), "the horizon of the run");
         assert_eq!(records[0].body.session, humanitl_audit::NO_SESSION);
     }
@@ -2767,13 +2767,13 @@ mod tests {
     use std::path::Path;
     use std::time::Duration;
 
-    use chrono::Utc;
     use humanitl_config::Env;
     use humanitl_core::diagnostics::codes;
     use humanitl_core::rule::Action;
     use humanitl_core::{FixAction, HostName, Method, Scheme, SessionId, Severity};
     use humanitl_proxy::rules_store::Origin;
     use humanitl_rules::{RequestKey, Verdict};
+    use jiff::Timestamp;
 
     use super::{
         ADVICE_DAEMON_SOCKET, Config, DirOwner, ResolverConfig, Runtime, SUN_PATH_MAX, Serve,
@@ -3110,7 +3110,7 @@ mod tests {
             let set = snapshot.read().expect("the snapshot");
 
             let host = HostName::parse("ollama.lan").expect("a host");
-            let verdict = set.evaluate(&llm_key(&host, &Method::POST), Utc::now(), session);
+            let verdict = set.evaluate(&llm_key(&host, &Method::POST), Timestamp::now(), session);
             let Verdict::Matched { rule, .. } = verdict else {
                 panic!("`{action} host \"**\"` swallowed the passthrough: {verdict:?}");
             };
@@ -3159,7 +3159,7 @@ mod tests {
         let host = HostName::parse("models.dev").expect("a host");
         let key = RequestKey::new(&host, &Method::GET, "/api.json", Scheme::Https, 443);
         assert_eq!(
-            set.evaluate(&key, Utc::now(), session).action(),
+            set.evaluate(&key, Timestamp::now(), session).action(),
             Action::Allow,
             "the rule of the user decides, the bundled one below it does not"
         );

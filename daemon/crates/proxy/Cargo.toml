@@ -15,7 +15,7 @@ humanitl-core.workspace = true
 humanitl-config.workspace = true
 # Die Regel-Engine (HUM-022) entscheidet im Proxy-Pfad, was ohne Menschen
 # entschieden wird (ADR-007, HUM-023); `tools/deps-allow.toml` erlaubt die
-# Kante. `chrono` kommt dazu, weil `RuleSet::evaluate` den Zeitpunkt für
+# Kante. `jiff` kommt dazu, weil `RuleSet::evaluate` den Zeitpunkt für
 # `expires` braucht.
 humanitl-rules.workspace = true
 # Die Detektoren (HUM-025) laufen im Proxy-Pfad, bevor eine Regel greift;
@@ -25,7 +25,7 @@ humanitl-findings.workspace = true
 # Handler, der als Einziger die Bytes in der Hand haelt;
 # `tools/deps-allow.toml` erlaubt die Kante.
 humanitl-recorder.workspace = true
-chrono.workspace = true
+jiff.workspace = true
 dashmap.workspace = true
 # Die Endpunkt-Probe (HUM-039) liest die Modelllisten von Ollama und einer
 # OpenAI-kompatiblen API und nimmt `llm.endpoint` als `Url` entgegen.

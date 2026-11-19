@@ -13,8 +13,8 @@
 //! auch die Datei kanonisch, und die Prüfung kann jede Zeile Byte für Byte
 //! nachbauen.
 
-use chrono::{DateTime, Utc};
 use hmac::{Hmac, KeyInit as _, Mac as _};
+use jiff::Timestamp;
 use serde_json::{Map, Value};
 use sha2::{Digest as _, Sha256};
 
@@ -38,15 +38,17 @@ pub const MAX_LINE_BYTES: u64 = 1024 * 1024;
 
 /// Das Format jedes Zeitstempels im Log: UTC, Mikrosekunden, immer `Z`.
 ///
-/// Ausdrücklich und nicht über `serde`: `chrono` schreibt je nach Feature mal
-/// mit, mal ohne Nanosekunden, und ein Zeitstempel, der sich mit einer
-/// Abhängigkeit ändert, änderte den Hash.
+/// Ausdrücklich und nicht über `serde`: Eine Bibliothek schreibt je nach
+/// Feature oder Version mal mit, mal ohne Nanosekunden, und ein Zeitstempel,
+/// der sich mit einer Abhängigkeit ändert, änderte den Hash. Die Form steht
+/// deshalb von Hand in [`humanitl_core::time::rfc3339_micros`]; der Text hier
+/// beschreibt sie im Stil von `strftime`.
 pub const TS_FORMAT: &str = "%Y-%m-%dT%H:%M:%S%.6fZ";
 
 /// Ein Zeitpunkt in der Form, die im Log steht.
 #[must_use]
-pub fn format_ts(at: DateTime<Utc>) -> String {
-    at.format(TS_FORMAT).to_string()
+pub fn format_ts(at: Timestamp) -> String {
+    humanitl_core::time::rfc3339_micros(at)
 }
 
 /// SHA-256 über `bytes` als Hex in Kleinbuchstaben.
@@ -257,7 +259,9 @@ mod tests {
 
     use serde_json::json;
 
-    use super::{AuditRecord, GENESIS_PREV, NO_SESSION, RecordBody, mac_hex, mac_matches};
+    use super::{
+        AuditRecord, GENESIS_PREV, NO_SESSION, RecordBody, format_ts, mac_hex, mac_matches,
+    };
 
     fn body() -> RecordBody {
         RecordBody {
@@ -290,6 +294,29 @@ mod tests {
         .collect();
         assert!(order.windows(2).all(|pair| pair[0] < pair[1]), "{text}");
         assert_eq!(AuditRecord::from_line(&line).unwrap(), record);
+    }
+
+    /// Ein Zeitstempel, den der Schreiber vor dem Wechsel von `chrono` auf
+    /// `jiff` (HUM-526) ins Log und in `audit_anchors.ts` geschrieben hat,
+    /// liest sich und schreibt sich Byte für Byte gleich zurück, und mit ihm
+    /// die ganze Zeile samt Hash und MAC.
+    #[test]
+    fn a_stored_timestamp_reads_back_unchanged() {
+        for ts in [
+            "2026-09-02T10:00:00.123456Z",
+            "2026-09-02T10:00:00.000000Z",
+            "2026-12-31T23:59:59.999999Z",
+            "1970-01-01T00:00:00.000000Z",
+        ] {
+            let at = humanitl_core::time::parse_rfc3339(ts).unwrap();
+            assert_eq!(format_ts(at), ts);
+        }
+
+        let line = body().seal(&[7; 32]).unwrap().to_line().unwrap();
+        let stored = AuditRecord::from_line(&line).unwrap();
+        let mut again = stored.body.clone();
+        again.ts = format_ts(humanitl_core::time::parse_rfc3339(&stored.body.ts).unwrap());
+        assert_eq!(again.seal(&[7; 32]).unwrap().to_line().unwrap(), line);
     }
 
     #[test]

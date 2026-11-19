@@ -16,7 +16,7 @@ humanitl-core.workspace = true
 # und nichts, was eine Datei öffnet. Den Schreiber und alles, was
 # `audit.jsonl` oder die Schlüsseldatei anfasst, enthält `humanitl-audit-log`
 # (HUM-155); `tools/check-deps.sh` weist eine solche Abhängigkeit hier ab.
-chrono.workspace = true
+jiff.workspace = true
 hex.workspace = true
 hmac.workspace = true
 serde_json.workspace = true

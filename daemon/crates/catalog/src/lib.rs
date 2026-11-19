@@ -52,10 +52,10 @@ pub mod store;
 use std::collections::BTreeSet;
 use std::path::Path;
 
-use chrono::{DateTime, Utc};
 use humanitl_core::diagnostics::codes::CATALOG_001;
 use humanitl_core::rule::HostPattern;
 use humanitl_core::{Diagnostic, HostName, Severity};
+use jiff::Timestamp;
 
 pub use crate::entry::{CatalogEntry, CatalogFile, Category, FORMAT_VERSION, Text};
 pub use crate::ranks::Ranks;
@@ -97,7 +97,7 @@ pub struct DomainInfo {
     /// Reichweite, kein Urteil (siehe [`ranks`]).
     pub popularity_rank: Option<u32>,
     /// Wann dieser Host in dieser Sitzung zum ersten Mal vorkam.
-    pub first_seen: Option<DateTime<Utc>>,
+    pub first_seen: Option<Timestamp>,
     /// Wie oft dieser Host in dieser Sitzung vorkam, diese Anfrage
     /// eingeschlossen. Nach [`Catalog::info`] immer mindestens 1.
     pub seen_count: u32,
@@ -226,7 +226,7 @@ impl Catalog {
     /// bekommt die Zeit gereicht, wie der Zustandsautomat auch
     /// (`backlog/CONVENTIONS.md` 4.11).
     #[must_use]
-    pub fn info(&self, host: &HostName, at: DateTime<Utc>) -> DomainInfo {
+    pub fn info(&self, host: &HostName, at: Timestamp) -> DomainInfo {
         let stats = self.seen.observe(host, at);
         self.assemble(host, Some(stats))
     }

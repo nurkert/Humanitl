@@ -26,7 +26,6 @@ mod support;
 
 use std::net::{IpAddr, Ipv4Addr};
 
-use chrono::Utc;
 use humanitl_core::{
     Action, Authority, Decision, Diagnostic, DiagnosticCode, FixAction, FlowEvent, HeaderMap,
     HostName, HostPattern, HttpRequest, Matcher, Method, Rule, RuleId, Scheme, SessionId, Severity,
@@ -35,6 +34,7 @@ use humanitl_core::{
 use humanitl_proxy::handler::{NoRule, private_address_refused, private_address_rule};
 use humanitl_rules::{RequestKey, RuleSet, Verdict, parse_rules, serialize_rules};
 use hyper::StatusCode;
+use jiff::Timestamp;
 
 use support::{ECHO_BODY, Events, FakeUpstream, Proxy, ProxyBuilder, body_string, get};
 
@@ -293,7 +293,7 @@ fn the_suggested_rule_survives_the_round_trip_and_matches_the_failed_request() {
         let path = "/v1/models?key=secret";
         let key = RequestKey::new(&host, &Method::GET, path, Scheme::Http, 11434);
         assert_eq!(
-            set.evaluate(&key, Utc::now(), SessionId::new()),
+            set.evaluate(&key, Timestamp::now(), SessionId::new()),
             Verdict::Matched {
                 rule: rule.id,
                 action: Action::Ask
@@ -305,17 +305,17 @@ fn the_suggested_rule_survives_the_round_trip_and_matches_the_failed_request() {
         // Methode treffen sie nicht.
         let other_port = RequestKey::new(&host, &Method::GET, path, Scheme::Http, 8080);
         assert_eq!(
-            set.evaluate(&other_port, Utc::now(), SessionId::new()),
+            set.evaluate(&other_port, Timestamp::now(), SessionId::new()),
             Verdict::Default
         );
         let other_path = RequestKey::new(&host, &Method::GET, "/admin", Scheme::Http, 11434);
         assert_eq!(
-            set.evaluate(&other_path, Utc::now(), SessionId::new()),
+            set.evaluate(&other_path, Timestamp::now(), SessionId::new()),
             Verdict::Default
         );
         let other_method = RequestKey::new(&host, &Method::POST, path, Scheme::Http, 11434);
         assert_eq!(
-            set.evaluate(&other_method, Utc::now(), SessionId::new()),
+            set.evaluate(&other_method, Timestamp::now(), SessionId::new()),
             Verdict::Default
         );
     }
@@ -353,7 +353,7 @@ fn an_unknown_method_gets_no_suggestion_because_no_rule_could_ever_match() {
     .with_allow_private(true);
     let set = RuleSet::from_rules([without_method]);
     assert_eq!(
-        set.evaluate(&key_of(&request), Utc::now(), SessionId::new()),
+        set.evaluate(&key_of(&request), Timestamp::now(), SessionId::new()),
         Verdict::Default,
         "an unknown method matches no rule at all"
     );
@@ -689,7 +689,7 @@ fn no_hostile_request_can_produce_a_rule_that_the_parser_rejects() {
             "{name}: {warnings:?}"
         );
         assert_eq!(
-            set.evaluate(&key_of(&request), Utc::now(), SessionId::new()),
+            set.evaluate(&key_of(&request), Timestamp::now(), SessionId::new()),
             Verdict::Matched {
                 rule: rule.id,
                 action: Action::Ask
@@ -799,7 +799,7 @@ fn an_upgrade_is_carried_into_the_rule_and_named_in_the_finding() {
 
     // Sie trifft den WebSocket ...
     assert_eq!(
-        set.evaluate(&key_of(&request), Utc::now(), SessionId::new()),
+        set.evaluate(&key_of(&request), Timestamp::now(), SessionId::new()),
         Verdict::Matched {
             rule: rule.id,
             action: Action::Ask
@@ -814,7 +814,7 @@ fn an_upgrade_is_carried_into_the_rule_and_named_in_the_finding() {
         request.authority.port,
     );
     assert_eq!(
-        set.evaluate(&plain, Utc::now(), SessionId::new()),
+        set.evaluate(&plain, Timestamp::now(), SessionId::new()),
         Verdict::Default,
         "an upgrade rule must not open ordinary requests"
     );
@@ -847,7 +847,7 @@ fn a_path_with_dot_segments_loses_its_prefix_instead_of_carrying_a_dead_conditio
         );
         let set = RuleSet::from_rules([rule.clone()]);
         assert_eq!(
-            set.evaluate(&key_of(&request), Utc::now(), SessionId::new()),
+            set.evaluate(&key_of(&request), Timestamp::now(), SessionId::new()),
             Verdict::Matched {
                 rule: rule.id,
                 action: Action::Ask

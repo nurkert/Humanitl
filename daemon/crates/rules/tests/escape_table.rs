@@ -14,18 +14,18 @@
 
 #![allow(clippy::unwrap_used, clippy::expect_used, clippy::panic)]
 
-use chrono::{TimeZone, Utc};
 use humanitl_core::diagnostics::codes::RULES_002;
 use humanitl_core::rule::{Action, Expiry, Matcher};
 use humanitl_core::{HostName, Method, Rule, RuleId, Scheme, SessionId, Upgrade};
 use humanitl_rules::{RequestKey, RuleSet, Verdict, parse_rules_for_session};
+use jiff::Timestamp;
 
 const ESC4_RULES: &str = include_str!("fixtures/esc4.yaml");
 
-fn now() -> chrono::DateTime<Utc> {
-    match Utc.with_ymd_and_hms(2026, 9, 3, 10, 0, 0).single() {
-        Some(stamp) => stamp,
-        None => panic!("fixed timestamp must exist"),
+fn now() -> Timestamp {
+    match "2026-09-03T10:00:00Z".parse::<Timestamp>() {
+        Ok(stamp) => stamp,
+        Err(err) => panic!("fixed timestamp must exist: {err}"),
     }
 }
 

@@ -292,6 +292,24 @@ pub fn plain(text: &str) -> String {
     one_line(&sanitize_note(text))
 }
 
+/// Sekunden seit 1970 als Zeit in der Zeitzone des Hosts, nach `format` im
+/// Stil von `strftime`, oder `-`, wenn es den Zeitpunkt nicht gibt.
+///
+/// Die Zeitzone kommt wie vorher bei `chrono::Local` aus `TZ` oder
+/// `/etc/localtime` (HUM-526).
+#[must_use]
+pub fn local_time(seconds: i64, format: &str) -> String {
+    time_in(seconds, format, &jiff::tz::TimeZone::system())
+}
+
+/// [`local_time`] in einer gegebenen Zeitzone.
+fn time_in(seconds: i64, format: &str, zone: &jiff::tz::TimeZone) -> String {
+    jiff::Timestamp::from_second(seconds).map_or_else(
+        |_| "-".to_owned(),
+        |at| at.to_zoned(zone.clone()).strftime(format).to_string(),
+    )
+}
+
 /// Eine Tabelle mit Kopfzeile, Spalten nach dem längsten Eintrag ausgerichtet.
 ///
 /// Die letzte Spalte wird nicht aufgefüllt, damit kein Zeilenende Leerzeichen
@@ -378,6 +396,28 @@ pub const fn tick(passed: bool) -> &'static str {
 #[cfg(test)]
 mod tests {
     #![allow(clippy::unwrap_used, clippy::expect_used, clippy::panic)]
+
+    /// Die lokale Zeit steht wie vorher mit `chrono::Local` (HUM-526): die
+    /// Zeitzone samt Sommerzeit angewandt, die Felder mit führenden Nullen,
+    /// und ein Zeitpunkt, den es nicht gibt, als `-`.
+    #[test]
+    fn local_time_keeps_the_old_form() {
+        let berlin = jiff::tz::TimeZone::posix("CET-1CEST,M3.5.0,M10.5.0/3").unwrap();
+        // 2026-09-03T10:00:00Z ist Sommerzeit, 2026-01-05T08:04:05Z nicht.
+        assert_eq!(
+            super::time_in(1_788_429_600, "%Y-%m-%d %H:%M:%S", &berlin),
+            "2026-09-03 12:00:00"
+        );
+        assert_eq!(
+            super::time_in(1_767_600_245, "%Y-%m-%d %H:%M", &berlin),
+            "2026-01-05 09:04"
+        );
+        assert_eq!(
+            super::time_in(1_767_600_245, "%H:%M:%S", &jiff::tz::TimeZone::UTC),
+            "08:04:05"
+        );
+        assert_eq!(super::time_in(i64::MAX, "%H:%M:%S", &berlin), "-");
+    }
 
     /// Ein `why`, das einen Verweis in das Terminal schreiben will, druckt
     /// seinen Text und nicht seine Wirkung (HUM-068).

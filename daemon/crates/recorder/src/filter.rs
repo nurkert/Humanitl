@@ -24,6 +24,9 @@
 //! einem `LIKE`-Wert werden mit `\` maskiert (`ESCAPE '\'`), sonst wäre
 //! `path:%` eine Suche nach allem statt nach einem Prozentzeichen.
 
+use jiff::civil::Time;
+use jiff::tz::Offset;
+
 use crate::error::{RecorderError, filter_failed};
 use crate::hostkey::suffix_range;
 
@@ -395,17 +398,20 @@ fn timestamp(value: &str, now_ms: i64, term: &str) -> Result<i64, RecorderError>
     if let Some(delta) = relative_millis(value) {
         return Ok(now_ms.saturating_sub(delta));
     }
-    if let Ok(fixed) = chrono::DateTime::parse_from_rfc3339(value) {
-        return Ok(fixed.timestamp_millis());
-    }
-    if let Ok(naive) = chrono::NaiveDateTime::parse_from_str(value, "%Y-%m-%dT%H:%M:%S") {
-        return Ok(naive.and_utc().timestamp_millis());
-    }
-    if let Ok(date) = chrono::NaiveDate::parse_from_str(value, "%Y-%m-%d") {
-        return Ok(date
-            .and_time(chrono::NaiveTime::MIN)
-            .and_utc()
-            .timestamp_millis());
+    let at = humanitl_core::time::parse_rfc3339(value)
+        .ok()
+        .or_else(|| {
+            jiff::civil::DateTime::strptime("%Y-%m-%dT%H:%M:%S", value)
+                .ok()
+                .and_then(|naive| Offset::UTC.to_timestamp(naive).ok())
+        })
+        .or_else(|| {
+            jiff::civil::Date::strptime("%Y-%m-%d", value)
+                .ok()
+                .and_then(|date| Offset::UTC.to_timestamp(date.to_datetime(Time::MIN)).ok())
+        });
+    if let Some(at) = at {
+        return Ok(humanitl_core::time::millis_floor(at));
     }
     Err(filter_failed(format!(
         "the filter term {term:?} needs an ISO-8601 timestamp (2026-09-03T10:00:00Z) or a \
@@ -501,6 +507,29 @@ mod tests {
 
         let filter = ok("since:2026-09-03");
         assert_eq!(filter.params, vec![Param::Int(1_788_393_600_000)]);
+    }
+
+    /// Die drei absoluten Formen lesen sich nach dem Wechsel von `chrono` auf
+    /// `jiff` (HUM-526) wie vorher: mit Versatz, ohne Versatz als UTC und als
+    /// Datum um Mitternacht UTC; Bruchteile unter der Millisekunde fallen weg.
+    #[test]
+    fn absolute_times_read_as_before() {
+        for (term, millis) in [
+            ("since:2026-09-03T12:00:00+02:00", 1_788_429_600_000),
+            ("since:2026-09-03T10:00:00.123456Z", 1_788_429_600_123),
+            ("since:2026-09-03T10:00:00", 1_788_429_600_000),
+            ("since:1969-12-31T23:59:59.999Z", -1),
+            ("since:1969-12-31T23:59:59.9999Z", -1),
+        ] {
+            assert_eq!(ok(term).params, vec![Param::Int(millis)], "{term}");
+        }
+        for broken in [
+            "since:2026-09-03T10:00",
+            "since:2026-13-03",
+            "since:03.09.2026",
+        ] {
+            assert!(parse(broken, 0).is_err(), "{broken} should not parse");
+        }
     }
 
     #[test]

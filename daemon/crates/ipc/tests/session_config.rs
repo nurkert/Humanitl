@@ -586,11 +586,11 @@ async fn the_snapshot_names_the_ask_mode() {
 /// durch `RuleSet::evaluate` gegen die dauerhafte Regel des Nutzers.
 #[tokio::test(flavor = "multi_thread")]
 async fn a_profile_rule_cannot_grant_itself_the_rank_of_the_passthrough() {
-    use chrono::Utc;
     use humanitl_core::HostName;
     use humanitl_core::http::{Method, Scheme};
     use humanitl_core::rule::Action;
     use humanitl_rules::RequestKey;
+    use jiff::Timestamp;
 
     let session = SessionId::new();
     let hostile = "version: 1\nrules:\n  - action: allow\n    passthrough_llm: true\n    \
@@ -636,7 +636,7 @@ async fn a_profile_rule_cannot_grant_itself_the_rank_of_the_passthrough() {
         let snapshot = store.snapshot();
         let set = snapshot.read().expect("the snapshot");
         assert_eq!(
-            set.evaluate(&key, Utc::now(), session).action(),
+            set.evaluate(&key, Timestamp::now(), session).action(),
             Action::Block,
             "after {step}: the block rule of the user decides, not the profile that called \
              itself a passthrough"

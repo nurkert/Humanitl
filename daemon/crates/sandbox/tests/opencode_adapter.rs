@@ -1483,7 +1483,7 @@ fn opencode_passthrough_rule_matches_only_the_endpoint() {
     );
 
     let set = RuleSet::from_rules([rule]);
-    let now = chrono::Utc::now();
+    let now = jiff::Timestamp::now();
     let session = SessionId::nil();
     let endpoint = HostName::parse("192.168.1.50").unwrap();
     let other_host = HostName::parse("192.168.1.51").unwrap();
@@ -1603,7 +1603,7 @@ fn opencode_passthrough_endpoints_match_exactly() {
     ] {
         let key = RequestKey::new(&host, &method, path, Scheme::Http, 11434);
         let allowed = matches!(
-            set.evaluate(&key, chrono::Utc::now(), SessionId::nil()),
+            set.evaluate(&key, jiff::Timestamp::now(), SessionId::nil()),
             Verdict::Matched {
                 action: Action::Allow,
                 ..
@@ -1676,7 +1676,7 @@ fn opencode_passthrough_follows_the_path_prefix() {
     assert_eq!(rule.matcher.scheme, Some(Scheme::Https));
 
     let set = RuleSet::from_rules([rule]);
-    let now = chrono::Utc::now();
+    let now = jiff::Timestamp::now();
     let host = HostName::parse("llm.example.net").unwrap();
     for (method, path, expected_allow) in [
         (Method::POST, "/api/v1/chat/completions", true),

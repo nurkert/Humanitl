@@ -69,11 +69,11 @@ use std::sync::atomic::{AtomicU64, Ordering};
 use std::sync::{Arc, Mutex, RwLock};
 use std::time::{SystemTime, UNIX_EPOCH};
 
-use chrono::Utc;
 use humanitl_core::diagnostics::codes;
 use humanitl_core::rule::{Action, Expiry, Rule};
 use humanitl_core::{Diagnostic, FixAction, RuleId, SessionId, Severity};
 use humanitl_rules::{RuleSet, parse_rules_for_session, serialize_rules};
+use jiff::Timestamp;
 use tokio::sync::broadcast;
 
 /// Rechte der Regel-Datei und ihrer Nebendatei: nur der Besitzer.
@@ -673,7 +673,7 @@ impl RulesStore {
     /// `RULES_009`, wenn die Datei nicht geschrieben werden konnte. Die
     /// Sitzungsregeln sind dann trotzdem aufgeräumt.
     pub fn prune(&self) -> Result<usize, Diagnostic> {
-        let now = Utc::now();
+        let now = Timestamp::now();
         let mut state = self.lock();
         let before = state.session.len() + state.persistent.len();
         state
@@ -1003,10 +1003,10 @@ mod tests {
 
     use std::os::unix::fs::PermissionsExt as _;
 
-    use chrono::{Duration, Utc};
     use humanitl_core::rule::{Action, Expiry, HostPattern, Matcher, Rule};
     use humanitl_core::{HostName, Method, RuleId, Scheme, SessionId};
     use humanitl_rules::{RequestKey, Verdict};
+    use jiff::{SignedDuration, Timestamp};
 
     use super::{Origin, RULES_MODE, RulesStore};
 
@@ -1096,7 +1096,7 @@ mod tests {
 
         let host = HostName::parse("api.github.com").expect("host");
         let key = RequestKey::new(&host, &Method::GET, "/repos", Scheme::Https, 443);
-        let verdict = store.effective().evaluate(&key, Utc::now(), session);
+        let verdict = store.effective().evaluate(&key, Timestamp::now(), session);
         assert_eq!(verdict.action(), Action::Allow, "{verdict:?}");
     }
 
@@ -1220,7 +1220,7 @@ mod tests {
         let gone = store
             .add(
                 &rule("a.example.com", Action::Allow)
-                    .with_expiry(Expiry::At(Utc::now() - Duration::seconds(1))),
+                    .with_expiry(Expiry::At(Timestamp::now() - SignedDuration::from_secs(1))),
                 None,
             )
             .expect("add");
@@ -1260,7 +1260,7 @@ mod tests {
 
         let read = |snapshot: &std::sync::Arc<std::sync::RwLock<humanitl_rules::RuleSet>>| {
             snapshot.read().map_or(Verdict::Default, |set| {
-                set.evaluate(&key, Utc::now(), session)
+                set.evaluate(&key, Timestamp::now(), session)
             })
         };
         assert_eq!(read(&snapshot), Verdict::Default);

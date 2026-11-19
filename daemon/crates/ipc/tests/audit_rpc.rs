@@ -182,12 +182,9 @@ async fn verify_and_head_name_the_same_head_and_the_anchors() {
     assert!(head.anchors_reported);
     let last_anchor = anchors.last().unwrap();
     let at = head.last_anchor_at.expect("the last anchor has a time");
-    let expected = chrono::DateTime::parse_from_rfc3339(&last_anchor.ts).unwrap();
-    assert_eq!(at.seconds, expected.timestamp());
-    assert_eq!(
-        u32::try_from(at.nanos).unwrap(),
-        expected.timestamp_subsec_nanos()
-    );
+    let expected: jiff::Timestamp = last_anchor.ts.parse().unwrap();
+    assert_eq!(at.seconds, expected.as_second());
+    assert_eq!(at.nanos, expected.subsec_nanosecond());
 }
 
 /// `verify` und `head` nennen den Zeitpunkt des Kopfes mit genau den Zeichen,
@@ -401,10 +398,10 @@ async fn query_filters_by_kind_session_and_time() {
 
     // Genau ein Zeitpunkt, beide Grenzen einschließlich: der Record selbst.
     let pick = &all[2];
-    let at = chrono::DateTime::parse_from_rfc3339(&pick.body.ts).unwrap();
+    let at: jiff::Timestamp = pick.body.ts.parse().unwrap();
     let stamp = prost_types::Timestamp {
-        seconds: at.timestamp(),
-        nanos: i32::try_from(at.timestamp_subsec_nanos()).unwrap(),
+        seconds: at.as_second(),
+        nanos: at.subsec_nanosecond(),
     };
     let window = answer(
         &server,
@@ -475,10 +472,10 @@ async fn export_takes_the_range_inclusively() {
     let chain = Chain::write(5, SessionId::new());
     let all = chain.records();
     let stamp = |record: &AuditRecord| {
-        let at = chrono::DateTime::parse_from_rfc3339(&record.body.ts).unwrap();
+        let at: jiff::Timestamp = record.body.ts.parse().unwrap();
         prost_types::Timestamp {
-            seconds: at.timestamp(),
-            nanos: i32::try_from(at.timestamp_subsec_nanos()).unwrap(),
+            seconds: at.as_second(),
+            nanos: at.subsec_nanosecond(),
         }
     };
     let out = chain.out("range.jsonl");

@@ -9,9 +9,11 @@
 use std::io::Write as _;
 use std::path::Path;
 
-use chrono::{DateTime, TimeZone, Utc};
 use humanitl_catalog::{Catalog, DOMAINS_FILE, DomainInfo, RANKS_FILE, Ranks};
 use humanitl_core::{HostName, Severity};
+use jiff::Timestamp;
+use jiff::civil::date;
+use jiff::tz::Offset;
 
 const SAMPLE: &str = r#"
 version: 1
@@ -46,8 +48,10 @@ fn host(text: &str) -> HostName {
     HostName::parse(text).unwrap()
 }
 
-fn at(second: u32) -> DateTime<Utc> {
-    Utc.with_ymd_and_hms(2026, 9, 3, 12, 0, second).unwrap()
+fn at(second: u32) -> Timestamp {
+    Offset::UTC
+        .to_timestamp(date(2026, 9, 3).at(12, 0, i8::try_from(second).unwrap(), 0))
+        .unwrap()
 }
 
 /// Ein Verzeichnis mit beiden Dateien, wie es der Daemon vorfindet.

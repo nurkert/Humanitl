@@ -32,7 +32,7 @@
 //! die Registry leer; ab HUM-026 beantwortet der Recorder `ListFlows` aus
 //! `SQLite`. `created` ist deshalb eine [`SystemTime`] wie
 //! [`Flow::received_at`], nicht der `DateTime<Utc>` aus der Skizze des Issues
-//! (der Kern kennt `chrono` nicht).
+//! (der Kern kannte damals keine Zeitbibliothek).
 //!
 //! Auch kein Aufräumen: ein abgeschlossener Flow bleibt stehen, bis ihn jemand
 //! mit [`FlowRegistry::forget`] entfernt. Eine Aufbewahrungsgrenze gehört zum

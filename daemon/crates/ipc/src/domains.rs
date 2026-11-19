@@ -30,7 +30,6 @@
 use std::sync::Arc;
 use std::time::SystemTime;
 
-use chrono::{DateTime, Utc};
 use dashmap::DashMap;
 use humanitl_catalog::{Catalog, DomainInfo};
 use humanitl_core::{FlowId, HostName};
@@ -108,7 +107,9 @@ impl DomainSink for DomainTable {
         if self.seen.contains_key(&flow) {
             return;
         }
-        let info = self.catalog.info(host, DateTime::<Utc>::from(at));
+        let info = self
+            .catalog
+            .info(host, humanitl_core::time::from_system_time(at));
         if let Some(recorder) = self.recorder.as_ref() {
             recorder.set_domain(flow, info.apex.clone(), info.catalog_id.clone());
         }

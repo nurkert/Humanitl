@@ -76,4 +76,4 @@ tempfile.workspace = true
 # erlaubt (`tools/check_deps.py` ueberspringt `kind == "dev"`), und der Adapter
 # liefert deshalb den Text der Datei statt geparster Regeln.
 humanitl-rules.workspace = true
-chrono.workspace = true
+jiff.workspace = true

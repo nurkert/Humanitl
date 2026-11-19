@@ -25,11 +25,11 @@
 //! vergibt sie", nicht „nur der Daemon darf"), und eine doppelte Id lehnt der
 //! Dienst mit `RULES_007` ab.
 
-use chrono::{DateTime, Local, Utc};
 use humanitl_core::diagnostics::codes;
 use humanitl_core::{Diagnostic, FixAction, RuleId, Severity};
 use humanitl_ipc::client::Client;
 use humanitl_ipc::v1;
+use jiff::Timestamp;
 use serde_json::{Value, json};
 
 use crate::cli::{RuleArgs, RulesCmd};
@@ -95,7 +95,7 @@ async fn add(ctx: &Context, args: &RuleArgs) -> Result<u8, Failure> {
         emit(ctx, &response, vec![("added", rule_json(added))]);
         return Ok(EXIT_OK);
     }
-    print!("{}", table(&HEADERS, &[rule_row(added, Utc::now())]));
+    print!("{}", table(&HEADERS, &[rule_row(added, Timestamp::now())]));
     Ok(EXIT_OK)
 }
 
@@ -114,7 +114,10 @@ async fn update(ctx: &Context, id: &str, args: &RuleArgs) -> Result<u8, Failure>
         emit(ctx, &response, vec![("updated", rule_json(changed))]);
         return Ok(EXIT_OK);
     }
-    print!("{}", table(&HEADERS, &[rule_row(changed, Utc::now())]));
+    print!(
+        "{}",
+        table(&HEADERS, &[rule_row(changed, Timestamp::now())])
+    );
     Ok(EXIT_OK)
 }
 
@@ -172,7 +175,10 @@ async fn set_disabled(ctx: &Context, id: &str, disabled: bool) -> Result<u8, Fai
         "{} {id}",
         if disabled { "disabled" } else { "enabled" }
     ));
-    print!("{}", table(&HEADERS, &[rule_row(&changed, Utc::now())]));
+    print!(
+        "{}",
+        table(&HEADERS, &[rule_row(&changed, Timestamp::now())])
+    );
     Ok(EXIT_OK)
 }
 
@@ -213,7 +219,7 @@ async fn reorder(ctx: &Context, id: &str, position: u32) -> Result<u8, Failure> 
             moved.position
         ));
     }
-    print!("{}", table(&HEADERS, &[rule_row(moved, Utc::now())]));
+    print!("{}", table(&HEADERS, &[rule_row(moved, Timestamp::now())]));
     Ok(EXIT_OK)
 }
 
@@ -492,7 +498,7 @@ impl Hidden {
 /// Regeln und die Durchreiche zum Sprachmodell schweigt, hielte das nicht ein
 /// (`backlog/CONVENTIONS.md` 4.13). Gezählt wird in derselben Antwort, die
 /// schon da ist, also ohne zweiten Aufruf.
-fn rules_view(rules: &[v1::Rule], all: bool, now: DateTime<Utc>) -> RulesView {
+fn rules_view(rules: &[v1::Rule], all: bool, now: Timestamp) -> RulesView {
     let shown: Vec<&v1::Rule> = rules
         .iter()
         .filter(|rule| in_table(rule, all, now))
@@ -523,7 +529,7 @@ fn rules_view(rules: &[v1::Rule], all: bool, now: DateTime<Utc>) -> RulesView {
 /// Die eine Stelle, die den Filter kennt. Weil [`hidden_counts`] dieselbe
 /// Frage negiert stellt, kann keine Regel in beiden Töpfen landen und keine
 /// in gar keinem.
-fn in_table(rule: &v1::Rule, all: bool, now: DateTime<Utc>) -> bool {
+fn in_table(rule: &v1::Rule, all: bool, now: Timestamp) -> bool {
     all || (!rule.bundled && !is_expired(rule, now))
 }
 
@@ -535,7 +541,7 @@ fn in_table(rule: &v1::Rule, all: bool, now: DateTime<Utc>) -> bool {
 /// nichts mehr entscheidet, wenn jemand sie wieder anschaltet; abgeschaltet
 /// vor den beiden letzten, weil `disabled` sagt, dass die Regel nicht gilt,
 /// und nicht, was sie täte.
-fn hidden_counts(rules: &[v1::Rule], all: bool, now: DateTime<Utc>) -> Hidden {
+fn hidden_counts(rules: &[v1::Rule], all: bool, now: Timestamp) -> Hidden {
     let mut counts = Hidden::default();
     for rule in rules.iter().filter(|rule| !in_table(rule, all, now)) {
         if is_expired(rule, now) {
@@ -553,7 +559,7 @@ fn hidden_counts(rules: &[v1::Rule], all: bool, now: DateTime<Utc>) -> Hidden {
 
 /// Schreibt, was [`rules_view`] aufgebaut hat.
 fn print_rules(ctx: &Context, rules: &[v1::Rule], all: bool) {
-    let view = rules_view(rules, all, Utc::now());
+    let view = rules_view(rules, all, Timestamp::now());
     if !view.rows.is_empty() {
         print!("{}", table(&HEADERS, &view.rows));
     }
@@ -591,7 +597,7 @@ fn join_and(parts: &[String]) -> String {
 /// ein `websocket`-Upgrade als `ws` hinter den Methoden: die acht Spalten der
 /// Spezifikation dürfen nicht dazu führen, dass zwei verschiedene Regeln
 /// gleich aussehen.
-fn rule_row(rule: &v1::Rule, now: DateTime<Utc>) -> Vec<String> {
+fn rule_row(rule: &v1::Rule, now: Timestamp) -> Vec<String> {
     let matcher = rule.matcher.clone().unwrap_or_default();
     vec![
         if rule.position == 0 {
@@ -647,7 +653,7 @@ fn methods_cell(matcher: &v1::RuleMatcher) -> String {
 }
 
 /// Die Gültigkeit einer Regel, mit dem Vermerk, wenn sie vorbei ist.
-fn expires_cell(rule: &v1::Rule, now: DateTime<Utc>) -> String {
+fn expires_cell(rule: &v1::Rule, now: Timestamp) -> String {
     match expiry_of(rule) {
         None | Some(v1::rule_expiry::Expiry::Never(())) => "never".to_owned(),
         Some(v1::rule_expiry::Expiry::Session(())) => "session".to_owned(),
@@ -663,23 +669,16 @@ fn expires_cell(rule: &v1::Rule, now: DateTime<Utc>) -> String {
 }
 
 /// Ob die Regel abgelaufen ist. Ohne Zeitpunkt läuft sie nie ab.
-fn is_expired(rule: &v1::Rule, now: DateTime<Utc>) -> bool {
+fn is_expired(rule: &v1::Rule, now: Timestamp) -> bool {
     match expiry_of(rule) {
-        Some(v1::rule_expiry::Expiry::At(at)) => at.seconds <= now.timestamp(),
+        Some(v1::rule_expiry::Expiry::At(at)) => at.seconds <= now.as_second(),
         _ => false,
     }
 }
 
 /// Ein Zeitpunkt als lokale Zeit, oder `-`.
 fn local_time(seconds: i64) -> String {
-    DateTime::from_timestamp(seconds, 0).map_or_else(
-        || "-".to_owned(),
-        |time| {
-            DateTime::<Local>::from(time)
-                .format("%Y-%m-%d %H:%M:%S")
-                .to_string()
-        },
-    )
+    crate::render::local_time(seconds, "%Y-%m-%d %H:%M:%S")
 }
 
 /// Die Gültigkeit einer Regel, soweit sie eine trägt.
@@ -723,7 +722,7 @@ pub(crate) fn rule_json(rule: &v1::Rule) -> Value {
         "port": matcher.port,
         "upgrade": upgrade_name(matcher.upgrade),
         "expires": expires_json(rule),
-        "expired": is_expired(rule, Utc::now()),
+        "expired": is_expired(rule, Timestamp::now()),
         "note": rule.note,
         "stream": rule.stream,
         "allow_private": rule.allow_private,
@@ -917,7 +916,7 @@ fn expiry_from_text(text: &str) -> Result<v1::RuleExpiry, Failure> {
         "never" => v1::rule_expiry::Expiry::Never(()),
         "session" => v1::rule_expiry::Expiry::Session(()),
         other => {
-            let at = DateTime::parse_from_rfc3339(other).map_err(|error| {
+            let at = humanitl_core::time::parse_rfc3339(other).map_err(|error| {
                 Failure::new(
                     Diagnostic::builder(codes::CLI_004, Severity::Error)
                         .why(format!(
@@ -930,9 +929,10 @@ fn expiry_from_text(text: &str) -> Result<v1::RuleExpiry, Failure> {
                         .build(),
                 )
             })?;
+            let (seconds, nanos) = humanitl_core::time::unix_parts(at);
             v1::rule_expiry::Expiry::At(prost_types::Timestamp {
-                seconds: at.timestamp(),
-                nanos: i32::try_from(at.timestamp_subsec_nanos().min(999_999_999)).unwrap_or(0),
+                seconds,
+                nanos: i32::try_from(nanos).unwrap_or(0),
             })
         }
     };
@@ -1419,11 +1419,11 @@ mod tests {
 
     #[test]
     fn an_expired_rule_says_so_and_a_row_shows_every_column() {
-        let now = chrono::Utc::now();
+        let now = jiff::Timestamp::now();
         let mut expired = rule("e", None, false);
         expired.expires = Some(v1::RuleExpiry {
             expiry: Some(v1::rule_expiry::Expiry::At(prost_types::Timestamp {
-                seconds: now.timestamp() - 60,
+                seconds: now.as_second() - 60,
                 nanos: 0,
             })),
         });
@@ -1595,8 +1595,8 @@ mod tests {
     // --- Die Fußzeile unter der Tabelle (HUM-038) --------------------------
 
     /// Ein fester Zeitpunkt, damit „abgelaufen" nicht von der Uhr abhängt.
-    fn now() -> chrono::DateTime<chrono::Utc> {
-        chrono::DateTime::from_timestamp(1_800_000_000, 0).expect("a valid instant")
+    fn now() -> jiff::Timestamp {
+        jiff::Timestamp::from_second(1_800_000_000).expect("a valid instant")
     }
 
     /// Eine mitgelieferte Regel, gültig für immer.

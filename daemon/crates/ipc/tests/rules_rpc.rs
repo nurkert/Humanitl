@@ -230,7 +230,7 @@ async fn add_session_rule_not_persisted() {
     let verdict = daemon
         .store
         .effective()
-        .evaluate(&key, chrono::Utc::now(), daemon.session);
+        .evaluate(&key, jiff::Timestamp::now(), daemon.session);
     assert_eq!(verdict.action(), Action::Allow);
 
     daemon.shutdown().await;

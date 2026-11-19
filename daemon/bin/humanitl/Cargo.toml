@@ -21,11 +21,15 @@ humanitl-core.workspace = true
 humanitl-ipc.workspace = true
 humanitl-sandbox.workspace = true
 
-chrono.workspace = true
 clap.workspace = true
 # Der Kopf-Hash der Kette kommt ueber die Wire-Form als Bytes und steht in der
 # Ausgabe als Hex, wie ueberall sonst im Audit-Log.
 hex.workspace = true
+# Zeiten in Tabellen stehen in der Zeitzone des Hosts. `tz-system` liest sie
+# aus `TZ` oder `/etc/localtime`, `tzdb-zoneinfo` loest einen Namen wie
+# `TZ=Europe/Berlin` ueber `/usr/share/zoneinfo` auf, so wie vorher
+# `chrono::Local` (HUM-526).
+jiff = { workspace = true, features = ["tz-system", "tzdb-zoneinfo"] }
 # `rules add --expires <RFC 3339>` baut einen `google.protobuf.Timestamp`; die
 # Wire-Form kennt keinen anderen Weg, einen Zeitpunkt zu schreiben.
 prost-types.workspace = true

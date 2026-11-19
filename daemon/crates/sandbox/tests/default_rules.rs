@@ -34,7 +34,7 @@ fn bundled() -> RuleSet {
 fn verdict(set: &RuleSet, host: &str, method: &Method, path: &str) -> Verdict {
     let host = HostName::parse(host).unwrap();
     let key = RequestKey::new(&host, method, path, Scheme::Https, 443);
-    set.evaluate(&key, chrono::Utc::now(), SessionId::nil())
+    set.evaluate(&key, jiff::Timestamp::now(), SessionId::nil())
 }
 
 #[test]

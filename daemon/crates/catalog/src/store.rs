@@ -6,15 +6,15 @@
 //! sonst heute fälschlich neu. Was über Sitzungen hinweg gilt, weiß die
 //! Aufzeichnung (`humanitl-recorder`), nicht dieser Speicher.
 
-use chrono::{DateTime, Utc};
 use dashmap::DashMap;
 use humanitl_core::HostName;
+use jiff::Timestamp;
 
 /// Was der Speicher über einen Host weiß.
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
 pub struct SeenStats {
     /// Wann der Host in dieser Sitzung zum ersten Mal vorkam.
-    pub first_seen: DateTime<Utc>,
+    pub first_seen: Timestamp,
     /// Wie oft er seither vorkam, die erste Beobachtung eingeschlossen.
     ///
     /// Der Zähler sättigt bei [`u32::MAX`], statt überzulaufen: eine Zahl, die
@@ -46,7 +46,7 @@ impl SeenStore {
     /// Der Rückgabewert darf ignoriert werden: Wer nur zählen will, ruft die
     /// Funktion und liest den Stand später mit [`SeenStore::peek`].
     #[allow(clippy::must_use_candidate)]
-    pub fn observe(&self, host: &HostName, at: DateTime<Utc>) -> SeenStats {
+    pub fn observe(&self, host: &HostName, at: Timestamp) -> SeenStats {
         let mut entry = self.map.entry(host.to_string()).or_insert(SeenStats {
             first_seen: at,
             count: 0,
@@ -105,13 +105,17 @@ impl SeenStore {
 mod tests {
     #![allow(clippy::unwrap_used, clippy::expect_used, clippy::panic)]
 
-    use chrono::{DateTime, TimeZone, Utc};
     use humanitl_core::HostName;
+    use jiff::Timestamp;
+    use jiff::civil::date;
+    use jiff::tz::Offset;
 
     use super::SeenStore;
 
-    fn at(second: u32) -> DateTime<Utc> {
-        Utc.with_ymd_and_hms(2026, 9, 3, 12, 0, second).unwrap()
+    fn at(second: u32) -> Timestamp {
+        Offset::UTC
+            .to_timestamp(date(2026, 9, 3).at(12, 0, i8::try_from(second).unwrap(), 0))
+            .unwrap()
     }
 
     fn host(name: &str) -> HostName {
