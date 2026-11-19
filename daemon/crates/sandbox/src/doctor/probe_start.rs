@@ -148,13 +148,20 @@ fn start(backend: &Backend, shim: &Path, scratch: &Scratch) -> Result<ProbeOutco
         Ending::Ended,
     );
     let report = handle.report_after_exit(REPORT_TAIL);
-    let label = format!("{} {}", backend.name(), backend.program().display());
     Ok(verdict(
         &results,
         &ending,
         report.exec_failed.as_ref(),
-        &label,
+        passed_label(backend),
     ))
+}
+
+/// Wie der Beleg eines bestandenen Probestarts das Backend nennt: mit
+/// seinem Namen, nicht mit dem Pfad seines Programms. Der Beleg landet im
+/// Zwischenspeicher, und der soll keinen Ordner aus dem `PATH` des Daemons
+/// nennen (HUM-508); den Pfad zeigt die Zeile `available`.
+pub(super) fn passed_label(backend: &Backend) -> &'static str {
+    backend.name()
 }
 
 /// Das Urteil über einen Probestart, der lief.
@@ -346,7 +353,7 @@ mod tests {
 
     #[test]
     fn three_guarantees_an_exec_and_exit_0_pass() {
-        let outcome = verdict(&all_passed(), &exited(0), None, "bwrap /usr/bin/bwrap");
+        let outcome = verdict(&all_passed(), &exited(0), None, "bwrap");
         assert!(matches!(outcome, ProbeOutcome::Passed(_)), "{outcome:?}");
     }
 

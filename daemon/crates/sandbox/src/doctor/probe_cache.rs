@@ -31,7 +31,18 @@
 //! Die Datei ist ein Hinweis und keine Zusage: Was sich nicht lesen lässt,
 //! zählt als leer, und was sich nicht schreiben lässt, kostet nur den nächsten
 //! Probestart.
+//!
+//! # Keine Pfade in der Datei
+//!
+//! Vom Schlüssel steht nur sein SHA-256 in der Datei ([`key_hash`]), und der
+//! Beleg nennt das Backend, nicht den Pfad seines Programms (HUM-508): Ein
+//! Pfad ist kein Geheimnis, kann aber einen privaten Ordner aus dem `PATH`
+//! des Daemons nennen, und die Datei braucht nur einen Vergleich. Eine Datei
+//! in einem älteren Format ([`FORMAT`]) trug Schlüssel und Beleg im
+//! Klartext; sie zählt als leer, und der nächste gelungene Probestart
+//! schreibt sie ohne ihre alten Einträge neu.
 
+use std::fmt::Write as _;
 use std::io::Write as _;
 use std::os::unix::fs::OpenOptionsExt as _;
 use std::path::{Path, PathBuf};
@@ -40,6 +51,11 @@ use serde::{Deserialize, Serialize};
 
 /// Der Name der Datei im Datenverzeichnis.
 const FILE_NAME: &str = "doctor-probe.json";
+
+/// Das Format der Datei. Bis HUM-508 fehlte das Feld, und Schlüssel und
+/// Beleg standen im Klartext darin; eine Datei ohne dieses Format zählt als
+/// leer.
+const FORMAT: u32 = 2;
 
 /// Wonach ein Probestart gespeichert wird.
 #[derive(Debug, Clone, PartialEq, Eq)]
@@ -77,6 +93,24 @@ impl ProbeKey {
             self.machine
         )
     }
+}
+
+/// SHA-256 in Kleinbuchstaben-Hex.
+#[must_use]
+pub(crate) fn sha256_hex(bytes: &[u8]) -> String {
+    humanitl_core::http::sha256(bytes)
+        .iter()
+        .fold(String::with_capacity(64), |mut hex, byte| {
+            let _ = write!(hex, "{byte:02x}");
+            hex
+        })
+}
+
+/// Was von einem Schlüssel in der Datei steht: der SHA-256 seiner Zeile
+/// ([`ProbeKey::id`]), nie die Zeile selbst, denn sie nennt den Pfad des
+/// Programms (HUM-508).
+fn key_hash(key: &ProbeKey) -> String {
+    sha256_hex(key.id().as_bytes())
 }
 
 /// Die Kennung dieses Rechners für den Schlüssel: unter Linux
@@ -121,15 +155,19 @@ pub fn machine_identity() -> String {
 struct Entry {
     /// Die Stufe; je Stufe steht höchstens ein Eintrag in der Datei.
     stage: String,
-    /// [`ProbeKey::id`] des Probestarts.
+    /// [`key_hash`] des Probestarts.
     key: String,
-    /// Der Beleg des gelungenen Probestarts.
+    /// Der Beleg des gelungenen Probestarts; er nennt das Backend, keinen
+    /// Pfad.
     evidence: String,
 }
 
 /// Der Inhalt der Datei.
 #[derive(Debug, Default, Serialize, Deserialize)]
 struct Contents {
+    /// [`FORMAT`]; fehlt in Dateien von vor HUM-508 und ist dann 0.
+    #[serde(default)]
+    format: u32,
     entries: Vec<Entry>,
 }
 
@@ -166,7 +204,7 @@ impl ProbeCache {
         if key.machine.is_empty() {
             return None;
         }
-        let id = key.id();
+        let id = key_hash(key);
         self.read()
             .entries
             .into_iter()
@@ -184,9 +222,10 @@ impl ProbeCache {
     pub fn store(&self, key: &ProbeKey, evidence: &str) -> std::io::Result<()> {
         let mut contents = self.read();
         contents.entries.retain(|entry| entry.stage != key.stage);
+        contents.format = FORMAT;
         contents.entries.push(Entry {
             stage: key.stage.clone(),
-            key: key.id(),
+            key: key_hash(key),
             evidence: evidence.to_owned(),
         });
         let text = serde_json::to_vec_pretty(&contents).map_err(std::io::Error::other)?;
@@ -229,11 +268,15 @@ impl ProbeCache {
         written
     }
 
-    /// Der Inhalt; leer, wenn die Datei fehlt oder sich nicht lesen lässt.
+    /// Der Inhalt; leer, wenn die Datei fehlt, sich nicht lesen lässt oder
+    /// ein anderes [`FORMAT`] hat. Eine Datei von vor HUM-508 trägt Pfade im
+    /// Klartext; ihre Einträge fallen so beim nächsten Schreiben weg, statt
+    /// neben einem neuen stehen zu bleiben.
     fn read(&self) -> Contents {
         std::fs::read(&self.path)
             .ok()
-            .and_then(|bytes| serde_json::from_slice(&bytes).ok())
+            .and_then(|bytes| serde_json::from_slice::<Contents>(&bytes).ok())
+            .filter(|contents| contents.format == FORMAT)
             .unwrap_or_default()
     }
 }
@@ -370,6 +413,56 @@ mod tests {
             .map(|entry| entry.file_name())
             .collect();
         assert_eq!(left.len(), 2, "no staging file stays behind: {left:?}");
+    }
+
+    /// HUM-508: Vom Schlüssel steht nur sein Hash in der Datei; das
+    /// Programm, auch nur sein Ordner, nie.
+    ///
+    /// Mutationsbeweis: `key: key.id()` in `store`, und dieser Test fällt.
+    #[test]
+    fn the_file_holds_a_hash_of_the_key_and_not_the_program() {
+        let dir = tempfile::tempdir().unwrap();
+        let path = dir.path().join("doctor-probe.json");
+        let cache = ProbeCache::at(&path);
+        let mut private = key("5.0.0");
+        private.program = "/home/someone/private-hum508/bin/engine".to_owned();
+        cache.store(&private, "passed").unwrap();
+        let written = std::fs::read_to_string(&path).unwrap();
+        assert!(!written.contains("private-hum508"), "{written}");
+        assert!(written.contains(&super::key_hash(&private)), "{written}");
+        assert_eq!(cache.lookup(&private).as_deref(), Some("passed"));
+    }
+
+    /// HUM-508: Eine Datei von vor HUM-508 trägt Schlüssel und Beleg im
+    /// Klartext. Sie zählt als leer, auch für genau denselben Schlüssel, und
+    /// der nächste gelungene Probestart, selbst einer anderen Stufe, schreibt
+    /// sie ohne ihre alten Einträge neu.
+    ///
+    /// Mutationsbeweis: ohne die Prüfung des Formats in `read` bleibt der
+    /// alte Eintrag der Stufe `bwrap` mit seinem Pfad stehen, und dieser
+    /// Test fällt.
+    #[test]
+    fn a_file_of_the_old_format_is_empty_and_rewritten_without_paths() {
+        let dir = tempfile::tempdir().unwrap();
+        let path = dir.path().join("doctor-probe.json");
+        let mut old = key("0.11.0");
+        old.stage = "bwrap".to_owned();
+        old.program = "/home/someone/private-hum508/bin/bwrap".to_owned();
+        let legacy = serde_json::json!({
+            "entries": [{
+                "stage": "bwrap",
+                "key": old.id(),
+                "evidence": "true ran under bwrap /home/someone/private-hum508/bin/bwrap; all hold",
+            }]
+        });
+        std::fs::write(&path, serde_json::to_vec_pretty(&legacy).unwrap()).unwrap();
+        let cache = ProbeCache::at(&path);
+        assert_eq!(cache.lookup(&old), None, "an old entry never counts");
+
+        cache.store(&key("5.0.0"), "passed").unwrap();
+        let written = std::fs::read_to_string(&path).unwrap();
+        assert!(!written.contains("private-hum508"), "{written}");
+        assert_eq!(cache.lookup(&key("5.0.0")).as_deref(), Some("passed"));
     }
 
     #[test]
