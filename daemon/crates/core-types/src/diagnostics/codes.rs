@@ -1917,8 +1917,9 @@ registry! {
         "The agent of this start would send its inference to a provider outside this machine (`LLM_010`), this combination of agent and provider was never confirmed, and the start request neither confirms it (`Start.acknowledge_cloud_inference`) nor says that the notice was shown (`Start.cloud_notice_shown`). Nothing started.",
         "`CopyCommand` with `humanitl run --yes`, which confirms and starts; in the app the start asks once. A client of its own shows the notice and sets one of the two fields.";
 
-    // HUM-518: the agent depot (ADR-0023). AGENT_011, AGENT_012, AGENT_014
-    // and AGENT_016 belong to HUM-519 and HUM-520.
+    // HUM-518: the agent depot (ADR-0023). AGENT_011 is registered by
+    // HUM-519 (at the end of the list); AGENT_012, AGENT_014 and AGENT_016
+    // belong to HUM-520.
     /// The agent's source is `depot` (by `agents.source`, `agents.<id>.source`
     /// or a company lock), and the depot of this agent holds no installed
     /// version: no `current` link, or one whose version directory or
@@ -2013,6 +2014,20 @@ registry! {
     SANDBOX_055 => "sandbox", "Kernel level vsock device silent", "#sandbox_055",
         "The daemon reaches the guest of the kernel level only through the vsock device of the session. The guest had said on the door that it listens, a line that travels through the device's queues, and then a `CONNECT` of the daemon to the guest's report port got no answer at all for ten seconds; a working device answers within milliseconds, with `OK` or a refusal. Version 0.3.0 of the vsock device program behaves like this after its event thread has ended (a request that reached it while the guest's driver was still setting up its queues; fixed in the upstream repository after 0.3.0); the process lives on and answers nothing. Without the report the guarantees are unproven, and the session does not start. A guest kernel that hangs right after its ready line looks the same from the host; the sentence names the stage and the time waited.",
         "No automatic fix: start the session again. If it repeats, install a vsock device program newer than 0.3.0, or point the setting of the kernel level that names it at a build from the upstream repository that carries the fix, and report the sentence.";
+
+    // HUM-519: install and update of a depot agent (ADR-0023 point 5).
+    /// An install or update of a depot agent failed, at the step the `why`
+    /// names: the run in the sandbox (a download, an installer that wants
+    /// `sudo` or writes into `/usr`), its result, the pinned version, the
+    /// vendor's signature as the daemon checks it with the host's `gpg`
+    /// (no `gpg` on the host, a key other than the one the adapter fixes, a
+    /// bad signature), the checksum against the verified manifest, a file
+    /// the program tree must not hold (socket, FIFO, device, hard link,
+    /// set-ID bit, link out of the tree, a name that is not UTF-8) or its
+    /// caps, or the commit. Nothing was taken over (HUM-519).
+    AGENT_011 => "agent", "Agent install or update failed", "#agent_011",
+        "Install and update of a depot agent run in a sandbox, and the daemon takes the result over only when every check passes: the version is the one asked for and only an update changes an installed one; where the vendor signs, the daemon itself verified its own copy of the vendor's manifest with the host's `gpg` and the key the adapter fixes, and the program's SHA-256 matches that manifest (the run only downloads, and no verdict of it counts); the program tree holds only regular files, directories and relative links inside it, no socket, FIFO, device, hard link, set-ID bit or name that is not UTF-8, within its caps. A missing `gpg` is a failure, never an unsigned install. The sentence names the step that failed; the depot is as it was before.",
+        "`CopyCommand` with `humanitl agents install <id>` to run again after a failed download; `humanitl agents update <id>` when a version is installed already; install `gnupg` on the host when `gpg` is missing. A failed signature, checksum or tree check has no fix to go around it.";
 }
 
 /// Sucht einen Code im Register.

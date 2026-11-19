@@ -1913,5 +1913,7 @@
   "settingsLockedBy": "Festgelegt durch die Firmenvorgabe {policy}; nur lesbar.",
   "settingsLoadRetry": "Erneut versuchen",
   "diagSANDBOX055Title": "vsock-Gerät der Kernel-Stufe stumm",
-  "diagSANDBOX055Why": "Der Gast hat sich bereit gemeldet, aber das Gerät, über das der Daemon ihn erreicht, antwortet nicht mehr. Starte die Sitzung neu; wiederholt es sich, braucht das Programm des Geräts eine neuere Fassung."
+  "diagSANDBOX055Why": "Der Gast hat sich bereit gemeldet, aber das Gerät, über das der Daemon ihn erreicht, antwortet nicht mehr. Starte die Sitzung neu; wiederholt es sich, braucht das Programm des Geräts eine neuere Fassung.",
+  "diagAGENT011Title": "Installation oder Update des Agenten gescheitert",
+  "diagAGENT011Why": "Die Installation oder das Update hat nicht jede Prüfung bestanden, deshalb wurde nichts übernommen, und das Depot ist wie vorher. Die Meldung nennt den Schritt, der scheiterte."
 }
