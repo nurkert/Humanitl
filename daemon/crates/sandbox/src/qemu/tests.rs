@@ -130,7 +130,7 @@ fn the_guest_plan_names_the_door_the_pin_and_the_walk() {
     let profile = profile();
     let session = session(work.path());
     let env = profile.effective_env(&session, None);
-    let text = guest_plan(&profile, &session, &env, 4242, None, &[], false).unwrap();
+    let text = guest_plan(&profile, &session, &env, 4242, None, &[], &[], false).unwrap();
     let plan: serde_json::Value = serde_json::from_str(&text).unwrap();
     assert_eq!(plan["door_port"], "5000");
     assert_eq!(plan["report_port"], "5001");
@@ -161,7 +161,17 @@ fn the_guest_plan_names_the_door_the_pin_and_the_walk() {
     assert_eq!(at("/sys")["mode"], "ro");
     assert_eq!(at("/dev/shm")["type"], "tmpfs");
     assert!(plan.get("root_probe").is_none());
-    let probed = guest_plan(&profile, &session, &env, 4242, Some("true"), &[], false).unwrap();
+    let probed = guest_plan(
+        &profile,
+        &session,
+        &env,
+        4242,
+        Some("true"),
+        &[],
+        &[],
+        false,
+    )
+    .unwrap();
     let probed: serde_json::Value = serde_json::from_str(&probed).unwrap();
     assert_eq!(
         probed["root_probe"],
@@ -180,12 +190,12 @@ fn a_disposable_guest_plan_mounts_an_overlay_over_the_checked_folder() {
     let profile = profile();
     let session = session(work.path());
     let env = profile.effective_env(&session, None);
-    let text = guest_plan(&profile, &session, &env, 4242, None, &[], true).unwrap();
+    let text = guest_plan(&profile, &session, &env, 4242, None, &[], &[], true).unwrap();
     let plan: serde_json::Value = serde_json::from_str(&text).unwrap();
     assert_eq!(plan["modules"], serde_json::json!(["overlay"]));
     assert_eq!(
         plan["disposable"],
-        serde_json::json!({"layer_tag": "layer", "lower_ino": "4242"})
+        serde_json::json!({"layer_tag": "layer", "lower_ino": "4242", "mask_mib": "64"})
     );
     assert_eq!(plan["pins"]["pins"], serde_json::json!([]));
     let mounts = plan["pins"]["mounts"].as_array().unwrap();
@@ -198,7 +208,7 @@ fn a_disposable_guest_plan_mounts_an_overlay_over_the_checked_folder() {
         1,
         "only the root; the project and the layer are no mounts of their own"
     );
-    let direct = guest_plan(&profile, &session, &env, 4242, None, &[], false).unwrap();
+    let direct = guest_plan(&profile, &session, &env, 4242, None, &[], &[], false).unwrap();
     let direct: serde_json::Value = serde_json::from_str(&direct).unwrap();
     assert!(direct.get("disposable").is_none() && direct.get("modules").is_none());
 
@@ -229,6 +239,76 @@ fn a_disposable_guest_plan_mounts_an_overlay_over_the_checked_folder() {
     );
 }
 
+/// HUM-481: In einer Wegwerf-Sitzung legt der Shim die Masken des Profils,
+/// die im Projekt vorhanden sind, über das Overlay: Der Gastplan nennt sie
+/// in der Reihenfolge des Profils, und die Mounttabelle erwartet je eine
+/// Zeile, ein Ordner beschreibbar, eine Datei nur lesbar. Eine direkte
+/// Sitzung nennt keine; dort liegen die Masken im Gefängnis des Dienstes
+/// für `/work`, das der Gast nur über virtiofs sieht.
+#[test]
+fn a_disposable_guest_plan_lays_the_present_masks_over_the_overlay() {
+    let work = tempfile::tempdir().unwrap();
+    std::fs::create_dir_all(work.path().join(".git/hooks")).unwrap();
+    std::fs::write(work.path().join(".env"), "SECRET=yes\n").unwrap();
+    let profile = profile();
+    let session = session(work.path());
+    let present = BwrapBackend::present_under_work(&profile, work.path());
+    let root = guest_root(
+        &profile,
+        &session,
+        &present,
+        Path::new("/run/x/files"),
+        Path::new("/m"),
+        &[],
+    );
+    let env = profile.effective_env(&session, None);
+    let plan = |disposable: bool| -> serde_json::Value {
+        let text = guest_plan(
+            &profile,
+            &session,
+            &env,
+            4242,
+            None,
+            &root.entries,
+            &root.masks,
+            disposable,
+        )
+        .unwrap();
+        serde_json::from_str(&text).unwrap()
+    };
+    let disposable = plan(true);
+    let masks: Vec<&str> = disposable["work_masks"]
+        .as_array()
+        .unwrap()
+        .iter()
+        .map(|mask| mask.as_str().unwrap())
+        .collect();
+    assert!(masks.contains(&"tmpfs:.git/hooks"), "{masks:?}");
+    assert!(masks.contains(&"empty:.env"), "{masks:?}");
+    assert_eq!(masks.len(), root.masks.len(), "only what is present");
+    let mounts = disposable["pins"]["mounts"].as_array().unwrap();
+    let at = |point: &str| {
+        mounts
+            .iter()
+            .find(|m| m["point"] == point)
+            .unwrap_or_else(|| panic!("{point}: {mounts:?}"))
+    };
+    assert_eq!(at("/work/.git/hooks")["mode"], "rw");
+    assert_eq!(at("/work/.git/hooks")["type"], "tmpfs");
+    assert_eq!(at("/work/.env")["mode"], "ro");
+    assert_eq!(at("/work/.env")["flags"], "nosuid,nodev");
+    let direct = plan(false);
+    assert!(direct.get("work_masks").is_none());
+    assert!(
+        direct["pins"]["mounts"]
+            .as_array()
+            .unwrap()
+            .iter()
+            .all(|m| m["point"] != "/work/.env"),
+        "a direct session has its masks on the host"
+    );
+}
+
 /// HUM-466: Jedes tmpfs des Profils außerhalb von `/work` steht im
 /// Gastplan, mit seiner Zeile der Mounttabelle und als Wurzel der
 /// Socket-Suche; die Datei des Adapters unter dem Heimatverzeichnis bleibt
@@ -248,7 +328,17 @@ fn the_guest_plan_names_every_tmpfs_and_what_stays_on_top() {
         &[],
     );
     let env = profile.effective_env(&session, None);
-    let text = guest_plan(&profile, &session, &env, 4242, None, &root.entries, false).unwrap();
+    let text = guest_plan(
+        &profile,
+        &session,
+        &env,
+        4242,
+        None,
+        &root.entries,
+        &root.masks,
+        false,
+    )
+    .unwrap();
     let plan: serde_json::Value = serde_json::from_str(&text).unwrap();
     assert_eq!(
         plan["tmpfs"],

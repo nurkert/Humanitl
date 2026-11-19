@@ -2047,6 +2047,93 @@ Der Dienst der Schicht nimmt jedes erweiterte Attribut an.
 ### Akzeptanzkriterien
 1. Der Agent sieht im Gast dieselben Masken wie unter bwrap.
 
+### Stand nach der Umsetzung (2026-11-19)
+
+**Masken im Gast (Punkt 1).** Der Gastplan einer Wegwerf-Sitzung trägt die
+Masken des Profils, die im Projekt vorhanden sind, als `work_masks`
+(`tmpfs:<relativ>` je maskiertem Ordner, `empty:<relativ>` je maskierter
+Datei, in der Reihenfolge von bwrap) und ihre Größe als `mask_mib` in
+`disposable`; die erwartete Mounttabelle nennt je Maske eine Zeile
+(`qemu/disposable.rs`, `guest_masks`). Eine direkte Sitzung nennt keine, dort
+liegen die Masken wie bisher im Gefängnis des Dienstes für `/work`. Der Shim
+(`guest_masks.rs`, aus `guest_overlay.rs` gerufen) legt nach dem Overlay auf
+`/work` jede Maske darüber: ein tmpfs wie bwraps `--tmpfs` (0755, dem Nutzer
+des Agenten, `nosuid`, `nodev`, 64 MiB wie auf dem Host) und für Dateien einen
+nur lesbaren Bind einer leeren Datei (0600 wie bwraps `--ro-bind-data`) aus
+dem tmpfs, auf dem er das Overlay vorbereitet, `nosuid`, `nodev`. Die leere
+Datei der Masken einer direkten Sitzung (im Gefängnis des Dienstes für
+`/work`) hat jetzt ebenfalls 0600 statt 0400. Die Kopien
+der leeren Datei nimmt er mit `open_tree`, bevor die Bühne verschwindet; jedes
+Ziel öffnet er mit `openat2` unter `/work` (`RESOLVE_BENEATH`,
+`RESOLVE_NO_SYMLINKS`, `RESOLVE_NO_MAGICLINKS`) und hängt über diesen
+Deskriptor ein, so dass keine Maske außerhalb des Overlays landet; ohne
+`O_NOFOLLOW`, denn mit `O_PATH` gäbe `openat2` sonst den Deskriptor eines
+Verweises am Ende selbst heraus statt `ELOOP` (vom Unit-Test gefunden). Ein
+fehlendes Ziel, ein Verweis oder ein Ordner statt einer Datei und umgekehrt
+verweigert den Start (`mounts_match`), wie ein gescheitertes `--tmpfs` bwraps
+Start verweigert. Liegt eine Maske in einem tmpfs, das eine frühere Maske gelegt
+hat (etwa `/work/custom` und dann `/work/custom/secret`), legt der Shim ihren
+Einhängepunkt in diesem tmpfs an wie bwrap: fehlende Ordner 0755, eine leere
+Datei 0600 mit `O_EXCL` oder einen Ordner, dem Nutzer des Agenten, jeden
+Schritt mit `openat2` unter dem tmpfs ohne Verweis; nur in einem tmpfs, das
+der Shim selbst gelegt hat, nie im Overlay (Befund aus dem Review von Codex).
+
+**`--xattrmap` (Punkt 2).** Der Dienst der Schicht läuft mit
+`--xattrmap ':ok:all:user.overlay.:user.overlay.::unsupported:all:::'`
+(`lines::LAYER_XATTRMAP`): `user.overlay.*` geht unverändert durch, jedes
+andere Attribut scheitert mit `ENOTSUP` und fehlt in Listen. `unsupported`
+statt `bad` (`EPERM`), damit das Overlay unbekannte Attribute beim Kopieren
+nach oben übergeht und der Gast ein Dateisystem ohne diese Attribute sieht.
+Gemessen mit Linux 7.3 im Gast und virtiofsd 1.14: In der Schicht stehen
+danach nur `user.overlay.opaque`, `user.overlay.impure` und
+`user.overlay.uuid`. Mit `--log-level debug` beantwortete der Dienst in einem
+Lauf 14 `Getxattr`, 10 `Setxattr`, 4 `Listxattr` und 3 `Removexattr`; mit der
+Regel endeten 2 `Removexattr` beim Einhängen, 6 `Getxattr` und der
+`Setxattr` des Agenten mit `ENOTSUP`, die übrigen mit Erfolg oder `ENODATA`.
+Die Namen nennt virtiofsd nicht; vermutlich (Kernelquelltext, nicht gemessen)
+sind die zwei `Removexattr` die ACLs auf dem Arbeitsverzeichnis des Overlays,
+das `ENOTSUP` dort übergeht, und die `Getxattr` Fragen nach ACL und
+`security.capability` beim Schreiben.
+Whiteouts, opake Verzeichnisse, Kopien nach oben, `chmod` und Verweise laufen
+unverändert (alle 26 KVM-Tests und `escape_worktree` gegen `qemu` grün).
+
+**Tests und Mutationsbeweise.** KVM
+`a_masked_path_and_a_foreign_xattr_are_refused_in_the_disposable_guest`
+(`qemu/kvm_tests/masks.rs`): `chmod u+w` und Schreiben auf `.env` scheitern
+(`EROFS`), `.env` hat die Rechte 600 und bleibt leer, ein Hook unter `.git/hooks` landet im tmpfs und
+nie in der Schicht, beide Masken stehen in `/proc/self/mountinfo`,
+`setxattr user.foreign` endet mit `ENOTSUP` (95), in der oberen Schicht steht
+kein Attribut außer `user.overlay.*` (jeder Lesefehler lässt den Test
+scheitern; das Arbeitsverzeichnis des Overlays liest er nicht, seine Ordner
+haben die Rechte 0000), das opake Verzeichnis kommt durch, der Scan
+sieht die Änderungen des Agenten und keine auf einer Maske. Gegatet wie die
+anderen KVM-Tests, ohne Eintritt in fremde Namensräume. Mutationsbeweise:
+Gastplan ohne Masken (`guest_masks(&work, &masks[..0])`) färbt den Test rot
+(`chmod-rc=0`, `env-rc=0`, 7 Bytes in `.env`); der Dienst der Schicht ohne
+`--xattrmap` färbt ihn rot (`xattr-foreign=ok`). Der KVM-Test legt dazu verschachtelte
+Masken an (`/work/custom` und `/work/custom/inner` als tmpfs,
+`/work/custom/secret` als Datei); ohne das Anlegen der Einhängepunkte startet
+der Gast nicht (`SANDBOX_049`, `mask-target:custom/inner`), rot. Gemessen nebenbei: ohne Masken
+scheitert ein bloßes Schreiben auf `.env` schon an den Rechten der leeren
+Datei aus der unteren Schicht (`EACCES`), aber der Agent besitzt sie und
+macht sie mit `chmod` beschreibbar; deshalb prüft der Test `chmod` zuerst.
+Einheitstests: Lesen von `work_masks` und `mask_mib` mit jeder Abweichung
+(Shim), `open_target` auf einem Verzeichnis (fehlend, Verweis am Ende, auf dem
+Weg und absolut, falsche Art je Richtung; Mutationsbeweise: ohne
+`RESOLVE_NO_SYMLINKS` und ohne Prüfung der Art je rot), Einträge und Tabellenzeilen je Maske (`qemu/disposable.rs`), Gastplan
+mit den vorhandenen Masken nur in einer Wegwerf-Sitzung (`qemu/tests.rs`),
+`--xattrmap` in der Zeile der Schicht (`qemu/lines.rs`).
+
+**Dokumente.** `docs/SECURITY.md` Abschnitt 14 (Wegwerf-Sandbox, „What is
+different") und Änderungsprotokoll, `docs/THREAT-MODEL.md` K-34 (Zeile und
+Prosa) und Änderungshistorie, beides auch deutsch; die deutschen Fassungen
+waren vorher schon nicht auf dem Stand ihrer Quelle, `source-sha256` bleibt.
+
+**Offen.** Kandidat: `tmpfs`-Masken im Gast mit festem `mask_mib` belegen
+Speicher des Gasts statt der Unit; ob ein eigener Abzug in
+`limits::in_ram_mib` für Wegwerf-Sitzungen entfallen kann (die Masken des
+Hosts sind dort nur lesbar), ist nicht geprüft.
+
 ---
 
 ## HUM-482 · Disposable layer: masks under casefold, pin the upper layer

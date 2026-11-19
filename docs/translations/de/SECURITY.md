@@ -1988,6 +1988,7 @@ die Binaries im Disk-Image.
 | 0.1.0 | Ein Projekt-Profil, ein Profil der Session oder ein Lauf (`humanitl run --llm NAME`) wählt mit `llm.server` einen der gespeicherten Modellserver; nur der gewählte Server ist die Durchleitung der Session und bekommt seinen Schlüssel; ein unbekannter Name lehnt den Start mit `CONFIG_021` ab und fällt nie auf `llm.active` zurück; Wahl und Herkunft stehen im Kopf der Sandbox und in `humanitl sandbox plan` (HUM-400, K-02). |
 | 0.1.0 | Der Bereich für Änderungen in der App: Ein Konflikt wird nur überschrieben, wenn er für genau diese Änderung bestätigt wurde (`ApplyChanges.overwrite_ids`); ein Konflikt, der nach der Auswahl auftritt, stoppt die Übernahme (HUM-351, K-24). |
 | 0.1.x | Cloud-Inferenz wird benannt: Liegt der Modell-Endpunkt des Agenten außerhalb dieses Rechners und seines Netzes, trägt die Kopfzeile der Sitzung ein orangefarbenes Tag mit dem Anbieter, `humanitl run` und `go` nennen ihn bei jedem Start, `humanitl doctor` hat die Zeile `inference`, und der erste Start je Agent und Anbieter fragt einmal; die Bestätigung liegt im Datenverzeichnis des Daemons, nie im Projekt oder in der App; blockiert wird nichts (HUM-516, [Abschnitt 5.1](#cloud-inferenz-hum-516), K-02). |
+| 0.1.x | Kernel-Stufe, Wegwerf-Sandbox: Der Shim legt die Masken des Profils im Gast über das Overlay, wie bubblewrap sie über sein Overlay legt, jede in der erwarteten Mounttabelle, so dass ein Schreiben auf eine maskierte Datei scheitert und ein Schreiben in einen maskierten Ordner die Schicht nie erreicht; der Dateisystemdienst der Schicht nimmt nur Attribute `user.overlay.*` an und beantwortet jedes andere mit `ENOTSUP` (`--xattrmap`) ([Abschnitt 14](#14-linux-qemu-micro-vm-kernel-stufe), K-34, HUM-481). |
 
 ## 13. Linux: Podman
 
@@ -2361,7 +2362,13 @@ Host-Prüfung steht dort als `isolation.check`; an den Garantien ändert das nic
   `work`. Ein dritter Dateisystemdienst liefert es als geöffneten Deskriptor aus (`--bind-fd`),
   beschreibbar, mit erweiterten Attributen (`--xattr`) und mit `CAP_DAC_OVERRIDE` nur im eigenen
   Nutzer-Namensraum, denn das Overlay im Gast arbeitet als Root (sein Arbeitsverzeichnis hat die
-  Rechte 0000). Das Projekt ist doppelt nur lesbar: Sein Dienst läuft mit `--readonly`, und sein
+  Rechte 0000). Dieser Dienst nimmt nur die eigenen Attribute des Overlays an, `user.overlay.*`
+  (`--xattrmap`, HUM-481); jedes andere Attribut, das der Gast dort setzt, liest oder entfernt,
+  scheitert mit `ENOTSUP` und fehlt in seinen Listen, so dass weder der Agent noch Root im Gast
+  ein Attribut `user.*`, `security.*` oder `trusted.*` in der Schicht auf dem Host ablegt
+  (gemessen mit Linux 7.3 im Gast: das Overlay schreibt `user.overlay.opaque`, `user.overlay.impure` und
+  `user.overlay.uuid`; Whiteouts, opake Verzeichnisse und Kopien nach oben laufen unverändert).
+  Das Projekt ist doppelt nur lesbar: Sein Dienst läuft mit `--readonly`, und sein
   Gefängnis bindet den geprüften Ordner nur lesbar (`--ro-bind-fd`), so dass auch ein Fehler in
   `--readonly` nicht ins Projekt schreibt; die Unit nennt zudem nur die Schicht als beschreibbaren
   Pfad, nicht das Projekt. Der Shim lädt das
@@ -2369,13 +2376,18 @@ Host-Prüfung steht dort als `isolation.check`; an den Garantien ändert das nic
   mit dem Plan, hängt die Schicht ein, baut das Overlay mit den Optionen des unprivilegierten
   Overlays von bubblewrap (`userxattr`, `redirect_dir=nofollow`, kein `metacopy`, kein Index) und
   setzt es allein auf `/work`; weder das Projekt noch die Schicht ist danach über einen Pfad
-  erreichbar. Root im Gast kann die Schicht trotzdem erneut einhängen und alles hineinschreiben,
+  erreichbar. Dann legt er die Masken des Profils über das Overlay wie bubblewrap (HUM-481): ein
+  leeres tmpfs über jeden vorhandenen maskierten Ordner, beschreibbar und so groß wie die Maske auf
+  dem Host, und eine leere, nur lesbare Datei über jede vorhandene maskierte Datei, jeweils unter
+  `/work` geöffnet, ohne einem Verweis zu folgen, und in der erwarteten Mounttabelle genannt. Ein
+  Schreiben auf `.env` scheitert im Gast wie unter bubblewrap, und was der Agent unter
+  `.git/hooks` ablegt, bleibt im tmpfs der Maske und erreicht die Schicht nie. Root im Gast kann die Schicht trotzdem erneut einhängen und alles hineinschreiben,
   also behandelt der Daemon jedes Byte darin als vom Angreifer geschrieben: Er liest die Schicht
   erst, wenn jeder Prozess der Unit beendet ist, mit dem Scan der Wegwerf-Sandbox von bubblewrap
   (kein Gerät, keine FIFO, kein Socket, kein setuid-Bit, kein fremdes Overlay-Attribut und kein
   Verweis aus dem Projekt hinaus wird je übernommen), und der Scan lehnt jede Änderung auf, unter
-  oder über einer Maske des Profils ab, weil die Masken unter dieser Stufe in der unteren Schicht
-  liegen und eine an ihnen vorbei geschriebene Schicht keinen Hook und kein Geheimnis ins Projekt
+  oder über einer Maske des Profils ab, weil Root im Gast die Schicht an den Masken vorbei
+  beschreiben kann und eine so geschriebene Schicht keinen Hook und kein Geheimnis ins Projekt
   tragen darf. Der Scan vergleicht Pfade genau mit den Masken; ein Projektordner, der Namen, die
   sich nur in der Schreibweise unterscheiden, als einen Eintrag führt, ist deshalb keine
   Wegwerf-Sandbox (HUM-482): Trägt die Wurzel des Projekts oder ein Ordner auf dem Weg zu einer
@@ -2436,9 +2448,9 @@ Host-Prüfung steht dort als `isolation.check`; an den Garantien ändert das nic
   Backends den Host und überdauert die Sitzung nicht.
 - **Die Wegwerf-Sandbox braucht das Modul `overlay` des Gastkernels.** Fehlt es unter
   `sandbox.qemu.modules`, lehnt `disposable` mit `SANDBOX_030` ab, und `auto` läuft mit
-  `SANDBOX_033` direkt. Im Gast darf der Agent in seiner eigenen Schicht über einen maskierten
-  Pfad des Projekts schreiben (die Maske liegt in der unteren Schicht, nicht obenauf wie unter
-  bubblewrap); der Scan übernimmt eine solche Änderung nie.
+  `SANDBOX_033` direkt. Die Masken liegen im Gast wie unter bubblewrap über dem Overlay
+  (HUM-481); entfernen könnte sie nur Root im Gast, der der Agent nicht ist, und der Scan
+  übernimmt eine Änderung an einer Maske ohnehin nie.
 - **Das Terminal reist als Strom** (K-29); ein Signal des Hosts erreicht keinen Prozess des Gasts,
   eine Unterbrechung ist ein Rahmen.
 

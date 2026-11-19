@@ -41,6 +41,8 @@ use crate::json::Parser;
 /// `move_mount(2)`: the source is the descriptor itself. Not in every libc
 /// of the crate (the musl half lacks it), so here once.
 const MOVE_MOUNT_F_EMPTY_PATH: libc::c_uint = 0x0000_0004;
+/// `move_mount(2)`: the target is the descriptor itself (HUM-481).
+const MOVE_MOUNT_T_EMPTY_PATH: libc::c_uint = 0x0000_0040;
 
 /// What lies beneath a tmpfs and stays on top of it.
 #[derive(Debug, Clone, PartialEq, Eq)]
@@ -243,8 +245,26 @@ pub(super) fn clone_tree(path: &Path) -> io::Result<OwnedFd> {
 
 /// Moves the detached copy `tree` onto `path` (`move_mount(2)`).
 pub(super) fn move_tree(tree: &OwnedFd, path: &Path) -> io::Result<()> {
-    use std::os::fd::AsRawFd as _;
     let path = c_path(path)?;
+    move_mount(tree, libc::AT_FDCWD, &path, 0)
+}
+
+/// Moves the detached copy `tree` onto the object behind the descriptor
+/// `target` (`move_mount(2)` from descriptor to descriptor, HUM-481).
+pub(super) fn move_tree_onto(tree: &OwnedFd, target: &OwnedFd) -> io::Result<()> {
+    use std::os::fd::AsRawFd as _;
+    move_mount(tree, target.as_raw_fd(), c"", MOVE_MOUNT_T_EMPTY_PATH)
+}
+
+/// `move_mount(2)` of `tree` to `to_path` relative to `to_dir`, with
+/// `MOVE_MOUNT_F_EMPTY_PATH` and the extra `flags`.
+fn move_mount(
+    tree: &OwnedFd,
+    to_dir: libc::c_int,
+    to_path: &std::ffi::CStr,
+    flags: libc::c_uint,
+) -> io::Result<()> {
+    use std::os::fd::AsRawFd as _;
     // SAFETY: two NUL-terminated strings that outlive the call, a descriptor
     // this function borrows, and integers.
     let rc = unsafe {
@@ -252,9 +272,9 @@ pub(super) fn move_tree(tree: &OwnedFd, path: &Path) -> io::Result<()> {
             libc::SYS_move_mount,
             tree.as_raw_fd(),
             c"".as_ptr(),
-            libc::AT_FDCWD,
-            path.as_ptr(),
-            MOVE_MOUNT_F_EMPTY_PATH,
+            to_dir,
+            to_path.as_ptr(),
+            MOVE_MOUNT_F_EMPTY_PATH | flags,
         )
     };
     if rc == 0 {
@@ -264,7 +284,7 @@ pub(super) fn move_tree(tree: &OwnedFd, path: &Path) -> io::Result<()> {
     }
 }
 
-fn c_path(path: &Path) -> io::Result<CString> {
+pub(super) fn c_path(path: &Path) -> io::Result<CString> {
     use std::os::unix::ffi::OsStrExt as _;
     CString::new(path.as_os_str().as_bytes())
         .map_err(|_| io::Error::new(io::ErrorKind::InvalidInput, "NUL byte"))

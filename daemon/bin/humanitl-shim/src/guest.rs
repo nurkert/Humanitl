@@ -45,7 +45,8 @@
 //!    the plan's. Mount `/work` from the plan's tag
 //!    (`virtiofs`, `nosuid`, `nodev`); in a disposable session (the plan's
 //!    `disposable`, HUM-446) an overlay of the read-only project and the
-//!    session's layer instead (`guest_overlay.rs`).
+//!    session's layer instead (`guest_overlay.rs`), with the profile's
+//!    masks on top of it as bwrap lays them (`guest_masks.rs`, HUM-481).
 //! 6. Set the shim's own variables and then the agent's environment, both
 //!    from the plan, with the rules of `--env-fd` (`envfd.rs`).
 //!
@@ -223,11 +224,14 @@ const PLAN_SHIM_VARS: [&str; 4] = [
 ///
 /// The escape suite's plans may add `"root_probe":["/bin/sh","-c","..."]`
 /// (HUM-445, see the module documentation). A disposable session adds
-/// `"disposable":{"layer_tag":"layer","lower_ino":"131"}` and names
-/// `overlay` under `modules` (HUM-446, `guest_overlay.rs`).
+/// `"disposable":{"layer_tag":"layer","lower_ino":"131","mask_mib":"64"}`,
+/// names `overlay` under `modules` (HUM-446, `guest_overlay.rs`) and may
+/// add the profile's masks over the overlay,
+/// `"work_masks":["tmpfs:.git/hooks","empty:.env"]` (HUM-481,
+/// `guest_masks.rs`).
 ///
 /// Every key is required but `modules`, `shim`, `socket_walk`, `tmpfs`,
-/// `tmpfs_keep`, `root_probe` and `disposable`; the ports
+/// `tmpfs_keep`, `root_probe`, `disposable` and `work_masks`; the ports
 /// are decimal strings. `socket_walk` names the roots of the socket walk of
 /// `single_socket`, absolute paths; absent means the whole file system, as
 /// under bwrap (HUM-444, `report::sockets_under`). `env` follows the rules of `--env-fd`, `pins` the shape of
@@ -277,7 +281,7 @@ pub struct Plan {
 }
 
 /// The keys a guest plan may have.
-const KEYS: [&str; 18] = [
+const KEYS: [&str; 19] = [
     "proxy_port",
     "door_port",
     "report_port",
@@ -296,6 +300,7 @@ const KEYS: [&str; 18] = [
     "gid",
     "hostname",
     "disposable",
+    "work_masks",
 ];
 
 /// A reason without spaces: it becomes evidence on a report line.
@@ -416,7 +421,7 @@ pub fn parse(text: &str) -> Result<Plan, String> {
     let uid = unprivileged_id("uid", &string("uid")?)?;
     let gid = unprivileged_id("gid", &string("gid")?)?;
     let hostname = checked_hostname(string("hostname")?)?;
-    let disposable = guest_overlay::parse(raw("disposable"), &modules)?;
+    let disposable = guest_overlay::parse(raw("disposable"), raw("work_masks"), &modules)?;
     Ok(Plan {
         proxy_port,
         door_port,
@@ -646,7 +651,9 @@ fn mount_work(plan: &Plan) -> Result<(), guest_overlay::Failure> {
             libc::MS_NOSUID | libc::MS_NODEV,
         )
         .map_err(|err| guest_overlay::Failure::Pin(format!("work-mount:{}:{err}", plan.work_tag))),
-        Some(disposable) => guest_overlay::mount(WORK, &plan.work_tag, disposable),
+        Some(disposable) => {
+            guest_overlay::mount(WORK, &plan.work_tag, disposable, plan.uid, plan.gid)
+        }
     }
 }
 
@@ -1065,13 +1072,17 @@ mod tests {
         assert_eq!(parse(PLAN).unwrap().disposable, None);
         let disposable = PLAN.replace(
             r#""work_tag": "work","#,
-            r#""work_tag": "work", "disposable": {"layer_tag": "layer", "lower_ino": "131"},"#,
+            r#""work_tag": "work", "disposable": {"layer_tag": "layer", "lower_ino": "131", "mask_mib": "64"}, "work_masks": ["empty:.env"],"#,
         );
         assert_eq!(
             parse(&disposable).unwrap().disposable,
             Some(guest_overlay::Disposable {
                 layer_tag: "layer".to_owned(),
                 lower_ino: 131,
+                mask_mib: 64,
+                masks: vec![crate::linux::guest_masks::Mask::Empty(PathBuf::from(
+                    ".env"
+                ))],
             })
         );
         let without = disposable.replace(r#""modules": ["overlay"],"#, "");

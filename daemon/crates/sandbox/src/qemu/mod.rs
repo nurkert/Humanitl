@@ -399,7 +399,10 @@ fn add_session_binds(root: &mut GuestRoot, session_ro: &[(PathBuf, PathBuf)]) {
 /// Inode er beim Einhängen mit `project_ino` vergleicht, oben die Schicht
 /// der Sitzung (Tag `layer`); das Modul `overlay` lädt er vor der
 /// Modulsperre. Die Mounttabelle erwartet dann an `/work` ein `overlay` und
-/// keinen Pin auf das Projekt, dessen Inode das Overlay nicht trägt.
+/// keinen Pin auf das Projekt, dessen Inode das Overlay nicht trägt. Über
+/// das Overlay legt der Shim die Masken des Profils (`masks`, HUM-481,
+/// [`disposable::guest_masks`]), mit je einer Zeile der Tabelle.
+#[allow(clippy::too_many_arguments)]
 fn guest_plan(
     profile: &SandboxProfile,
     session: &SessionContext,
@@ -407,12 +410,17 @@ fn guest_plan(
     project_ino: u64,
     root_probe: Option<&str>,
     root: &[RootEntry],
+    masks: &[WorkMask],
     disposable: bool,
 ) -> Result<String, Diagnostic> {
     let places = &tmpfs::guest_tmpfs(root)?;
     let (agent_env, shim_env) = crate::shim_fds::split_env(env);
     let work = profile.mounts.work.dst.display().to_string();
-    let mounts = expected_mounts(&work, places, project_ino, disposable);
+    let mut mounts = expected_mounts(&work, places, project_ino, disposable);
+    let masks = disposable.then(|| disposable::guest_masks(&work, masks));
+    if let Some(masks) = &masks {
+        mounts.extend(masks.mounts.iter().cloned());
+    }
     let command: Vec<&str> = session
         .command
         .iter()
@@ -468,12 +476,14 @@ fn guest_plan(
     if let Some(probe) = root_probe {
         plan["root_probe"] = serde_json::json!(["/bin/sh", "-c", probe]);
     }
-    if disposable {
+    if let Some(masks) = masks {
         plan["modules"] = serde_json::json!([OVERLAY_MODULE]);
         plan["disposable"] = serde_json::json!({
             "layer_tag": LAYER_TAG,
             "lower_ino": project_ino.to_string(),
+            "mask_mib": disposable::guest_mask_mib(),
         });
+        plan["work_masks"] = serde_json::json!(masks.plan);
     }
     Ok(plan.to_string())
 }
@@ -1471,8 +1481,12 @@ fn write_files(
             .and_then(|()| std::fs::set_permissions(path, std::fs::Permissions::from_mode(mode)))
             .map_err(|err| setup_failed(format!("{}: {err}", path.display())))
     };
+    // Die leere Datei der Masken unter `/work` trägt die Rechte, die
+    // bwraps `--ro-bind-data` einer Maske gibt (0600), wie die Masken im
+    // Gast einer Wegwerf-Sitzung (HUM-481); nur lesbar ist der Bind.
+    let empty = layout.files().join("empty");
     for (path, content) in &root.files {
-        write(path, content, 0o400)?;
+        write(path, content, if *path == empty { 0o600 } else { 0o400 })?;
     }
     write(
         &layout.files().join("guest-plan.json"),
@@ -1533,6 +1547,7 @@ impl VmBackend {
             project.ino,
             options.guest_root_probe.command(),
             &root.entries,
+            &root.masks,
             project.layer.is_some(),
         )?;
         write_files(layout, &root, &plan_text, unit)?;

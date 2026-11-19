@@ -2182,6 +2182,7 @@ the binaries inside the disk image.
 | 0.1.0 | A project that chooses a saved server other than the default starts only after the human confirmed that server for that project folder once (`CONFIG_022`); the confirmation lives in the daemon's data directory, never in the project; the daemon writes the project file without following a link (HUM-405, K-02). |
 | 0.1.0 | The disposable sandbox is the default where the system allows it: `sandbox.mode = "auto"` resolves to disposable with bubblewrap 0.11 or newer, a runtime directory on tmpfs and a writable project, and otherwise runs direct, as before, with the warning `SANDBOX_033`; an explicit `disposable` still refuses with `SANDBOX_030` and never falls back (HUM-357, K-24). |
 | 0.1.x | OpenCode reaches a model on the loopback through the proxy: the adapter writes the reserved name `llm.humanitl.internal` into the `baseURL`, and the proxy maps that name only to the configured loopback endpoint with its scheme and port, before the rules; any other use of the name is refused with `PROXY_003` and never resolved ([section 5.1](#the-reserved-name-llmhumanitlinternal-hum-387), HUM-387). |
+| 0.1.x | Kernel level, disposable sandbox: the shim lays the profile's masks over the overlay in the guest as bubblewrap lays them over its overlay, each in the expected mount table, so a write to a masked file fails and a write into a masked folder never reaches the layer; the layer's file system daemon takes only `user.overlay.*` attributes and answers any other with `ENOTSUP` (`--xattrmap`) ([section 14](#14-linux-qemu-micro-vm-kernel-level), K-34, HUM-481). |
 
 ## 13. Linux: Podman
 
@@ -2542,20 +2543,32 @@ listen).
   creates the upper layer in RAM as under bubblewrap, a directory with `upper` and `work`. A
   third file system daemon shares it as an opened descriptor (`--bind-fd`), writable, with
   extended attributes on (`--xattr`) and `CAP_DAC_OVERRIDE` inside its own user namespace only,
-  because the overlay in the guest works as root (its work directory has mode 0000). The project
+  because the overlay in the guest works as root (its work directory has mode 0000). That daemon
+  takes only the overlay's own attributes, `user.overlay.*` (`--xattrmap`, HUM-481); any other
+  attribute the guest sets, gets or removes there fails with `ENOTSUP` and is hidden from its
+  listings, so neither the agent nor root in the guest stores a `user.*`, `security.*` or
+  `trusted.*` attribute in the layer on the host (measured with Linux 7.3 in the guest: the overlay writes `user.overlay.opaque`,
+  `user.overlay.impure` and `user.overlay.uuid`; whiteouts, opaque directories and copy-ups work
+  unchanged). The project
   is read-only twice over: its daemon runs with `--readonly`, and its jail binds the checked
   folder read-only (`--ro-bind-fd`), so a flaw in `--readonly` does not write the project either;
   the unit also names only the layer, not the project, as a writable path. The shim loads the `overlay` module before the module
   lock, mounts the project read-only, compares its inode with the plan, mounts the layer, builds
   the overlay with the options of bubblewrap's unprivileged one (`userxattr`,
   `redirect_dir=nofollow`, no `metacopy`, no index) and moves it alone onto `/work`; neither the
-  project nor the layer is reachable by a path afterwards. Root in the guest can still mount the
+  project nor the layer is reachable by a path afterwards. Then it lays the profile's masks over
+  the overlay as bubblewrap does (HUM-481): an empty tmpfs over every masked folder that exists,
+  writable and as large as the mask on the host, and an empty read-only file over every masked
+  file that exists, each opened beneath `/work` without following a symbolic link and listed in
+  the expected mount table. A write to `.env` fails in the guest as under bubblewrap, and what the
+  agent puts under `.git/hooks` stays in the mask's tmpfs and never reaches the layer. Root in the guest can still mount the
   layer again and write anything into it, so the daemon treats every byte of it as written by
   the attacker: it reads the layer only after every process of the unit has ended, with the scan
   of bubblewrap's disposable sandbox (no device, FIFO, socket, setuid bit, foreign overlay
   attribute or symbolic link out of the project is ever applied), and the scan refuses every
-  change on, under or above a mask of the profile, because under this level the masks lie in the
-  lower layer and a layer written past them must not carry a hook or a secret into the project.
+  change on, under or above a mask of the profile, because root in the guest can write the
+  layer past the masks and a layer written past them must not carry a hook or a secret into the
+  project.
   The scan compares paths with the masks exactly, so a project folder that treats names differing
   only in case as one entry is no disposable sandbox (HUM-482): when the project root or a folder
   on the way to a mask carries the casefold attribute (`chattr +F` on ext4, f2fs or tmpfs), lies
@@ -2609,9 +2622,9 @@ listen).
   written there reaches the host or outlives the session under either backend.
 - **The disposable sandbox needs the overlay module of the guest kernel.** Without it under
   `sandbox.qemu.modules`, `disposable` refuses with `SANDBOX_030`, and `auto` runs direct with
-  `SANDBOX_033`. In the guest the agent may write over a masked path of the project inside its
-  own layer (the mask lies in the lower layer, not on top as under bubblewrap); the scan never
-  applies such a change.
+  `SANDBOX_033`. The masks lie on top of the overlay in the guest as under bubblewrap (HUM-481);
+  only root in the guest, which the agent is not, could remove them, and the scan never applies
+  a change on a mask either way.
 - **The terminal travels as a stream** (K-29); a signal of the host reaches no process of the
   guest, an interrupt is a frame.
 
