@@ -1537,6 +1537,22 @@ of the person's choice".
   forward`, `decided_by: upstream`) and the status of the proxy's answer in `flow.responded`;
   Humanitl claims no allow or block it did not see. The agent gets the proxy's answer unchanged,
   a `403` of the proxy included; after `egress.proxy_response_timeout_secs` it gets `502`.
+- *When the connection closes.* If the request went out through the proxy and the connection
+  then ends without an answer (Burp Suite's Drop with "Suppress Burp error messages in browser",
+  mitmproxy's `444`), the agent gets `502` whose first line is `Closed without an answer by the
+  decision proxy or the target behind it.`, not `Blocked by Humanitl.`, and the flow fails with
+  `upstream_proxy_closed`, not `upstream_connect` (`UpstreamError::ProxyClosed`, HUM-555). An
+  intercepting proxy closes itself; through a tunnel it does not intercept, the target may have
+  closed, and Humanitl cannot always tell which. The reason never says why: a decision there and
+  an error of the proxy look the same. It stands in the history and the recording
+  (`FlowSummary.error`), not in the HMAC audit log, which has no record for a failed flow yet.
+  `upstream_connect` stays for a proxy that is not reachable, refuses `CONNECT` or answers `407`.
+- *Limit: the proxy's own answers.* Humanitl cannot tell an answer the proxy wrote itself from
+  one it relayed from the target; inside the tunnel both come over the proxy's TLS connection, and
+  nothing every proxy shares marks them. Humanitl does not guess at vendor page texts. A Drop
+  with an error page therefore appears in the audit and the history as `200`, as forwarded
+  (Burp Suite's default, "Request was dropped by user."), and so does an error page of the proxy
+  about the target. The Burp Suite guide switches these pages off.
 
 ### Pausing intercept
 

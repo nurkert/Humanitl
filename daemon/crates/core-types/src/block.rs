@@ -27,6 +27,18 @@ pub const CONTENT_TYPE: &str = "text/plain; charset=utf-8";
 /// Erste Zeile jeder Block-Antwort.
 pub const BANNER: &str = "Blocked by Humanitl.";
 
+/// Erste Zeile der `502`, wenn der Weg über den Entscheidungs-Proxy ohne
+/// Antwort endete ([`UpstreamError::ProxyClosed`], HUM-555).
+///
+/// Nicht [`BANNER`]: Humanitl hat nicht entschieden, und der Agent soll es
+/// ihm nicht zuschreiben. Die Zeile nennt beide, die geschlossen haben
+/// können, weil Humanitl sie nicht immer unterscheidet: Ein abfangender
+/// Proxy (Burp Suite, mitmproxy) schließt selbst, durch einen Tunnel ohne
+/// Abfangen schließt womöglich das Ziel. Die Zeilen darunter haben dieselbe
+/// Form wie in jeder anderen Antwort.
+pub const PROXY_CLOSED_BANNER: &str =
+    "Closed without an answer by the decision proxy or the target behind it.";
+
 /// Was der Proxy dem Client schickt, wenn die Anfrage nicht hinausgeht.
 #[derive(Debug, Clone, PartialEq, Eq)]
 pub struct BlockResponse {
@@ -197,18 +209,42 @@ pub fn block_response(
 
 /// Baut die Antwort auf einen gescheiterten Upstream: immer `502`, die
 /// `reason:`-Zeile trägt [`UpstreamError::reason`] mit Präfix `upstream_`.
+///
+/// Die erste Zeile ist [`BANNER`], außer bei
+/// [`UpstreamError::ProxyClosed`]: Dort endete der Weg über den
+/// Entscheidungs-Proxy ohne Antwort, und die Zeile nennt den Proxy oder das
+/// Ziel dahinter statt Humanitl ([`PROXY_CLOSED_BANNER`], HUM-555).
 #[must_use]
 pub fn failed_response(error: UpstreamError, flow: FlowId, host: &HostName) -> BlockResponse {
+    let banner = match error {
+        UpstreamError::ProxyClosed => PROXY_CLOSED_BANNER,
+        UpstreamError::Dns
+        | UpstreamError::Connect
+        | UpstreamError::Tls
+        | UpstreamError::PrivateAddress(_)
+        | UpstreamError::Timeout => BANNER,
+    };
     BlockResponse {
         status: error.http_status(),
-        body: body(error.reason(), flow, host, None),
+        body: body_with(banner, error.reason(), flow, host, None),
         note: None,
     }
 }
 
-/// Der Body in seiner verbindlichen Form.
+/// Der Body in seiner verbindlichen Form, mit [`BANNER`].
 fn body(reason: &str, flow: FlowId, host: &HostName, note: Option<&str>) -> String {
-    let mut out = format!("{BANNER}\nreason: {reason}\nflow: {flow}\nhost: {host}\n");
+    body_with(BANNER, reason, flow, host, note)
+}
+
+/// Der Body mit der ersten Zeile `banner`.
+fn body_with(
+    banner: &str,
+    reason: &str,
+    flow: FlowId,
+    host: &HostName,
+    note: Option<&str>,
+) -> String {
+    let mut out = format!("{banner}\nreason: {reason}\nflow: {flow}\nhost: {host}\n");
     if let Some(note) = note {
         out.push_str("note: ");
         out.push_str(note);
@@ -261,6 +297,23 @@ mod tests {
         assert!(timed_out.body.contains("reason: upstream_timeout\n"));
         let policy = block_response(BlockReason::Timeout, flow, &host(), None);
         assert!(policy.body.contains("reason: timeout\n"));
+    }
+
+    /// Schloss der Entscheidungs-Proxy dahinter, nennt die erste Zeile ihn
+    /// und nicht Humanitl (HUM-555); der Rest hat die gewohnte Form.
+    #[test]
+    fn a_closed_decision_proxy_is_named_instead_of_humanitl() {
+        let flow = FlowId::new();
+        let response = failed_response(UpstreamError::ProxyClosed, flow, &host());
+        assert_eq!(response.status, 502);
+        assert_eq!(
+            response.body,
+            format!(
+                "Closed without an answer by the decision proxy or the target behind it.\nreason: upstream_proxy_closed\n\
+                 flow: {flow}\nhost: api.github.com\n"
+            )
+        );
+        assert!(!response.body.contains("Blocked by Humanitl."));
     }
 
     #[test]

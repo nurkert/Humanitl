@@ -193,6 +193,17 @@ pub enum UpstreamError {
     PrivateAddress(IpAddr),
     /// Das Ziel antwortete nicht rechtzeitig.
     Timeout,
+    /// Der Weg über den Entscheidungs-Proxy dahinter (`egress.proxy`,
+    /// ADR-0022) stand, die Anfrage ging hinaus, und die Verbindung endete
+    /// ohne Antwort (HUM-555).
+    ///
+    /// So endet etwa „Drop" in Burp Suite mit „Suppress Burp error messages
+    /// in browser". Geschlossen hat der Proxy, oder, durch einen Tunnel ohne
+    /// Abfangen, das Ziel dahinter; Humanitl unterscheidet das nicht immer
+    /// und weiß nie, warum. Humanitl war es nicht, und ein Ziel, das nicht
+    /// erreichbar war, auch nicht. Nur auf einem Weg über einen solchen
+    /// Proxy; direkt bleibt ein Abbruch [`UpstreamError::Connect`].
+    ProxyClosed,
 }
 
 impl UpstreamError {
@@ -209,6 +220,7 @@ impl UpstreamError {
             Self::Tls => "tls",
             Self::PrivateAddress(_) => "private_address",
             Self::Timeout => "timeout",
+            Self::ProxyClosed => "proxy_closed",
         }
     }
 
@@ -228,6 +240,7 @@ impl UpstreamError {
             Self::Tls => "upstream_tls",
             Self::PrivateAddress(_) => "upstream_private_address",
             Self::Timeout => "upstream_timeout",
+            Self::ProxyClosed => "upstream_proxy_closed",
         }
     }
 
@@ -1053,12 +1066,13 @@ mod tests {
         BlockReason::ClientAborted,
     ];
 
-    const UPSTREAM_ERRORS: [UpstreamError; 5] = [
+    const UPSTREAM_ERRORS: [UpstreamError; 6] = [
         UpstreamError::Dns,
         UpstreamError::Connect,
         UpstreamError::Tls,
         UpstreamError::PrivateAddress(IpAddr::V4(Ipv4Addr::new(10, 0, 0, 1))),
         UpstreamError::Timeout,
+        UpstreamError::ProxyClosed,
     ];
 
     #[test]

@@ -689,6 +689,13 @@ impl Upstream {
                     UpstreamError::Timeout,
                     diagnostics::response_late(proxy, &request.authority, wait.response),
                 ),
+                // Der Weg über den Entscheidungs-Proxy endete ohne Antwort,
+                // nachdem die Anfrage hinausging: Der Proxy schloss, oder
+                // durch einen Tunnel ohne Abfangen das Ziel dahinter. Wer
+                // von beiden, sieht Humanitl nicht immer; Humanitl war es
+                // nicht, und ein unerreichbares Ziel war es auch nicht
+                // (HUM-555).
+                (Some(_), Failed::Closed) => ForwardError::from(UpstreamError::ProxyClosed),
                 (_, failure) => ForwardError::from(failure.error()),
             })?;
         // Ein `407` auf eine Anfrage in absoluter Form kommt vom Proxy, nicht
@@ -757,7 +764,7 @@ impl Upstream {
             loop {
                 tokio::select! {
                     response = &mut send => {
-                        let response = response.map_err(|_err| Failed::Other(UpstreamError::Connect))?;
+                        let response = response.map_err(|err| Failed::sending(&err))?;
                         // Das Ziel kann antworten, bevor es den Upload gelesen
                         // hat. Dann hält die Verbindung den Rest des Rumpfs
                         // noch, und die Wache läuft weiter, bis er zu Ende ist
@@ -788,7 +795,7 @@ impl Upstream {
         tokio::time::timeout(wait.response, sender.send_request(outgoing))
             .await
             .map_err(|_elapsed| Failed::HeadLate)?
-            .map_err(|_err| Failed::Other(UpstreamError::Connect))
+            .map_err(|err| Failed::sending(&err))
     }
 }
 
@@ -826,22 +833,69 @@ async fn watch_after_head(watch: StreamWatch, connection: tokio::task::JoinHandl
 }
 
 /// Wie das Senden scheiterte: der Kopf der Antwort kam nicht in seiner
-/// Frist, oder etwas anderes. Nur der erste Fall bekommt über einen
-/// Entscheidungs-Proxy einen eigenen Befund (`PROXY_019`).
+/// Frist, die Gegenseite schloss ohne Antwort, oder etwas anderes. Nur der
+/// erste Fall bekommt über einen Entscheidungs-Proxy einen eigenen Befund
+/// (`PROXY_019`); der zweite heißt dort [`UpstreamError::ProxyClosed`]
+/// (HUM-555).
 #[derive(Debug, Clone, Copy)]
 enum Failed {
     /// Der Kopf der Antwort blieb aus, auch nach dem Ende eines gestreamten
     /// Uploads.
     HeadLate,
+    /// Die Verbindung endete, bevor ein Kopf kam, und nicht wegen unserer
+    /// Seite: Die Gegenseite schloss oder brach ab, ohne etwas Unlesbares
+    /// zu schicken.
+    Closed,
     /// Alles andere.
     Other(UpstreamError),
 }
 
 impl Failed {
-    /// Was der Automat verbucht.
+    /// Ordnet einen Fehler von `send_request` ein.
+    ///
+    /// `Closed` nur, wenn die Verbindung endete, bevor ein Kopf kam: hyper
+    /// meldet eine halbe Nachricht (`is_incomplete_message`), eine
+    /// geschlossene oder abgebrochene Verbindung (`is_closed`,
+    /// `is_canceled`), oder darunter liegt ein Dateiende oder ein Abbruch der
+    /// Leitung. Ein Fehler der eigenen Seite (`is_user`, etwa ein Rumpf des
+    /// Clients, der abbrach), ein unlesbarer oder zu großer Kopf
+    /// (`is_parse`) und alles andere bleiben [`UpstreamError::Connect`]
+    /// wie vor HUM-555: Die Gegenseite hat dann etwas geschickt, nur nichts
+    /// Brauchbares, und ein Schließen wäre die falsche Erklärung. Dasselbe
+    /// Muster wie `went_away` im Handler.
+    fn sending(err: &hyper::Error) -> Self {
+        tracing::debug!(%err, "sending upstream failed");
+        if err.is_user() || err.is_parse() || err.is_timeout() {
+            return Self::Other(UpstreamError::Connect);
+        }
+        let ended = err.is_incomplete_message()
+            || err.is_closed()
+            || err.is_canceled()
+            || std::error::Error::source(err)
+                .and_then(|source| source.downcast_ref::<std::io::Error>())
+                .is_some_and(|io| {
+                    matches!(
+                        io.kind(),
+                        std::io::ErrorKind::UnexpectedEof
+                            | std::io::ErrorKind::ConnectionReset
+                            | std::io::ErrorKind::ConnectionAborted
+                            | std::io::ErrorKind::BrokenPipe
+                    )
+                });
+        if ended {
+            Self::Closed
+        } else {
+            Self::Other(UpstreamError::Connect)
+        }
+    }
+
+    /// Was der Automat verbucht, wenn kein Entscheidungs-Proxy dazwischen
+    /// steht. Direkt bleibt ein Schließen des Ziels
+    /// [`UpstreamError::Connect`] wie vor HUM-555.
     const fn error(self) -> UpstreamError {
         match self {
             Self::HeadLate => UpstreamError::Timeout,
+            Self::Closed => UpstreamError::Connect,
             Self::Other(error) => error,
         }
     }

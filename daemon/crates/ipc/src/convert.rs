@@ -813,6 +813,7 @@ pub const fn upstream_error_to_proto(error: UpstreamError) -> v1::UpstreamError 
         UpstreamError::Tls => v1::UpstreamError::Tls,
         UpstreamError::PrivateAddress(_) => v1::UpstreamError::PrivateAddress,
         UpstreamError::Timeout => v1::UpstreamError::Timeout,
+        UpstreamError::ProxyClosed => v1::UpstreamError::ProxyClosed,
     }
 }
 
@@ -1748,7 +1749,8 @@ fn resolved_ip(error: UpstreamError) -> String {
         UpstreamError::Dns
         | UpstreamError::Connect
         | UpstreamError::Tls
-        | UpstreamError::Timeout => String::new(),
+        | UpstreamError::Timeout
+        | UpstreamError::ProxyClosed => String::new(),
     }
 }
 
@@ -2115,7 +2117,10 @@ pub fn recorded_summary_to_proto(row: &RecordedSummary) -> v1::FlowSummary {
         passthrough: row.passthrough,
         deadline: None,
         origin_tool: String::new(),
-        upstream_error: 0,
+        // Aus der Spalte `error` zurück (HUM-555): Eine aufgezeichnete Zeile
+        // endet als `recorded`, und ohne diese Abbildung verlöre die Historie
+        // nach einem Neustart den Grund, an dem der Flow scheiterte.
+        upstream_error: upstream_error_from_reason(row.error.as_deref().unwrap_or_default()) as i32,
         // Der Grund steht in der Spalte, nicht im Zustand: Ein abgebrochener
         // TLS-Handschlag endet als `recorded`, nicht als `failed` (HUM-045).
         error: row.error.clone().unwrap_or_default(),
@@ -2178,6 +2183,24 @@ fn decision_kind_from_name(name: &str) -> v1::DecisionKind {
         "block" => v1::DecisionKind::Block,
         "timed_out" => v1::DecisionKind::TimedOut,
         _ => v1::DecisionKind::Unspecified,
+    }
+}
+
+/// Der Upstream-Fehler hinter seinem Text in der Aufzeichnung
+/// ([`UpstreamError`] als `Display`, also [`UpstreamError::reason`], bei
+/// `upstream_private_address` mit `:<ip>` dahinter). Verglichen wird der Teil
+/// vor dem ersten `:`; alles andere, auch `tls_handshake_failed:<klasse>`,
+/// ist kein Upstream-Fehler.
+fn upstream_error_from_reason(reason: &str) -> v1::UpstreamError {
+    let name = reason.split_once(':').map_or(reason, |(name, _)| name);
+    match name {
+        "upstream_dns" => v1::UpstreamError::Dns,
+        "upstream_connect" => v1::UpstreamError::Connect,
+        "upstream_tls" => v1::UpstreamError::Tls,
+        "upstream_private_address" => v1::UpstreamError::PrivateAddress,
+        "upstream_timeout" => v1::UpstreamError::Timeout,
+        "upstream_proxy_closed" => v1::UpstreamError::ProxyClosed,
+        _ => v1::UpstreamError::Unspecified,
     }
 }
 
@@ -2322,7 +2345,8 @@ mod tests {
     use super::{
         CheckResult, IsolationCheck, RecordedSummary, block_note, check_result_to_proto,
         diagnostic_to_proto, flow_event_to_proto, matches_filter, record_to_detail,
-        record_to_summary, recorded_summary_to_proto, rule_from_proto, rule_to_proto, wall_clock,
+        record_to_summary, recorded_summary_to_proto, rule_from_proto, rule_to_proto,
+        upstream_error_to_proto, wall_clock,
     };
     use crate::domains::DomainTable;
     use crate::v1;
@@ -2819,6 +2843,61 @@ mod tests {
         );
         assert_eq!(proto.block_reason, v1::BlockReason::Unspecified as i32);
         assert_eq!(proto.status, 404);
+    }
+
+    /// Jeder Upstream-Fehler übersteht den Weg durch die Aufzeichnung
+    /// (HUM-555): `Display` schreibt die Spalte `error`, und eine geladene
+    /// Zeile trägt danach dieselbe Wire-Form wie das Ereignis `Failed`. Ein
+    /// anderer Text in der Spalte ist kein Upstream-Fehler.
+    #[test]
+    fn every_upstream_error_survives_the_recording() {
+        use std::net::{IpAddr, Ipv4Addr};
+        let ip = IpAddr::V4(Ipv4Addr::new(10, 0, 0, 5));
+        for error in [
+            UpstreamError::Dns,
+            UpstreamError::Connect,
+            UpstreamError::Tls,
+            UpstreamError::PrivateAddress(ip),
+            UpstreamError::Timeout,
+            UpstreamError::ProxyClosed,
+        ] {
+            // Fehlt hier eine Variante, scheitert der Match beim Übersetzen.
+            match error {
+                UpstreamError::Dns
+                | UpstreamError::Connect
+                | UpstreamError::Tls
+                | UpstreamError::PrivateAddress(_)
+                | UpstreamError::Timeout
+                | UpstreamError::ProxyClosed => {}
+            }
+            let row = RecordedSummary {
+                state: "recorded".to_owned(),
+                error: Some(error.to_string()),
+                ..recorded_row()
+            };
+            let proto = recorded_summary_to_proto(&row);
+            assert_eq!(
+                proto.upstream_error,
+                upstream_error_to_proto(error) as i32,
+                "{error}"
+            );
+            assert_eq!(proto.error, error.to_string());
+        }
+        for other in [
+            "tls_handshake_failed:alert_unknown_ca",
+            "tls_handshake_failed",
+            "",
+        ] {
+            let row = RecordedSummary {
+                error: (!other.is_empty()).then(|| other.to_owned()),
+                ..recorded_row()
+            };
+            assert_eq!(
+                recorded_summary_to_proto(&row).upstream_error,
+                v1::UpstreamError::Unspecified as i32,
+                "{other:?}"
+            );
+        }
     }
 
     /// Eine gewöhnliche, freigegebene Zeile der Aufzeichnung.

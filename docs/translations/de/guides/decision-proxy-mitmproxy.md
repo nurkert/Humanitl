@@ -1,6 +1,6 @@
 ---
 source: guides/decision-proxy-mitmproxy.md
-source-sha256: 6bc84769cfe4de6b800096fd23b438d8b9011de6551c580ca0bd691f1be5b811
+source-sha256: 13df8e11920a509f934b48000970f0a2bdffa4c9dab69b46c5ddc033d58b0f60
 lang: de
 ---
 # mitmproxy hinter Humanitl
@@ -250,8 +250,8 @@ Der Statuscode `444` lässt mitmproxy ohne Antwort auflegen.
 |---|---|
 | weitergelassen | die Antwort des Ziels, unverändert |
 | abgelehnt mit `block_list` und `403` | das `403` von mitmproxy, unverändert, sofort |
-| `block_list` mit `444` | `502` von Humanitl, sofort |
-| beendet, während sie angehalten war (`X`) | `502` von Humanitl, nach `egress.proxy_response_timeout_secs` |
+| `block_list` mit `444` | `502`, sofort, hinter Humanitl geschlossen (`upstream_proxy_closed`; seit HUM-555 aus dem Code abgeleitet, mit mitmproxy nicht noch einmal ausprobiert) |
+| beendet, während sie angehalten war (`X`) | `502` von Humanitl, nach `egress.proxy_response_timeout_secs` (seit HUM-555 nicht noch einmal ausprobiert) |
 | niemand entscheidet | `502` von Humanitl, nach `egress.proxy_response_timeout_secs` |
 
 Beobachtet: Eine Anfrage, die beendet wurde, während sie angehalten war, ging nicht
@@ -261,7 +261,9 @@ mitmproxy 12.3.1 markiert
 einen angehaltenen Fluss als nicht mehr abgefangen, ohne ihn fortzusetzen, und ein
 Kommentar dort nennt die Art, wie das Beenden signalisiert wird, „not ideal"
 ([mitmproxy#4711](https://github.com/mitmproxy/mitmproxy/issues/4711)). Soll der
-Agent eine Ablehnung sofort erfahren, lehne mit `block_list` ab.
+Agent eine Ablehnung sofort erfahren, lehne mit `block_list` ab. Schlösse ein
+späteres mitmproxy die Verbindung beim Beenden, bekäme der Agent stattdessen
+sofort `502` mit `upstream_proxy_closed`.
 
 `egress.proxy_response_timeout_secs` (Vorgabe 300 Sekunden) ist, wie lange Humanitl
 auf den Kopf der Antwort von mitmproxy wartet, weil dort ein Mensch entscheiden kann.

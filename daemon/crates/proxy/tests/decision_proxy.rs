@@ -867,3 +867,69 @@ async fn a_streamed_upload_past_the_proxy_response_timeout_is_only_proxy_019() {
         .collect();
     assert_eq!(codes, [PROXY_019.as_str()]);
 }
+
+/// Eine Gegenstelle, die den Kopf jeder Anfrage liest und dann `reply`
+/// schreibt (leer: nichts) und schließt. Steht als Ziel oder als
+/// Entscheidungs-Proxy für `http://` (HUM-555).
+async fn answering_with(reply: &'static [u8]) -> std::net::SocketAddr {
+    use tokio::io::AsyncWriteExt as _;
+    let listener = TcpListener::bind("127.0.0.1:0").await.unwrap();
+    let addr = listener.local_addr().unwrap();
+    tokio::spawn(async move {
+        while let Ok((mut tcp, _)) = listener.accept().await {
+            tokio::spawn(async move {
+                if support::stand_in::read_head(&mut tcp).await.is_some() {
+                    let _ = tcp.write_all(reply).await;
+                }
+                let _ = tcp.shutdown().await;
+            });
+        }
+    });
+    addr
+}
+
+/// Schließt der Entscheidungs-Proxy nach der Anfrage ohne Antwort, heißt das
+/// `ProxyClosed`, nicht `Connect` (HUM-555).
+#[tokio::test(flavor = "multi_thread")]
+async fn a_proxy_that_closes_without_an_answer_is_proxy_closed() {
+    let file = ca_file(&ForeignCa::new());
+    let proxy = answering_with(b"").await;
+    let resolver = Arc::new(MockResolver::answering(PUBLIC));
+    let failure = upstream(&config(proxy, &file.path, ProxyResolve::Proxy), &resolver)
+        .forward(&named(Scheme::Http, 80), Bytes::new(), false)
+        .await
+        .unwrap_err();
+    assert_eq!(failure.error, UpstreamError::ProxyClosed);
+}
+
+/// Schickt der Proxy etwas Unlesbares, hat er nicht geschlossen: Das bleibt
+/// `Connect` wie vor HUM-555. Fängt `Failed::sending` jeden Fehler außer
+/// `is_user` als Schließen, wird der Test rot.
+#[tokio::test(flavor = "multi_thread")]
+async fn a_proxy_that_answers_garbage_did_not_close() {
+    let file = ca_file(&ForeignCa::new());
+    let proxy = answering_with(b"not http at all\r\n\r\n").await;
+    let resolver = Arc::new(MockResolver::answering(PUBLIC));
+    let failure = upstream(&config(proxy, &file.path, ProxyResolve::Proxy), &resolver)
+        .forward(&named(Scheme::Http, 80), Bytes::new(), false)
+        .await
+        .unwrap_err();
+    assert_eq!(failure.error, UpstreamError::Connect);
+}
+
+/// Direkt, ohne Entscheidungs-Proxy, bleibt ein Ziel, das ohne Antwort
+/// schließt, `Connect` (HUM-555): `ProxyClosed` gibt es nur über den Proxy.
+/// Wird `(Some(_), Failed::Closed)` in `send_via` zu `(_, Failed::Closed)`,
+/// wird der Test rot.
+#[tokio::test(flavor = "multi_thread")]
+async fn a_direct_target_that_closes_without_an_answer_stays_connect() {
+    let target = answering_with(b"").await;
+    let resolver = Arc::new(MockResolver::answering(IpAddr::V4(Ipv4Addr::LOCALHOST)));
+    let mut config = Config::default();
+    config.tls.trust_system_store = false;
+    let failure = upstream(&config, &resolver)
+        .forward(&named(Scheme::Http, target.port()), Bytes::new(), true)
+        .await
+        .unwrap_err();
+    assert_eq!(failure.error, UpstreamError::Connect);
+}

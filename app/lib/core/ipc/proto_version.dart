@@ -144,7 +144,11 @@ abstract final class ProtoVersion {
   /// opens the same field or folder chooser as an empty `ChangeSetting` of
   /// a daemon before 1.50, which the app still reads that way (HUM-507).
   /// 48 and 49 have no reader here.
-  static const int minor = 50;
+  /// Raised to 51 with `UPSTREAM_ERROR_PROXY_CLOSED`: a failed flow says
+  /// that the connection through the decision proxy closed without an
+  /// answer, by the proxy or the target behind it, instead of a connection
+  /// error (HUM-555).
+  static const int minor = 51;
 
   /// `major.minor` as text.
   static const String text = '$major.$minor';

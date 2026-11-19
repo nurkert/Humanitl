@@ -1609,6 +1609,25 @@ freigegeben durch eine Regel, einen Menschen oder den Entscheidungs-Proxy deiner
   behauptet keine Freigabe und keine Sperre, die es nicht gesehen hat. Der Agent bekommt die
   Antwort des Proxys unverändert, auch ein `403`; nach `egress.proxy_response_timeout_secs` ein
   `502`.
+- *Wenn die Verbindung schließt.* Ging die Anfrage über den Proxy hinaus und endet die
+  Verbindung danach ohne Antwort („Drop" in Burp Suite mit „Suppress Burp error messages in
+  browser", `444` in mitmproxy), bekommt der Agent ein `502`, dessen erste Zeile `Closed without
+  an answer by the decision proxy or the target behind it.` lautet, nicht `Blocked by Humanitl.`,
+  und der Fluss scheitert mit `upstream_proxy_closed`, nicht mit `upstream_connect`
+  (`UpstreamError::ProxyClosed`, HUM-555). Ein abfangender Proxy schließt selbst; durch einen
+  Tunnel, den er nicht abfängt, hat womöglich das Ziel geschlossen, und Humanitl kann das nicht
+  immer unterscheiden. Warum, sagt der Grund nie: Eine Entscheidung dort und ein Fehler des
+  Proxys sehen gleich aus. Er steht in der Historie und der Aufzeichnung (`FlowSummary.error`),
+  nicht im HMAC-Audit-Log, das für einen gescheiterten Fluss noch keinen Eintrag hat.
+  `upstream_connect` bleibt für einen Proxy, der nicht erreichbar ist, `CONNECT` ablehnt oder
+  `407` sagt.
+- *Grenze: eigene Antworten des Proxys.* Humanitl kann eine Antwort, die der Proxy selbst
+  schreibt, nicht von einer unterscheiden, die er vom Ziel weiterreicht; im Tunnel kommen beide
+  über seine TLS-Verbindung, und nichts, was alle Proxys teilen, kennzeichnet sie. Humanitl rät
+  keine Seitentexte eines Herstellers. Ein „Drop" mit Fehlerseite erscheint deshalb im Audit und
+  in der Historie als `200`, als weitergeleitet (die Vorgabe von Burp Suite, „Request was dropped
+  by user."), ebenso eine Fehlerseite des Proxys über das Ziel. Die Anleitung zu Burp Suite
+  schaltet diese Seiten ab.
 
 ## 7. Die Regel-Engine
 

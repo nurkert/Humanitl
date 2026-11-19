@@ -241,8 +241,8 @@ The status code `444` makes mitmproxy hang up without an answer.
 |---|---|
 | resumed | the target's answer, unchanged |
 | refused with `block_list` and `403` | mitmproxy's `403`, unchanged, at once |
-| `block_list` with `444` | `502` from Humanitl, at once |
-| killed while held (`X`) | `502` from Humanitl, after `egress.proxy_response_timeout_secs` |
+| `block_list` with `444` | `502`, at once, closed behind Humanitl (`upstream_proxy_closed`; derived from the code since HUM-555, not tried again with mitmproxy) |
+| killed while held (`X`) | `502` from Humanitl, after `egress.proxy_response_timeout_secs` (not tried again since HUM-555) |
 | nobody decides | `502` from Humanitl, after `egress.proxy_response_timeout_secs` |
 
 Observed: a request killed while it was held was not forwarded, but its connection
@@ -251,7 +251,9 @@ stayed open, so Humanitl waits until the deadline. In mitmproxy 12.3.1
 marks a held flow as no longer intercepted without resuming it, and a comment there
 calls the way killing is signalled "not ideal"
 ([mitmproxy#4711](https://github.com/mitmproxy/mitmproxy/issues/4711)). If the agent
-should learn of a refusal at once, refuse with `block_list`.
+should learn of a refusal at once, refuse with `block_list`. Should a later
+mitmproxy close the connection on a kill, the agent would get `502` with
+`upstream_proxy_closed` at once instead.
 
 `egress.proxy_response_timeout_secs` (default 300 seconds) is how long Humanitl
 waits for the head of mitmproxy's answer, because a person may be deciding there.

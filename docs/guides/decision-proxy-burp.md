@@ -298,10 +298,10 @@ was not observed in the AI trial (open for the owner walkthrough, HUM-553).
 | In Burp | The agent gets |
 |---|---|
 | forwarded | the target's answer, unchanged |
-| dropped, with "Suppress Burp error messages in browser" on | `502` from Humanitl, at once |
+| dropped, with "Suppress Burp error messages in browser" on | `502`, at once, closed behind Humanitl (`upstream_proxy_closed`) |
 | dropped, with Burp's default | `200 OK` from Burp with an HTML page "Request was dropped by user.", at once |
 | Burp cannot resolve the target's name, Burp's default | `200 OK` from Burp with an HTML page "Unknown host: …", at once |
-| Burp does not trust the target ("Verify upstream TLS" on), with "Suppress Burp error messages in browser" on | `502` from Humanitl, at once |
+| Burp does not trust the target ("Verify upstream TLS" on), with "Suppress Burp error messages in browser" on | `502`, at once, closed behind Humanitl (`upstream_proxy_closed`) |
 | nobody decides | `502` from Humanitl, after `egress.proxy_response_timeout_secs` |
 
 All rows observed in the trial. Not observed: an unknown name with the setting on,
@@ -315,6 +315,36 @@ not resolve the target's name ("Unknown host"). With
 on, which "suppress[es] the messages that are usually sent to the browser when
 errors occur", Burp closes the connection instead, and Humanitl answers `502` at
 once. The file from step 1 switches it on.
+
+In the trial that `502` still read `Blocked by Humanitl.` with the reason
+`upstream_connect`, as if Humanitl had decided or the target were down. Since
+HUM-555 its first line names the proxy behind, or the target behind it, instead
+of Humanitl, and the history records the flow as failed with that reason
+(`FlowSummary.error`), not as a target nobody reached. The HMAC audit log has no
+record for a failed flow yet; it shows only the forward.
+
+```text
+Closed without an answer by the decision proxy or the target behind it.
+reason: upstream_proxy_closed
+flow: <flow id>
+host: <host>
+```
+
+This follows from the code and the test with the stand-in proxy; it was not
+tried again with Burp. Humanitl cannot tell a Drop from one of Burp's own errors
+with the setting on: both close without an answer, so `upstream_proxy_closed`
+says where it closed, not why. `upstream_connect` stays for a Burp that is not
+reachable, refuses `CONNECT` or answers `407`.
+
+**A Drop with Burp's error page stays a `200` in Humanitl's records.** Humanitl
+cannot tell an answer Burp wrote itself from one Burp relayed from the target:
+inside the tunnel both arrive over Burp's TLS connection with Burp's certificate,
+and nothing in the answer marks it in a way every proxy shares. Recognising
+"Request was dropped by user." or "Unknown host" would mean guessing at Burp's page
+texts, which can change with any version and which a target can imitate; Humanitl
+does not do that. With Burp's default, a dropped request appears in the audit and
+the history as forwarded with status `200`. Keep "Suppress Burp error messages in
+browser" on.
 
 The last row is Humanitl's own behaviour and holds for any proxy behind it; in the
 trial it came after the deadline, with the reason `upstream_timeout` in the body.
@@ -371,7 +401,8 @@ These are in [SECURITY.md](../SECURITY.md#the-proxy-behind-decides-holdask_mode-
   because Burp resolves the name again (see
   [Who resolves names](#who-resolves-names)).
 - Burp's default answer to "Drop" and to its own errors is `200 OK` with an error
-  page (step 7).
+  page (step 7). Humanitl cannot tell that page from the target's answer: a Drop
+  with an error page appears in the audit and the history as `200`.
 - The isolation does not move: the agent reaches only Humanitl, the connection to
   Burp starts in the daemon.
 - The LLM passthrough declared for a session is an `allow` that ranks ahead of your
