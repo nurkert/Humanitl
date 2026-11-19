@@ -937,7 +937,8 @@ pub fn event_to_proto(event: &FlowEvent, flow: &FakeFlow) -> v1::FlowEvent {
                 UpstreamError::Dns
                 | UpstreamError::Connect
                 | UpstreamError::Tls
-                | UpstreamError::Timeout => String::new(),
+                | UpstreamError::Timeout
+                | UpstreamError::ProxyClosed => String::new(),
             },
         }),
         FlowEvent::TimedOut { .. } => Event::TimedOut(v1::FlowRef { flow_id }),

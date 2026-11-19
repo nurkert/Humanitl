@@ -50,7 +50,7 @@
 //! | Ein Werkzeug, das früher aufgibt, beendet die Anfrage, eine neue wartet von vorn | `ClientTimeout` in `HoldQueue::hold`, die Karte verlässt die Warteschlange (HUM-308) |
 //! | `curl` ohne `--max-time` wartet von selbst | `curl` hat keine eigene Gesamtfrist (HUM-308) |
 //! | Ohne Frage: nichts wartet, abgelehnt `403`, alles andere sofort `504` | `ask_mode = none` setzt die Frist auf null; `Matched { Block }` bleibt `403` |
-//! | Mit `upstream`: wartet bis `{timeout}`s, dann `502` mit `upstream_timeout`; ein weiterer Proxy antwortet, seine Ablehnung beginnt nicht unbedingt mit `Blocked by Humanitl.`, sein `403` heißt nicht erlaubt (HUM-512) | `DecisionSource::Upstream` in `AskPipeline`; `egress.proxy_response_timeout_secs`, `UpstreamError::Timeout`; die Antwort des Entscheidungs-Proxys geht unverändert an den Agenten |
+//! | Mit `upstream`: wartet bis `{timeout}`s, dann `502` mit `upstream_timeout`; ein weiterer Proxy antwortet, seine Ablehnung beginnt nicht unbedingt mit `Blocked by Humanitl.`, sein `403` heißt nicht erlaubt (HUM-512); schließt es dahinter ohne Antwort, sofort `502` mit `upstream_proxy_closed`, nicht unverändert wiederholen (HUM-555) | `DecisionSource::Upstream` in `AskPipeline`; `egress.proxy_response_timeout_secs`, `UpstreamError::Timeout`; die Antwort des Entscheidungs-Proxys geht unverändert an den Agenten; `UpstreamError::ProxyClosed` aus `Upstream::send_via` mit `humanitl_core::block::PROXY_CLOSED_BANNER` |
 //! | Nach einem `504` einmal Zugang mit `POST /ask` beantragen und später einmal wiederholen, in beiden Ask-Modi gleich | Ein neuer Flow wird nach den dann geltenden Regeln entschieden |
 //!
 //! Die Frist, die der Text für `curl --max-time` vorschlägt, ist
@@ -425,6 +425,29 @@ mod tests {
                 assert!(
                     text.lines().count() > 1,
                     "{language:?}: the block {name} keeps its lines"
+                );
+            }
+        }
+    }
+
+    /// Nur hinter einem Entscheidungs-Proxy (`upstream`) erfährt der Agent,
+    /// dass ein Schließen ohne Antwort `502` mit `upstream_proxy_closed` ist
+    /// und nicht wiederholt wird (HUM-555); die anderen Modi kennen den Grund
+    /// nicht, weil es dort keinen Proxy dahinter gibt.
+    #[test]
+    fn only_the_upstream_variant_names_the_closed_proxy() {
+        for language in [Language::En, Language::De] {
+            let upstream = render(language, AskMode::Upstream, 300, Some(HOST)).unwrap();
+            assert!(
+                upstream.contains("`502` und `reason: upstream_proxy_closed`")
+                    || upstream.contains("`502` and `reason: upstream_proxy_closed`"),
+                "{language:?}: {upstream}"
+            );
+            for ask_mode in [AskMode::Ui, AskMode::None] {
+                let text = render(language, ask_mode, 300, Some(HOST)).unwrap();
+                assert!(
+                    !text.contains("upstream_proxy_closed"),
+                    "{language:?}/{ask_mode:?}"
                 );
             }
         }

@@ -118,6 +118,10 @@ pub enum Verdict {
     /// Verbindung schließen ohne Antwort, wie „kill" oder `block_list` mit
     /// `444`.
     Kill,
+    /// Die Anfrage so lange halten, wie ein Mensch überlegt, dann die
+    /// Verbindung ohne Antwort schließen: „Drop" in Burp Suite mit „Suppress
+    /// Burp error messages in browser" (HUM-555).
+    HoldThenKill(Duration),
 }
 
 /// Wie der abfangende Stellvertreter entscheidet und wohin er weiterleitet.
@@ -332,6 +336,10 @@ async fn serve(mut tcp: TcpStream, tls: Leaf, behaviour: Behaviour, seen: Arc<Mu
         }
         let answer = match (intercept.decide)(&line) {
             Verdict::Kill => return,
+            Verdict::HoldThenKill(hold) => {
+                tokio::time::sleep(hold).await;
+                return;
+            }
             Verdict::Refuse(status) => format!(
                 "HTTP/1.1 {status} Stand-in\r\nContent-Length: 7\r\nConnection: close\r\n\r\nrefused"
             )

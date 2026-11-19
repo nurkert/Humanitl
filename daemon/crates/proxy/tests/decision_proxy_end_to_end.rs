@@ -17,7 +17,11 @@
 //!   genau einmal auf; die Antwort des Ziels erreicht den Agenten.
 //! - `"proxy"`: `CONNECT host:port`, Humanitl löst nichts auf.
 //! - Weiter (`200` vom Ziel), Ablehnung (`403` des Proxys, das Ziel sieht
-//!   nichts), Kappen (`502` von Humanitl).
+//!   nichts), Kappen, auch nach dem Halten wie „Drop" in Burp ohne
+//!   Fehlerseite (`502`, deren erste Zeile den Proxy oder das Ziel dahinter
+//!   nennt, nicht Humanitl, und der Flow scheitert mit `ProxyClosed`,
+//!   HUM-555); ein Proxy, der gar nicht erreichbar ist, bleibt
+//!   `upstream_connect`.
 //! - Eine Regel `block` erreicht den Stellvertreter nie.
 //!
 //! Mutationsbeweise (von Hand, je eine Zeile, danach zurückgesetzt):
@@ -37,15 +41,24 @@
 //! - `daemon/crates/proxy/src/pipeline.rs`: `Matched { Block }` an die innere
 //!   Strategie statt zu sperren: `a_block_rule_never_reaches_the_stand_in`
 //!   wird rot.
+//! - `daemon/crates/proxy/src/upstream.rs`, `send_via`: `Failed::Closed`
+//!   über den Proxy wieder als `UpstreamError::Connect`, der alte Grund:
+//!   `a_killed_request_reaches_the_agent_as_502` und
+//!   `a_drop_after_holding_names_the_proxy_behind_and_not_humanitl` werden
+//!   rot (HUM-555).
+//! - `daemon/crates/core-types/src/block.rs`, `failed_response`: `BANNER`
+//!   statt `PROXY_CLOSED_BANNER` für `ProxyClosed`: dieselben beiden Tests
+//!   werden rot.
 
 #![allow(clippy::unwrap_used, clippy::expect_used, clippy::panic)]
 
 mod support;
 
 use std::sync::Arc;
+use std::time::{Duration, Instant};
 
 use humanitl_config::{AskMode, ProxyResolve};
-use humanitl_core::{Decision, DecisionSource, FlowEvent};
+use humanitl_core::{Decision, DecisionSource, FlowEvent, UpstreamError};
 use humanitl_proxy::egress::from_config;
 use hyper::StatusCode;
 use support::stand_in::{CaFile, HOST, Intercept, PUBLIC, StandIn, Verdict, ca_file, config};
@@ -60,16 +73,31 @@ const RULES: &str = "version: 1\n\
      \x20     host: blocked.test\n";
 
 /// Was der Mensch am Stellvertreter tut, nach dem Pfad: `/refuse` lehnt er
-/// mit `403` ab (in mitmproxy `block_list`), `/kill` kappt er, alles
+/// mit `403` ab (in mitmproxy `block_list`), `/kill` kappt er, `/drop` hält
+/// er eine Weile und kappt dann (Burp „Drop" ohne Fehlerseite), alles
 /// andere lässt er weiter.
 fn by_path(line: &str) -> Verdict {
     if line.contains(" /refuse ") {
         Verdict::Refuse(403)
     } else if line.contains(" /kill ") {
         Verdict::Kill
+    } else if line.contains(" /drop ") {
+        Verdict::HoldThenKill(DROP_AFTER)
     } else {
         Verdict::Resume
     }
+}
+
+/// So lange hält der Stellvertreter eine Anfrage an `/drop`, bevor er sie
+/// verwirft: länger als nichts, kürzer als jede Frist.
+const DROP_AFTER: Duration = Duration::from_millis(400);
+
+/// Der Fehler des Flows aus `Failed`, falls es eines gab.
+fn failure(events: &Events) -> Option<UpstreamError> {
+    events.seen.iter().find_map(|event| match event {
+        FlowEvent::Failed { error, .. } => Some(*error),
+        _ => None,
+    })
 }
 
 /// Ziel, Stellvertreter und Humanitl davor, im Modus `upstream`.
@@ -212,11 +240,88 @@ async fn a_refusal_at_the_stand_in_reaches_the_agent_as_403_and_the_target_sees_
 #[tokio::test(flavor = "multi_thread")]
 async fn a_killed_request_reaches_the_agent_as_502() {
     let setup = setup(ProxyResolve::Humanitl).await;
+    let mut events = setup.proxy.events();
 
-    let (status, _body) = agent_get(&setup.proxy, HOST, "/kill").await;
+    let (status, body) = agent_get(&setup.proxy, HOST, "/kill").await;
     assert_eq!(status, StatusCode::BAD_GATEWAY);
+    assert!(
+        body.starts_with(
+            "Closed without an answer by the decision proxy or the target behind it.\n"
+        ),
+        "{body}"
+    );
     assert_eq!(setup.stand_in.seen().inner_lines, ["GET /kill HTTP/1.1"]);
     assert_eq!(setup.target.hits(), 0);
+    events.wait_for("failed").await;
+    assert_eq!(failure(&events), Some(UpstreamError::ProxyClosed));
+}
+
+/// „Drop" ohne Fehlerseite (HUM-555): Der Stellvertreter hält die Anfrage
+/// und schließt dann ohne Antwort. Der Agent liest, dass hinter Humanitl
+/// geschlossen wurde, nicht „Blocked by Humanitl.", und der Flow scheitert mit
+/// `ProxyClosed`, nicht mit `Connect` wie ein Ziel, das niemand erreicht.
+/// Humanitl selbst hat nur weitergereicht (`Allow` von `Upstream`).
+#[tokio::test(flavor = "multi_thread")]
+async fn a_drop_after_holding_names_the_proxy_behind_and_not_humanitl() {
+    for resolve in [ProxyResolve::Humanitl, ProxyResolve::Proxy] {
+        let setup = setup(resolve).await;
+        let mut events = setup.proxy.events();
+
+        let started = Instant::now();
+        let (status, body) = agent_get(&setup.proxy, HOST, "/drop").await;
+        assert!(
+            started.elapsed() >= DROP_AFTER,
+            "{resolve:?}: the answer came before the drop"
+        );
+        assert_eq!(status, StatusCode::BAD_GATEWAY, "{resolve:?}: {body}");
+        let flow = events.wait_for("failed").await.flow_id().unwrap();
+        assert_eq!(
+            body,
+            format!(
+                "Closed without an answer by the decision proxy or the target behind it.\n\
+                 reason: upstream_proxy_closed\nflow: {flow}\nhost: {HOST}\n"
+            ),
+            "{resolve:?}"
+        );
+        assert!(!body.contains("Blocked by Humanitl."), "{resolve:?}");
+        assert_eq!(
+            failure(&events),
+            Some(UpstreamError::ProxyClosed),
+            "{resolve:?}: the record says it closed behind Humanitl, not an unreachable target"
+        );
+        assert_eq!(
+            decisions(&events),
+            [(Decision::Allow, DecisionSource::Upstream)],
+            "{resolve:?}: Humanitl forwarded; the drop is the proxy's"
+        );
+        assert_eq!(setup.stand_in.seen().inner_lines, ["GET /drop HTTP/1.1"]);
+        assert!(setup.stand_in.seen().dialed.is_empty());
+        assert_eq!(setup.target.hits(), 0, "{resolve:?}");
+    }
+}
+
+/// Die Gegenprobe: Ist der Proxy dahinter gar nicht erreichbar, bleibt es
+/// ein Weg, der nicht zustande kam (`upstream_connect`, von Humanitl), und
+/// wird kein Schließen des Proxys.
+#[tokio::test(flavor = "multi_thread")]
+async fn an_unreachable_proxy_stays_a_connect_failure_of_humanitl() {
+    let Setup {
+        target,
+        stand_in,
+        proxy,
+        _ca,
+    } = setup(ProxyResolve::Proxy).await;
+    // Ohne den Stellvertreter lauscht niemand mehr auf seiner Adresse.
+    drop(stand_in);
+    let mut events = proxy.events();
+
+    let (status, body) = agent_get(&proxy, HOST, "/echo").await;
+    assert_eq!(status, StatusCode::BAD_GATEWAY, "{body}");
+    assert!(body.starts_with("Blocked by Humanitl.\n"), "{body}");
+    assert!(body.contains("\nreason: upstream_connect\n"), "{body}");
+    events.wait_for("failed").await;
+    assert_eq!(failure(&events), Some(UpstreamError::Connect));
+    assert_eq!(target.hits(), 0);
 }
 
 #[tokio::test(flavor = "multi_thread")]

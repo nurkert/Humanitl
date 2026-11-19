@@ -5702,6 +5702,74 @@ obwohl die Entscheidung der Proxy dahinter getroffen hat. Die Anleitung
 1. Weder Agent noch Audit schreiben eine Entscheidung des Proxys dahinter
    Humanitl zu.
 
+### Stand nach der Umsetzung (2026-11-19)
+Neuer Upstream-Fehler `UpstreamError::ProxyClosed`, Grund
+`upstream_proxy_closed`, auf der Leitung `UPSTREAM_ERROR_PROXY_CLOSED = 6`
+(Protokoll 1.51), in Dart `UpstreamError.proxyClosed`. `Upstream::send`
+ordnet einen Fehler von `send_request` nur dann als `Failed::Closed` ein,
+wenn die Verbindung ohne Kopf endete (`is_incomplete_message`, `is_closed`,
+`is_canceled`, darunter Dateiende oder Abbruch der Leitung); `is_user`,
+`is_parse` und `is_timeout` bleiben `Connect`, wie das Muster `went_away`
+im Handler. `send_via` macht aus `Closed` nur auf einem Weg über einen
+Entscheidungs-Proxy `ProxyClosed`, direkt bleibt es `Connect`. Ein Proxy,
+der nicht erreichbar ist, `CONNECT` ablehnt oder `407` sagt, bleibt
+`upstream_connect` mit seinem Befund.
+
+Entscheidung zum Wortlaut: Die erste Zeile der `502` lautet `Closed without
+an answer by the decision proxy or the target behind it.`
+(`PROXY_CLOSED_BANNER`) statt `Blocked by Humanitl.`. Sie nennt beide, weil
+Humanitl nicht immer weiß, wer schloss: Ein abfangender Proxy wie Burp oder
+mitmproxy schließt selbst, durch einen Tunnel ohne Abfangen kann das Ziel
+geschlossen haben. Sicher ist nur, dass es hinter Humanitl geschah und kein
+unerreichbares Ziel war; der Grund `upstream_proxy_closed` sagt das, nicht
+warum („Drop" und ein Fehler von Burp mit unterdrückter Fehlerseite sehen
+gleich aus). Damit schreibt weder die Antwort noch die Aufzeichnung die
+Entscheidung Humanitl zu (Akzeptanzkriterium 1).
+
+Die Aufzeichnung trägt `upstream_proxy_closed` in `error`, und
+`recorded_summary_to_proto` liest daraus `FlowSummary.upstream_error` für
+jeden `upstream_*`-Grund zurück (vorher stand an einer geladenen Zeile
+immer `0`, Historie und JSONL-Export verloren den Grund nach einem
+Neustart). `LLM_001` zählt `ProxyClosed` nicht als unerreichbaren
+Modell-Server. Der Skill sagt in der Variante `upstream`, dass
+`upstream_proxy_closed` nicht unverändert wiederholt wird; das Briefing
+bleibt unverändert.
+
+Teil 2, entschieden: Humanitl erkennt eine Antwort, die der Proxy selbst
+schreibt, nicht. Im Tunnel kommen eigene und weitergereichte Antworten über
+dieselbe TLS-Verbindung des Proxys, und kein Merkmal, das alle Proxys
+teilen, unterscheidet sie; Seitentexte von Burp zu erkennen wäre Raten und
+von einem Ziel nachzuahmen. Die Grenze steht in `docs/SECURITY.md`
+(Nachfragemodus `upstream`, en und de) und in der Anleitung zu Burp
+(Schritt 7 und Grenzen, en und de), dort auch, dass der Grund in Historie
+und Aufzeichnung steht, nicht im HMAC-Audit-Log. Die Anleitung zu
+mitmproxy nennt für `444` den neuen Grund, als abgeleitet und nicht neu
+ausprobiert markiert, ebenso die Zeile zu „kill".
+
+Tests: `decision_proxy_end_to_end.rs` mit dem Stellvertreter und dem neuen
+Urteil `Verdict::HoldThenKill` („Drop" nach 400 ms Halten, beide Werte von
+`proxy_resolve`): Text, Grund `ProxyClosed`, Entscheidung `Allow` von
+`Upstream`, Ziel unberührt; `/kill` ebenso; Gegenprobe mit einem Proxy, der
+nicht mehr lauscht: `Blocked by Humanitl.` und `upstream_connect`.
+`decision_proxy.rs`: ein Proxy, der ohne Antwort schließt, ist
+`ProxyClosed`; einer, der Unlesbares schickt, bleibt `Connect`; direkt
+bleibt ein schließendes Ziel `Connect`. `convert.rs`: jeder Upstream-Fehler
+übersteht den Weg durch die Aufzeichnung.
+Mutationsbeweise: `send_via` mit dem alten Grund `Connect` färbt zwei
+Ende-zu-Ende-Tests rot; `failed_response` mit `BANNER` dieselben zwei und den
+Einheitstest in `block.rs`; `(_, Failed::Closed)` statt `(Some(_), …)` färbt
+den Test des direkten Wegs rot; `Failed::sending` ohne die Prüfung auf
+`is_parse` (jeder Fehler außer `is_user` ein Schließen) den Test mit
+Unlesbarem; `upstream_error: 0` in `recorded_summary_to_proto` den
+Rundlauf-Test.
+
+Nicht umgesetzt, Kandidat für ein eigenes Issue: Das Audit-Log
+(`humanitl-audit`) schreibt für einen gescheiterten Flow gar keinen Record,
+weder `upstream_connect` noch einen anderen Grund; nach `flow.decided` mit
+`decided_by: upstream` folgt dort nichts. Ebenso offen: ob ein Kopf
+`Proxy-Status` (RFC 9209) an Antworten eines Proxys ausgewertet werden
+soll; ob Burp oder mitmproxy ihn senden, ist nicht geprüft.
+
 ---
 
 ## HUM-556 · Speicher des Daemons: Flow-Registry ohne Obergrenze, Audit-Kanal unbegrenzt

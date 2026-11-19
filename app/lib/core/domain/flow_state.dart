@@ -142,4 +142,9 @@ enum UpstreamError {
 
   /// The upstream did not answer in time.
   timeout,
+
+  /// The request went out through the decision proxy and the connection
+  /// closed without an answer, by the proxy or the target behind it
+  /// (HUM-555). Not Humanitl's decision and not an unreachable target.
+  proxyClosed,
 }

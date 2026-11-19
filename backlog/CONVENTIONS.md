@@ -4035,3 +4035,44 @@ Quelltext und ihren möglichen Werten im Register `SITES` beziehungsweise
 `DART_SITES`. Wer einen neuen Fix mit Laufzeitwert baut, nimmt den Seam oder
 trägt die Stelle ein. Der Fake (`fake/player.rs`) prüft die Vorschläge einer
 Sitzungsdatei beim Lesen genauso.
+
+### 4.57 Aus der Umsetzung des Schließens hinter dem Entscheidungs-Proxy (HUM-555, 2026-11-19)
+
+**`UpstreamError::ProxyClosed` ergänzt 3.2.** Die Liste lautet jetzt
+`UpstreamError { Dns, Connect, Tls, PrivateAddress(IpAddr), Timeout,
+ProxyClosed }`, auf der Leitung `UPSTREAM_ERROR_PROXY_CLOSED = 6`
+(Protokoll 1.51), in Dart `UpstreamError.proxyClosed`, in der Aufzeichnung
+und in der `reason:`-Zeile `upstream_proxy_closed`. Gemeint ist genau ein
+Fall: Der Weg über einen Entscheidungs-Proxy (`egress.proxy`) stand, die
+Anfrage ging hinaus, und die Verbindung endete, bevor ein Kopf der Antwort
+kam (`Failed::Closed` in `Upstream::send`: `is_incomplete_message`,
+`is_closed`, `is_canceled` oder darunter ein Dateiende oder Abbruch der
+Leitung; nie `is_user`, `is_parse`, `is_timeout`). Direkt bleibt derselbe
+Abbruch `Connect`, ein unlesbarer Kopf ebenfalls; ein Proxy, der nicht
+erreichbar ist, `CONNECT` ablehnt oder `407` sagt, bleibt `Connect` mit
+seinem Befund (`PROXY_012` bis `PROXY_014`).
+
+**Der Grund sagt, wo geschlossen wurde, nicht wer genau und nicht warum.**
+Ein abfangender Proxy (Burp Suite, mitmproxy) schließt selbst; durch einen
+Tunnel, den der Proxy nicht abfängt, kann das Ziel geschlossen haben, und
+Humanitl unterscheidet das nicht. Darum nennt die erste Zeile der `502`
+beide: `Closed without an answer by the decision proxy or the target behind
+it.` (`humanitl_core::block::PROXY_CLOSED_BANNER`), nicht `Blocked by
+Humanitl.`; `reason:`, `flow:` und `host:` folgen wie in 3.5. „Drop" und ein
+eigener Fehler des Proxys ohne Fehlerseite sehen gleich aus. Der Skill sagt
+es nur in der Variante `upstream`.
+
+**Die Aufzeichnung behält den Grund.** `recorded_summary_to_proto` liest
+`FlowSummary.upstream_error` aus der Spalte `error` zurück (Teil vor dem
+ersten `:`), für jeden `upstream_*`-Grund; vorher war das Feld an einer
+geladenen Zeile immer `0`. Im HMAC-Audit-Log steht für einen gescheiterten
+Flow weiterhin kein Eintrag.
+
+**Eine Antwort, die der Proxy selbst schreibt, erkennt Humanitl nicht.** Im
+Tunnel kommen eigene und weitergereichte Antworten über dieselbe
+TLS-Verbindung des Proxys, und kein Merkmal, das alle Proxys teilen,
+unterscheidet sie. Seitentexte eines Herstellers („Request was dropped by
+user.") werden nicht geraten. Ein „Drop" mit Fehlerseite bleibt deshalb ein
+weitergeleiteter Flow mit dem Status der Seite; die Grenze steht in
+`docs/SECURITY.md` beim Nachfragemodus `upstream` und in der Anleitung zu
+Burp Suite.

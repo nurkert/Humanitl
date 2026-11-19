@@ -370,9 +370,10 @@ pub struct FlowSummary {
     ///
     /// Ein kurzer, fester Bezeichner: `upstream_dns`, `upstream_connect`,
     /// `upstream_tls`, `upstream_private_address:<ip>`, `upstream_timeout` für
-    /// einen gescheiterten Weg nach draußen, `tls_handshake_failed` für einen
-    /// Client in der Sandbox, der den Handschlag zum Proxy abgebrochen hat
-    /// (HUM-045). Nicht dasselbe wie [`FlowSummary::block_reason`]: dort steht,
+    /// einen gescheiterten Weg nach draußen, `upstream_proxy_closed` für einen
+    /// Entscheidungs-Proxy dahinter, der ohne Antwort schloss (HUM-555),
+    /// `tls_handshake_failed` für einen Client in der Sandbox, der den
+    /// Handschlag zum Proxy abgebrochen hat (HUM-045). Nicht dasselbe wie [`FlowSummary::block_reason`]: dort steht,
     /// warum jemand geblockt hat, hier, woran es gescheitert ist.
     pub error: Option<String>,
     /// Wahr für eine Anfrage an den reservierten Namen `humanitl.internal`,

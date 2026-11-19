@@ -51,7 +51,15 @@ pub const PROTO_MAJOR: u32 = 1;
 /// Minor-Version des Vertrags. Steigt bei jeder additiven Änderung
 /// (`Info.proto_minor`).
 ///
-/// `50` seit dem Feld ohne Wert (HUM-507): `FixAction.edit_setting`
+/// `51` seit dem Schließen hinter dem Entscheidungs-Proxy (HUM-555):
+/// `UPSTREAM_ERROR_PROXY_CLOSED` heißt, die Anfrage ging über den Proxy
+/// hinaus, und die Verbindung endete ohne Antwort, geschlossen vom Proxy
+/// oder vom Ziel dahinter. Dazu trägt eine geladene Zeile der Aufzeichnung
+/// `FlowSummary.upstream_error` aus ihrer Spalte `error`. Ein Daemon davor nannte das
+/// `UPSTREAM_ERROR_CONNECT`; eine ältere App kennt die neue Zahl nicht und
+/// liest sie im Ereignis als `connect`, in der Zusammenfassung als keinen
+/// Fehler.
+/// `50` war das Feld ohne Wert (HUM-507): `FixAction.edit_setting`
 /// (`EditSetting`, nur der Schlüssel) öffnet ein Feld, dessen Wert nur der
 /// Mensch kennt (Zugangsschlüssel, Projektordner, Entscheidungs-Proxy, Adresse
 /// des Modells). Ein `ChangeSetting` trägt seither immer einen Wert, den
@@ -271,7 +279,7 @@ pub const PROTO_MAJOR: u32 = 1;
 /// Spiegelung in `app/lib/core/ipc/proto_version.dart` darf nachziehen: eine
 /// abweichende Minor ist verabredetermaßen kein Grund, die Verbindung
 /// abzulehnen (`docs/PROTOCOL.md`).
-pub const PROTO_MINOR: u32 = 50;
+pub const PROTO_MINOR: u32 = 51;
 
 /// Metadata-Schlüssel für das Session-Token aus
 /// `$XDG_RUNTIME_DIR/humanitl/token` (CONVENTIONS.md 3.6).

@@ -162,7 +162,10 @@ const fn unreachable_cause(error: UpstreamError) -> Option<&'static str> {
         UpstreamError::Connect => Some("nobody accepted the connection"),
         UpstreamError::Tls => Some("the TLS handshake failed"),
         UpstreamError::Timeout => Some("it did not answer in time"),
-        UpstreamError::PrivateAddress(_) => None,
+        // Der Entscheidungs-Proxy dahinter schloss ohne Antwort (HUM-555):
+        // Ob er verwarf oder das Modell nicht erreichte, sagt er nicht, und
+        // der Rat, `llm.endpoint` zu richten, wäre geraten.
+        UpstreamError::PrivateAddress(_) | UpstreamError::ProxyClosed => None,
     }
 }
 
@@ -288,6 +291,13 @@ mod tests {
         reach.observe(&decided(flow, DecisionSource::Passthrough));
         let ip = "10.0.0.1".parse().unwrap();
         assert!(!reach.observe(&failed(flow, UpstreamError::PrivateAddress(ip))));
+        // Ein Schließen des Entscheidungs-Proxys dahinter ist kein Befund
+        // über den Modell-Server (HUM-555).
+        let reach = LlmReach::default();
+        reach.begin(ENDPOINT);
+        let flow = FlowId::new();
+        reach.observe(&decided(flow, DecisionSource::Passthrough));
+        assert!(!reach.observe(&failed(flow, UpstreamError::ProxyClosed)));
         assert_eq!(reach.current(), None);
     }
 

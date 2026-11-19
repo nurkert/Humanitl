@@ -1,6 +1,6 @@
 ---
 source: guides/decision-proxy-burp.md
-source-sha256: bc96899eef0807f5e1223732e56ed703548b42bddcd9f10128ca9f81b9bcc0b2
+source-sha256: 7e1d8bf7dbc810d6c0b1c08d7e80f88506179ff8cff1bb957ac86c747ed652c6
 lang: de
 ---
 # Burp Suite hinter Humanitl
@@ -320,10 +320,10 @@ für den Durchgang mit dem Eigentümer, HUM-553).
 | In Burp | Der Agent bekommt |
 |---|---|
 | weitergeleitet | die Antwort des Ziels, unverändert |
-| verworfen, mit „Suppress Burp error messages in browser" | `502` von Humanitl, sofort |
+| verworfen, mit „Suppress Burp error messages in browser" | `502`, sofort, hinter Humanitl geschlossen (`upstream_proxy_closed`) |
 | verworfen, mit der Vorgabe von Burp | `200 OK` von Burp mit einer HTML-Seite „Request was dropped by user.", sofort |
 | Burp kann den Namen des Ziels nicht auflösen, Vorgabe von Burp | `200 OK` von Burp mit einer HTML-Seite „Unknown host: …", sofort |
-| Burp vertraut dem Ziel nicht („Verify upstream TLS" an), mit „Suppress Burp error messages in browser" | `502` von Humanitl, sofort |
+| Burp vertraut dem Ziel nicht („Verify upstream TLS" an), mit „Suppress Burp error messages in browser" | `502`, sofort, hinter Humanitl geschlossen (`upstream_proxy_closed`) |
 | niemand entscheidet | `502` von Humanitl, nach `egress.proxy_response_timeout_secs` |
 
 Alle Zeilen im Probelauf beobachtet. Nicht beobachtet: ein unbekannter Name mit
@@ -338,6 +338,39 @@ host"). Mit
 das die Meldungen unterdrückt, „that are usually sent to the browser when errors
 occur", schließt Burp stattdessen die Verbindung, und Humanitl antwortet sofort mit
 `502`. Die Datei aus Schritt 1 schaltet das ein.
+
+Im Probelauf lautete dieses `502` noch `Blocked by Humanitl.` mit dem Grund
+`upstream_connect`, als hätte Humanitl entschieden oder wäre das Ziel nicht
+erreichbar. Seit HUM-555 nennt seine erste Zeile statt Humanitl den Proxy
+dahinter oder das Ziel dahinter, und die Historie verbucht den Fluss als
+gescheitert mit diesem Grund (`FlowSummary.error`), nicht als Ziel, das niemand
+erreichte. Das HMAC-Audit-Log hat für einen gescheiterten Fluss noch keinen
+Eintrag; es zeigt nur die Weiterleitung.
+
+```text
+Closed without an answer by the decision proxy or the target behind it.
+reason: upstream_proxy_closed
+flow: <flow id>
+host: <host>
+```
+
+Das folgt aus dem Code und dem Test mit dem Stellvertreter-Proxy; mit Burp wurde
+es nicht noch einmal ausprobiert. Ein „Drop" kann Humanitl bei eingeschalteter
+Einstellung nicht von einem eigenen Fehler von Burp unterscheiden: Beide schließen
+ohne Antwort, `upstream_proxy_closed` sagt also, wo geschlossen wurde, nicht
+warum. `upstream_connect` bleibt für ein Burp, das nicht erreichbar ist, `CONNECT`
+ablehnt oder `407` sagt.
+
+**Ein „Drop" mit der Fehlerseite von Burp bleibt in den Aufzeichnungen von
+Humanitl ein `200`.** Humanitl kann eine Antwort, die Burp selbst schreibt, nicht
+von einer unterscheiden, die Burp vom Ziel weiterreicht: Im Tunnel kommen beide
+über die TLS-Verbindung von Burp mit dem Zertifikat von Burp, und nichts in der
+Antwort kennzeichnet sie auf eine Weise, die alle Proxys teilen. „Request was
+dropped by user." oder „Unknown host" zu erkennen hieße, die Seitentexte von Burp
+zu raten; die können sich mit jeder Fassung ändern, und ein Ziel kann sie
+nachahmen. Humanitl tut das nicht. Mit der Vorgabe von Burp erscheint eine
+verworfene Anfrage im Audit und in der Historie als weitergeleitet mit Status
+`200`. „Suppress Burp error messages in browser" eingeschaltet lassen.
 
 Die letzte Zeile ist das Verhalten von Humanitl selbst und gilt für jeden Proxy
 dahinter; im Probelauf kam sie nach der Frist, mit dem Grund `upstream_timeout` im
@@ -396,7 +429,9 @@ und im [Bedrohungsmodell](../THREAT-MODEL.md); kurz:
 - `egress.proxy_resolve = "humanitl"` hält mit Burp private Ziele nicht fern, weil
   Burp den Namen erneut auflöst (siehe [Wer Namen auflöst](#who-resolves-names)).
 - Die Vorgabe von Burp bei „Drop" und bei eigenen Fehlern ist `200 OK` mit einer
-  Fehlerseite (Schritt 7).
+  Fehlerseite (Schritt 7). Humanitl kann diese Seite nicht von der Antwort des
+  Ziels unterscheiden: Ein „Drop" mit Fehlerseite erscheint im Audit und in der
+  Historie als `200`.
 - Die Isolierung wandert nicht: Der Agent erreicht nur Humanitl, die Verbindung zu
   Burp beginnt im Daemon.
 - Die für eine Session erklärte Durchreiche zum Sprachmodell ist ein `allow`, das
