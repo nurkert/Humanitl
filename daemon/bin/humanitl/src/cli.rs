@@ -346,6 +346,58 @@ pub enum AgentsCmd {
         #[arg(long)]
         yes: bool,
     },
+    /// Log an agent of the depot in, in a maintenance sandbox with the depot
+    /// program and no project: only its login hosts pass without a hold, and
+    /// only the credential file, checked by the guard, goes back into the
+    /// depot. Attaches to the run's terminal; every session after it starts
+    /// logged in.
+    Login {
+        /// The agent, such as `claude`.
+        agent: String,
+        /// Open the login URL in the browser of this machine once the agent
+        /// prints it. Only a URL to one of the adapter's login hosts is ever
+        /// opened; any other is shown, never opened.
+        #[arg(long)]
+        open: bool,
+        /// Do not ask.
+        #[arg(long)]
+        yes: bool,
+    },
+    /// Deliver the callback URL from the browser's address bar into the
+    /// running login, where the agent waits for it on its own loopback. Only
+    /// exactly the agent's callback (`http://localhost:<port><path>?...`) is
+    /// delivered, inside the sandbox; no port is forwarded. Not under
+    /// Seatbelt (macOS): there only the device flow works.
+    Callback {
+        /// The agent, such as `codex`.
+        agent: String,
+        /// The URL from the browser's address bar.
+        url: String,
+    },
+    /// Change an agent's configuration: the agent runs on a writable copy of
+    /// its configuration without a project; afterwards the changed files are
+    /// listed, keys that run commands highlighted, and taken over only after
+    /// confirmation.
+    Config {
+        /// The agent, such as `claude`.
+        agent: String,
+        /// Only list the configuration as it is, with its keys that run
+        /// commands.
+        #[arg(long, conflicts_with_all = ["accept", "discard", "yes"])]
+        show: bool,
+        /// Take over the changes of a configuration run that waits for a
+        /// confirmation.
+        #[arg(long, conflicts_with = "discard")]
+        accept: bool,
+        /// Discard the changes of a configuration run that waits for a
+        /// confirmation.
+        #[arg(long)]
+        discard: bool,
+        /// Do not ask before the run, and take its changes over without
+        /// asking.
+        #[arg(long)]
+        yes: bool,
+    },
 }
 
 /// Die Unterkommandos von `humanitl egress` (HUM-511).

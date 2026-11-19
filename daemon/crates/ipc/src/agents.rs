@@ -24,7 +24,7 @@ use humanitl_config::agents::{AgentSource, SourceLock, effective_source};
 use humanitl_config::{Config, Paths};
 use humanitl_core::diagnostics::codes::{AGENT_009, AGENT_015, AGENT_018, CONFIG_003, IPC_006};
 use humanitl_core::{Diagnostic, FixAction, Severity};
-use humanitl_sandbox::agent::depot::{Depot, KNOWN, KnownAgent, MaintenanceTask};
+use humanitl_sandbox::agent::depot::{Depot, KNOWN, KnownAgent, MaintenanceTask, account};
 
 use crate::{convert, v1};
 
@@ -77,13 +77,44 @@ pub fn answer(
             }
             Depot::of(paths, agent.id).remove()?;
         }
-        // The sandbox service runs them (HUM-563); the server hands them
-        // there before it asks this function for the state afterwards.
-        Some(v1::agents_request::Op::Install(_) | v1::agents_request::Op::Update(_)) => {
+        // The sandbox service runs them (HUM-563, HUM-520); the server
+        // hands them there before it asks this function for the state
+        // afterwards.
+        Some(
+            v1::agents_request::Op::Install(_)
+            | v1::agents_request::Op::Update(_)
+            | v1::agents_request::Op::Login(_)
+            | v1::agents_request::Op::Config(_)
+            | v1::agents_request::Op::DeliverCallback(_),
+        ) => {
             return Err(refused(
-                "install and update run as a maintenance session of the daemon's sandbox \
-                 service, not here",
+                "install, update, login, configuration and a callback run in a maintenance \
+                 session of the daemon's sandbox service, not here",
             ));
+        }
+        // HUM-520: the confirmation of a configuration run, or its discard.
+        Some(v1::agents_request::Op::ConfigAccept(wish)) => {
+            let agent = known(&wish.agent)?;
+            account::accept_config(paths, agent.id)?;
+        }
+        Some(v1::agents_request::Op::ConfigDiscard(wish)) => {
+            let agent = known(&wish.agent)?;
+            account::discard_config(paths, agent.id);
+        }
+        Some(v1::agents_request::Op::ConfigShow(wish)) => {
+            let agent = known(&wish.agent)?;
+            let mut state = status(paths, &configured(paths)?, lock, in_use);
+            if let Some(entry) = state
+                .agents
+                .iter_mut()
+                .find(|entry| entry.agent == agent.id)
+            {
+                entry.config_files = account::show_config(paths, agent)
+                    .iter()
+                    .map(crate::sandbox::config_change_to_proto)
+                    .collect();
+            }
+            return Ok(state);
         }
         None => return Err(refused("the request names no operation")),
     }
@@ -152,6 +183,10 @@ fn agent_status(
                 out.version = installed.version;
                 out.signature = installed.manifest.signature;
                 out.logged_in = depot.logged_in();
+                out.last_writeback = depot
+                    .last_writeback()
+                    .map(|last| format!("{} session {}", last.at, last.session))
+                    .unwrap_or_default();
                 if !out.logged_in && agent.recipe.is_some() {
                     findings.push(not_logged_in(agent));
                 }
@@ -245,6 +280,8 @@ pub fn maintenance_of(
             Some((MaintenanceTask::Install, wish.clone()))
         }
         Some(v1::agents_request::Op::Update(wish)) => Some((MaintenanceTask::Update, wish.clone())),
+        Some(v1::agents_request::Op::Login(wish)) => Some((MaintenanceTask::Login, wish.clone())),
+        Some(v1::agents_request::Op::Config(wish)) => Some((MaintenanceTask::Config, wish.clone())),
         _ => None,
     }
 }
@@ -265,6 +302,31 @@ pub fn no_sandbox_service() -> Diagnostic {
                 .to_owned(),
         )
         .build()
+}
+
+/// Puts the last refused write-back of each agent into its findings
+/// (HUM-520), until the next one is taken over.
+pub fn with_writeback_refusals(
+    status: &mut v1::AgentsStatus,
+    refusals: &std::collections::BTreeMap<String, Diagnostic>,
+) {
+    for entry in &mut status.agents {
+        if let Some(found) = refusals.get(&entry.agent) {
+            entry.diagnostics.push(convert::diagnostic_to_proto(found));
+        }
+    }
+}
+
+/// The agent of a decision on a waiting configuration (HUM-520).
+#[must_use]
+pub fn config_decision_of(op: Option<&v1::agents_request::Op>) -> Option<String> {
+    match op {
+        Some(
+            v1::agents_request::Op::ConfigAccept(wish)
+            | v1::agents_request::Op::ConfigDiscard(wish),
+        ) => Some(wish.agent.trim().to_owned()),
+        _ => None,
+    }
 }
 
 /// Puts the last maintenance run of each agent into its entry (HUM-563).

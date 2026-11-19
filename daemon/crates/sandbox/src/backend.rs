@@ -224,6 +224,24 @@ pub fn runtime_fits_backend(
 }
 
 impl Backend {
+    /// Whether the sandbox has a loopback of its own on which the agent may
+    /// bind (HUM-520): every Linux backend gives it one; under Seatbelt it
+    /// shares the host's, and the profile admits only the
+    /// session's two ports. A login callback is delivered inside the sandbox
+    /// only where this holds.
+    #[must_use]
+    pub fn own_loopback(&self) -> bool {
+        #[cfg(target_os = "macos")]
+        {
+            !matches!(self, Self::Seatbelt(_))
+        }
+        #[cfg(not(target_os = "macos"))]
+        {
+            let _ = self;
+            true
+        }
+    }
+
     /// Sucht das Backend mit diesem Namen und prüft, ob es auf dieser
     /// Maschine läuft. [`crate::AUTO_BACKEND`] ist das Backend des Systems
     /// ([`crate::PLATFORM_BACKEND_NAME`]). Ein Backend, das nicht in

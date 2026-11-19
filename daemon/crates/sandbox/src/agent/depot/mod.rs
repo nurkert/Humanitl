@@ -21,18 +21,28 @@
 //!   `program/<version>/` and the switch of `current`, with a journal.
 //! - [`verify`]: the vendor's signature, checked by the daemon with the
 //!   host's `gpg` on its own copy; the run reports no verdict.
+//! - [`credential`]: the guard of the one file a session writes back, the
+//!   credential file, checked against the adapter's format (HUM-520);
+//!   [`writeback`] watches it in a running session.
+//! - [`account`]: login and configuration as maintenance runs of the depot
+//!   program (HUM-520); [`login_url`] reads the URLs a login prints and
+//!   checks a pasted callback.
 //!
 //! **Never on the host.** No function here starts anything from the depot,
 //! not even `--version`: the version comes from `manifest.json`.
 
+pub mod account;
 pub mod adopt;
+pub mod credential;
 pub mod guard;
+pub mod login_url;
 pub mod maintenance;
 pub mod recipe;
 pub mod scratch;
 pub mod store;
 pub(crate) mod tree;
 pub mod verify;
+pub mod writeback;
 
 use std::ffi::{OsStr, OsString};
 use std::path::{Path, PathBuf};
@@ -47,8 +57,8 @@ pub use self::maintenance::{
     Committed, DepotMaintenance, Maintenance, MaintenanceRequest, MaintenanceRun, MaintenanceTask,
 };
 pub use self::recipe::{
-    DepotRecipe, HostPlatform, InstallHost, InstallRecipe, KNOWN, KnownAgent, LoginFlow,
-    SignedManifest,
+    DepotRecipe, HostPlatform, InstallHost, InstallRecipe, KNOWN, KnownAgent, LoginCallback,
+    LoginFlow, LoginRecipe, SignedManifest,
 };
 pub use self::scratch::Scratch;
 pub use self::store::{Depot, Installed, Manifest, Reservation};
@@ -134,6 +144,12 @@ pub struct DepotSession {
     /// of a project. Only the daemon sets it; `None` for every other
     /// session. See [`guard::work_place`].
     pub maintenance_home: Option<PathBuf>,
+    /// The agent a login or configuration run starts from the depot
+    /// (HUM-520): such a run carries the depot mount of exactly this agent
+    /// beside its work directory. Only the daemon sets it, together with
+    /// [`DepotSession::maintenance_home`]; `None` for an install run and for
+    /// every other session.
+    pub maintenance_program: Option<String>,
 }
 
 impl DepotSession {

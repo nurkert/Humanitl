@@ -34,6 +34,9 @@ pub struct Scratch {
     armed: bool,
     /// The depot's reservation for this session; it goes with the sandbox.
     reservation: Option<Reservation>,
+    /// The SHA-256 of each credential file as copied: the base a write-back
+    /// of this session is judged against (HUM-520).
+    bases: Vec<(String, String)>,
 }
 
 impl Scratch {
@@ -41,6 +44,36 @@ impl Scratch {
     #[must_use]
     pub fn path(&self) -> &Path {
         &self.dir
+    }
+
+    /// The SHA-256 of the credential file `file` as this session got it;
+    /// `None` when it got none.
+    #[must_use]
+    pub fn base(&self, file: &str) -> Option<&str> {
+        self.bases
+            .iter()
+            .find(|(name, _)| name == file)
+            .map(|(_, sum)| sum.as_str())
+    }
+
+    /// The sandbox now owns the scratch, and the guard of the write-back
+    /// watches its credential file until the end (HUM-520): every
+    /// [`super::credential::WRITEBACK_POLL`] and once more before the scratch
+    /// goes. `None`: nothing goes back (`agents.<id>.credential_writeback =
+    /// false`, or an adapter without a credential format).
+    pub fn hand_to_with(
+        self,
+        handle: &crate::SandboxHandle,
+        writeback: Option<super::writeback::Writeback>,
+    ) {
+        if let Some(writeback) = writeback {
+            let base = writeback
+                .file()
+                .and_then(|file| self.base(file))
+                .map(ToOwned::to_owned);
+            super::writeback::watch(handle, self.dir.clone(), base, writeback);
+        }
+        self.hand_to(handle);
     }
 
     /// The sandbox now owns the scratch: it goes with the sandbox's end.
@@ -94,11 +127,12 @@ pub fn create(
     let _ = std::fs::remove_dir_all(&dir);
     std::fs::write(&owner, std::process::id().to_string())
         .map_err(|err| failed(depot, &owner, &err))?;
-    let scratch = Scratch {
+    let mut scratch = Scratch {
         dir: dir.clone(),
         owner,
         armed: true,
         reservation,
+        bases: Vec::new(),
     };
     make_private_dir(&dir).map_err(|err| failed(depot, &dir, &err))?;
     let mut budget = SCRATCH_CAP_BYTES;
@@ -127,6 +161,11 @@ pub fn create(
                 &meta,
                 &mut budget,
             )?;
+            if let Some(name) = entry.file_name().to_str()
+                && let Some(sum) = super::credential::fingerprint(&dir, name)
+            {
+                scratch.bases.push((name.to_owned(), sum));
+            }
         }
     }
     Ok(scratch)

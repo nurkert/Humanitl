@@ -2982,6 +2982,19 @@ message AgentsRequest {
     // Die verlangte Version; leer fuer die aktuelle des Anbieters.
     string version = 2;
   }
+  // Ein Agent, fuer die Operationen um seine Konfiguration (HUM-520).
+  message Agent {
+    string agent = 1;
+  }
+  // Eine Callback-URL, die der Mensch aus der Adresszeile des Browsers
+  // eingefuegt hat (HUM-520). Der Daemon nimmt genau
+  // `http://localhost:<port><pfad>?<query>` des Adapters an und stellt sie
+  // im laufenden Anmeldelauf an `127.0.0.1` zu, mit einem Prozess in der
+  // Sandbox; es wird kein Port vom Host in die Sandbox weitergeleitet.
+  message Callback {
+    string agent = 1;
+    string url = 2;
+  }
   oneof op {
     Status status = 1;
     SetSource set_source = 2;
@@ -2990,7 +3003,54 @@ message AgentsRequest {
     Maintain install = 4;
     // Eine neue Version, oder zurueck auf eine, die das Depot noch haelt.
     Maintain update = 5;
+    // Anmeldung in einem Wartungslauf mit dem Programm des Depots (HUM-520);
+    // nur die vom Waechter gepruefte Zugangsdatei geht ins Depot. Die
+    // Version bleibt leer. Antwort, sobald der Lauf steht.
+    Maintain login = 6;
+    // Konfigurationslauf (HUM-520): der Agent auf einer schreibbaren Kopie
+    // seiner Konfiguration ohne Projekt; danach wartet die Aenderung auf
+    // `config_accept` oder `config_discard`. Die Version bleibt leer.
+    Maintain config = 7;
+    // Die wartende Konfiguration uebernehmen, nach der Bestaetigung des
+    // Menschen; ohne wartende Konfiguration `AGENT_019`.
+    Agent config_accept = 8;
+    // Die wartende Konfiguration verwerfen; `config/` bleibt.
+    Agent config_discard = 9;
+    // Den Stand von `config/` zeigen: `AgentDepot.config_files`.
+    Agent config_show = 10;
+    // Eine Callback-URL in den laufenden Anmeldelauf zustellen; eine andere
+    // URL, ein Backend ohne eigenes Loopback oder kein laufender
+    // Anmeldelauf ergeben `AGENT_014`.
+    Callback deliver_callback = 11;
   }
+}
+
+// Eine URL aus der Ausgabe eines Anmeldelaufs (HUM-520).
+message AgentLoginUrl {
+  // Die URL, wie der Agent sie ausgab.
+  string url = 1;
+  // Wahr nur fuer HTTPS zu einem Anmeldehost des Adapters, ohne Nutzerteil
+  // und ohne anderen Port. Ein Client oeffnet sie auf dem Host nur nach
+  // Klick oder Bestaetigung; jede andere URL zeigt er nur.
+  bool openable = 2;
+}
+
+// Eine geaenderte Datei eines Konfigurationslaufs, oder eine Datei von
+// `config/` fuer `config_show` (HUM-520).
+message AgentConfigChange {
+  // Der Pfad relativ zum Konfigurationsordner.
+  string path = 1;
+  // `added`, `changed` oder `removed`; fuer `config_show` immer `added`.
+  string change = 2;
+  // Die geaenderten Schluessel einer JSON-Datei, mit Punkten: zuerst alle,
+  // die Befehle ausfuehren, dann hoechstens 50 weitere.
+  repeated string keys = 3;
+  // Die davon, die Befehle ausfuehren (Angabe des Adapters, fuer Claude
+  // Code `hooks`, `apiKeyHelper`, `statusLine`, `mcpServers`, `env`); ein
+  // Client hebt sie hervor. Nie gekuerzt; sie stehen auch in `keys` vorn.
+  repeated string command_keys = 4;
+  // Wie viele andere geaenderte Schluessel `keys` auslaesst.
+  uint32 keys_omitted = 5;
 }
 
 // Der letzte Wartungslauf eines Agenten in diesem Daemon (HUM-563).
@@ -2998,10 +3058,11 @@ message AgentMaintenance {
   // Die Sandbox des Laufs; leer, wenn kein Lauf noetig war (die Version
   // lag schon im Depot).
   string sandbox_id = 1;
-  // `install` oder `update`.
+  // `install`, `update`, `login` oder `config`.
   string task = 2;
   // `running`, solange der Lauf geht; `done` nach der Uebernahme;
-  // `failed`, wenn nichts uebernommen wurde.
+  // `failed`, wenn nichts uebernommen wurde; `confirm`, wenn ein
+  // Konfigurationslauf auf die Bestaetigung wartet (HUM-520).
   string state = 3;
   // Die Version, die `current` nach dem Lauf nennt; leer davor und nach
   // einem Fehlschlag.
@@ -3012,6 +3073,15 @@ message AgentMaintenance {
   // Was zu sagen ist: `AGENT_011` mit dem Schritt, der scheiterte, und die
   // Befunde des Laufs.
   repeated Diagnostic diagnostics = 6;
+  // Die URLs, die ein Anmeldelauf bisher ausgab (HUM-520).
+  repeated AgentLoginUrl login_urls = 7;
+  // Wahr, wenn ein Client das Feld zum Einfuegen der Callback-URL zeigt:
+  // der Adapter wartet auf einen Callback, und das Backend gibt der Sandbox
+  // ein eigenes Loopback. Unter Seatbelt nie.
+  bool callback_paste = 8;
+  // Die Aenderungen eines Konfigurationslaufs im Zustand `confirm`, die auf
+  // `config_accept` oder `config_discard` warten.
+  repeated AgentConfigChange config_changes = 9;
 }
 
 // Der Stand eines Agenten im Depot.
@@ -3035,7 +3105,10 @@ message AgentDepot {
   string signature = 8;
   // Wahr, wenn das Depot eine Zugangsdatei haelt.
   bool logged_in = 9;
-  // Die letzte Rueckschrift der Zugangsdatei (ab HUM-520); leer bis dahin.
+  // Die letzte Rueckschrift der Zugangsdatei (HUM-520): Zeit in RFC 3339
+  // und die Sitzung, die schrieb, als `<zeit> session <id>`; leer, wenn es
+  // keine gab. Eine Ablehnung steht in `diagnostics` (`AGENT_012`,
+  // `AGENT_016`).
   string last_writeback = 10;
   // Bytes aller Dateien des Depots.
   uint64 size_bytes = 11;
@@ -3047,6 +3120,9 @@ message AgentDepot {
   // Der letzte Wartungslauf dieses Agenten in diesem Daemon (HUM-563);
   // fehlt, wenn es keinen gab.
   AgentMaintenance maintenance = 14;
+  // Die Dateien von `config/` mit ihren Schluesseln, die Befehle
+  // ausfuehren; nur in der Antwort auf `config_show` (HUM-520).
+  repeated AgentConfigChange config_files = 15;
 }
 
 // Der Stand aller bekannten Agenten, in der Reihenfolge von

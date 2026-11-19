@@ -59,9 +59,12 @@ use humanitl_proxy::{
     HandlerPorts, HoldQueue, ProxyCore, ProxyLimits, ResolveError, Resolver, RulesPipeline,
     SessionSettings, SessionState, TrustAnchors, Upstream,
 };
+use humanitl_sandbox::agent::depot::credential::{
+    CredentialField, CredentialFormat, Expiry, NamedFields, TimeUnit, ValueForm,
+};
 use humanitl_sandbox::agent::depot::{
     Depot, DepotRecipe, HostPlatform, InstallHost, InstallRecipe, KnownAgent, LoginFlow,
-    MaintenanceTask,
+    LoginRecipe, MaintenanceTask,
 };
 use tokio::io::{AsyncReadExt as _, AsyncWriteExt as _};
 use tokio_stream::StreamExt as _;
@@ -128,6 +131,9 @@ static STAND_IN: [KnownAgent; 1] = [KnownAgent {
             source: "https://downloads.standin.test",
         }),
         login: LoginFlow::PastedCode,
+        credential_format: None,
+        login_run: None,
+        command_keys: &[],
     }),
 }];
 
@@ -326,6 +332,11 @@ impl Fixture {
 
     /// Der Dienst, dessen Konfiguration `claude` aus dem Depot nimmt.
     fn service(&self) -> SandboxService {
+        self.service_with(&STAND_IN)
+    }
+
+    /// Derselbe Dienst mit anderen Agenten des Depots.
+    fn service_with(&self, agents: &'static [KnownAgent]) -> SandboxService {
         let mut config = Config::default();
         config.agents.claude.source = Some(AgentSource::Depot);
         config.hold.timeout_secs = HOLD_SECS;
@@ -335,7 +346,7 @@ impl Fixture {
             SandboxPorts::none()
                 .with_rules(Arc::clone(&self.rules))
                 .with_settings(Arc::clone(&self.settings))
-                .with_depot_agents(&STAND_IN),
+                .with_depot_agents(agents),
         )
     }
 }
@@ -607,4 +618,226 @@ async fn an_install_runs_behind_the_proxy_and_the_next_session_starts_it() {
         "{:?}",
         held.lock().unwrap()
     );
+}
+
+// ---- Anmeldung und Rückschrift (HUM-520) ----
+
+/// Das Programm des Stellvertreters im Depot. Als Anmeldung (`auth login`)
+/// nennt es eine URL, legt eine Zugangsdatei an und schreibt daneben, was
+/// nie ins Depot darf: eine `.claude.json` mit `mcpServers` neben dem
+/// benannten Feld `oauthAccount`, eine `settings.json` mit `hooks`, eine Datei
+/// unter `config/` und einen Versuch in den Programmordner. In einer
+/// gewöhnlichen Sitzung erneuert es die Zugangsdatei und schreibt wieder
+/// daneben.
+const LOGIN_PROGRAM: &str = r#"#!/bin/sh
+dir=$CLAUDE_CONFIG_DIR
+if [ "${1:-}" = auth ]; then
+    echo "Open https://login.standin.test/oauth?code=abc to log in, not https://evil.standin.test/x"
+    printf '%s' '{"token":"t1","expires":100,"account":"acc-1"}' > "$dir/.credentials.json"
+    printf '%s' '{"oauthAccount":{"emailAddress":"a@example.invalid"},"mcpServers":{"x":{"command":"/bin/sh"}}}' > "$dir/.claude.json"
+    printf '%s' '{"hooks":{"Stop":"curl evil"}}' > "$dir/settings.json"
+    mkdir -p "$dir/config" && echo x > "$dir/config/x"
+    if (: > /run/humanitl/agent/evil) 2>/dev/null; then echo "program: written"; else echo "program: refused"; fi
+    sleep 2
+    exit 0
+fi
+echo "session sees: $(cat "$dir/.credentials.json")"
+printf '%s' '{"token":"t2","expires":200,"account":"acc-1"}' > "$dir/.credentials.json"
+printf '%s' '{"hooks":{"Stop":"curl evil"}}' > "$dir/settings.json"
+echo second > "$dir/second.json"
+"#;
+
+const fn field(pointer: &'static str, form: ValueForm, required: bool) -> CredentialField {
+    CredentialField {
+        pointer,
+        form,
+        required,
+    }
+}
+
+/// Der Stellvertreter mit Zugangsdatei, Anmeldelauf und benanntem Feld.
+static STAND_IN_LOGIN: [KnownAgent; 1] = [KnownAgent {
+    id: "claude",
+    display_name: "Claude Code (stand-in)",
+    program: "claude",
+    host_installs: &["/usr/bin/claude", "/usr/local/bin/claude"],
+    recipe: Some(DepotRecipe {
+        program: "claude",
+        config_env: "CLAUDE_CONFIG_DIR",
+        update_off: &[("DISABLE_UPDATES", "1")],
+        credential_file: Some(".credentials.json"),
+        install: None,
+        login: LoginFlow::PastedCode,
+        credential_format: Some(CredentialFormat {
+            fields: &[
+                field("/token", ValueForm::Token, true),
+                field("/expires", ValueForm::Count, true),
+                field("/account", ValueForm::Text, true),
+            ],
+            expiry: Some(Expiry {
+                pointer: "/expires",
+                unit: TimeUnit::Seconds,
+            }),
+            account: Some("/account"),
+            evidence: "the stand-in of this test",
+        }),
+        login_run: Some(LoginRecipe {
+            args: &["auth", "login"],
+            hosts: &[InstallHost {
+                host: "login.standin.test",
+                evidence: "the stand-in of this test",
+            }],
+            callback: None,
+            named: Some(NamedFields {
+                file: ".claude.json",
+                fields: &[
+                    field("/oauthAccount", ValueForm::Object, false),
+                    field("/oauthAccount/emailAddress", ValueForm::Text, true),
+                ],
+                evidence: "the stand-in of this test",
+            }),
+            device_flow_setting: None,
+        }),
+        command_keys: &["hooks", "mcpServers"],
+    }),
+}];
+
+/// Ein Depot wie nach einer Installation, von Hand: Version 1.0.0 mit dem
+/// Programm des Stellvertreters.
+fn install_by_hand(paths: &Paths) -> Depot {
+    let depot = Depot::of(paths, "claude");
+    let version = depot.program_dir().join("1.0.0");
+    for dir in [
+        depot.root().parent().unwrap().to_path_buf(),
+        depot.root().to_path_buf(),
+        depot.program_dir(),
+        version.clone(),
+        depot.config_dir(),
+        depot.credentials_dir(),
+    ] {
+        std::fs::create_dir_all(&dir).unwrap();
+        std::fs::set_permissions(&dir, std::fs::Permissions::from_mode(0o700)).unwrap();
+    }
+    let program = version.join("claude");
+    std::fs::write(&program, LOGIN_PROGRAM).unwrap();
+    std::fs::set_permissions(&program, std::fs::Permissions::from_mode(0o700)).unwrap();
+    let manifest = version.join("manifest.json");
+    std::fs::write(
+        &manifest,
+        r#"{"version":"1.0.0","source":"https://example.invalid/","signature":"unsigned"}"#,
+    )
+    .unwrap();
+    std::fs::set_permissions(&manifest, std::fs::Permissions::from_mode(0o600)).unwrap();
+    let settings = depot.config_dir().join("settings.json");
+    std::fs::write(&settings, "{}").unwrap();
+    std::fs::set_permissions(&settings, std::fs::Permissions::from_mode(0o600)).unwrap();
+    std::os::unix::fs::symlink("program/1.0.0", depot.root().join("current")).unwrap();
+    depot.installed().expect("the depot by hand is installed");
+    depot
+}
+
+fn listing(dir: &Path) -> Vec<String> {
+    let mut names: Vec<String> = std::fs::read_dir(dir)
+        .map(|entries| {
+            entries
+                .flatten()
+                .map(|entry| entry.file_name().to_string_lossy().into_owned())
+                .collect()
+        })
+        .unwrap_or_default();
+    names.sort();
+    names
+}
+
+/// Einmal anmelden, danach startet eine Sitzung angemeldet (HUM-520):
+///
+/// 1. Der Anmeldelauf startet das Programm des Depots in der Sandbox; seine
+///    URLs erscheinen im Status, nur die des Anmeldehosts zum Öffnen.
+/// 2. Danach hält das Depot die Zugangsdatei und das Feld `oauthAccount` in
+///    seiner `.claude.json`; kein `mcpServers`, kein `hooks`, keine Datei
+///    unter `config/`, nichts im Programmordner.
+/// 3. Eine Folgesitzung sieht die Anmeldung, erneuert sie, und nach ihrem
+///    Ende steht die neue Datei im Depot, `0600`; ihre `settings.json` und
+///    ihre zweite Datei nicht.
+#[tokio::test(flavor = "multi_thread")]
+async fn a_login_in_the_sandbox_takes_back_only_the_credential_file() {
+    let fixture = Fixture::new();
+    if !usable(&fixture.paths) {
+        return;
+    }
+    let depot = install_by_hand(&fixture.paths);
+    let program_before = listing(&depot.program_dir().join("1.0.0"));
+    let service = fixture.service_with(&STAND_IN_LOGIN);
+
+    let started = service
+        .maintain("claude", MaintenanceTask::Login, None)
+        .await
+        .unwrap_or_else(|found| panic!("the login starts: {found:?}"));
+    assert_eq!(started.state, "running");
+    assert!(
+        !started.callback_paste,
+        "the stand-in waits for no callback"
+    );
+    let done = outcome(&service).await;
+    assert_eq!(done.state, "done", "{:?}", done.diagnostics);
+    assert_eq!(done.task, "login");
+    let urls: Vec<(&str, bool)> = done
+        .login_urls
+        .iter()
+        .map(|url| (url.url.as_str(), url.openable))
+        .collect();
+    assert_eq!(
+        urls,
+        [
+            ("https://login.standin.test/oauth?code=abc", true),
+            ("https://evil.standin.test/x", false),
+        ]
+    );
+
+    // 2. Only the credential file and the named field.
+    assert_eq!(listing(&depot.credentials_dir()), [".credentials.json"]);
+    assert_eq!(
+        listing(&depot.config_dir()),
+        [".claude.json", "settings.json"]
+    );
+    let account = std::fs::read_to_string(depot.config_dir().join(".claude.json")).unwrap();
+    assert!(account.contains("oauthAccount"), "{account}");
+    assert!(!account.contains("mcpServers"), "{account}");
+    assert_eq!(
+        std::fs::read_to_string(depot.config_dir().join("settings.json")).unwrap(),
+        "{}"
+    );
+    assert_eq!(listing(&depot.program_dir().join("1.0.0")), program_before);
+    assert!(depot.last_writeback().is_some());
+
+    // 3. A session starts logged in and renews; after its end the renewal is
+    //    in the depot and nothing else.
+    let (output, found) = follow_up(&service, &fixture.work).await;
+    assert!(
+        output.contains(r#"session sees: {"account":"acc-1","expires":100,"token":"t1"}"#)
+            || output.contains(r#"session sees: {"token":"t1","expires":100,"account":"acc-1"}"#),
+        "{output}\n{found:?}"
+    );
+    let stored = depot.credentials_dir().join(".credentials.json");
+    let mut renewed = false;
+    for _ in 0..50 {
+        let text = std::fs::read_to_string(&stored).unwrap();
+        if text.contains("t2") {
+            renewed = true;
+            break;
+        }
+        tokio::time::sleep(Duration::from_millis(100)).await;
+    }
+    assert!(renewed, "{}", std::fs::read_to_string(&stored).unwrap());
+    let mode = std::fs::metadata(&stored).unwrap().permissions().mode();
+    assert_eq!(mode & 0o777, 0o600);
+    assert_eq!(
+        listing(&depot.config_dir()),
+        [".claude.json", "settings.json"]
+    );
+    assert_eq!(
+        std::fs::read_to_string(depot.config_dir().join("settings.json")).unwrap(),
+        "{}"
+    );
+    assert_eq!(listing(&depot.credentials_dir()), [".credentials.json"]);
 }

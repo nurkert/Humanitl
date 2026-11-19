@@ -1,5 +1,5 @@
-//! `humanitl agents status|source|remove|install|update` (HUM-518, HUM-563,
-//! ADR-0023).
+//! `humanitl agents status|source|remove|install|update|login|callback|config`
+//! (HUM-518, HUM-563, HUM-520, ADR-0023).
 //!
 //! Ein gRPC-Aufruf je Befehl und sonst nichts (ADR-018): welche Quelle gilt,
 //! ob eine Firmenvorgabe sie sperrt, welche Version im Depot liegt und ob eine
@@ -10,6 +10,12 @@
 //! ohne Projekt), hängen dieses Terminal an dessen Terminal und fragen nach
 //! dem Ende, was der Daemon übernommen hat. Auch das ist kein Fachwissen des
 //! Clients: Version, Hosts und Prüfung kennt nur der Daemon.
+//!
+//! `login` und `config` (HUM-520) sind Wartungsläufe derselben Art. Welche
+//! URL einer Anmeldung sich öffnen lässt, sagt der Daemon (`openable`); die
+//! CLI öffnet nur mit `--open` und nur eine solche. Welche Schlüssel einer
+//! Konfiguration Befehle ausführen, sagt ebenfalls der Daemon; die CLI hebt
+//! sie hervor und fragt vor der Übernahme.
 
 use std::io::{BufRead as _, IsTerminal as _};
 use std::time::{Duration, Instant};
@@ -34,6 +40,8 @@ const OUTCOME_WAIT: Duration = Duration::from_secs(600);
 const RUNNING: &str = "running";
 /// `done` nach der Übernahme.
 const DONE: &str = "done";
+/// `confirm`: ein Konfigurationslauf wartet auf die Bestätigung (HUM-520).
+const CONFIRM: &str = "confirm";
 
 /// Führt `humanitl agents <cmd>` aus.
 ///
@@ -69,6 +77,25 @@ pub async fn run(ctx: &Context, cmd: &AgentsCmd) -> Result<u8, Failure> {
             yes,
         } => {
             return maintain(ctx, Task::Update, agent, version.as_deref(), *yes).await;
+        }
+        AgentsCmd::Login { agent, open, yes } => {
+            return maintain(ctx, Task::Login { open: *open }, agent, None, *yes).await;
+        }
+        AgentsCmd::Callback { agent, url } => return callback(ctx, agent, url).await,
+        AgentsCmd::Config {
+            agent,
+            show,
+            accept,
+            discard,
+            yes,
+        } => {
+            if *show {
+                return show_config(ctx, agent).await;
+            }
+            if *accept || *discard {
+                return decide_config(ctx, agent, *accept).await;
+            }
+            return maintain(ctx, Task::Config, agent, None, *yes).await;
         }
         AgentsCmd::Remove { agent, yes } => {
             if !yes {
@@ -107,11 +134,16 @@ pub async fn run(ctx: &Context, cmd: &AgentsCmd) -> Result<u8, Failure> {
     Ok(EXIT_OK)
 }
 
-/// Installation oder Update.
+/// Installation, Update, Anmeldung oder Konfigurationslauf.
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
 enum Task {
     Install,
     Update,
+    /// `open`: die erste URL zu einem Anmeldehost des Adapters öffnen.
+    Login {
+        open: bool,
+    },
+    Config,
 }
 
 impl Task {
@@ -119,6 +151,34 @@ impl Task {
         match self {
             Self::Install => "install",
             Self::Update => "update",
+            Self::Login { .. } => "login",
+            Self::Config => "config",
+        }
+    }
+
+    /// Die Frage vor dem Lauf.
+    fn question(self, agent: &str) -> String {
+        match self {
+            Self::Install | Self::Update => format!(
+                "{} {agent} in the depot? It runs in a sandbox without your project; only the \
+                 vendor's hosts pass without a hold, and nothing downloaded runs on this machine. \
+                 [y/N] ",
+                if self == Self::Install {
+                    "Install"
+                } else {
+                    "Update"
+                }
+            ),
+            Self::Login { .. } => format!(
+                "Log {agent} in? Its depot program runs in a sandbox without your project; only \
+                 its login hosts pass without a hold, and only its checked credential file goes \
+                 back into the depot. [y/N] "
+            ),
+            Self::Config => format!(
+                "Run {agent} on a copy of its configuration? It runs in a sandbox without your \
+                 project; afterwards you see every changed file and decide whether it is taken \
+                 over. [y/N] "
+            ),
         }
     }
 }
@@ -135,16 +195,7 @@ async fn maintain(
     if !yes {
         ask(
             ctx,
-            &format!(
-                "{} {agent} in the depot? It runs in a sandbox without your project; only the \
-                 vendor's hosts pass without a hold, and nothing downloaded runs on this machine. \
-                 [y/N] ",
-                if task == Task::Install {
-                    "Install"
-                } else {
-                    "Update"
-                }
-            ),
+            &task.question(agent),
             &format!("humanitl agents {} {agent} --yes", task.word()),
             &format!("nothing was started; the answer was not yes, so the depot of {agent} stays"),
         )?;
@@ -159,6 +210,8 @@ async fn maintain(
     let op = match task {
         Task::Install => v1::agents_request::Op::Install(wish),
         Task::Update => v1::agents_request::Op::Update(wish),
+        Task::Login { .. } => v1::agents_request::Op::Login(wish),
+        Task::Config => v1::agents_request::Op::Config(wish),
     };
     let mut client = ctx.connect().await?;
     let status = client
@@ -168,25 +221,259 @@ async fn maintain(
         .into_inner();
     let started = maintenance_of(&status, agent)?;
     if started.state == RUNNING && !started.sandbox_id.is_empty() {
-        if !ctx.render.is_json() {
-            match attach_or_outcome(ctx, agent, &started.sandbox_id, keys).await? {
-                Attached::Ended(outcome) => return report(ctx, agent, &outcome),
-                Attached::Terminal(Ending::Stream(_)) => {}
-                Attached::Terminal(Ending::Detached) => {
-                    ctx.render.note(&format!(
-                        "Detached; the run keeps going. Its result: humanitl agents status {agent}"
-                    ));
-                    return Ok(EXIT_OK);
-                }
-                Attached::Terminal(Ending::Signal(number)) => {
-                    return Ok(128_u8.saturating_add(number));
-                }
+        let opener = match task {
+            Task::Login { open: true } => Some(tokio::spawn(open_login_url(
+                ctx.connect().await?,
+                agent.to_owned(),
+                started.sandbox_id.clone(),
+            ))),
+            _ => None,
+        };
+        let finished = attended(ctx, agent, &started, keys).await;
+        if let Some(opener) = opener {
+            opener.abort();
+        }
+        return match finished? {
+            Attended::Ended(outcome) => finish(ctx, task, agent, &outcome, yes).await,
+            Attended::Detached => Ok(EXIT_OK),
+            Attended::Signal(number) => Ok(128_u8.saturating_add(number)),
+        };
+    }
+    finish(ctx, task, agent, &started, yes).await
+}
+
+/// Wie ein Lauf am Terminal ausging.
+enum Attended {
+    /// Er ist vorbei, mit diesem Ergebnis.
+    Ended(v1::AgentMaintenance),
+    /// Der Mensch hat sich abgehängt; der Lauf geht weiter.
+    Detached,
+    /// Ein Signal beendete das Anhängen.
+    Signal(u8),
+}
+
+/// Hängt sich an das Terminal des Laufs und wartet auf sein Ergebnis.
+async fn attended(
+    ctx: &Context,
+    agent: &str,
+    started: &v1::AgentMaintenance,
+    keys: humanitl_config::DetachKeys,
+) -> Result<Attended, Failure> {
+    if !ctx.render.is_json() {
+        match attach_or_outcome(ctx, agent, &started.sandbox_id, keys).await? {
+            Attached::Ended(outcome) => return Ok(Attended::Ended(outcome)),
+            Attached::Terminal(Ending::Stream(_)) => {}
+            Attached::Terminal(Ending::Detached) => {
+                ctx.render.note(&format!(
+                    "Detached; the run keeps going. Its result: humanitl agents status {agent}"
+                ));
+                return Ok(Attended::Detached);
+            }
+            Attached::Terminal(Ending::Signal(number)) => {
+                return Ok(Attended::Signal(number));
             }
         }
-        let outcome = wait_for_outcome(ctx, agent, &started.sandbox_id).await?;
-        return report(ctx, agent, &outcome);
     }
-    report(ctx, agent, &started)
+    let outcome = wait_for_outcome(ctx, agent, &started.sandbox_id).await?;
+    Ok(Attended::Ended(outcome))
+}
+
+/// Nach dem Lauf: das Ergebnis, und für einen Konfigurationslauf mit
+/// Änderungen die Frage, ob sie übernommen werden.
+async fn finish(
+    ctx: &Context,
+    task: Task,
+    agent: &str,
+    outcome: &v1::AgentMaintenance,
+    yes: bool,
+) -> Result<u8, Failure> {
+    if task == Task::Config && outcome.state == CONFIRM {
+        print_changes(ctx, agent, &outcome.config_changes, "changed");
+        if ctx.render.is_json() && !yes {
+            return Ok(EXIT_OK);
+        }
+        let take = yes
+            || ask(
+                ctx,
+                &format!("Take these changes into the configuration of {agent}? [y/N] "),
+                &format!("humanitl agents config {agent} --accept"),
+                &format!(
+                    "nothing was taken over; the changes wait: humanitl agents config {agent} \
+                     --accept or --discard"
+                ),
+            )
+            .is_ok();
+        return decide_config(ctx, agent, take).await;
+    }
+    report(ctx, agent, outcome)
+}
+
+/// `humanitl agents config <id> --accept|--discard`: entscheidet über einen
+/// wartenden Konfigurationslauf.
+async fn decide_config(ctx: &Context, agent: &str, accept: bool) -> Result<u8, Failure> {
+    let wish = v1::agents_request::Agent {
+        agent: agent.to_owned(),
+    };
+    let op = if accept {
+        v1::agents_request::Op::ConfigAccept(wish)
+    } else {
+        v1::agents_request::Op::ConfigDiscard(wish)
+    };
+    let mut client = ctx.connect().await?;
+    client
+        .agents(v1::AgentsRequest { op: Some(op) })
+        .await
+        .map_err(|status| Failure::new(status_diagnostic(&status, "Agents")))?;
+    if ctx.render.is_json() {
+        ctx.render
+            .value(&json!({ "agent": agent, "accepted": accept }));
+    } else if accept {
+        ctx.render.line(&format!(
+            "{agent}: the changed configuration is in the depot now"
+        ));
+    } else {
+        ctx.render.line(&format!(
+            "{agent}: the changes were discarded; the configuration stays as it was"
+        ));
+    }
+    Ok(EXIT_OK)
+}
+
+/// `humanitl agents config <id> --show`.
+async fn show_config(ctx: &Context, agent: &str) -> Result<u8, Failure> {
+    let mut client = ctx.connect().await?;
+    let status = client
+        .agents(v1::AgentsRequest {
+            op: Some(v1::agents_request::Op::ConfigShow(
+                v1::agents_request::Agent {
+                    agent: agent.to_owned(),
+                },
+            )),
+        })
+        .await
+        .map_err(|status| Failure::new(status_diagnostic(&status, "Agents")))?
+        .into_inner();
+    let files = status
+        .agents
+        .iter()
+        .find(|entry| entry.agent == agent)
+        .map(|entry| entry.config_files.clone())
+        .unwrap_or_default();
+    print_changes(ctx, agent, &files, "file");
+    Ok(EXIT_OK)
+}
+
+/// Die Dateien einer Konfiguration, Schlüssel mit Befehlen hervorgehoben.
+fn print_changes(ctx: &Context, agent: &str, changes: &[v1::AgentConfigChange], what: &str) {
+    if ctx.render.is_json() {
+        ctx.render.value(&json!({
+            "agent": agent,
+            "files": changes.iter().map(|change| json!({
+                "path": change.path,
+                "change": change.change,
+                "keys": change.keys,
+                "command_keys": change.command_keys,
+                "keys_omitted": change.keys_omitted,
+            })).collect::<Vec<_>>(),
+        }));
+        return;
+    }
+    if changes.is_empty() {
+        ctx.render.line(&format!("{agent}: no configuration file"));
+        return;
+    }
+    for change in changes {
+        let label = if what == "file" {
+            String::new()
+        } else {
+            format!(" ({})", change.change)
+        };
+        ctx.render.line(&format!("{}{label}", change.path));
+        for key in &change.keys {
+            if change.command_keys.contains(key) {
+                ctx.render.line(&format!(
+                    "  ! {key}    runs commands, read it before you agree"
+                ));
+            } else {
+                ctx.render.line(&format!("    {key}"));
+            }
+        }
+        if change.keys_omitted > 0 {
+            ctx.render.line(&format!(
+                "    ... and {} more changed keys, none of them runs commands",
+                change.keys_omitted
+            ));
+        }
+    }
+}
+
+/// `humanitl agents callback <id> <url>`.
+async fn callback(ctx: &Context, agent: &str, url: &str) -> Result<u8, Failure> {
+    let mut client = ctx.connect().await?;
+    client
+        .agents(v1::AgentsRequest {
+            op: Some(v1::agents_request::Op::DeliverCallback(
+                v1::agents_request::Callback {
+                    agent: agent.to_owned(),
+                    url: url.to_owned(),
+                },
+            )),
+        })
+        .await
+        .map_err(|status| Failure::new(status_diagnostic(&status, "Agents")))?;
+    if ctx.render.is_json() {
+        ctx.render
+            .value(&json!({ "agent": agent, "delivered": true }));
+    } else {
+        ctx.render.line(&format!(
+            "{agent}: the callback was delivered inside the login run"
+        ));
+    }
+    Ok(EXIT_OK)
+}
+
+/// Öffnet mit `--open` die erste URL eines Anmeldelaufs, die der Daemon als
+/// öffenbar meldet (ein Anmeldehost des Adapters), genau einmal im Browser
+/// dieses Rechners. Jede andere URL bleibt ungeöffnet.
+async fn open_login_url(mut client: humanitl_ipc::client::Client, agent: String, sandbox: String) {
+    loop {
+        tokio::time::sleep(OUTCOME_POLL).await;
+        let Ok(status) = client
+            .agents(v1::AgentsRequest {
+                op: Some(v1::agents_request::Op::Status(
+                    v1::agents_request::Status {},
+                )),
+            })
+            .await
+        else {
+            return;
+        };
+        let Ok(run) = maintenance_of(&status.into_inner(), &agent) else {
+            return;
+        };
+        if run.sandbox_id != sandbox || run.state != RUNNING {
+            return;
+        }
+        if let Some(url) = run.login_urls.iter().find(|url| url.openable) {
+            open_on_host(&url.url);
+            return;
+        }
+    }
+}
+
+/// Der Browser des Rechners für eine geprüfte URL: ein Argument, keine Shell.
+fn open_on_host(url: &str) {
+    let opener = if cfg!(target_os = "macos") {
+        "open"
+    } else {
+        "xdg-open"
+    };
+    let _ = std::process::Command::new(opener)
+        .arg(url)
+        .stdin(std::process::Stdio::null())
+        .stdout(std::process::Stdio::null())
+        .stderr(std::process::Stdio::null())
+        .spawn();
 }
 
 /// Wie das Anhängen ausging: am Terminal, oder der Lauf war schon vorbei.
@@ -353,6 +640,15 @@ fn report(ctx: &Context, agent: &str, outcome: &v1::AgentMaintenance) -> Result<
 
 /// Die Zeile nach einem geglückten Lauf.
 fn outcome_line(agent: &str, outcome: &v1::AgentMaintenance) -> String {
+    if outcome.task == "login" {
+        return format!(
+            "{agent}: logged in; the depot keeps the checked credential file, and every session \
+             starts with it"
+        );
+    }
+    if outcome.task == "config" {
+        return format!("{agent}: the run changed nothing in the configuration");
+    }
     if outcome.previous.is_empty() {
         format!(
             "{agent}: version {} installed in the depot",
@@ -489,6 +785,11 @@ fn maintenance_json(run: &v1::AgentMaintenance) -> serde_json::Value {
         "state": run.state,
         "version": run.version,
         "previous": run.previous,
+        "login_urls": run.login_urls.iter().map(|url| json!({
+            "url": url.url,
+            "openable": url.openable,
+        })).collect::<Vec<_>>(),
+        "callback_paste": run.callback_paste,
         "diagnostics": run.diagnostics.iter().map(|found| json!({
             "code": found.code,
             "why": found.why,
@@ -505,7 +806,9 @@ fn maintenance_line(run: &v1::AgentMaintenance) -> String {
     };
     let what = match run.state.as_str() {
         RUNNING => "running".to_owned(),
+        DONE if run.version.is_empty() => "done".to_owned(),
         DONE => format!("done, version {}", run.version),
+        CONFIRM => "waiting for your confirmation".to_owned(),
         other => other.to_owned(),
     };
     format!("  last {}: {what} ({sandbox})", run.task)

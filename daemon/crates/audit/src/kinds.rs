@@ -26,7 +26,9 @@
 //! und Ende einer Pause des Abfangens, die ein Mensch über den Socket des
 //! Daemons beschlossen hat. `sandbox.door_capped` kommt aus HUM-477 dazu: Die
 //! Tür einer Sitzung der Kernel-Stufe hat eine Verbindung über ihrer
-//! Obergrenze abgewiesen.
+//! Obergrenze abgewiesen. `agent.credential_writeback` kommt aus HUM-520
+//! dazu: Die Zugangsdatei eines Depot-Agenten ging zurück ins Depot oder
+//! wurde abgelehnt, mit den SHA-256 alt und neu, nie mit dem Inhalt.
 
 use std::time::SystemTime;
 
@@ -696,6 +698,39 @@ pub struct SandboxDoorCapped {
     pub cap: u32,
 }
 
+/// `agent.credential_writeback`: Der Wächter des Agent-Depots hat die
+/// Zugangsdatei einer Sitzung oder eines Anmeldelaufs übernommen oder
+/// abgelehnt (HUM-520, ADR-0023 Punkt 4).
+///
+/// Der Record nennt den Agenten, das Ergebnis, bei einer Ablehnung den Code
+/// (`AGENT_012` oder `AGENT_016`) und die SHA-256 der gespeicherten und der
+/// angebotenen Datei, nie ihren Inhalt. Die Sitzung steht im Record selbst.
+#[derive(Debug, Clone, PartialEq, Eq)]
+pub struct AgentCredentialWriteback {
+    /// Der Agent, wie in `agents.<id>`.
+    pub agent: String,
+    /// Ob die Datei jetzt im Depot steht.
+    pub accepted: bool,
+    /// Der Code einer Ablehnung; `None` bei einer Übernahme.
+    pub code: Option<String>,
+    /// SHA-256 der gespeicherten Datei davor; `None` vor der ersten Anmeldung.
+    pub sha256_old: Option<String>,
+    /// SHA-256 der angebotenen Datei; `None`, wenn sie nicht lesbar war.
+    pub sha256_new: Option<String>,
+}
+
+impl AgentCredentialWriteback {
+    fn data(&self) -> Value {
+        json!({
+            "agent": self.agent,
+            "accepted": self.accepted,
+            "code": self.code,
+            "sha256_old": self.sha256_old,
+            "sha256_new": self.sha256_new,
+        })
+    }
+}
+
 /// `intercept.resumed`: Eine Pause des Abfangens ist zu Ende (HUM-407).
 ///
 /// Ihr Beginn steht als `intercept.paused` davor; zwischen beiden steht jede
@@ -775,6 +810,9 @@ pub enum RecordKind {
     /// Die Tür einer Sitzung hat eine Verbindung über ihrer Obergrenze
     /// abgewiesen (HUM-477).
     SandboxDoorCapped(SandboxDoorCapped),
+    /// Die Zugangsdatei eines Depot-Agenten ging zurück oder wurde abgelehnt
+    /// (HUM-520).
+    AgentCredentialWriteback(AgentCredentialWriteback),
 }
 
 impl RecordKind {
@@ -808,11 +846,12 @@ impl RecordKind {
             Self::InterceptResumed(_) => "intercept.resumed",
             Self::ProjectsCleaned(_) => "projects.cleaned",
             Self::SandboxDoorCapped(_) => "sandbox.door_capped",
+            Self::AgentCredentialWriteback(_) => "agent.credential_writeback",
         }
     }
 
     /// Alle Namen, in der Reihenfolge der Tabelle.
-    pub const NAMES: [&'static str; 26] = [
+    pub const NAMES: [&'static str; 27] = [
         "daemon.started",
         "daemon.stopped",
         "session.started",
@@ -839,6 +878,7 @@ impl RecordKind {
         "intercept.resumed",
         "projects.cleaned",
         "sandbox.door_capped",
+        "agent.credential_writeback",
     ];
 
     /// `data` dieser Art.
@@ -940,6 +980,7 @@ impl RecordKind {
             Self::InterceptResumed(d) => d.data(),
             Self::ProjectsCleaned(d) => d.data(),
             Self::SandboxDoorCapped(d) => json!({ "cap": d.cap }),
+            Self::AgentCredentialWriteback(d) => d.data(),
         }
     }
 }
@@ -975,7 +1016,7 @@ mod tests {
 
     #[test]
     fn every_kind_has_the_name_of_the_table_and_canonical_data() {
-        assert_eq!(RecordKind::NAMES.len(), 26);
+        assert_eq!(RecordKind::NAMES.len(), 27);
         for name in RecordKind::NAMES {
             let (area, verb) = name.split_once('.').unwrap();
             assert!(!area.is_empty() && !verb.is_empty(), "{name}");

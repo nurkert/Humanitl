@@ -29,6 +29,10 @@
 //!
 //! Der Dienst hält eine Sandbox: Ein Lauf braucht den Anspruch auf den Start
 //! wie jede Sitzung und wird abgelehnt, solange eine andere läuft.
+//!
+//! Anmeldung und Konfigurationslauf (HUM-520) sind Wartungsläufe derselben
+//! Art, die statt eines Rezepts das Programm des Depots starten; was für sie
+//! anders ist, steht in [`super::account`].
 
 use std::sync::Arc;
 
@@ -59,6 +63,8 @@ pub const STATE_RUNNING: &str = "running";
 pub const STATE_DONE: &str = "done";
 /// `failed`: nichts übernommen, das Depot ist wie vorher.
 pub const STATE_FAILED: &str = "failed";
+/// `confirm`: ein Konfigurationslauf wartet auf die Bestätigung (HUM-520).
+pub const STATE_CONFIRM: &str = "confirm";
 
 impl SandboxService {
     /// Startet eine Installation oder ein Update von `agent` (HUM-563).
@@ -89,12 +95,29 @@ impl SandboxService {
     }
 }
 
+/// Was nach dem Ende eines Laufs übernommen wird.
+pub(super) enum Job {
+    /// Installation oder Update (HUM-563).
+    Install(Box<MaintenanceRun>),
+    /// Anmeldung oder Konfiguration (HUM-520).
+    Agent(Box<humanitl_sandbox::agent::depot::account::AgentRun>),
+}
+
+impl Job {
+    fn agent(&self) -> &'static KnownAgent {
+        match self {
+            Self::Install(run) => run.agent(),
+            Self::Agent(run) => run.agent(),
+        }
+    }
+}
+
 /// Ein vorbereiteter Lauf samt Sitzung, bereit zum Start.
-struct Staged {
-    run: Box<MaintenanceRun>,
-    prepared: Prepared,
+pub(super) struct Staged {
+    pub(super) job: Job,
+    pub(super) prepared: Prepared,
     /// Die Sitzungsregeln des Laufs, schon im Regelspeicher.
-    rules: Vec<RuleId>,
+    pub(super) rules: Vec<RuleId>,
 }
 
 impl Inner {
@@ -121,10 +144,15 @@ impl Inner {
             });
         };
         let this = Arc::clone(&self);
-        let staged =
-            tokio::task::spawn_blocking(move || this.stage(entry, task, version.as_deref()))
-                .await
-                .map_err(|error| joined_failed(&error))??;
+        let staged = tokio::task::spawn_blocking(move || {
+            if task.runs_agent() {
+                this.stage_agent(entry, task).map(Ok)
+            } else {
+                this.stage(entry, task, version.as_deref())
+            }
+        })
+        .await
+        .map_err(|error| joined_failed(&error))??;
         let staged = match staged {
             Ok(staged) => staged,
             // No run: the version lay in the depot already.
@@ -134,6 +162,9 @@ impl Inner {
             }
         };
         let (output_tx, output_rx) = std::sync::mpsc::channel();
+        // A login's output passes the reader of its URLs on the way
+        // (HUM-520).
+        let (launch_tx, urls, callback_paste) = self.login_output(&staged, output_tx);
         let this = Arc::clone(&self);
         let launched = tokio::task::spawn_blocking(move || {
             let result = this.launch_with(
@@ -141,7 +172,7 @@ impl Inner {
                 &v1::sandbox_request::Plan::default(),
                 None,
                 None,
-                Some(output_tx),
+                Some(launch_tx),
             );
             (staged, result)
         })
@@ -159,9 +190,17 @@ impl Inner {
             sandbox_id: launched.sandbox.to_string(),
             task: task.as_str().to_owned(),
             state: STATE_RUNNING.to_owned(),
+            callback_paste,
             ..v1::AgentMaintenance::default()
         };
-        lock(&self.maintenance).insert(entry.id.to_owned(), outcome.clone());
+        {
+            let mut runs = lock(&self.maintenance);
+            let mut entry_now = outcome.clone();
+            if let Some(urls) = &urls {
+                entry_now.login_urls.clone_from(&lock(urls));
+            }
+            runs.insert(entry.id.to_owned(), entry_now);
+        }
         tracing::info!(
             session = %self.session,
             sandbox = %launched.sandbox,
@@ -218,9 +257,9 @@ impl Inner {
             .resolve(&SessionRequest::default())
             .map(|resolved| resolved.config)?;
         let prepared = self.maintenance_session(&config, &run)?;
-        let rules = self.apply_run_rules(&config, &run)?;
+        let rules = self.apply_run_rules(&config, run.session_rules())?;
         Ok(Ok(Staged {
-            run,
+            job: Job::Install(run),
             prepared,
             rules,
         }))
@@ -234,6 +273,28 @@ impl Inner {
         config: &Config,
         run: &MaintenanceRun,
     ) -> Result<Prepared, Diagnostic> {
+        self.run_session(
+            config,
+            &RunShape {
+                home: run.home(),
+                agent: run.agent(),
+                command: run.command(),
+                env: run.env(),
+                mount: None,
+            },
+        )
+    }
+
+    /// Die Sitzung eines Laufs: das Sandbox-Profil der Konfiguration ohne
+    /// Erweiterungen, der Arbeitsordner an [`MAINTENANCE_HOME_DST`] statt
+    /// eines Projekts, die Host-Installationen des Agenten verdeckt; für
+    /// Anmeldung und Konfiguration (HUM-520) dazu das Programm des Depots
+    /// und die Kopie der Konfiguration.
+    pub(super) fn run_session(
+        &self,
+        config: &Config,
+        shape: &RunShape<'_>,
+    ) -> Result<Prepared, Diagnostic> {
         let policy = MountPolicy::from_paths(&self.paths);
         let (profile_path, _) = self.profile_path(&config.sandbox.profile)?;
         let mut profile = SandboxProfile::load_validated(&profile_path, &policy)?;
@@ -241,17 +302,17 @@ impl Inner {
         profile.mounts.work.mode = Some(WorkMode::Rw);
         profile.mounts.extra_ro.clear();
         profile.mounts.extra_rw.clear();
-        let home = std::fs::canonicalize(run.home()).map_err(|err| {
+        let home = std::fs::canonicalize(shape.home).map_err(|err| {
             Diagnostic::builder(codes::AGENT_011, Severity::Error)
                 .why(format!(
                     "the work directory {} of the maintenance run cannot be resolved ({err})",
-                    run.home().display()
+                    shape.home.display()
                 ))
                 .build()
         })?;
-        let agent = run.agent();
+        let agent = shape.agent;
         let mut session_env = vec![(ENV_SESSION.to_owned(), self.session.to_string())];
-        session_env.extend(run.env());
+        session_env.extend(shape.env.iter().cloned());
         let session = SessionContext {
             session: self.session,
             work_src: home.clone(),
@@ -261,7 +322,7 @@ impl Inner {
             ca_bundle_src: self.paths.ca_dir().join(CA_BUNDLE_FILE),
             shim_src: shim_path(),
             session_env,
-            command: run.command(),
+            command: shape.command.clone(),
             files: Vec::new(),
             agent_program: None,
             agent_depot: DepotSession {
@@ -272,6 +333,8 @@ impl Inner {
                     locked_by: None,
                 }],
                 maintenance_home: Some(home),
+                maintenance_program: shape.mount.as_ref().map(|mount| mount.agent.clone()),
+                mount: shape.mount.clone(),
                 ..DepotSession::default()
             },
         };
@@ -304,10 +367,10 @@ impl Inner {
     /// Die mitgelieferte Gruppe bleibt nach dem Lauf so: Der Dienst hält eine
     /// Sandbox, und der nächste Start setzt die Gruppe seiner Sitzung
     /// (`Inner::apply_resolved`), bevor in ihr etwas läuft.
-    fn apply_run_rules(
+    pub(super) fn apply_run_rules(
         &self,
         config: &Config,
-        run: &MaintenanceRun,
+        session_rules: Vec<humanitl_core::rule::Rule>,
     ) -> Result<Vec<RuleId>, Diagnostic> {
         if let Some(settings) = self.settings.as_ref() {
             settings.set(SessionState::for_config(
@@ -324,7 +387,7 @@ impl Inner {
         let (bundled, _) = bundled_rules(&bare, &[], self.session);
         store.set_bundled(&bundled.all());
         let mut added = Vec::new();
-        for rule in run.session_rules() {
+        for rule in session_rules {
             match store.add(&rule, None) {
                 Ok(rule) => added.push(rule.id),
                 Err(found) => {
@@ -339,7 +402,7 @@ impl Inner {
     }
 
     /// Nimmt die Regeln des Laufs wieder heraus.
-    fn unwind_rules(&self, staged: &Staged) {
+    pub(super) fn unwind_rules(&self, staged: &Staged) {
         let Some(store) = self.rules.as_ref() else {
             return;
         };
@@ -390,8 +453,19 @@ impl Inner {
         self.unwind_rules(&staged);
         // Green guarantees and status 0, or nothing is taken over.
         let succeeded = code == Some(0) && !failed;
-        let Staged { run, .. } = staged;
-        let agent = run.agent().id;
+        let own_loopback = staged.prepared.backend.own_loopback();
+        let Staged { job, .. } = staged;
+        let agent = job.agent().id;
+        let run = match job {
+            Job::Install(run) => run,
+            Job::Agent(run) => {
+                let outcome = self
+                    .finish_agent_run(*run, succeeded, own_loopback, outcome, &warnings, found)
+                    .await;
+                lock(&self.maintenance).insert(agent.to_owned(), outcome);
+                return;
+            }
+        };
         let committed = tokio::task::spawn_blocking(move || run.commit(succeeded))
             .await
             .map_err(|error| joined_failed(&error))
@@ -427,6 +501,15 @@ impl Inner {
         }
         lock(&self.maintenance).insert(agent.to_owned(), outcome);
     }
+}
+
+/// Was eine Sitzung eines Laufs braucht.
+pub(super) struct RunShape<'a> {
+    pub(super) home: &'a std::path::Path,
+    pub(super) agent: &'static KnownAgent,
+    pub(super) command: Vec<std::ffi::OsString>,
+    pub(super) env: Vec<(String, String)>,
+    pub(super) mount: Option<humanitl_sandbox::agent::depot::DepotMount>,
 }
 
 /// Der Agent, dessen Wartungslauf noch nicht übernommen ist: Er läuft oder

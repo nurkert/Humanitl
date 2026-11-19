@@ -1790,6 +1790,36 @@ Schalter dafür ist ohnehin aus (`DISABLE_UPDATES=1` bei Claude Code). Ein Lauf 
 solange keine Session in diesem Daemon läuft (`CLI_005`). Kernel-Stufe und Seatbelt (macOS) tragen
 noch keinen Wartungslauf (`AGENT_015`).
 
+`humanitl agents login AGENT [--open] [--yes]` meldet den Agenten einmal für jede Session an
+(HUM-520): ein Wartungslauf, der das Programm des Depots mit dem Anmeldekommando des Adapters
+startet, seine Konfiguration eine schreibbare Kopie, ohne Halt nur die Anmeldehosts des Adapters. Er
+hängt sich an wie `install`. Der Agent gibt seine Anmelde-URL im Terminal aus; mit `--open` öffnet
+der Befehl sie im Browser dieses Rechners, aber nur eine URL zu einem Anmeldehost des Adapters, nie
+eine andere. Nach dem Lauf geht nur die Zugangsdatei ins Depot, geprüft vom Wächter der
+Rückschrift; alles andere, was die Anmeldung schrieb, wird verworfen. Jede spätere Session des
+Agenten startet angemeldet, auch eine Wegwerf-Session; ein Token, das sie erneuert, geht auf
+demselben geprüften Weg zurück, während sie läuft und an ihrem Ende
+(`agents.AGENT.credential_writeback = false` schaltet das ab). Eine abgelehnte Rückschrift ist
+`AGENT_012`, ein älteres Token oder ein anderes Konto `AGENT_016`, beide in `humanitl agents
+status`. Eine Anmeldung, die der Adapter noch nicht speichern kann, weil er kein Format seiner
+Zugangsdatei erklärt, antwortet `AGENT_014`, bevor etwas startet.
+
+`humanitl agents callback AGENT URL` stellt die Callback-URL aus der Adresszeile des Browsers in
+die laufende Anmeldung zu, für einen Agenten, der auf seinem eigenen Loopback auf den Browser
+wartet: Angenommen wird genau `http://localhost:<port><pfad>?<query>` des Adapters, zugestellt von
+einem Prozess im Lauf; kein Port dieses Rechners wird in die Sandbox weitergeleitet. Unter Seatbelt
+(macOS) teilt die Sandbox das Loopback des Hosts, dort gibt es keinen Callback, nur den
+Geräte-Fluss (`AGENT_014`).
+
+`humanitl agents config AGENT [--yes]` startet den Agenten auf einer schreibbaren Kopie seiner
+Konfiguration ohne Projekt, damit du dort seine Einstellungen änderst. Danach listet der Befehl
+jede geänderte Datei mit ihren geänderten Schlüsseln, markiert die Schlüssel, die Befehle ausführen,
+mit `!` (bei Claude Code `hooks`, `apiKeyHelper`, `statusLine`, `mcpServers`, `env`) und fragt, ob
+sie übernommen werden; nur ein Ja (oder `--yes`) ändert die Konfiguration im Depot. Ohne Terminal
+warten die Änderungen: `humanitl agents config AGENT --accept` oder `--discard` entscheidet später.
+`humanitl agents config AGENT --show` listet die Konfiguration, wie sie ist, mit ihren Schlüsseln,
+die Befehle ausführen.
+
 ## Die globalen Schalter
 
 Fünf Schalter gelten für jedes Unterkommando, weil `clap` sie als `global` führt

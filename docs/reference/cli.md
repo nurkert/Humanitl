@@ -99,6 +99,9 @@ step, is described in [`docs/cli.md`](../cli.md); which RPC each subcommand serv
 - [`humanitl agents remove`](#humanitl-agents-remove) Remove the depot of an agent with its program, configuration and login; refused while a session uses it. The source stays as it is
 - [`humanitl agents install`](#humanitl-agents-install) Install an agent into the depot in a maintenance sandbox: no project, only the vendor's hosts without a hold, nothing downloaded runs on the host. Attaches to the run's terminal. The version is pinned; only `update` changes it
 - [`humanitl agents update`](#humanitl-agents-update) Update an agent in the depot in a maintenance sandbox, or switch back to a version the depot still holds (`--version`). Running sessions keep their version; the next one starts the new
+- [`humanitl agents login`](#humanitl-agents-login) Log an agent of the depot in, in a maintenance sandbox with the depot program and no project: only its login hosts pass without a hold, and only the credential file, checked by the guard, goes back into the depot. Attaches to the run's terminal; every session after it starts logged in
+- [`humanitl agents callback`](#humanitl-agents-callback) Deliver the callback URL from the browser's address bar into the running login, where the agent waits for it on its own loopback. Only exactly the agent's callback (`http://localhost:<port><path>?...`) is delivered, inside the sandbox; no port is forwarded. Not under Seatbelt (macOS): there only the device flow works
+- [`humanitl agents config`](#humanitl-agents-config) Change an agent's configuration: the agent runs on a writable copy of its configuration without a project; afterwards the changed files are listed, keys that run commands highlighted, and taken over only after confirmation
 - [`humanitl projects`](#humanitl-projects) The project register: the projects the daemon knows with their last start, agent and runs, and what was chosen for one of them
 - [`humanitl projects ls`](#humanitl-projects-ls) List the known projects, the latest start first: name, folder, agent, last start, runs, and whether a session runs or changes wait
 - [`humanitl projects show`](#humanitl-projects-show) Show one project by its folder: its entry and every key of its project choice with the chosen value, the value that applies and its origin
@@ -3093,12 +3096,15 @@ The agent depot: where each agent comes from (host or depot), its installed vers
 Usage: humanitl agents [OPTIONS] <COMMAND>
 
 Commands:
-  status   Show every agent, or one: its source with origin or company lock, the installed version and signature, whether it is logged in, its size. Nothing from the depot is started for this
-  source   Set where an agent comes from: `host` or `depot` (`agents.<id>.source`). Switching back to `host` keeps the depot
-  remove   Remove the depot of an agent with its program, configuration and login; refused while a session uses it. The source stays as it is
-  install  Install an agent into the depot in a maintenance sandbox: no project, only the vendor's hosts without a hold, nothing downloaded runs on the host. Attaches to the run's terminal. The version is pinned; only `update` changes it
-  update   Update an agent in the depot in a maintenance sandbox, or switch back to a version the depot still holds (`--version`). Running sessions keep their version; the next one starts the new
-  help     Print this message or the help of the given subcommand(s)
+  status    Show every agent, or one: its source with origin or company lock, the installed version and signature, whether it is logged in, its size. Nothing from the depot is started for this
+  source    Set where an agent comes from: `host` or `depot` (`agents.<id>.source`). Switching back to `host` keeps the depot
+  remove    Remove the depot of an agent with its program, configuration and login; refused while a session uses it. The source stays as it is
+  install   Install an agent into the depot in a maintenance sandbox: no project, only the vendor's hosts without a hold, nothing downloaded runs on the host. Attaches to the run's terminal. The version is pinned; only `update` changes it
+  update    Update an agent in the depot in a maintenance sandbox, or switch back to a version the depot still holds (`--version`). Running sessions keep their version; the next one starts the new
+  login     Log an agent of the depot in, in a maintenance sandbox with the depot program and no project: only its login hosts pass without a hold, and only the credential file, checked by the guard, goes back into the depot. Attaches to the run's terminal; every session after it starts logged in
+  callback  Deliver the callback URL from the browser's address bar into the running login, where the agent waits for it on its own loopback. Only exactly the agent's callback (`http://localhost:<port><path>?...`) is delivered, inside the sandbox; no port is forwarded. Not under Seatbelt (macOS): there only the device flow works
+  config    Change an agent's configuration: the agent runs on a writable copy of its configuration without a project; afterwards the changed files are listed, keys that run commands highlighted, and taken over only after confirmation
+  help      Print this message or the help of the given subcommand(s)
 
 Options:
       --json
@@ -3287,6 +3293,120 @@ Options:
 
   -q, --quiet
           Only the result, no notes
+
+      --profile <NAME>
+          Use this profile for the session; falls back to the sandbox profile of that name when no session profile exists
+
+  -h, --help
+          Print help
+```
+
+## humanitl agents login
+
+```text
+Log an agent of the depot in, in a maintenance sandbox with the depot program and no project: only its login hosts pass without a hold, and only the credential file, checked by the guard, goes back into the depot. Attaches to the run's terminal; every session after it starts logged in
+
+Usage: humanitl agents login [OPTIONS] <AGENT>
+
+Arguments:
+  <AGENT>
+          The agent, such as `claude`
+
+Options:
+      --json
+          Machine-readable output: one JSON value on stdout, diagnostics included
+
+      --open
+          Open the login URL in the browser of this machine once the agent prints it. Only a URL to one of the adapter's login hosts is ever opened; any other is shown, never opened
+
+      --config <PATH>
+          Read this config file instead of the one in the user's config directory
+
+      --yes
+          Do not ask
+
+  -v, --verbose...
+          Explain what is happening; repeat for more
+
+  -q, --quiet
+          Only the result, no notes
+
+      --profile <NAME>
+          Use this profile for the session; falls back to the sandbox profile of that name when no session profile exists
+
+  -h, --help
+          Print help
+```
+
+## humanitl agents callback
+
+```text
+Deliver the callback URL from the browser's address bar into the running login, where the agent waits for it on its own loopback. Only exactly the agent's callback (`http://localhost:<port><path>?...`) is delivered, inside the sandbox; no port is forwarded. Not under Seatbelt (macOS): there only the device flow works
+
+Usage: humanitl agents callback [OPTIONS] <AGENT> <URL>
+
+Arguments:
+  <AGENT>
+          The agent, such as `codex`
+
+  <URL>
+          The URL from the browser's address bar
+
+Options:
+      --json
+          Machine-readable output: one JSON value on stdout, diagnostics included
+
+      --config <PATH>
+          Read this config file instead of the one in the user's config directory
+
+  -v, --verbose...
+          Explain what is happening; repeat for more
+
+  -q, --quiet
+          Only the result, no notes
+
+      --profile <NAME>
+          Use this profile for the session; falls back to the sandbox profile of that name when no session profile exists
+
+  -h, --help
+          Print help
+```
+
+## humanitl agents config
+
+```text
+Change an agent's configuration: the agent runs on a writable copy of its configuration without a project; afterwards the changed files are listed, keys that run commands highlighted, and taken over only after confirmation
+
+Usage: humanitl agents config [OPTIONS] <AGENT>
+
+Arguments:
+  <AGENT>
+          The agent, such as `claude`
+
+Options:
+      --json
+          Machine-readable output: one JSON value on stdout, diagnostics included
+
+      --show
+          Only list the configuration as it is, with its keys that run commands
+
+      --accept
+          Take over the changes of a configuration run that waits for a confirmation
+
+      --config <PATH>
+          Read this config file instead of the one in the user's config directory
+
+      --discard
+          Discard the changes of a configuration run that waits for a confirmation
+
+  -v, --verbose...
+          Explain what is happening; repeat for more
+
+  -q, --quiet
+          Only the result, no notes
+
+      --yes
+          Do not ask before the run, and take its changes over without asking
 
       --profile <NAME>
           Use this profile for the session; falls back to the sandbox profile of that name when no session profile exists

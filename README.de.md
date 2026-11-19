@@ -130,7 +130,7 @@ laufen in der CI bei jedem Commit.
 
 ## Wovor es nicht schützt
 
-Lies [`docs/THREAT-MODEL.md`](docs/THREAT-MODEL.md), bevor du dich auf Humanitl verlässt. Fünf
+Lies [`docs/THREAT-MODEL.md`](docs/THREAT-MODEL.md), bevor du dich auf Humanitl verlässt. Sechs
 Seitenkanäle sind erklärt, in der App sichtbar und nicht geschlossen
 ([`docs/SECURITY.md`](docs/SECURITY.md#5-declared-side-channels)):
 
@@ -146,6 +146,12 @@ Seitenkanäle sind erklärt, in der App sichtbar und nicht geschlossen
 - **Die Terminalausgabe** kommt vom Agenten und wird gefiltert, nicht geglaubt.
 - **Hostnamen** stehen im Klartext in der Aufzeichnung und in jedem Export.
 - **Paket-Caches** gelten je Projekt und tragen Daten zwischen den Sitzungen dieses Projekts.
+- **Die Zugangsdatei des Depots** ([Abschnitt 5.7](docs/SECURITY.md#57-the-credential-file-of-the-depot)):
+  Mit einem Agenten aus dem Depot geht eine erneuerte Anmeldung zurück ins Depot, damit die nächste
+  Sitzung angemeldet startet. Nur diese eine Datei, geprüft gegen das Format des Agenten, nie älter
+  und nie von einem anderen Konto; innerhalb ihres Formats kann eine Sitzung der nächsten trotzdem
+  ein paar Bytes hinterlassen. Jede Rückschrift steht im Audit-Log;
+  `agents.<id>.credential_writeback = false` schaltet sie ab.
 
 **Und du bist der Klassifikator:** Eine freigegebene Anfrage geht hinaus, also lies, was du
 freigibst. Antworten und WebSocket-Frames werden aufgezeichnet, aber nicht angehalten, es gibt kein HTTP/2

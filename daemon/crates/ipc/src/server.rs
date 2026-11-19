@@ -2518,6 +2518,24 @@ impl v1::humanitl_server::Humanitl for IpcServer {
             }
             None => op,
         };
+        // A pasted callback goes into the running login (HUM-520).
+        let op = match op {
+            Some(v1::agents_request::Op::DeliverCallback(callback)) => {
+                let sandbox = self
+                    .sandbox
+                    .as_ref()
+                    .ok_or_else(|| diagnostic_to_status(&crate::agents::no_sandbox_service()))?;
+                sandbox
+                    .deliver_callback(&callback.agent, &callback.url)
+                    .await
+                    .map_err(|diagnostic| diagnostic_to_status(&diagnostic))?;
+                Some(v1::agents_request::Op::Status(
+                    v1::agents_request::Status {},
+                ))
+            }
+            other => other,
+        };
+        let decided = crate::agents::config_decision_of(op.as_ref());
         let paths = self.doctor.paths.clone();
         let lock = self.source_lock();
         let in_use = self.sandbox.as_ref().and_then(SandboxService::depot_in_use);
@@ -2528,7 +2546,11 @@ impl v1::humanitl_server::Humanitl for IpcServer {
         .map_err(|error| diagnostic_to_status(&unfinished("Agents", &error)))?
         .map_err(|diagnostic| diagnostic_to_status(&diagnostic))?;
         if let Some(sandbox) = self.sandbox.as_ref() {
+            if let Some(agent) = decided.as_deref() {
+                sandbox.config_decided(agent);
+            }
             crate::agents::with_maintenance(&mut status, &sandbox.maintenance_runs());
+            crate::agents::with_writeback_refusals(&mut status, &sandbox.writeback_refusals());
         }
         if let Some(key) = written {
             self.config_events.publish([key], "");
