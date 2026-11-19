@@ -697,6 +697,31 @@ fn the_link_s_no_report_line_is_a_missing_report() {
     }
 }
 
+/// HUM-486: Hat der Faden zum Gast ein stummes vsock-Gerät festgehalten,
+/// wird aus dem fehlenden Bericht `SANDBOX_055` mit dem Stand des Wegs im
+/// Grund; ohne den Vermerk bleibt es `SANDBOX_013` mit demselben Stand.
+/// Mutationsbeweis: Ohne den Zweig für `silent` in `name_the_link` zeigt
+/// der Start `SANDBOX_013`.
+#[test]
+fn a_silent_vsock_device_is_sandbox_055() {
+    let link = "the guest said ready after 2.1s; the CONNECT for the report connection has had no \
+                answer from the vsock device for 10.0s";
+    let mut silent = results_of_lines(&[session::NO_REPORT]);
+    name_the_link(&mut silent, link, true);
+    let mut waiting = results_of_lines(&[session::NO_REPORT]);
+    name_the_link(&mut waiting, link, false);
+    for (results, code) in [(&silent, "SANDBOX_055"), (&waiting, "SANDBOX_013")] {
+        assert!(results.iter().all(|result| !result.passed), "{results:?}");
+        for result in results {
+            let diagnostic = result.diagnostic.as_ref().unwrap();
+            assert_eq!(diagnostic.code.as_str(), code, "{results:?}");
+            assert!(diagnostic.why.contains(link), "{}", diagnostic.why);
+            assert!(result.evidence.contains(link), "{}", result.evidence);
+        }
+    }
+    assert_eq!(shown_code(&silent).as_deref(), Some("SANDBOX_055"));
+}
+
 /// Bestand der Bericht des Gasts, ist jeder Fund des Hosts `SANDBOX_047`,
 /// wie seit HUM-444; nur die Garantie mit dem Fund wird rot.
 #[test]

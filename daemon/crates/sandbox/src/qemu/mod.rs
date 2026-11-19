@@ -75,6 +75,7 @@ use std::time::{Duration, Instant};
 use humanitl_config::{HostResources, Paths, QemuConfig, SandboxRef, WorkMode};
 use humanitl_core::diagnostics::codes::{
     SANDBOX_006, SANDBOX_011, SANDBOX_012, SANDBOX_013, SANDBOX_041, SANDBOX_046, SANDBOX_051,
+    SANDBOX_055,
 };
 use humanitl_core::{Diagnostic, FixAction, Severity};
 
@@ -1266,7 +1267,8 @@ impl VmBackend {
         stop: &crate::launcher::UnitStop,
         mut results: Vec<CheckResult>,
     ) -> Vec<CheckResult> {
-        name_the_link(&mut results, &stop.admission.link());
+        let (link, silent) = stop.admission.link_state();
+        name_the_link(&mut results, &link, silent);
         name_the_door(&mut results, stop.admission.door());
         let mut findings = host_check::run(stop, &self.resolved, DOOR_PORT);
         #[cfg(test)]
@@ -1306,7 +1308,11 @@ impl VmBackend {
 /// der Weg zum Gast kam (HUM-471): keine Bereitschaft an der Tür, keine
 /// Antwort auf die Verbindung des Berichts oder auf die des Steuerkanals.
 /// So nennt schon der Lauf, der scheitert, die Stelle.
-fn name_the_link(results: &mut [CheckResult], link: &str) {
+///
+/// Ist der Stand ein stummes vsock-Gerät (`silent`, HUM-486), wird aus dem
+/// fehlenden Bericht `SANDBOX_055`: Der Gast lauschte und das Gerät hatte
+/// seine Zeile getragen, nur auf das `CONNECT` des Hosts kam keine Antwort.
+fn name_the_link(results: &mut [CheckResult], link: &str, silent: bool) {
     if link.is_empty() {
         return;
     }
@@ -1318,7 +1324,17 @@ fn name_the_link(results: &mut [CheckResult], link: &str) {
     }) {
         result.evidence.push_str("; vsock link: ");
         result.evidence.push_str(link);
-        if let Some(diagnostic) = result.diagnostic.as_mut() {
+        if silent {
+            result.diagnostic = Some(
+                Diagnostic::builder(SANDBOX_055, Severity::Blocking)
+                    .why(format!(
+                        "{}: the vsock device went silent: {}",
+                        result.check.as_str(),
+                        result.evidence
+                    ))
+                    .build(),
+            );
+        } else if let Some(diagnostic) = result.diagnostic.as_mut() {
             diagnostic.why.push_str("; vsock link: ");
             diagnostic.why.push_str(link);
         }

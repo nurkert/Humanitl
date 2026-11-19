@@ -4436,5 +4436,9 @@
   "settingsLockedBy": "Fixed by the company policy {policy}; read only.",
   "@settingsLockedBy": {"description": "Under a setting a company policy locks (HUM-534): the row is read only, and this names the policy that locks it.", "placeholders": {"policy": {"type": "String", "example": "/etc/humanitl/policy.toml"}}},
   "settingsLoadRetry": "Try again",
-  "@settingsLoadRetry": {"description": "Button under the settings when GetConfig or the settings catalog failed (HUM-534): asks the daemon again."}
+  "@settingsLoadRetry": {"description": "Button under the settings when GetConfig or the settings catalog failed (HUM-534): asks the daemon again."},
+  "diagSANDBOX055Title": "Kernel level vsock device silent",
+  "@diagSANDBOX055Title": {"description": "Title of the diagnostic SANDBOX_055 (docs/DIAGNOSTICS.md, HUM-486): the vsock device of a kernel-level session took a connection after the guest said it listens and never answered."},
+  "diagSANDBOX055Why": "The guest said it was ready, but the device that connects the daemon to it stopped answering. Start the session again; if it repeats, the device program needs a newer version.",
+  "@diagSANDBOX055Why": {"description": "Generic cause of SANDBOX_055. Stands in the cause slot only when the diagnostic carries no sentence of the daemon's own (HUM-052)."}
 }

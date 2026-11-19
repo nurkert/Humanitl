@@ -1911,5 +1911,7 @@
   "diagSANDBOX054Title": "Aufräumplan in Gebrauch oder veraltet",
   "diagSANDBOX054Why": "Seit der Aufräumplan gezeigt wurde, hat sich etwas geändert, oder einer seiner Einträge ist jetzt in Gebrauch. Nichts wurde gelöscht. Lass dir den Plan neu zeigen und bestätige den neuen.",
   "settingsLockedBy": "Festgelegt durch die Firmenvorgabe {policy}; nur lesbar.",
-  "settingsLoadRetry": "Erneut versuchen"
+  "settingsLoadRetry": "Erneut versuchen",
+  "diagSANDBOX055Title": "vsock-Gerät der Kernel-Stufe stumm",
+  "diagSANDBOX055Why": "Der Gast hat sich bereit gemeldet, aber das Gerät, über das der Daemon ihn erreicht, antwortet nicht mehr. Starte die Sitzung neu; wiederholt es sich, braucht das Programm des Geräts eine neuere Fassung."
 }
