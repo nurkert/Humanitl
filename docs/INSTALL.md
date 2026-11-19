@@ -15,10 +15,40 @@ matrix. Shipped code links to three sections of this page (`#hardening`,
 `#xdg_runtime_dir-ohne-logind` and `#runtime-directory-on-macos`); all three
 anchors stay.
 
+## Install script
+
+`install.sh` in the repository root is the universal installer behind
+`curl -fsSL https://humanitl.de/install | sh` (HUM-528); the website build
+copies it byte for byte to `/install` and renders a read page from the same
+file. What it does per system and its options are in
+[the install guide](guides/install.md#the-install-script). On Debian and Ubuntu
+it sets up the APT repository below, with the same key, source line and file
+names as the script on `apt.nurkert.de`, so either script can run after the
+other.
+
+On that path it downloads and checks everything before the first `sudo`: the
+repository key `https://apt.nurkert.de/KEY.gpg` against the SHA-256 pinned in
+`install.sh` (`apt_key_sha256` in `main`), and the release's `.deb` against
+`SHA256SUMS`. The first installation is that checked `.deb`
+(`apt-get install ./humanitl_<version>_amd64.deb`, dependencies from the
+distribution); later versions come from the repository with `apt upgrade`. It
+decodes the armored key itself and needs no gnupg.
+
+When the repository key changes, the script refuses the new key until it is
+updated: check the new key with
+`curl -fsSL https://apt.nurkert.de/KEY.gpg | gpg --show-keys`, put
+`curl -fsSL https://apt.nurkert.de/KEY.gpg | sha256sum` into `apt_key_sha256`
+and the fingerprint into the comment above it, replace
+`tools/tests/fixtures/install/apt-nurkert-KEY.gpg` with the new file (the test
+checks that pin and fixture match), and publish the website. Today's key is
+"Nurkert APT <apt@nurkert.de>", fingerprint
+`0FE4 E9CF DD78 E971 5BBF 01F6 454A D85D A868 B52A`.
+
 ## APT repository
 
 Every release also lands in the APT repository `apt.nurkert.de`, so later
-versions arrive with `apt upgrade`:
+versions arrive with `apt upgrade`. The universal script above sets it up; the
+script on the repository server does the same, run as root:
 
 ```sh
 curl -fsSL https://apt.nurkert.de/install/humanitl | sudo sh

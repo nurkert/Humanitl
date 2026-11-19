@@ -10,6 +10,8 @@ on:
       - 'website/**'
       # Die Docs-Seiten entstehen aus docs/ (HUM-336).
       - 'docs/**'
+      # Unter /install liegt install.sh selbst, dazu seine Leseseite (HUM-528).
+      - 'install.sh'
       - '.github/workflows/website.yml'
   # Ein neues Release erscheint sofort auf der Download-Seite. Ein Release aus release.yml
   # löst dieses Ereignis nicht aus (GITHUB_TOKEN startet keine Workflows); dort stößt der
@@ -57,6 +59,8 @@ jobs:
       # Kein toter interner Link und kein toter Anker, auch nicht in den Docs (HUM-336), und
       # jede Docs-Seite in beiden Sprachen mit Sprachwahl und hreflang (HUM-346).
       - run: npm run check-links
+      # /install ist Byte für Byte install.sh, die Leseseite zeigt denselben Text (HUM-528).
+      - run: npm run check-install
       # Fehlende und veraltete Übersetzungen der Docs, nur als Bericht (HUM-346): die Seite
       # zeigt sie mit Hinweis an, und das Skript endet immer mit Status 0.
       - run: npm run check-translations

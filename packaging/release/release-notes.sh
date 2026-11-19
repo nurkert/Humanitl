@@ -161,12 +161,12 @@ To remove: \`humanitl daemon uninstall\`, then \`sudo pacman -Rns humanitl-bin\`
 
 Open \`Humanitl-${version}-macos.dmg\` and drag Humanitl into Applications.
 The app is signed ad hoc, not with an Apple Developer ID, so macOS refuses the
-first start: allow it once under System Settings › Privacy & Security ›
-Open Anyway, or in a terminal:
+first start: open it once, then allow it under System Settings › Privacy &
+Security › Open Anyway. Humanitl never asks you to remove the quarantine mark.
+To check the download first:
 
 \`\`\`sh
 shasum -a 256 -c SHA256SUMS --ignore-missing
-xattr -dr com.apple.quarantine /Applications/Humanitl.app
 \`\`\`
 
 On the setup screen, "Set up the service" installs the daemon as a launchd

@@ -1028,6 +1028,27 @@
   justify-items: center;
   gap: 1rem;
 }
+.hm-install {
+  display: grid;
+  justify-items: center;
+  gap: 0.6rem;
+  width: min(100%, 30rem);
+  margin-top: 0.4rem;
+}
+.hm-install__label {
+  color: var(--fg-1);
+  font-size: 0.92rem;
+}
+.hm-install .oneliner {
+  width: 100%;
+}
+.hm-install__read {
+  color: var(--fg-1);
+  font-size: 0.88rem;
+}
+.hm-install__read:hover {
+  color: var(--fg);
+}
 .hm-end__cta {
   --pill-h: 3.6rem;
   max-width: 100%;

@@ -2,6 +2,7 @@
 // Sektion 6: Reifegrad und Download, der Abschluss der Startseite. Der Knopf ist derselbe
 // wie zuvor: Er nennt das System des Besuchers (smart-download.ts).
 import Icon from '../Icon.astro';
+import InstallCommand from '../InstallCommand.astro';
 import Rich from '../security/Rich.astro';
 import More from './More.astro';
 
@@ -10,8 +11,10 @@ interface Props {
   cta: { cta: string; ctaMac: string; ctaLinux: string };
   download: string;
   macHref?: string;
+  /** Der Einzeiler des Installationsskripts und der Weg zu seiner Leseseite (HUM-528). */
+  install: { command: string; copy: string; label: string; read: string; href: string };
 }
-const { c, cta, download, macHref } = Astro.props;
+const { c, cta, download, macHref, install } = Astro.props;
 ---
 
 <section class="hm-sec hm-end" id="reife" aria-labelledby="hm-end-title">
@@ -44,6 +47,11 @@ const { c, cta, download, macHref } = Astro.props;
         <Icon name="download" />
         <span data-smart-label>{cta.cta}</span>
       </a>
+      <div class="hm-install">
+        <p class="hm-install__label">{install.label}</p>
+        <InstallCommand command={install.command} copy={install.copy} />
+        <a class="hm-install__read" href={install.href}>{install.read}</a>
+      </div>
       <More href={download} text={c.more} />
     </div>
   </div>

@@ -24,7 +24,9 @@
 #   - hum-* and macos-* branches compare with their merge base with
 #     origin/main, main with the previous commit (github.event.before); an
 #     unknown or rewritten previous commit means everything.
-#   - website/** alone starts no heavy job. backlog/** and BACKLOG.md start
+#   - website/** alone starts only install-script, which builds the site and
+#     checks that /install is install.sh (HUM-528). install.sh alone starts
+#     only the three install-* jobs. backlog/** and BACKLOG.md start
 #     only rust-test (config_readers.rs reads them). docs/** and the Markdown
 #     files at the root start only the Linux jobs that read them (rust-test,
 #     flutter-analyze-test, deps-lint, parity-check).
@@ -131,6 +133,9 @@ jobs:
       e2e-m4: ${{ steps.areas.outputs.e2e-m4 }}
       e2e-m4-package: ${{ steps.areas.outputs.e2e-m4-package }}
       parity-check: ${{ steps.areas.outputs.parity-check }}
+      install-script: ${{ steps.areas.outputs.install-script }}
+      install-linux: ${{ steps.areas.outputs.install-linux }}
+      install-macos: ${{ steps.areas.outputs.install-macos }}
     steps:
       - uses: actions/checkout@11d5960a326750d5838078e36cf38b85af677262 # v4.4.0
         with:
@@ -234,6 +239,15 @@ jobs:
       - name: skip parity-check
         if: steps.areas.outputs.parity-check != 'true'
         run: echo "parity-check is skipped, the path rules found nothing it reads"
+      - name: skip install-script
+        if: steps.areas.outputs.install-script != 'true'
+        run: echo "install-script is skipped, the path rules found nothing it reads"
+      - name: skip install-linux
+        if: steps.areas.outputs.install-linux != 'true'
+        run: echo "install-linux is skipped, the path rules found nothing it reads"
+      - name: skip install-macos
+        if: steps.areas.outputs.install-macos != 'true'
+        run: echo "install-macos is skipped, the path rules found nothing it reads"
 
   rust-check:
     name: rust-check
@@ -1627,6 +1641,107 @@ jobs:
         # docs/reference/cli.md): this job is the `docs-check` of the spec.
         run: ./scripts/ci/parity-check.sh
 
+  install-script:
+    name: install-script
+    # The universal installer install.sh (HUM-528) and its two faces on
+    # humanitl.de: the file under /install and the read page. Runs for
+    # install.sh and for website/**; nothing else reads either.
+    needs: changes
+    if: needs.changes.outputs.install-script == 'true'
+    runs-on: ubuntu-24.04
+    timeout-minutes: 20
+    steps:
+      - uses: actions/checkout@11d5960a326750d5838078e36cf38b85af677262 # v4.4.0
+      - name: shellcheck, dash and busybox
+        run: |
+          set -euo pipefail
+          missing=()
+          for tool in shellcheck dash busybox; do
+            command -v "$tool" > /dev/null || missing+=("$tool")
+          done
+          if [[ ${#missing[@]} -gt 0 ]]; then
+            sudo apt-get update
+            sudo apt-get install -y --no-install-recommends "${missing[@]}"
+          fi
+      - name: install.sh against stubs (HUM-528)
+        # shellcheck, sh -n under dash and busybox sh, the source test against
+        # removing the macOS quarantine, unsupported systems, --dry-run on
+        # every path, the archive path, wrong and missing checksums, and the
+        # mutation proof that removing the checksum check turns both red.
+        # STRICT: a missing shellcheck or busybox is red, not a skip.
+        env:
+          INSTALL_TEST_STRICT: "1"
+        run: make install-script-test
+      - name: --dry-run against the real releases
+        # The only path the stubs cannot cover: finding the newest release
+        # through the redirect of github.com/.../releases/latest.
+        run: |
+          set -euo pipefail
+          home="$(mktemp -d)"
+          HOME="$home" sh install.sh --dry-run --method tarball < /dev/null | tee "$RUNNER_TEMP/dry.txt"
+          grep -q 'Dry run: nothing was changed' "$RUNNER_TEMP/dry.txt"
+          grep -qE '^  Version: [0-9]+\.[0-9]+\.[0-9]+$' "$RUNNER_TEMP/dry.txt"
+          [[ -z "$(ls -A "$home")" ]]
+      - uses: actions/setup-node@949feb2413d6458794dcd2491c4babbbce0c15c1 # v7.1.0
+        with:
+          node-version: 24
+          cache: npm
+          cache-dependency-path: website/package-lock.json
+      - name: Website, /install and the read page
+        # The build copies install.sh byte for byte to dist/install and renders
+        # the read page from the same file; check-install compares both with
+        # install.sh. check-links covers the new links.
+        working-directory: website
+        env:
+          GITHUB_TOKEN: ${{ secrets.GITHUB_TOKEN }}
+          ASTRO_TELEMETRY_DISABLED: "1"
+        run: |
+          set -euo pipefail
+          npm ci --no-audit --no-fund
+          npm test
+          npm run build
+          npm run check-install
+          npm run check-links
+
+  install-linux:
+    name: install-linux
+    # install.sh in fresh containers (HUM-528): Debian and Ubuntu through a
+    # local signed APT repository with a pinned key, without gnupg in the
+    # container, first installing the checked .deb; Fedora through dnf, openSUSE, Arch and a
+    # generic Linux through the archive, each against the files of the newest
+    # release as a local stand-in, ending in `humanitl --version`. One job
+    # that runs the six containers one after the other: they take a few
+    # minutes together, a matrix would pay the runner start six times.
+    needs: changes
+    if: needs.changes.outputs.install-linux == 'true'
+    runs-on: ubuntu-24.04
+    timeout-minutes: 45
+    steps:
+      - uses: actions/checkout@11d5960a326750d5838078e36cf38b85af677262 # v4.4.0
+      - name: install.sh on six Linux systems
+        env:
+          ENGINE: docker
+        run: ./tools/tests/install_sh_containers.sh
+
+  install-macos:
+    name: install-macos
+    # install.sh on macOS (HUM-528) against a stand-in disk image: the app
+    # lands in /Applications, carries com.apple.quarantine on every file, and
+    # a wrong checksum stops before anything is replaced. A job of its own
+    # and not a step of `macos`: that one builds Rust and Flutter, this one
+    # needs a minute, and only install.sh starts it.
+    needs: changes
+    if: needs.changes.outputs.install-macos == 'true'
+    runs-on: macos-15
+    timeout-minutes: 15
+    steps:
+      - uses: actions/checkout@11d5960a326750d5838078e36cf38b85af677262 # v4.4.0
+      - name: Syntax under the shells of macOS
+        run: |
+          /bin/sh -n install.sh
+      - name: install.sh with a stand-in disk image
+        run: ./tools/tests/install_sh_macos.sh
+
   ci-ok:
     name: ci-ok
     # The one check branch protection should require (HUM-424). A skipped
@@ -1656,6 +1771,9 @@ jobs:
       - e2e-m4
       - e2e-m4-package
       - parity-check
+      - install-script
+      - install-linux
+      - install-macos
     runs-on: ubuntu-24.04
     steps:
       - name: Every job succeeded or was skipped by the path plan

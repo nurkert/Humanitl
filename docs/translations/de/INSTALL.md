@@ -19,10 +19,36 @@ Laufzeitverzeichnis ohne logind, das Bauen der Pakete und die manuelle Testmatri
 Ausgelieferter Code verlinkt auf drei Abschnitte dieser Seite (`#hardening`,
 `#xdg_runtime_dir-ohne-logind` und `#runtime-directory-on-macos`); alle drei Anker bleiben.
 
+## Installationsskript
+
+`install.sh` im Wurzelverzeichnis des Repositorys ist das universelle Installationsskript hinter
+`curl -fsSL https://humanitl.de/install | sh` (HUM-528); der Bau der Website kopiert es Byte für
+Byte nach `/install` und erzeugt aus derselben Datei eine Leseseite. Was es je System tut und
+welche Optionen es kennt, steht in [der Installationsanleitung](guides/install.md#das-installationsskript).
+Unter Debian und Ubuntu richtet es das APT-Repository unten ein, mit demselben Schlüssel, derselben
+Quellzeile und denselben Dateinamen wie das Skript auf `apt.nurkert.de`; beide Skripte können also
+nacheinander laufen.
+
+Auf diesem Weg lädt und prüft es alles vor dem ersten `sudo`: den Schlüssel
+`https://apt.nurkert.de/KEY.gpg` gegen die in `install.sh` festgelegte SHA-256 (`apt_key_sha256` in
+`main`) und das `.deb` des Releases gegen `SHA256SUMS`. Die erste Installation ist genau dieses
+geprüfte `.deb` (`apt-get install ./humanitl_<version>_amd64.deb`, Abhängigkeiten aus der
+Distribution); spätere Versionen kommen aus dem Repository mit `apt upgrade`. Den Schlüssel
+dekodiert es selbst, gnupg braucht es nicht.
+
+Wechselt der Schlüssel des Repositorys, lehnt das Skript den neuen ab, bis es angepasst ist: den
+neuen Schlüssel mit `curl -fsSL https://apt.nurkert.de/KEY.gpg | gpg --show-keys` prüfen,
+`curl -fsSL https://apt.nurkert.de/KEY.gpg | sha256sum` nach `apt_key_sha256` und den Fingerabdruck
+in den Kommentar darüber schreiben, `tools/tests/fixtures/install/apt-nurkert-KEY.gpg` durch die
+neue Datei ersetzen (der Test prüft, dass Festlegung und Datei zusammenpassen) und die Website
+veröffentlichen. Heute ist es „Nurkert APT <apt@nurkert.de>", Fingerabdruck
+`0FE4 E9CF DD78 E971 5BBF 01F6 454A D85D A868 B52A`.
+
 ## APT-Repository
 
 Jedes Release landet auch im APT-Repository `apt.nurkert.de`, sodass spätere Versionen mit
-`apt upgrade` ankommen:
+`apt upgrade` ankommen. Das universelle Skript oben richtet es ein; das Skript auf dem Server des
+Repositorys tut dasselbe, als root ausgeführt:
 
 ```sh
 curl -fsSL https://apt.nurkert.de/install/humanitl | sudo sh

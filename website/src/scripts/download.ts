@@ -2,6 +2,7 @@
 // Empfehlung auszusprechen), schaltet zwischen den Feldern
 // und kopiert Befehle. Ohne Skript stehen beide Felder offen untereinander.
 
+import './copy';
 import { detectPlatform } from './platform';
 
 const tabs = document.querySelector<HTMLElement>('[data-tabs]');
@@ -58,15 +59,3 @@ function initTabs(tabs: HTMLElement) {
     if (selected) place(selected);
   });
 }
-
-document.querySelectorAll<HTMLButtonElement>('[data-copy]').forEach((button) => {
-  button.addEventListener('click', async () => {
-    try {
-      await navigator.clipboard.writeText(button.dataset.copy ?? '');
-      button.toggleAttribute('data-copied', true);
-      setTimeout(() => button.removeAttribute('data-copied'), 1600);
-    } catch {
-      // Ohne Erlaubnis für die Zwischenablage bleibt der Befehl zum Markieren stehen.
-    }
-  });
-});

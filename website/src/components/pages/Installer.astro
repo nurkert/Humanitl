@@ -1,0 +1,62 @@
+---
+// Die Leseseite des Installationsskripts (HUM-528). Unter /install liefert die Website die Datei
+// install.sh selbst, für `curl`; ein Browser lüde diese Datei ohne Endung nur herunter. Diese Seite
+// entsteht beim Bau aus derselben Datei und zeigt den Quelltext mit Hervorhebung.
+// scripts/install-check.mjs prüft nach dem Bau, dass /install und diese Seite denselben Text tragen.
+import { Code } from 'astro:components';
+
+import InstallCommand from '../InstallCommand.astro';
+import Rich from '../security/Rich.astro';
+import Base from '../../layouts/Base.astro';
+import { repoUrl, ui, type Lang } from '../../i18n/ui';
+// Vite liest die Datei beim Bau, unverändert; ein Pfad über import.meta.url zeigte nach dem
+// Bündeln in dist/ statt ins Repository.
+import source from '../../../../install.sh?raw';
+import '../../styles/docs.css';
+
+interface Props {
+  lang: Lang;
+}
+const { lang } = Astro.props;
+const t = ui[lang];
+const c = t.install;
+---
+
+<Base lang={lang} page="installer" title={`${c.title} · Humanitl`} description={c.metaDescription}>
+  <main id="main" class="script-page">
+    <div class="container doc">
+      <h1 class="chrome">{c.title}</h1>
+      <Rich tag="p" text={c.lede} />
+      <InstallCommand command={c.command} copy={c.copy} />
+      <p>{c.dryRun}</p>
+      <InstallCommand command={c.dryRunCommand} copy={c.copy} />
+      <Rich tag="p" text={c.unsigned} />
+      <p class="script-page__links">
+        <a href="/install">{c.raw} (/install)</a>
+        <a href={`${repoUrl}/blob/main/install.sh`}>{c.source}</a>
+      </p>
+      <div class="code" data-install-source>
+        <div class="code__bar"><span class="code__lang">sh</span></div>
+        <Code code={source} lang="sh" theme="css-variables" />
+      </div>
+    </div>
+  </main>
+</Base>
+
+<script>
+  import '../../scripts/copy';
+</script>
+
+<style>
+  .script-page {
+    padding: clamp(8rem, 18vh, 11rem) 0 6rem;
+  }
+  .script-page :global(.oneliner) {
+    margin: 0.4rem 0 1.4rem;
+  }
+  .script-page__links {
+    display: flex;
+    flex-wrap: wrap;
+    gap: 0.4rem 1.5rem;
+  }
+</style>

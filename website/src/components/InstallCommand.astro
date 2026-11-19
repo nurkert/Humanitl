@@ -1,0 +1,80 @@
+---
+// Ein Befehl in einer Zeile mit Kopieren-Knopf (HUM-528). Der Knopf kopiert genau den Befehl,
+// nicht das Skript dahinter; das Verhalten steht in src/scripts/copy.ts, das die Seite einbindet.
+import Icon from './Icon.astro';
+
+interface Props {
+  command: string;
+  copy: string;
+  class?: string;
+}
+const { command, copy, class: cls } = Astro.props;
+---
+
+<div class:list={['cmd', 'oneliner', cls]}>
+  <pre tabindex="0"><code><span class="oneliner__prompt" aria-hidden="true">$ </span>{command}</code></pre>
+  <button class="oneliner__copy" type="button" data-copy={command} aria-label={copy} title={copy}>
+    <Icon name="copy" />
+  </button>
+</div>
+
+<style>
+  .oneliner {
+    position: relative;
+    display: flex;
+    align-items: center;
+    border-radius: 14px;
+    border: 1px solid var(--line-strong);
+    background: #07080b;
+    text-align: left;
+  }
+  .oneliner pre {
+    flex: 1;
+    min-width: 0;
+    margin: 0;
+    padding: 0.85rem 0.4rem 0.85rem 1.1rem;
+    overflow-x: auto;
+    color: var(--fg);
+    font: 0.85rem/1.5 var(--mono);
+    white-space: pre;
+    scrollbar-width: thin;
+  }
+  .oneliner pre code {
+    font: inherit;
+  }
+  .oneliner__prompt {
+    color: var(--fg-2);
+    user-select: none;
+  }
+  .oneliner__copy {
+    flex: none;
+    display: grid;
+    place-items: center;
+    width: 2.75rem;
+    height: 2.75rem;
+    margin-right: 0.3rem;
+    border: 0;
+    border-radius: 10px;
+    background: transparent;
+    color: var(--fg-1);
+    cursor: pointer;
+    transition:
+      color 0.3s var(--ease-out),
+      background 0.3s var(--ease-out);
+  }
+  .oneliner__copy:hover {
+    color: var(--strong);
+    background: rgb(var(--ink) / 0.08);
+  }
+  .oneliner__copy:focus-visible {
+    outline: 2px solid var(--strong);
+    outline-offset: -2px;
+  }
+  .oneliner__copy :global(svg) {
+    width: 1.05rem;
+    height: 1.05rem;
+  }
+  .oneliner__copy[data-copied] {
+    color: var(--ok);
+  }
+</style>
