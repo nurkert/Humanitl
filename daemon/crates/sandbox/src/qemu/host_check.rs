@@ -501,6 +501,10 @@ fn unit_programs(resolved: &Resolved) -> Vec<String> {
             programs.push(target.to_string_lossy().into_owned());
         }
     }
+    // Die Shell eines Tests im Gefängnis (HUM-557): dieselbe Datei wie die
+    // des Skripts, unter einem Pfad, den die Endform nicht kennt.
+    #[cfg(test)]
+    programs.push(super::test_machine::TEST_SHELL.to_owned());
     programs
 }
 
@@ -717,7 +721,12 @@ pub(crate) fn count_roles(
     ];
     let mut findings = Vec::new();
     for (role, program, wanted) in expected {
-        let names = names_of(program);
+        #[cfg_attr(not(test), allow(unused_mut))]
+        let mut names = names_of(program);
+        #[cfg(test)]
+        if program == Path::new(super::lines::SCRIPT_SHELL) {
+            names.push(super::test_machine::TEST_SHELL.to_owned());
+        }
         let pids: Vec<String> = processes
             .iter()
             .filter(|process| process.program.as_ref().is_some_and(|p| names.contains(p)))

@@ -5891,6 +5891,79 @@ einem statischen Programm in einer Test-Unit gemessen:
 1. Jeder geschlossene Weg ist gemessen und getestet; was offen bleibt, steht
    mit Grund in K-33.
 
+### Stand nach der Umsetzung (2026-11-19)
+Gemessen auf Debian 14 mit systemd 262, bubblewrap 0.13.1, QEMU 11.1.3,
+virtiofsd 1.14.0 und vhost-device-vsock 0.3.0, zuerst mit einem statischen
+Programm in Units `humanitl-test-*`, dann im KVM-Test mit Python als Prozess,
+der eigenen Code ausführt (nur im Test in `ExecPaths=`).
+
+**1. Die übrigen Programme verdeckt** (`lines::seal`,
+`programs::hidden_in_jail`). Jedes Gefängnis bindet `/dev/null` über jedes
+andere Programm der Unit, das es unter `/usr` sieht, unter dessen
+aufgelöstem Pfad; ein `execve` darauf endet mit `EACCES` (126). Das schließt
+„Shell und bubblewrap zusammen" schon allein. Dazu, unabhängig davon,
+`--unshare-user --disable-userns` in jedem Gefängnis: Ein Prozess darin legt
+keinen Nutzer-Namensraum mehr an (`ENOSPC`), hängt also nichts ein, und ein
+verschachteltes bubblewrap scheitert sofort. Gemessen mit bubblewrap, das der
+Test unter eigenem Pfad wieder erreichbar macht: ohne die Option startete
+`bwrap --tmpfs /t --perms 0755 --file 9 /t/p /t/p` eine Kopie von Python aus
+seinem tmpfs (Status 0), mit ihr `ENOSPC`.
+
+**2. Keine beschreibbare Einhängung ohne `noexec`.** bubblewrap 0.13 kennt für
+eigene Einhängungen kein `noexec` und kein Neu-Einhängen damit. Gemessen
+blieben drei Orte: die Wurzel des Gefängnisses (ein tmpfs, das dem Nutzer
+gehört), `/dev` (ebenso, mit `/dev/shm` als Verzeichnis darin) und die tmpfs
+von `--tmpfs` (die leeren Verzeichnisse der Wurzel des Gasts und die Masken
+über `/work`). Die ersten beiden und die tmpfs der Wurzel des Gasts hängt
+jedes Gefängnis am Ende nur lesbar neu ein (`--remount-ro`); eine Kopie
+dorthin scheitert mit `EROFS`. In die Masken über `/work` schreibt der Gast;
+sie sind jetzt tmpfs der Unit (`TemporaryFileSystem=<Laufzeitverzeichnis>/masks/<n>:size=67108864,mode=0700,noexec,nosuid,nodev`),
+die das Gefängnis bindet; das `noexec` erbt es gesperrt. Eine Kopie dort ist
+geschrieben, ihr Start endet mit `EACCES`. Die Grenze von 64 MiB je Maske
+gilt weiter (`a_write_beyond_a_mask_s_size_ends_with_enospc` grün).
+
+**3. memfd: ein Filter.** `exec_filter.rs`, klassisches BPF von Hand, elf
+Befehle, von bubblewrap mit `--seccomp 7` vor dem Start des Helfers
+aufgelegt; das Skript öffnet die Datei aus `files/`. Für virtiofsd und das
+vsock-Gerät verweigert er `execveat` ganz und `memfd_create` ohne
+`MFD_NOEXEC_SEAL`; nur auf das Fehlen dieser Marke zu prüfen, nicht auf
+`MFD_EXEC`, ist nötig, weil bei `vm.memfd_noexec = 0` auch ein `memfd` ohne
+beide Marken ausführbar ist. `execve` muss offen bleiben (bubblewrap startet
+damit den Helfer, und ein Filter ohne Zustand unterscheidet den ersten Aufruf
+nicht von späteren); über `/proc/self/fd` läuft trotzdem nichts, weil kein
+ausführbarer `memfd` entsteht. Der Emulator legt den Speicher des Gasts
+selbst als `memfd` an und bekommt deshalb nur die Regel für `execveat`;
+`execve` verbietet er sich mit `-sandbox spawn=deny` (gemessen: sein `memfd`
+trägt die Rechte 777, ist also ausführbar). Die x32-ABI bekommt
+`EPERM`, eine fremde Architektur endet. Gemessen: `memfd_create(0)` im
+Gefängnis des Geräts endet mit `EPERM`, `fexecve` im Gefängnis der Maschine
+ebenso.
+
+**Offen, in K-33:** Ein Prozess, der schon eigenen Code ausführt, kann ihn in
+seinem eigenen Speicher ausführen (`mprotect`); das startet kein Programm. Der
+Dienst der Wurzel sieht die Programme der Unit unter `/guest/usr`, dem `/usr`
+des Gasts; verdecken ginge nur auf Kosten des Gasts. Dort erreicht er sie,
+aber bubblewrap legt keinen Namensraum an, und keine beschreibbare
+Einhängung seines Gefängnisses lässt etwas laufen.
+
+Tests: `exec_filter::tests` (ein Interpreter rechnet jede Antwort nach),
+`programs::tests::a_jail_hides_every_other_program_of_the_unit`,
+`lines::tests::every_jail_ends_sealed_before_its_program`,
+`the_unit_carries_the_hardening_of_the_spike` (`TemporaryFileSystem=`); KVM
+`own_code::a_helper_reaches_no_code_of_its_own_choosing`: Python im Gefängnis
+der Maschine und in dem des Geräts (`TestMachine::device_command`, neu)
+versucht jeden Weg, die wartende Unterschale nach der Zulassung drei davon;
+die Shell des Tests liegt unter `/humanitl-test/sh`, weil die Shell der Unit
+verdeckt ist, und die Host-Prüfung kennt den Namen nur im Test.
+Mutationsbeweise, je einzeln, Test jedes Mal rot: ohne die Masken laufen die
+verdeckten Programme (`bubblewrap 0.13.1`, Status 0); ohne
+`--disable-userns` startet das verschachtelte bubblewrap die Kopie; ohne
+`--remount-ro` laufen die Kopien in `/` und `/dev/shm`, auch nach der
+Zulassung; ohne `noexec` in `TemporaryFileSystem=` läuft die Kopie in der
+Maske; ohne die Regel für `execveat` läuft `fexecve` im Gefängnis der
+Maschine, auch nach der Zulassung; mit dem Filter des Emulators im Gefängnis
+des Geräts läuft der `memfd` über `/proc/self/fd`. Alle 28 KVM-Tests grün.
+
 ---
 
 ## HUM-558 · Test `fd_handover::nobody_coming_ends_the_wait_and_the_socket` wackelt unter paralleler Last

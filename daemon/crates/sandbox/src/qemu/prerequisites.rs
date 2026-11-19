@@ -210,8 +210,11 @@ const VSOCK_DEVICE: Program = Program {
 };
 
 /// bubblewrap: der geprüfte Projektordner kommt als Deskriptor (HUM-437),
-/// und jedes tmpfs eines Gefängnisses hat eine feste Größe (`--size`,
-/// HUM-485).
+/// jedes tmpfs eines Gefängnisses hat eine feste Größe (`--size`,
+/// HUM-485), und jedes Gefängnis endet mit dem Abschluss aus HUM-557: kein
+/// weiterer Nutzer-Namensraum (`--disable-userns`), Wurzel und `/dev` nur
+/// lesbar (`--remount-ro`), der Filter (`--seccomp`). Fehlt eine davon,
+/// scheiterte erst der Start der Sitzung.
 const BUBBLEWRAP: Program = Program {
     name: "bwrap",
     key: None,
@@ -219,7 +222,14 @@ const BUBBLEWRAP: Program = Program {
     package: Package::Bubblewrap,
     questions: &[Question {
         args: &["--help"],
-        words: &["--bind-fd", "--ro-bind-fd", "--size"],
+        words: &[
+            "--bind-fd",
+            "--ro-bind-fd",
+            "--size",
+            "--disable-userns",
+            "--remount-ro",
+            "--seccomp",
+        ],
     }],
 };
 
@@ -351,7 +361,8 @@ pub(crate) enum Prerequisite {
     FileDaemon,
     /// Das vsock-Gerät.
     VsockDevice,
-    /// bubblewrap mit `--bind-fd`, `--ro-bind-fd` und `--size`.
+    /// bubblewrap mit `--bind-fd`, `--ro-bind-fd`, `--size`,
+    /// `--disable-userns`, `--remount-ro` und `--seccomp`.
     Bubblewrap,
     /// Das Kernel-Abbild.
     Kernel,
@@ -1006,7 +1017,8 @@ mod tests {
             );
             fixture.program(
                 "bwrap",
-                "printf '    --bind-fd FD DEST\\n    --ro-bind-fd FD DEST\\n    --size BYTES\\n'\n",
+                "printf '    --bind-fd FD DEST\\n    --ro-bind-fd FD DEST\\n    --size BYTES\\n    \
+                 --disable-userns\\n    --remount-ro DEST\\n    --seccomp FD\\n'\n",
             );
             fixture
         }
@@ -1372,6 +1384,26 @@ mod tests {
                 "bwrap",
                 "printf '  --bind-fd FD DEST\\n  --ro-bind-fd FD DEST\\n'\n",
                 "--size",
+            ),
+            // HUM-557: der Abschluss jedes Gefängnisses. `--add-seccomp-fd`
+            // nennt `--seccomp` nicht.
+            (
+                "bwrap",
+                "printf '  --bind-fd FD\\n  --ro-bind-fd FD\\n  --size B\\n  --remount-ro D\\n  \
+                 --seccomp FD\\n'\n",
+                "--disable-userns",
+            ),
+            (
+                "bwrap",
+                "printf '  --bind-fd FD\\n  --ro-bind-fd FD\\n  --size B\\n  --disable-userns\\n  \
+                 --seccomp FD\\n'\n",
+                "--remount-ro",
+            ),
+            (
+                "bwrap",
+                "printf '  --bind-fd FD\\n  --ro-bind-fd FD\\n  --size B\\n  --disable-userns\\n  \
+                 --remount-ro D\\n  --add-seccomp-fd FD\\n'\n",
+                "--seccomp",
             ),
             (
                 "qemu-system-x86_64",

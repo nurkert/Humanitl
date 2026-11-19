@@ -24,7 +24,14 @@
 //!   Shell den Befehl und ersetzt sich dann durch den Emulator, so wie ein
 //!   übernommener Helfer ein Programm starten könnte. Was er findet, schreibt
 //!   er in einen Ordner des Tests, den die Unit beschreiben darf und den das
-//!   Gefängnis beschreibbar bindet.
+//!   Gefängnis beschreibbar bindet. Seit HUM-557 verdeckt jedes Gefängnis
+//!   die Shell der Unit; die Shell des Tests liegt deshalb unter
+//!   [`TEST_SHELL`], dieselbe Datei an einem Pfad, den die Endform nicht
+//!   kennt. Die Host-Prüfung kennt im Test auch diesen Namen.
+//! - **Ein Befehl im Gefängnis des vsock-Geräts** (HUM-557), ebenso, unter
+//!   dessen Filter.
+//! - **Weitere Einhängungen im Gefängnis der Maschine** (HUM-557), etwa das
+//!   tmpfs einer Maske unter `/work`, um zu prüfen, dass dort nichts läuft.
 
 use std::cell::RefCell;
 use std::ffi::OsString;
@@ -58,7 +65,16 @@ pub(crate) struct TestMachine {
     /// etwa eine, die auf ein Zeichen des Tests wartet (HUM-480); die
     /// Host-Prüfung zählt sie zu den Shells des Skripts.
     pub(crate) extra_shells: usize,
+    /// Ein Befehl der Shell im Gefängnis des vsock-Geräts vor dem Gerät
+    /// (HUM-557); [`Self::writable`] bindet auch dieses Gefängnis.
+    pub(crate) device_command: Option<String>,
+    /// Weitere beschreibbare Einhängungen im Gefängnis der Maschine,
+    /// Quelle und Ziel, mit [`RUNTIME_PLACEHOLDER`] (HUM-557).
+    pub(crate) machine_binds: Vec<(String, String)>,
 }
+
+/// Wo die Shell des Tests in einem Gefängnis liegt (HUM-557).
+pub(crate) const TEST_SHELL: &str = "/humanitl-test/sh";
 
 /// Steht in einem Befehl des Tests für das Laufzeitverzeichnis der Sitzung,
 /// das erst der Plan kennt (HUM-480).
@@ -129,29 +145,22 @@ pub(crate) fn apply(line: &mut Vec<OsString>, layout: &Layout) {
             binds.extend(["--ro-bind".into(), dir.into(), dir.into()]);
         }
     }
-    // Vor das Programm des Emulators, also noch in die Optionen von bwrap;
-    // der Befehl im Gefängnis danach, als dessen Programm.
+    let runtime = layout.dir.to_string_lossy();
+    for (source, target) in &machine.machine_binds {
+        binds.extend([
+            "--bind".into(),
+            source.replace(RUNTIME_PLACEHOLDER, &runtime).into(),
+            target.replace(RUNTIME_PLACEHOLDER, &runtime).into(),
+        ]);
+    }
     if let Some(at) = line.iter().position(|word| word == "-M") {
-        let program = at.saturating_sub(1);
-        let jailed: Vec<OsString> = machine
-            .jailed_command
-            .iter()
-            .flat_map(|command| {
-                [
-                    super::lines::SCRIPT_SHELL.into(),
-                    "-c".into(),
-                    format!(
-                        "{}; exec \"$@\"",
-                        command.replace(RUNTIME_PLACEHOLDER, &layout.dir.to_string_lossy())
-                    )
-                    .into(),
-                    "humanitl-test".into(),
-                ]
-            })
-            .collect();
-        for (offset, word) in binds.into_iter().chain(jailed).enumerate() {
-            line.insert(program + offset, word);
-        }
+        jail_command(
+            line,
+            at.saturating_sub(1),
+            binds,
+            machine.jailed_command.as_deref(),
+            layout,
+        );
     }
     if let Some(command) = &machine.extra_process {
         let shell: [OsString; 4] = [
@@ -165,6 +174,62 @@ pub(crate) fn apply(line: &mut Vec<OsString>, layout: &Layout) {
             "humanitl-test".into(),
         ];
         line.splice(0..0, shell);
+    }
+}
+
+/// Ändert die Zeile des vsock-Geräts, wie dieser Faden es verlangt
+/// (HUM-557).
+pub(crate) fn apply_device(line: &mut Vec<OsString>, layout: &Layout) {
+    let machine = current();
+    let Some(command) = machine.device_command.as_deref() else {
+        return;
+    };
+    let mut binds: Vec<OsString> = Vec::new();
+    if let Some(dir) = &machine.writable {
+        binds.extend(["--bind".into(), dir.clone().into(), dir.clone().into()]);
+    }
+    if let Some(at) = line.iter().position(|word| word == "--guest-cid") {
+        jail_command(line, at.saturating_sub(1), binds, Some(command), layout);
+    }
+}
+
+/// Fügt `binds` vor den Abschluss des Gefängnisses ein
+/// ([`super::lines::seal_start`]), und vor das Programm an `program` die
+/// Shell des Tests mit `command`, die sich danach durch das Programm
+/// ersetzt.
+fn jail_command(
+    line: &mut Vec<OsString>,
+    program: usize,
+    mut binds: Vec<OsString>,
+    command: Option<&str>,
+    layout: &Layout,
+) {
+    let jailed: Vec<OsString> = command
+        .iter()
+        .flat_map(|command| {
+            [
+                TEST_SHELL.into(),
+                "-c".into(),
+                format!(
+                    "{}; exec \"$@\"",
+                    command.replace(RUNTIME_PLACEHOLDER, &layout.dir.to_string_lossy())
+                )
+                .into(),
+                "humanitl-test".into(),
+            ]
+        })
+        .collect();
+    if command.is_some() {
+        let shell = std::fs::canonicalize(super::lines::SCRIPT_SHELL)
+            .unwrap_or_else(|_| PathBuf::from(super::lines::SCRIPT_SHELL));
+        binds.extend(["--ro-bind".into(), shell.into(), TEST_SHELL.into()]);
+    }
+    for (offset, word) in jailed.into_iter().enumerate() {
+        line.insert(program + offset, word);
+    }
+    let sealed = super::lines::seal_start(line).unwrap_or(program);
+    for (offset, word) in binds.into_iter().enumerate() {
+        line.insert(sealed + offset, word);
     }
 }
 
