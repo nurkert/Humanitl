@@ -51,6 +51,26 @@ Future<SandboxBackendList> sandboxBackends(Ref ref, String? backend) async {
   return list;
 }
 
+/// Whether [answer] still holds the list of a previous plan while the one
+/// for the current plan is on its way (HUM-510).
+///
+/// A change of the configuration (another project folder, another lower
+/// bound, another setting) or a link that comes back asks the same member of
+/// [sandboxBackendsProvider] again, and Riverpod keeps the old list as its
+/// value until the answer is there. That list belongs to the old plan; the
+/// surfaces show it muted and offer no choice from it, as for a new member
+/// without a value (HUM-504). Which settings the plan reads, the app does not
+/// judge (ADR-018): every change of the configuration counts.
+///
+/// The second ask while the daemon is still checking a backend (HUM-502,
+/// [sandboxBackendsCheckingRetry]) is no change of the plan: the provider
+/// asks itself again with the same inputs, the old list is still the current
+/// one, and nothing dims every two seconds. Riverpod tells the two apart: a
+/// rebuild after a changed dependency is a reload, one after
+/// `invalidateSelf` a refresh.
+bool sandboxBackendsOutdated(AsyncValue<SandboxBackendList> answer) =>
+    answer.isReloading;
+
 /// How long the list waits before it asks again while the daemon is still
 /// checking a backend (HUM-502). The daemon keeps searching in between and
 /// answers from its memory, so asking again costs no new search.

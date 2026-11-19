@@ -33,7 +33,8 @@ import '../providers/backend_choice.dart';
 /// list it showed last, with the new choice already selected, so it neither
 /// collapses nor shifts what lies under it (HUM-504). That list belongs to
 /// the previous plan: its lines are muted and the segments disabled until
-/// the answer for the new choice is there.
+/// the answer for the new choice is there. The same holds when the same list
+/// is asked again for another project or configuration (HUM-510).
 class SandboxBackendSection extends ConsumerStatefulWidget {
   /// Creates the section for [status].
   const SandboxBackendSection({required this.status, super.key});
@@ -89,10 +90,15 @@ class _SandboxBackendSectionState extends ConsumerState<SandboxBackendSection> {
         ? null
         : answer.value ?? _lastShown;
     _lastShown = list;
-    // Die alte Liste gehört zum Plan des vorigen Backends: Sie hält den
-    // Platz, sieht aber nicht aktuell aus und lässt nichts wählen, bis die
-    // Antwort für das neue da ist.
-    final bool pending = list != null && !answer.hasValue;
+    // Die alte Liste gehört zum vorigen Plan, sei es eines anderen Backends
+    // (neues Mitglied ohne Wert, HUM-504) oder eines anderen Projekts oder
+    // einer anderen Konfiguration (dasselbe Mitglied, neu geladen, HUM-510):
+    // Sie hält den Platz, sieht aber nicht aktuell aus und lässt nichts
+    // wählen, bis die Antwort für den neuen Plan da ist. Das erneute Fragen
+    // nach einem Backend in Prüfung (HUM-502) ändert den Plan nicht und
+    // dämpft nichts.
+    final bool pending =
+        list != null && (!answer.hasValue || sandboxBackendsOutdated(answer));
     if (list == null || list.offered.isEmpty) {
       return const SizedBox.shrink();
     }

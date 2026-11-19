@@ -3619,6 +3619,50 @@ auffrischt.
 1. Kein Flackern beim Nachfragen, keine alte Liste als aktuell nach einem
    Wechsel des Projekts.
 
+### Stand nach der Umsetzung (2026-11-19)
+Riverpod unterscheidet die beiden Auffrischungen schon: Ändert sich eine
+Abhängigkeit (`configProvider`, `linkLiveProvider`), baut es das Mitglied als
+Neuladen (`isReloading`), nach `invalidateSelf` des Nachfragens aus HUM-502 als
+Auffrischen (`isRefreshing`). Neu `sandboxBackendsOutdated` in
+`sandbox_backends_feed.dart`: wahr, solange ein Mitglied nach einer Änderung
+der Konfiguration oder der Verbindung neu lädt. Welche Einstellungen der Plan
+liest, beurteilt die App nicht (ADR-018); jede Änderung der Konfiguration
+zählt. `SandboxBackendSection` zeigt die Liste dann gedämpft und sperrt die
+Segmente wie in HUM-504; ebenso die Zeile `sandbox.backend` der Einstellungen,
+deren Mitglied (`null`) nach jeder Änderung der Konfiguration neu lädt, auch
+nach dem Schreiben von `sandbox.backend` selbst. Das Nachfragen eines Backends
+in Prüfung dämpft nichts.
+
+**Tests.** sandbox: erneutes Fragen nach einem Backend in Prüfung mit
+zurückgehaltener Antwort (Wahl bedienbar, Zeilen in `fg1`), Wechsel des
+Projekts über `SetConfig` auf `sandbox.work_dir` mit zurückgehaltener Antwort
+(Wahl gesperrt, Zeilen und Untergrenze in `fg2`, Höhe gleich, danach die neue
+Liste), Farbe der Gründe während des Ladens (Grund des Daemons und Satz ohne
+Grund in `fg2`, davor und danach in `warningText`); settings: beides in der
+Zeile. Je unter Linux und macOS. Mutationsbeweise: `sandboxBackendsOutdated`
+als `isLoading` macht die Tests des Nachfragens rot, als `false` die des
+Wechsels und der Farbe, `warningColor` ohne `pending` den der Farbe. Keine
+Goldens geändert: Die Darstellung des Ladens ist die aus HUM-504.
+
+**Nach dem Review.** Codex: Scheitert das Neuladen nach einem Wechsel des
+Projekts, hält Riverpod die alte Liste neben dem Fehler, das Neuladen ist
+vorbei, und die Zeile der Einstellungen zeigte die Liste des vorigen
+Projekts in voller Farbe und wählbar. Die Zeile prüft jetzt den Fehler vor
+dem Wert und nennt ihn wie bisher ohne Liste; der Abschnitt tat das schon
+(HUM-504). Tests: gescheitertes Neuladen nach dem Wechsel in Zeile und
+Abschnitt; je rot ohne die Prüfung von `hasError`. Sonnet: Wer ein Backend
+mit der Tastatur wählt, schreibt `sandbox.backend`, das Neuladen sperrt die
+Segmente, und ein gesperrtes Segment verliert den Fokus. Die Zeile merkt
+sich beim Sperren, ob die Segmente den Fokus hatten, und gibt ihn danach
+dem gewählten zurück; wer nicht in der Zeile war, bekommt dort keinen.
+Tests: Wahl mit Enter, Fokus nach dem Neuladen wieder in der Zeile (rot ohne
+das Merken), Wechsel des Projekts ohne Fokus in der Zeile lässt ihn draußen
+(rot, wenn immer zurückgegeben wird).
+
+Offen als Kandidat: Im Abschnitt des Reiters Isolation verliert eine Wahl
+mit der Tastatur den Fokus ebenso, dort seit HUM-504 (neues Mitglied ohne
+Wert, Segmente gesperrt).
+
 ---
 
 ## HUM-511 · Egress: der Adapter `HttpProxy` zu einem Entscheidungs-Proxy des Nutzers

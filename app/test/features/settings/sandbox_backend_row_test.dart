@@ -5,10 +5,14 @@
 // Daemons; eines, das der Daemon nicht zulässt (`SANDBOX_048`), steht nicht
 // da.
 
+import 'dart:async';
+
 import 'package:flutter/services.dart';
 import 'package:flutter/widgets.dart';
+import 'package:flutter_riverpod/flutter_riverpod.dart';
 import 'package:flutter_test/flutter_test.dart';
 import 'package:humanitl/core/domain/domain.dart';
+import 'package:humanitl/core/ipc/config_providers.dart';
 import 'package:humanitl/core/ipc/fake_daemon_client.dart';
 import 'package:humanitl/core/ipc/sandbox_backends_feed.dart';
 import 'package:humanitl/core/ui/ui.dart';
@@ -74,6 +78,16 @@ HSegment<String> segment(WidgetTester tester, String value) =>
 
 String textOf(WidgetTester tester, String key) =>
     tester.widget<Text>(find.byKey(Key(key))).data!;
+
+/// Ob der Fokus auf einem Segment der Zeile steht.
+bool focusInRow(WidgetTester tester) {
+  final BuildContext? focused = FocusManager.instance.primaryFocus?.context;
+  return focused != null &&
+      find
+          .descendant(of: row, matching: find.byWidget(focused.widget))
+          .evaluate()
+          .isNotEmpty;
+}
 
 void main() {
   testWidgets('the row offers auto and every admitted backend with its level, '
@@ -333,4 +347,196 @@ void main() {
     );
     expect(segment(tester, 'container').enabled, isTrue);
   }, variant: TargetPlatformVariant.only(TargetPlatform.linux));
+
+  // HUM-510: Nach einer Änderung der Konfiguration lädt Riverpod die Liste
+  // der Einstellung neu und behält bis zur Antwort die alte. Sie steht
+  // gedämpft da, und die Zeile lässt nichts wählen; das erneute Fragen nach
+  // einem Backend in Prüfung (HUM-502) dagegen dämpft nichts. Mutationsbeweis:
+  // `sandboxBackendsOutdated` als `false` macht den ersten Teil rot, als
+  // `isLoading` den zweiten.
+  testWidgets(
+    'a changed configuration mutes the list and locks the row until '
+    'the new answer, asking again for a checked backend does not',
+    (WidgetTester tester) async {
+      final _HeldClient client = _HeldClient()
+        ..sandboxBackendList = SandboxBackendList(
+          minIsolation: IsolationLevel.policy,
+          autoBackend: DoctorCheckId.sandboxTool,
+          backends: <SandboxBackendInfo>[
+            FakeSandboxBackends.defaultSandboxBackends.backends.first,
+            const SandboxBackendInfo(
+              name: 'container',
+              isolation: IsolationLevel.namespaces,
+              diagnostics: <Diagnostic>[
+                Diagnostic(
+                  code: DiagnosticCodes.doctorNotPerformed,
+                  severity: Severity.warning,
+                  why: 'still being checked',
+                ),
+              ],
+            ),
+          ],
+        );
+      await openSettings(tester, client);
+      final HTokens tokens = HTheme.of(tester.element(row));
+      const String level = 'settings-sandbox-backend-level-container';
+      Color? colorOf(String key) =>
+          tester.widget<Text>(find.byKey(Key(key))).style?.color;
+      expect(colorOf(level), tokens.colors.fg1);
+
+      // Erneutes Fragen, derselbe Plan: nichts gedämpft, nichts gesperrt.
+      Completer<SandboxBackendList> held = Completer<SandboxBackendList>();
+      client.held = held;
+      final int asked = client.sandboxBackendsCalls;
+      await tester.pump(sandboxBackendsCheckingRetry);
+      await tester.pump();
+      await tester.pump();
+      expect(client.sandboxBackendsCalls, greaterThan(asked));
+      expect(held.isCompleted, isFalse);
+      expect(colorOf(level), tokens.colors.fg1);
+      expect(tester.widget<HSegmented<String>>(row).enabled, isTrue);
+      client.sandboxBackendList = SandboxBackendList(
+        minIsolation: IsolationLevel.policy,
+        autoBackend: DoctorCheckId.sandboxTool,
+        backends: <SandboxBackendInfo>[
+          FakeSandboxBackends.defaultSandboxBackends.backends.first,
+          availableContainer,
+        ],
+      );
+      held.complete(client.sandboxBackendList);
+      await tester.pumpAndSettle();
+      expect(
+        find.byKey(const Key('settings-sandbox-backend-checking-container')),
+        findsNothing,
+      );
+
+      // Ein anderes Projekt: dieselbe Liste, ein anderer Plan.
+      held = Completer<SandboxBackendList>();
+      client.held = held;
+      unawaited(
+        ProviderScope.containerOf(tester.element(row))
+            .read(configProvider.notifier)
+            .write(FormKeys.sandboxWorkDir, '/home/dev/other-project'),
+      );
+      await tester.pump();
+      await tester.pump();
+      await tester.pump(const Duration(milliseconds: 600));
+      expect(held.isCompleted, isFalse);
+      expect(colorOf(level), tokens.colors.fg2);
+      expect(tester.widget<HSegmented<String>>(row).enabled, isFalse);
+
+      held.complete(client.sandboxBackendList);
+      await tester.pumpAndSettle();
+      expect(colorOf(level), tokens.colors.fg1);
+      expect(tester.widget<HSegmented<String>>(row).enabled, isTrue);
+      // Wer nicht in der Zeile war, bekommt dort keinen Fokus.
+      expect(focusInRow(tester), isFalse);
+    },
+    variant: TargetPlatformVariant(<TargetPlatform>{
+      TargetPlatform.linux,
+      TargetPlatform.macOS,
+    }),
+  );
+
+  // HUM-510, Review: Scheitert das Neuladen nach einem Wechsel des Projekts,
+  // hält Riverpod die alte Liste neben dem Fehler. Die Zeile nennt den
+  // Fehler, statt die Liste des vorigen Projekts als aktuell zu zeigen.
+  // Mutationsbeweis: `answer.value` ohne `hasError` macht diesen Test rot.
+  testWidgets(
+    'a failed reload after a project switch shows the failure, not '
+    'the previous list',
+    (WidgetTester tester) async {
+      final _HeldClient client = _HeldClient()
+        ..sandboxBackendList = clientWith().sandboxBackendList;
+      await openSettings(tester, client);
+      expect(row, findsOneWidget);
+
+      client.sandboxBackendsFailure = const Diagnostic(
+        code: 'IPC_006',
+        severity: Severity.error,
+        why: 'the daemon does not know SandboxBackends',
+      );
+      unawaited(
+        ProviderScope.containerOf(tester.element(row))
+            .read(configProvider.notifier)
+            .write(FormKeys.sandboxWorkDir, '/home/dev/other-project'),
+      );
+      await tester.pumpAndSettle();
+
+      expect(row, findsNothing);
+      expect(
+        find.byKey(const Key('settings-sandbox-backend-level-container')),
+        findsNothing,
+      );
+      expect(
+        textOf(tester, 'settings-sandbox-backend-failed'),
+        contains('does not know SandboxBackends'),
+      );
+    },
+    variant: TargetPlatformVariant(<TargetPlatform>{
+      TargetPlatform.linux,
+      TargetPlatform.macOS,
+    }),
+  );
+
+  // HUM-510, Review: Wer ein Backend mit der Tastatur wählt, schreibt
+  // `sandbox.backend`; die Liste lädt danach neu und sperrt die Segmente
+  // kurz. Der Fokus bleibt danach in der Zeile, damit die Tastatur dort
+  // weitermachen kann.
+  testWidgets(
+    'choosing a backend by keyboard keeps the focus in the row '
+    'across the reload',
+    (WidgetTester tester) async {
+      final _HeldClient client = _HeldClient()
+        ..sandboxBackendList = clientWith().sandboxBackendList;
+      await openSettings(tester, client);
+      final Finder target = find.descendant(
+        of: row,
+        matching: find.text('container'),
+      );
+      await tester.ensureVisible(target);
+      await tester.pumpAndSettle();
+      Focus.of(tester.element(target)).requestFocus();
+      await tester.pump();
+      expect(focusInRow(tester), isTrue);
+
+      final Completer<SandboxBackendList> held =
+          Completer<SandboxBackendList>();
+      client.held = held;
+      await tester.sendKeyEvent(LogicalKeyboardKey.enter);
+      await tester.pump();
+      await tester.pump();
+      await tester.pump(const Duration(milliseconds: 600));
+      expect(held.isCompleted, isFalse);
+      expect(tester.widget<HSegmented<String>>(row).selected, 'container');
+      expect(tester.widget<HSegmented<String>>(row).enabled, isFalse);
+
+      held.complete(client.sandboxBackendList);
+      await tester.pumpAndSettle();
+      expect(tester.widget<HSegmented<String>>(row).enabled, isTrue);
+      expect(focusInRow(tester), isTrue);
+    },
+    variant: TargetPlatformVariant(<TargetPlatform>{
+      TargetPlatform.linux,
+      TargetPlatform.macOS,
+    }),
+  );
+}
+
+/// Ein Fake, der die nächste Liste erst nennt, wenn der Test [held] erfüllt.
+class _HeldClient extends FakeDaemonClient {
+  _HeldClient() : super(script: const <ScriptedEvent>[]);
+
+  /// Die zurückgehaltene Antwort, oder null für sofortige Antworten.
+  Completer<SandboxBackendList>? held;
+
+  @override
+  Future<SandboxBackendList> sandboxBackends({String? backend}) {
+    final Completer<SandboxBackendList>? hold = held;
+    if (hold == null || hold.isCompleted) {
+      return super.sandboxBackends(backend: backend);
+    }
+    sandboxBackendsCalls++;
+    return hold.future;
+  }
 }
