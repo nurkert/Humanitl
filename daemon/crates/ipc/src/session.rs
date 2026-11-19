@@ -25,7 +25,7 @@
 //! Client; sie stehen in `config.toml` oder in einem globalen Profil, wo ein
 //! Mensch sie geschrieben hat, und der Daemon liest sie dort.
 //!
-//! Übrig bleiben die vier Schlüssel in [`SESSION_OVERRIDE_KEYS`]; die ersten
+//! Übrig bleiben die fünf Schlüssel in [`SESSION_OVERRIDE_KEYS`]; die ersten
 //! zwei sind Flags aus `backlog/CONVENTIONS.md` 3.8:
 //!
 //! - `hold.timeout_secs` sagt, wie lange eine gehaltene Anfrage wartet. Er
@@ -49,8 +49,8 @@
 //!   `sandbox.min_isolation` (`SANDBOX_035`), eine, die das Sandbox-Profil
 //!   nicht verlangt (`SANDBOX_036`), und eine nicht zugelassene
 //!   (`SANDBOX_048`) ablehnt; jedes zugelassene Backend hält die drei
-//!   Garantien. Die Untergrenze ist kein Schlüssel der Liste, und über alle
-//!   Ebenen gilt dort ohnehin der strengste Wert.
+//!   Garantien. Die Untergrenze selbst steht seit HUM-489 auf der Liste
+//!   (unten), und über alle Ebenen gilt dort ohnehin der strengste Wert.
 //! - `sandbox.podman.runtime` (HUM-432, `--podman-runtime`) wählt die
 //!   Laufzeit unter Podman und damit die Stufe; seit HUM-464 gibt es nur
 //!   noch `podman/crun`, die Kernel-Stufe ist ein eigenes Backend, und den
@@ -68,6 +68,15 @@
 //!   Wert der Kommandozeile wie ein Flag. Die übrigen Schlüssel von
 //!   `sandbox.podman` bestimmen Programm, Wurzel und Grenzen und bleiben
 //!   gesperrt.
+//! - `sandbox.min_isolation` (HUM-489, `--sandbox-min-isolation`) hebt die
+//!   Untergrenze der Isolation für diese Sitzung. Er vergrößert nichts: Beim
+//!   Mischen der Ebenen gewinnt für diesen Schlüssel der strengste Wert, nicht
+//!   der oberste (`humanitl_config::load`). Ein Wunsch über den Start hebt
+//!   die Untergrenze aus Konfiguration, Profil, Projektwahl und
+//!   Firmenvorgabe also nur, er senkt sie nie; ein schwächerer Wert bleibt
+//!   draußen, und die Herkunft nennt weiter die Ebene des strengsten. Vor
+//!   HUM-489 ließ `humanitl run` das Flag still fallen, und der Daemon
+//!   startete unter einer Stufe, die der Mensch ausgeschlossen hatte.
 //!
 //! [`SandboxService`]: crate::SandboxService
 //!
@@ -105,7 +114,13 @@ pub const SESSION_OVERRIDE_KEYS: &[&str] = &[
     "hold.timeout_secs",
     SANDBOX_BACKEND_KEY,
     "sandbox.podman.runtime",
+    SANDBOX_MIN_ISOLATION_KEY,
 ];
+
+/// Die Untergrenze der Isolation, seit HUM-489 ein Schlüssel der Sitzung.
+/// Ein Wunsch über den Start hebt sie nur: Beim Mischen gilt der strengste
+/// Wert aller Ebenen.
+pub const SANDBOX_MIN_ISOLATION_KEY: &str = "sandbox.min_isolation";
 
 /// Der Schlüssel des Backends einer Sitzung, in `Start.cli_overrides` und als
 /// `Plan.backend` (HUM-440).
@@ -759,28 +774,29 @@ mod tests {
     #[test]
     fn the_allowed_keys_pass_and_everything_else_does_not() {
         // Die Zahl steht im Test, weil die Aufzählung darunter sonst nichts
-        // hielte: Ein dritter Schlüssel in der Liste bliebe grün, solange er
+        // hielte: Ein weiterer Schlüssel in der Liste bliebe grün, solange er
         // nur nicht zufällig einer der neun genannten ist. Wer die Liste
         // erweitert, ändert diese Zahl und schreibt in
         // `backlog/CONVENTIONS.md` 4.25, warum der neue Schlüssel nichts
         // vergrößert.
         assert_eq!(
             SESSION_OVERRIDE_KEYS.len(),
-            4,
-            "a client sets llm.endpoint, hold.timeout_secs, sandbox.backend and \
-             sandbox.podman.runtime, and nothing else: {SESSION_OVERRIDE_KEYS:?}"
+            5,
+            "a client sets llm.endpoint, hold.timeout_secs, sandbox.backend, \
+             sandbox.podman.runtime and sandbox.min_isolation, and nothing else: \
+             {SESSION_OVERRIDE_KEYS:?}"
         );
         for key in SESSION_OVERRIDE_KEYS {
             assert!(check_override_key(key).is_ok(), "{key} should be allowed");
         }
         // Genau die Schlüssel, mit denen ein Client die Sandbox aufmachen
-        // würde. Jeder einzelne ist ein eigener Weg hinaus. Die Untergrenze
-        // der Isolation und die Einstellungen von Podman außer der Laufzeit
-        // gehören dazu (HUM-431, HUM-432): Ein Wunsch über den Start senkte
-        // sonst, was der Mensch verlangt hat, oder bestimmte Programm, Wurzel
-        // und Grenzen von Podman.
+        // würde. Jeder einzelne ist ein eigener Weg hinaus. Die Einstellungen
+        // von Podman außer der Laufzeit gehören dazu (HUM-432): Ein Wunsch
+        // über den Start bestimmte sonst Programm, Wurzel und Grenzen von
+        // Podman. Die Untergrenze der Isolation steht seit HUM-489 auf der
+        // Liste; dass ein Wunsch sie nur hebt, prüft
+        // `a_session_floor_only_raises`.
         for key in [
-            "sandbox.min_isolation",
             "sandbox.podman.program",
             "sandbox.podman.rootfs",
             "sandbox.podman.image",
@@ -1013,6 +1029,50 @@ mod tests {
         assert_eq!(
             fixed.current().expect("fixed").config.llm.endpoint,
             fixed.base().config.llm.endpoint
+        );
+    }
+
+    /// `sandbox.min_isolation` from the start raises the floor of the
+    /// session and never lowers it (HUM-489): `kernel` over the default
+    /// makes `auto` end with `SANDBOX_035`, and `policy` under a `namespaces`
+    /// from `config.toml` leaves `namespaces` with its origin in place.
+    ///
+    /// Mutation proof: without the key in [`SESSION_OVERRIDE_KEYS`] the first
+    /// start is `CONFIG_003`; with the topmost value instead of the strictest
+    /// in `humanitl_config::load` the second resolves to `policy`.
+    #[test]
+    fn a_session_floor_only_raises() {
+        use humanitl_config::{MinIsolation, Origin};
+
+        let home = tempfile::tempdir().expect("tempdir");
+        let under_test = session_resolver(home.path());
+        let floor = |value: &str| SessionRequest {
+            overrides: vec![(
+                super::SANDBOX_MIN_ISOLATION_KEY.to_owned(),
+                value.to_owned(),
+            )],
+            ..SessionRequest::default()
+        };
+
+        let raised = under_test.resolve(&floor("kernel")).expect("resolves");
+        assert_eq!(raised.config.sandbox.min_isolation, MinIsolation::Kernel);
+        assert_eq!(raised.origin("sandbox.min_isolation"), Some(&Origin::Cli));
+        let refused = humanitl_sandbox::choose_backend(
+            &raised.config.sandbox,
+            humanitl_sandbox::AUTO_BACKEND,
+        )
+        .expect_err("auto never reaches the kernel level");
+        assert_eq!(refused.code.as_str(), "SANDBOX_035", "{}", refused.why);
+
+        let config = under_test.paths().config_path();
+        std::fs::create_dir_all(config.parent().expect("a directory")).expect("mkdir");
+        std::fs::write(&config, "[sandbox]\nmin_isolation = \"namespaces\"\n").expect("write");
+        let kept = under_test.resolve(&floor("policy")).expect("resolves");
+        assert_eq!(kept.config.sandbox.min_isolation, MinIsolation::Namespaces);
+        assert_eq!(
+            kept.origin("sandbox.min_isolation"),
+            Some(&Origin::Global),
+            "the origin names the layer of the strictest value"
         );
     }
 }

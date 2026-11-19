@@ -1270,8 +1270,9 @@ async fn resources_over_this_host_hold_up_no_other_backend() {
 
 /// Ein Projekt hebt die Untergrenze auf `kernel`, und weder der Wunsch über
 /// den Start noch die Wahl `auto` umgeht sie: Der Start lehnt mit
-/// `SANDBOX_035` ab, statt ein anderes Backend zu nehmen (HUM-431). Die
-/// Untergrenze selbst lässt sich über den Start nicht setzen.
+/// `SANDBOX_035` ab, statt ein anderes Backend zu nehmen (HUM-431). Ein
+/// schwächerer Wunsch nach der Untergrenze über den Start senkt sie nicht
+/// (HUM-489): Auch er endet mit `SANDBOX_035`.
 #[tokio::test(flavor = "multi_thread")]
 async fn a_floor_raised_by_the_project_refuses_the_start_and_cannot_be_lowered_by_the_client() {
     let fixture = Fixture::live();
@@ -1300,8 +1301,34 @@ async fn a_floor_raised_by_the_project_refuses_the_start_and_cannot_be_lowered_b
         .run(with_override("sandbox.min_isolation", "policy"))
         .await;
     assert!(
-        codes(&seen).contains(&"CONFIG_003".to_owned()),
-        "the floor is no key of the allow list: {:?}",
+        codes(&seen).contains(&"SANDBOX_035".to_owned()),
+        "a weaker floor from the start does not lower the project's: {:?}",
+        codes(&seen)
+    );
+    assert!(failed(&seen), "{seen:?}");
+}
+
+/// `sandbox.min_isolation` über den Start hebt die Untergrenze der Sitzung
+/// (HUM-489): `kernel` ohne jede Untergrenze in der Konfiguration lässt
+/// `auto` mit `SANDBOX_035` enden, statt still unter der verlangten Stufe zu
+/// starten.
+///
+/// Mutation proof: without the key in `SESSION_OVERRIDE_KEYS` the start is
+/// `CONFIG_003` instead.
+#[tokio::test(flavor = "multi_thread")]
+async fn a_floor_from_the_start_raises_the_floor_of_the_session() {
+    let fixture = Fixture::live();
+    let seen = fixture
+        .run(with_override("sandbox.min_isolation", "kernel"))
+        .await;
+    assert!(
+        codes(&seen).contains(&"SANDBOX_035".to_owned()),
+        "{:?}",
+        codes(&seen)
+    );
+    assert!(
+        !codes(&seen).contains(&"CONFIG_003".to_owned()),
+        "the floor is a key of the session: {:?}",
         codes(&seen)
     );
     assert!(failed(&seen), "{seen:?}");

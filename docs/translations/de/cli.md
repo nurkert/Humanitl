@@ -111,10 +111,11 @@ den Daemon und liest die Erklärung weiter aus der Datei, die es nennt.
 
 Jedes andere Konfigurations-Flag (`--hold-timeout-secs`, `--findings-enabled`
 und so weiter) gehört zur Konfiguration und nicht zu einer Session. Der Daemon
-nimmt vom Client nur vier Pfade an, `llm.endpoint`, `hold.timeout_secs`,
-`sandbox.backend` und `sandbox.podman.runtime`, und beantwortet jeden anderen
-mit `CONFIG_003`; für die beiden Pfade des Backends gelten trotzdem
-`sandbox.min_isolation` und die Zulassung. Der Grund steht in
+nimmt vom Client nur fünf Pfade an, `llm.endpoint`, `hold.timeout_secs`,
+`sandbox.backend`, `sandbox.podman.runtime` und `sandbox.min_isolation`, und
+beantwortet jeden anderen mit `CONFIG_003`; für die beiden Pfade des Backends
+gelten trotzdem `sandbox.min_isolation` und die Zulassung, und die Untergrenze
+selbst steigt nur. Der Grund steht in
 `backlog/CONVENTIONS.md` 4.26: Ein Client, der jeden Schlüssel setzen könnte,
 würde damit über die Mount-Fläche der Sandbox und den Prozess darin entscheiden.
 Wer einen anderen Wert ändern will, schreibt ihn in `config.toml` oder in ein
@@ -361,12 +362,18 @@ jedem zugelassenen, verfügbaren Backend eine leere Sandbox und prüft ihre fün
 `kernel`) ist die schwächste Stufe, mit der eine Sitzung starten darf. Über
 alle Ebenen gilt der strengste Wert: Ein Projekt-Profil darf sie heben, und
 nichts senkt sie unter das, was eine andere Ebene verlangt.
-`--sandbox-min-isolation kernel` auf `humanitl sandbox run`, `sandbox argv`
-oder `sandbox check` hebt sie für diesen einen Aufruf; `humanitl run` schickt
-sie nicht an den Daemon, der nur die vier oben genannten Pfade annimmt, also
-gehört sie für eine Sitzung über den Daemon in `config.toml` oder das
-Projekt-Profil. Steht die Untergrenze auf `kernel`, startet nur `qemu`; jedes
-andere Backend endet mit `SANDBOX_035`, statt darunter zu laufen.
+`--sandbox-min-isolation kernel` auf `humanitl run`, `humanitl go`, `humanitl
+sandbox run`, `sandbox argv` oder `sandbox check` hebt sie für diesen einen
+Aufruf, ebenso `HUMANITL_SANDBOX__MIN_ISOLATION` und eine Datei, die `--config`
+nennt. `humanitl run` und `humanitl go` schicken dem Daemon mit dem Start den
+strengsten dieser Werte, nie den schwächeren eines Flags neben einer strengeren
+Variable; der Daemon nimmt den strengsten Wert aus `config.toml`, den Profilen,
+der Projektwahl, der Firmenvorgabe und dem Start, also senkt
+`--sandbox-min-isolation policy` nie ein `namespaces` aus `config.toml`. Ein
+Daemon vor Vertrag 1.49 kennt die Untergrenze nicht als Schlüssel der Sitzung,
+und `humanitl run` endet dann mit `CLI_004`, statt ohne sie zu starten. Steht
+die Untergrenze auf `kernel`, startet nur `qemu`; jedes andere Backend endet
+mit `SANDBOX_035`, statt darunter zu laufen.
 
 **Was `humanitl doctor` zur Kernel-Stufe sagt.** In der Gruppe der
 Kernel-Stufe gibt der Doctor eine Zeile je Voraussetzung: `kvm` (`/dev/kvm`),

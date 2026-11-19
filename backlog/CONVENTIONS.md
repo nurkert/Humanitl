@@ -2524,8 +2524,8 @@ eine Stufe unter `sandbox.min_isolation` (`SANDBOX_035`), eine, die das
 Sandbox-Profil nicht verlangt (`SANDBOX_036`), und eine, die nicht in
 `ADMITTED_BACKENDS` steht (`SANDBOX_048`), ablehnt, und jedes zugelassene
 Backend hält die drei Garantien, sonst stünde es nicht auf der Liste. Die
-Untergrenze selbst ist kein Schlüssel der Liste: Über alle Ebenen gilt dort der
-strengste Wert, und ein Wunsch über den Start könnte sie ohnehin nur heben.
+Untergrenze selbst steht seit HUM-489 auf der Liste (unten): Über alle Ebenen
+gilt dort der strengste Wert, und ein Wunsch über den Start kann sie nur heben.
 
 Seit HUM-432 steht `sandbox.podman.runtime` als vierter Schlüssel darauf
 (`humanitl run --podman-runtime crun`). Die Laufzeit macht aus Podman eine
@@ -2550,6 +2550,20 @@ starten. Weil der Daemon mit seiner eigenen Umgebung läuft, schickt
 Wert der Kommandozeile und wird geprüft wie ein Flag. Die übrigen Schlüssel von `sandbox.podman` (Programm, Wurzel,
 Abbild, Grenzen) bleiben gesperrt: Sie bestimmen, welches Programm startet
 und was es sieht.
+
+Seit HUM-489 steht `sandbox.min_isolation` als fünfter Schlüssel darauf
+(`humanitl run --sandbox-min-isolation kernel`, ebenso `humanitl go`). Er
+vergrößert nichts: Beim Mischen gilt für ihn der strengste Wert aller Ebenen
+(Konfiguration, Profile, Projektwahl, Firmenvorgabe, Kommandozeile), nicht der
+oberste; ein Wunsch über den Start hebt die Untergrenze also nur, ein
+schwächerer bleibt draußen, und die Herkunft nennt weiter die Ebene des
+strengsten. Vorher ließ `humanitl run` das Flag still fallen, und der Daemon
+startete unter einer Stufe, die der Mensch ausgeschlossen hatte. Geschickt
+wird der aufgelöste Wert des Clients, sobald ihn eine Quelle gesetzt hat, die
+nur der Client sieht (Flag, `HUMANITL_SANDBOX__MIN_ISOLATION`, eine Datei aus
+`--config`); ein schwächeres Flag verdrängt so nie eine strengere Variable. Ein Daemon vor Vertrag 1.49 lehnte den
+Schlüssel mit einem irreführenden `CONFIG_003` ab; `humanitl run` sagt dann
+`CLI_004` und schickt ihn nicht.
 
 **Eine Profilregel kann sich den Rang der Durchreiche nicht selbst ausstellen.**
 `set_bundled` stempelt auf jede Regel der mitgelieferten Gruppe `bundled`, und

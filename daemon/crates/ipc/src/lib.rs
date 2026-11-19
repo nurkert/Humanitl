@@ -51,7 +51,12 @@ pub const PROTO_MAJOR: u32 = 1;
 /// Minor-Version des Vertrags. Steigt bei jeder additiven Änderung
 /// (`Info.proto_minor`).
 ///
-/// `48` seit dem Startvorschlag (HUM-536): `ProjectsRequest.proposal` mit
+/// `49` seit der Untergrenze der Sitzung (HUM-489): `Start.cli_overrides`
+/// nimmt `sandbox.min_isolation` an. Der Wunsch hebt die Untergrenze der
+/// Sitzung und senkt sie nie, weil über alle Ebenen der strengste Wert gilt;
+/// ein älterer Daemon antwortet mit `CONFIG_003`, und `humanitl run` sagt
+/// davor `CLI_004`, statt den Wunsch zu schicken.
+/// `48` war der Startvorschlag (HUM-536): `ProjectsRequest.proposal` mit
 /// Ordner oder Kennung und einer Teilwahl antwortet mit
 /// `ProjectsResponse.proposal` (`StartProposal`: je Feld Schlüssel, Vorgabe,
 /// Herkunft, Sperre und Optionen mit Verfügbarkeit, Gründen und den Paaren
@@ -260,7 +265,7 @@ pub const PROTO_MAJOR: u32 = 1;
 /// Spiegelung in `app/lib/core/ipc/proto_version.dart` darf nachziehen: eine
 /// abweichende Minor ist verabredetermaßen kein Grund, die Verbindung
 /// abzulehnen (`docs/PROTOCOL.md`).
-pub const PROTO_MINOR: u32 = 48;
+pub const PROTO_MINOR: u32 = 49;
 
 /// Metadata-Schlüssel für das Session-Token aus
 /// `$XDG_RUNTIME_DIR/humanitl/token` (CONVENTIONS.md 3.6).
