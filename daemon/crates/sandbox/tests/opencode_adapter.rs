@@ -714,18 +714,19 @@ fn opencode_preflight_reports_a_mounted_directory_that_the_path_does_not_name() 
         "the finding says what is missing: {}",
         agent_004.why
     );
+    // Der Ausweg ist der Suchpfad, nicht eine weitere Einhängung. Den
+    // Eintrag `sandbox.env.PATH` schreibt `config set` nicht; der Rat steht
+    // deshalb im Satz und nicht in einem `ChangeSetting` (HUM-507).
     assert!(
-        matches!(
-            agent_004.fix,
-            Some(humanitl_core::FixAction::ChangeSetting { ref key, .. }) if key == "sandbox.env.PATH"
-        ),
-        "the way out is the search path, not another mount: {:?}",
-        agent_004.fix
+        agent_004.why.contains("under [sandbox.env] in config.toml"),
+        "the way out is the search path, not another mount: {}",
+        agent_004.why
     );
+    assert_eq!(agent_004.fix, None);
 
     // Ohne `[env].PATH` gilt die Vorgabe der C-Bibliothek. Der Vorschlag wird
-    // kopiert und eingetragen: Er trägt den nackten Pfad, nicht den Satz, mit
-    // dem der Befund ihn erklärt.
+    // kopiert und eingetragen: Er trägt den nackten Pfad in Anführungszeichen,
+    // nicht den Satz, mit dem der Befund ihn erklärt.
     let without_a_path = context(Some("http://192.168.1.50:11434"))
         .with_models(vec!["qwen3".to_owned()])
         .with_host_path(Some(mounted.clone()))
@@ -738,13 +739,14 @@ fn opencode_preflight_reports_a_mounted_directory_that_the_path_does_not_name() 
         .into_iter()
         .find(|diagnostic| diagnostic.code.as_str() == "AGENT_004")
         .expect("the default search path names the directory just as little");
-    let Some(humanitl_core::FixAction::ChangeSetting { value, .. }) = finding.fix else {
-        panic!("the way out is a setting: {:?}", finding.fix);
-    };
-    assert_eq!(
-        value,
-        format!("{}:/bin:/usr/bin", Path::new(&mounted).display()),
-        "the value is a PATH and nothing else"
+    let line = format!(
+        "PATH = \"{}:/bin:/usr/bin\" under [sandbox.env]",
+        Path::new(&mounted).display()
+    );
+    assert!(
+        finding.why.contains(&line),
+        "the value is a PATH and nothing else: {}",
+        finding.why
     );
     drop(keep);
 }

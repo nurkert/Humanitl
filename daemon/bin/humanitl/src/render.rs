@@ -199,27 +199,31 @@ pub fn docs_url(diagnostic: &Diagnostic) -> Option<String> {
 /// Die Einstellung, die auf den Zugangsschlüssel des Endpunkts verweist.
 const API_KEY_REF_SETTING: &str = "llm.api_key_ref";
 
+/// Der Schlüssel des Verweises auf die Zugangsdaten des Entscheidungs-Proxys.
+const EGRESS_AUTH_REF_SETTING: &str = "egress.proxy_auth_ref";
+
 /// Der Behebungsvorschlag als eine Zeile, die man abtippen oder kopieren kann.
 #[must_use]
 pub fn fix_line(fix: &FixAction) -> String {
     match fix {
         FixAction::SetEnv { key, value } => format!("export {key}={}", shell_word(value)),
-        // Den Verweis auf den Zugangsschlüssel setzt kein `config set`: Ein
-        // leerer Wert dort löschte ihn nur, und den Schlüssel selbst nimmt
-        // allein `humanitl llm key set` entgegen. `LLM_002` trägt diesen
-        // Vorschlag seit HUM-275 als Einstellung, damit die Oberfläche das
-        // Feld öffnen kann; die Kommandozeile zeigt denselben Befehl wie zuvor.
-        FixAction::ChangeSetting { key, .. } if key == API_KEY_REF_SETTING => {
+        // Ein Feld, dessen Wert nur der Mensch kennt (HUM-507). Den
+        // Zugangsschlüssel nimmt allein `humanitl llm key set` entgegen
+        // (`LLM_002`, HUM-275), die Zugangsdaten des Entscheidungs-Proxys
+        // `humanitl egress auth set`; der Projektordner ist in der Oberfläche
+        // die Ordnerauswahl und hier der Befehl, der einen Ordner dauerhaft
+        // wählt (HUM-293). Jedes andere Feld druckt `config set` mit einem
+        // Platzhalter, nie mit einem leeren Wert, den `config set` ablehnte.
+        FixAction::EditSetting { key } if key == API_KEY_REF_SETTING => {
             "humanitl llm key set".to_owned()
         }
-        // Ein Projektordner ohne Wert ist die Ordnerauswahl der Oberfläche;
-        // hier steht der Befehl, der einen Ordner dauerhaft wählt, mit einem
-        // Platzhalter statt eines leeren Werts (HUM-293).
-        FixAction::ChangeSetting { key, value }
-            if key == humanitl_sandbox::WORK_DIR_KEY && value.is_empty() =>
-        {
+        FixAction::EditSetting { key } if key == EGRESS_AUTH_REF_SETTING => {
+            "humanitl egress auth set".to_owned()
+        }
+        FixAction::EditSetting { key } if key == humanitl_sandbox::WORK_DIR_KEY => {
             humanitl_sandbox::CHOOSE_PROJECT_FOLDER.to_owned()
         }
+        FixAction::EditSetting { key } => format!("humanitl config set {key} <value>"),
         FixAction::ChangeSetting { key, value } => {
             format!("humanitl config set {key} {}", shell_word(value))
         }
@@ -241,6 +245,9 @@ pub fn fix_json(fix: &FixAction) -> Value {
             FixAction::SetEnv { key, value: v } | FixAction::ChangeSetting { key, value: v } => {
                 object.insert("key".to_owned(), Value::String(key.clone()));
                 object.insert("value".to_owned(), Value::String(v.clone()));
+            }
+            FixAction::EditSetting { key } => {
+                object.insert("key".to_owned(), Value::String(key.clone()));
             }
             FixAction::OpenUrl(url) => {
                 object.insert("url".to_owned(), Value::String(url.clone()));
@@ -547,20 +554,58 @@ mod tests {
         assert_eq!(super::shell_word("it's"), r"'it'\''s'");
     }
 
-    /// HUM-275: `LLM_002` schlägt die Einstellung `llm.api_key_ref` vor, und
-    /// die Kommandozeile druckt dafür denselben Befehl wie vorher, nicht ein
+    /// HUM-275: `LLM_002` schlägt das Feld `llm.api_key_ref` vor, und die
+    /// Kommandozeile druckt dafür denselben Befehl wie vorher, nicht ein
     /// `config set`, das den Verweis leerte.
     #[test]
     fn the_key_setting_prints_the_key_command() {
-        let fix = FixAction::ChangeSetting {
+        let fix = FixAction::EditSetting {
             key: "llm.api_key_ref".to_owned(),
-            value: String::new(),
         };
         assert_eq!(super::fix_line(&fix), "humanitl llm key set");
         assert_eq!(
             super::fix_json(&fix)["command"],
             serde_json::Value::String("humanitl llm key set".to_owned())
         );
+    }
+
+    /// Ein Feld, dessen Wert der Mensch einträgt (`EditSetting`), druckt nie
+    /// `config set KEY ''`, das `config set` ablehnte, sondern den eigenen
+    /// Befehl oder einen Platzhalter (HUM-507). Mutationsbeweis: ohne den
+    /// Zweig für den Projektordner druckt er `config set sandbox.work_dir
+    /// <value>` statt des Satzes von HUM-293.
+    #[test]
+    fn a_field_to_fill_in_never_prints_an_empty_config_set() {
+        for (key, expected) in [
+            ("llm.api_key_ref", "humanitl llm key set".to_owned()),
+            (
+                "egress.proxy_auth_ref",
+                "humanitl egress auth set".to_owned(),
+            ),
+            (
+                "sandbox.work_dir",
+                humanitl_sandbox::CHOOSE_PROJECT_FOLDER.to_owned(),
+            ),
+            (
+                "egress.proxy",
+                "humanitl config set egress.proxy <value>".to_owned(),
+            ),
+            (
+                "egress.proxy_ca",
+                "humanitl config set egress.proxy_ca <value>".to_owned(),
+            ),
+            (
+                "llm.endpoint",
+                "humanitl config set llm.endpoint <value>".to_owned(),
+            ),
+        ] {
+            let fix = FixAction::EditSetting {
+                key: key.to_owned(),
+            };
+            assert_eq!(super::fix_line(&fix), expected, "{key}");
+            assert_eq!(super::fix_json(&fix)["key"], key);
+            assert_eq!(super::fix_json(&fix)["kind"], "edit_setting");
+        }
     }
 
     /// Nur ein `=` am Anfang wird gequotet, eines in der Mitte bleibt nackt.

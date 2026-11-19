@@ -333,6 +333,7 @@ message FixAction {
     string copy_command = 5;
     string open_url = 6;
     string remount_read_only = 7;
+    EditSetting edit_setting = 8;
   }
 
   // Umgebungsvariable setzen.
@@ -341,10 +342,19 @@ message FixAction {
     string value = 2;
   }
 
-  // Konfigurationsschluessel aendern.
+  // Konfigurationsschluessel aendern. Der Wert ist immer einer, den
+  // `humanitl config set` fuer diesen Schluessel annimmt (HUM-507).
   message ChangeSetting {
     string key = 1;
     string value = 2;
+  }
+
+  // Ein Feld der Konfiguration oeffnen, dessen Wert nur der Mensch kennt:
+  // die Oberflaeche zeigt das Feld (oder die Ordnerauswahl), die
+  // Kommandozeile den Befehl dafuer; gesetzt wird nichts (HUM-507). Ein
+  // Daemon vor 1.50 schickte dafuer ein `ChangeSetting` mit leerem Wert.
+  message EditSetting {
+    string key = 1;
   }
 }
 

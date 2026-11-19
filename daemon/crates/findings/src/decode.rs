@@ -810,9 +810,24 @@ fn cap_exceeded(
         // also zeigt der Rat auf das Cap.
         .fix(humanitl_core::FixAction::ChangeSetting {
             key: "limits.preview_cap_bytes".to_owned(),
-            value: cap_bytes.saturating_mul(2).to_string(),
+            value: doubled_cap(cap_bytes).to_string(),
         })
         .build()
+}
+
+/// Das Doppelte des Caps, höchstens die größte Zahl, die
+/// `humanitl config set` liest (`i64::MAX`, HUM-507).
+///
+/// Nach oben begrenzt die Prüfung der Konfiguration
+/// `limits.preview_cap_bytes` nicht; ein Doppeltes, das über `i64::MAX`
+/// hinausginge, wäre aber keine Zahl, die `config set` nimmt. Der Test
+/// `every_change_setting_fix_is_a_value_config_set_takes`
+/// (`humanitl-config`, `tests/change_setting_fixes.rs`) prüft den Wert an
+/// der Grenze.
+#[must_use]
+pub(crate) fn doubled_cap(cap_bytes: usize) -> usize {
+    let ceiling = usize::try_from(i64::MAX).unwrap_or(usize::MAX);
+    cap_bytes.saturating_mul(2).min(ceiling)
 }
 
 /// Der Befund `FINDINGS_002` für einen `deflate`-Body mit einer Lesart, die
@@ -1497,6 +1512,23 @@ mod tests {
         assert!(diagnostic.why.contains("100:1"), "{}", diagnostic.why);
         assert!(diagnostic.why.contains("max_decompress_ratio"));
         assert!(diagnostic.fix.is_none());
+    }
+
+    /// Das Doppelte des Caps bleibt eine Zahl, die `humanitl config set`
+    /// liest (HUM-507). Mutationsbeweis: ohne `min` ist das Doppelte von
+    /// `usize::MAX` größer als `i64::MAX`.
+    #[test]
+    fn the_doubled_cap_stays_a_number_config_set_reads() {
+        let ceiling = usize::try_from(i64::MAX).unwrap();
+        assert_eq!(super::doubled_cap(4096), 8192);
+        assert_eq!(super::doubled_cap(ceiling), ceiling);
+        assert_eq!(super::doubled_cap(usize::MAX), ceiling);
+        assert!(
+            super::doubled_cap(usize::MAX)
+                .to_string()
+                .parse::<i64>()
+                .is_ok()
+        );
     }
 
     #[test]

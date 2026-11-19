@@ -71,6 +71,7 @@ fn fix_texts(fix: &FixAction) -> Vec<String> {
             ));
             texts
         }
+        FixAction::EditSetting { key } => vec![key.clone()],
         FixAction::InstallService => Vec::new(),
         FixAction::CopyCommand(text) | FixAction::OpenUrl(text) => vec![text.clone()],
         FixAction::RemountReadOnly(path) => vec![path.to_string_lossy().into_owned()],

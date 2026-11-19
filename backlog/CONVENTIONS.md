@@ -109,7 +109,7 @@ pub enum FindingKind { ApiKey(String), Jwt, Email, Iban, CreditCard, Phone, Ipv4
 
 pub struct Diagnostic { pub code: DiagnosticCode, pub severity: Severity, pub title: String, pub why: String, pub fix: Option<FixAction>, pub docs: Option<Url> }
 pub enum Severity { Info, Warning, Error, Blocking }
-pub enum FixAction { SetEnv { key, value }, AddRule(Rule), InstallService, ChangeSetting { key, value }, CopyCommand(String), OpenUrl(Url), RemountReadOnly(PathBuf) }
+pub enum FixAction { SetEnv { key, value }, AddRule(Rule), InstallService, ChangeSetting { key, value }, EditSetting { key }, CopyCommand(String), OpenUrl(Url), RemountReadOnly(PathBuf) }
 pub struct DiagnosticCode(pub &'static str);   // Schema: BEREICH_NNN, z. B. SANDBOX_001, TLS_003, LLM_002, DAEMON_001
 ```
 
@@ -3998,3 +3998,38 @@ des Daemons (`audit_sink::sandbox_record`).
 Übersetzungen ins Protokoll (`convert::flow_event_to_proto`,
 `fake::state::event_to_proto`) geben für sie ein `FlowEvent` ohne `event`
 zurück. Kein Feld im Protokoll, keine neue Fassung.
+
+### 4.56 Aus der Umsetzung der Fixe, die `config set` annimmt (HUM-507, 2026-11-19)
+
+**`ChangeSetting` trägt nur Werte, die `humanitl config set` annimmt.** Die
+Prüfung ist `humanitl_config::value::check_setting(key, value)`: ein Blatt des
+Schemas unter heutigem Namen, `parse_value`, `check_value` und die
+Vorgabe-Konfiguration mit genau diesem Wert durch `Config::validate`. Werte,
+die erst zur Laufzeit feststehen, baut ein Erzeuger über
+`value::change_setting` (kein Fix, wenn die Prüfung ablehnt), `value::reset_fix`
+(Vorgabe oder `-`) oder `value::raised` (das Doppelte, höchstens bis zur
+Obergrenze der Prüfung). Eine Anleitung („remove NAME", „an absolute path, for
+example …") ist kein Wert; sie steht im `why`, und der Befund hat keinen Fix.
+Eine Firmenvorgabe, die den Schlüssel sperrt (HUM-534), unterdrückt den Fix
+nicht: `config set` lehnt dann mit eigenem Befund ab, der die Vorgabe nennt.
+
+**`EditSetting { key }` öffnet ein Feld, dessen Wert nur der Mensch kennt**
+(Zugangsschlüssel, Projektordner, Entscheidungs-Proxy, dessen CA und
+Zugangsdaten, Adresse des Modells). Auf der Leitung `FixAction.edit_setting`
+(Protokoll 1.50), in Dart `FixAction.editSetting`. Die App öffnet damit
+dieselbe Ordnerauswahl oder dasselbe Feld wie zuvor bei einem leeren
+`ChangeSetting` (HUM-262, HUM-275, HUM-511); die Kommandozeile druckt
+`humanitl llm key set`, `humanitl egress auth set`, die Wahl des
+Projektordners oder `humanitl config set KEY <value>`. Ein leeres
+`ChangeSetting` eines Daemons vor 1.50 lesen App (`convert.dart`),
+Kommandozeile (`cmd::fix_from_proto`) und Aufnahme (`DiagnosticRecord::fix`)
+als `EditSetting`.
+
+**Der Test hält beides fest.** `daemon/crates/config/tests/change_setting_fixes.rs`
+liest jeden Bau eines `ChangeSetting` im Rust-Quelltext unter `daemon/`
+(außerhalb von Testcode) und von `FixAction.changeSetting` unter `app/lib/`.
+Literale laufen durch `check_setting`; jede andere Stelle steht mit ihrem
+Quelltext und ihren möglichen Werten im Register `SITES` beziehungsweise
+`DART_SITES`. Wer einen neuen Fix mit Laufzeitwert baut, nimmt den Seam oder
+trägt die Stelle ein. Der Fake (`fake/player.rs`) prüft die Vorschläge einer
+Sitzungsdatei beim Lesen genauso.

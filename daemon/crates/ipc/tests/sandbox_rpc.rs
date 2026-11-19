@@ -703,10 +703,10 @@ async fn a_configured_folder_that_holds_the_config_is_refused_by_the_plan() {
             refused.why
         );
         let fix = refused.fix.as_ref().expect("the finding carries a fix");
-        let Some(v1::fix_action::Action::ChangeSetting(change)) = &fix.action else {
+        let Some(v1::fix_action::Action::EditSetting(edit)) = &fix.action else {
             panic!("the fix is a choice of another folder, got {fix:?}");
         };
-        assert_eq!(change.key, "sandbox.work_dir");
+        assert_eq!(edit.key, "sandbox.work_dir");
         let status = status.expect("the state is still answered");
         assert_eq!(status.state, v1::SandboxState::Failed as i32);
         // Der Ordner bleibt sichtbar, damit der Befund einen Bezug hat.

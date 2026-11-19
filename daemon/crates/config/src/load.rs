@@ -1152,14 +1152,13 @@ fn unknown_key(entry: &Entry, severity: Severity) -> Diagnostic {
     if let Some(near) = nearest(&entry.path) {
         // Der Wert so, wie `humanitl config set` ihn nimmt: eine Zeichenkette
         // ohne Anführungszeichen (HUM-503).
+        // Und nur, wenn `config set` den Wert für den ähnlichen Schlüssel
+        // nimmt (HUM-507): `hold.timeout = "abc"` schlägt nichts vor.
         let value = entry
             .value
             .as_str()
             .map_or_else(|| entry.value.to_string(), str::to_owned);
-        builder = builder.fix(FixAction::ChangeSetting {
-            key: near.to_owned(),
-            value,
-        });
+        builder = builder.maybe_fix(crate::value::change_setting(near, value));
     }
     builder.build()
 }
@@ -1245,11 +1244,7 @@ fn bad_value(entry: &Entry, expected: &str, found: &str) -> Diagnostic {
             "{} (from {}) expects {expected}, found {found}",
             entry.written_as, entry.origin
         ))
-        .fix(FixAction::ChangeSetting {
-            key: entry.path.clone(),
-            value: schema::field(&entry.path)
-                .map_or_else(|| "-".to_owned(), schema::Field::default_value),
-        })
+        .maybe_fix(crate::value::reset_fix(&entry.path))
         .build()
 }
 
@@ -1288,10 +1283,14 @@ fn alias_diagnostics(
                         "{written_as} (from {origin}) is the old name of {path} and still works; \
                          rename it."
                     ))
-                    .fix(FixAction::ChangeSetting {
-                        key: path.clone(),
-                        value: value.to_string(),
-                    })
+                    // Der Wert, wie `config set` ihn nimmt: eine
+                    // Zeichenkette ohne Anführungszeichen (HUM-507).
+                    .maybe_fix(crate::value::change_setting(
+                        path,
+                        value
+                            .as_str()
+                            .map_or_else(|| value.to_string(), str::to_owned),
+                    ))
                     .build(),
             );
             continue;

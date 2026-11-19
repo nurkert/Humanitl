@@ -4143,22 +4143,21 @@ impl Inner {
         need: KeyNeed,
     ) -> Result<AgentContribution, Diagnostic> {
         let registry = AdapterRegistry::builtin();
-        let adapter = registry.get(&config.agent.adapter).ok_or_else(|| {
-            Diagnostic::builder(codes::CONFIG_003, Severity::Blocking)
-                .why(format!(
-                    "agent.adapter is {:?}, and no adapter of that name exists; known: {}",
-                    config.agent.adapter,
-                    registry.ids().join(", ")
-                ))
-                .fix(FixAction::ChangeSetting {
-                    key: "agent.adapter".to_owned(),
-                    value: registry
-                        .ids()
-                        .first()
-                        .map_or_else(String::new, |id| (*id).to_owned()),
-                })
-                .build()
-        })?;
+        let adapter =
+            registry.get(&config.agent.adapter).ok_or_else(|| {
+                Diagnostic::builder(codes::CONFIG_003, Severity::Blocking)
+                    .why(format!(
+                        "agent.adapter is {:?}, and no adapter of that name exists; known: {}",
+                        config.agent.adapter,
+                        registry.ids().join(", ")
+                    ))
+                    // Die erste Kennung nur, wenn `config set` sie nimmt; ein leeres
+                    // Register schlägt nichts vor (HUM-507).
+                    .maybe_fix(registry.ids().first().and_then(|id| {
+                        humanitl_config::value::change_setting("agent.adapter", *id)
+                    }))
+                    .build()
+            })?;
 
         // A shell from the caller does not wait for a locked or missing key
         // (HUM-280): it starts without one and says so. The agent the daemon
@@ -4649,10 +4648,10 @@ fn given_against_choice(
         .why(format!(
             "this service starts with the backend {given:?}, and sandbox.backend chose {chosen:?}"
         ))
-        .fix(FixAction::ChangeSetting {
-            key: "sandbox.backend".to_owned(),
-            value: given.to_owned(),
-        })
+        .maybe_fix(humanitl_config::value::change_setting(
+            "sandbox.backend",
+            given,
+        ))
         .build())
 }
 
@@ -7260,15 +7259,19 @@ mod tests {
             .as_ref()
             .map(ToString::to_string)
             .unwrap_or_default();
-        assert_eq!(
-            llm.fix.and_then(|fix| fix.action),
-            Some(v1::fix_action::Action::ChangeSetting(
-                v1::fix_action::ChangeSetting {
-                    key: "llm.endpoint".to_owned(),
-                    value: endpoint,
-                }
-            ))
-        );
+        // Die geltende Adresse als Wert; ohne sie das Feld (HUM-507), nie
+        // ein `ChangeSetting` mit leerem Wert.
+        let expected = if endpoint.is_empty() {
+            v1::fix_action::Action::EditSetting(v1::fix_action::EditSetting {
+                key: "llm.endpoint".to_owned(),
+            })
+        } else {
+            v1::fix_action::Action::ChangeSetting(v1::fix_action::ChangeSetting {
+                key: "llm.endpoint".to_owned(),
+                value: endpoint,
+            })
+        };
+        assert_eq!(llm.fix.and_then(|fix| fix.action), Some(expected));
         assert_eq!(
             status_llm(&service).await.map(|llm| llm.code),
             Some("LLM_001".to_owned()),

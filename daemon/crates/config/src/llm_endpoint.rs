@@ -280,17 +280,19 @@ pub fn check_text(text: &str) -> Result<(), Diagnostic> {
     // sich die bereinigte Adresse nicht lesen, bleibt nur der Befehl ohne
     // Wert; ein Text, den kein Parser zerlegt hat, könnte noch eins tragen.
     let clean = cleaned(text);
-    let fix = match Url::parse(&clean) {
-        Ok(url) => FixAction::ChangeSetting {
-            key: SETTING.to_owned(),
-            value: if carries_secrets(&url) {
+    // Die bereinigte Adresse nur, wenn `config set` sie so nimmt (HUM-507);
+    // sonst bleibt der Befehl ohne Wert.
+    let fix = Url::parse(&clean)
+        .ok()
+        .and_then(|url| {
+            let value = if carries_secrets(&url) {
                 without_secrets(&url).to_string()
             } else {
                 clean
-            },
-        },
-        Err(_unreadable) => FixAction::CopyCommand(format!("humanitl config set {SETTING} URL")),
-    };
+            };
+            crate::value::change_setting(SETTING, value)
+        })
+        .unwrap_or_else(|| FixAction::CopyCommand(format!("humanitl config set {SETTING} URL")));
     Err(Diagnostic::builder(CONFIG_003, Severity::Error)
         .why(format!(
             "{REFUSAL_MARK}{} at position {position} of {length}; a URL carries no quotes, \

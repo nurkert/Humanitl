@@ -290,12 +290,18 @@ pub enum FixSpec {
         /// Wert der Variable.
         value: String,
     },
-    /// Eine Einstellung ändern.
+    /// Eine Einstellung ändern; der Wert muss einer sein, den
+    /// `humanitl config set` annimmt (HUM-507, geprüft beim Lesen).
     ChangeSetting {
         /// Schlüssel im Schema.
         key: String,
         /// Der vorgeschlagene Wert.
         value: String,
+    },
+    /// Ein Feld öffnen, dessen Wert der Mensch einträgt (HUM-507).
+    EditSetting {
+        /// Schlüssel im Schema.
+        key: String,
     },
     /// Einen Befehl in die Zwischenablage legen.
     CopyCommand(String),
@@ -411,15 +417,37 @@ fn check_line(number: usize, line: &SessionLine) -> Result<(), SessionError> {
             .and_then(|()| check_body_b64(spec.body_b64.as_deref()))
             .map_err(field),
         LineKind::Diagnostic(spec) => {
-            if humanitl_core::diag::lookup_str(&spec.code).is_some() {
-                Ok(())
-            } else {
-                Err(field(format!(
+            if humanitl_core::diag::lookup_str(&spec.code).is_none() {
+                return Err(field(format!(
                     "{} is not in the diagnostic registry",
                     spec.code
-                )))
+                )));
             }
+            spec.fix.as_ref().map_or(Ok(()), check_fix).map_err(field)
         }
+    }
+}
+
+/// Prüft einen Vorschlag der Sitzungsdatei wie jeden des Daemons (HUM-507):
+/// Ein `change_setting` trägt einen Wert, den `humanitl config set` für
+/// seinen Schlüssel annimmt, ein `edit_setting` einen Schlüssel des
+/// Schemas. Sonst spielte der Fake einen Knopf ab, den der echte Daemon nie
+/// zeigt und `config set` ablehnte.
+fn check_fix(fix: &FixSpec) -> Result<(), String> {
+    match fix {
+        FixSpec::ChangeSetting { key, value } => humanitl_config::value::check_setting(key, value)
+            .map_err(|refused| {
+                format!(
+                    "fix change_setting {key} = {value:?} is a value humanitl config set refuses \
+                     ({}); a field the person fills in is edit_setting",
+                    refused.why
+                )
+            }),
+        FixSpec::EditSetting { key } => humanitl_config::schema::field(key)
+            .filter(|field| !field.group)
+            .map(|_| ())
+            .ok_or_else(|| format!("fix edit_setting names {key}, which is no setting")),
+        FixSpec::SetEnv { .. } | FixSpec::CopyCommand(_) | FixSpec::OpenUrl(_) => Ok(()),
     }
 }
 
@@ -1011,6 +1039,7 @@ fn build_fix(spec: &FixSpec) -> humanitl_core::FixAction {
             key: key.clone(),
             value: value.clone(),
         },
+        FixSpec::EditSetting { key } => FixAction::EditSetting { key: key.clone() },
         FixSpec::CopyCommand(command) => FixAction::CopyCommand(command.clone()),
         FixSpec::OpenUrl(url) => FixAction::OpenUrl(url.clone()),
     }
@@ -1158,6 +1187,38 @@ mod tests {
         let text = r#"{"t_ms":0,"type":"diagnostic","code":"NOPE_001","why":"x"}"#;
         let err = Session::parse(text).expect_err("must fail");
         assert!(err.to_string().contains("NOPE_001"), "{err}");
+    }
+
+    /// Ein Vorschlag der Sitzungsdatei besteht dieselbe Prüfung wie jeder
+    /// des Daemons (HUM-507): Ein Wert, den `config set` ablehnt, hält die
+    /// Datei beim Lesen an. Mutationsbeweis: ohne `check_fix` in
+    /// `check_line` liest sich der verdoppelte Tag.
+    #[test]
+    fn parse_rejects_a_fix_config_set_refuses() {
+        let line = |fix: &str| {
+            format!(r#"{{"t_ms":0,"type":"diagnostic","code":"LIMIT_004","why":"x","fix":{fix}}}"#)
+        };
+        for (fix, needle) in [
+            (
+                r#"{"change_setting":{"key":"limits.body_timeout_secs","value":"172800"}}"#,
+                "limits.body_timeout_secs",
+            ),
+            (
+                r#"{"change_setting":{"key":"llm.api_key_ref","value":""}}"#,
+                "edit_setting",
+            ),
+            (r#"{"edit_setting":{"key":"no.such.key"}}"#, "no.such.key"),
+        ] {
+            let err = Session::parse(&line(fix)).expect_err(fix);
+            assert!(matches!(err, SessionError::Field { line: 1, .. }), "{err}");
+            assert!(err.to_string().contains(needle), "{err}");
+        }
+        for fix in [
+            r#"{"change_setting":{"key":"limits.body_timeout_secs","value":"86400"}}"#,
+            r#"{"edit_setting":{"key":"llm.api_key_ref"}}"#,
+        ] {
+            Session::parse(&line(fix)).expect(fix);
+        }
     }
 
     #[test]

@@ -514,13 +514,12 @@ async fn probe_sends_the_key_as_bearer_and_only_when_given() {
     assert!(!rejected.why.contains("sk-wrong"), "{}", rejected.why);
 }
 
-/// Der Vorschlag jedes `LLM_002` seit HUM-275: die Einstellung
-/// `llm.api_key_ref` mit leerem Wert. Die Oberfläche macht daraus den Knopf,
-/// der die Einstellungen am Feld des Zugangsschlüssels öffnet.
+/// Der Vorschlag jedes `LLM_002` seit HUM-275: das Feld `llm.api_key_ref`,
+/// seit HUM-507 als `EditSetting` ohne Wert. Die Oberfläche macht daraus den
+/// Knopf, der die Einstellungen am Feld des Zugangsschlüssels öffnet.
 fn key_setting_fix() -> humanitl_core::FixAction {
-    humanitl_core::FixAction::ChangeSetting {
+    humanitl_core::FixAction::EditSetting {
         key: "llm.api_key_ref".to_owned(),
-        value: String::new(),
     }
 }
 

@@ -127,9 +127,10 @@ pub fn nothing_to_check() -> Diagnostic {
              directly"
                 .to_owned(),
         )
-        .fix(FixAction::ChangeSetting {
+        // Das Feld und keine Beispieladresse als Wert: Wo der Proxy lauscht,
+        // weiß nur der Mensch (HUM-507).
+        .fix(FixAction::EditSetting {
             key: "egress.proxy".to_owned(),
-            value: "http://127.0.0.1:8080".to_owned(),
         })
         .build()
 }
@@ -236,9 +237,9 @@ pub fn doctor_line(egress: &EgressConfig) -> v1::DoctorCheck {
                      decision proxy fails until it can",
                     path.display()
                 ))
-                .fix(FixAction::ChangeSetting {
+                // Das Feld: Den richtigen Pfad kennt nur der Mensch (HUM-507).
+                .fix(FixAction::EditSetting {
                     key: "egress.proxy_ca".to_owned(),
-                    value: String::new(),
                 })
                 .build()
         })

@@ -57,9 +57,10 @@ pub(crate) fn unusable(key: &str, detail: &str) -> Diagnostic {
             "{key} cannot be used: {detail}. Every request of the agent fails with this finding \
              until it is fixed and the daemon restarted; nothing leaves directly."
         ))
-        .fix(FixAction::ChangeSetting {
+        // Das Feld: Welcher Proxy, welche CA oder welche Zugangsdaten
+        // richtig sind, weiß nur der Mensch (HUM-507).
+        .fix(FixAction::EditSetting {
             key: key.to_owned(),
-            value: String::new(),
         })
         .build()
 }
@@ -72,11 +73,14 @@ pub fn ca_mismatch(proxy: &str, authority: &Authority) -> Diagnostic {
         .why(format!(
             "the certificate for {authority} that came through the decision proxy at {proxy} is \
              signed by none of the trusted CAs; egress.proxy_ca is empty or names another CA than \
-             the one this proxy signs with. That CA is trusted only on this way, never directly."
+             the one this proxy signs with. That CA is trusted only on this way, never directly. \
+             Name the PEM file of the proxy's CA there, for mitmproxy the absolute path of \
+             ~/.mitmproxy/mitmproxy-ca-cert.pem."
         ))
-        .fix(FixAction::ChangeSetting {
+        // Das Feld und kein Beispielpfad als Wert: Den Pfad kennt nur der
+        // Mensch (HUM-507).
+        .fix(FixAction::EditSetting {
             key: "egress.proxy_ca".to_owned(),
-            value: "/home/USER/.mitmproxy/mitmproxy-ca-cert.pem".to_owned(),
         })
         .build()
 }
@@ -136,9 +140,10 @@ pub fn nothing_to_check() -> Diagnostic {
              directly"
                 .to_owned(),
         )
-        .fix(FixAction::ChangeSetting {
+        // Das Feld und keine Beispieladresse als Wert: Wo der Proxy lauscht,
+        // weiß nur der Mensch (HUM-507).
+        .fix(FixAction::EditSetting {
             key: "egress.proxy".to_owned(),
-            value: "http://127.0.0.1:8080".to_owned(),
         })
         .build()
 }

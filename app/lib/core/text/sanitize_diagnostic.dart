@@ -39,6 +39,9 @@ Diagnostic sanitizeDiagnostic(Diagnostic diagnostic) {
           key: sanitizeBodyText(key),
           value: sanitizeBodyText(value),
         ),
+      FixActionEditSetting(:final String key) => FixAction.editSetting(
+        key: sanitizeBodyText(key),
+      ),
       FixActionCopyCommand(:final String command) => FixAction.copyCommand(
         command: sanitizeBodyText(command),
       ),

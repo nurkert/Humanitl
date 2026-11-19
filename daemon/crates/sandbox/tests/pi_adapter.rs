@@ -516,12 +516,15 @@ fn pi_preflight_reports_node_missing_in_the_sandbox() {
         .into_iter()
         .find(|diagnostic| diagnostic.code.as_str() == "AGENT_006")
         .expect("AGENT_006");
-    assert_eq!(
-        finding.fix,
-        Some(FixAction::ChangeSetting {
-            key: "sandbox.env.PATH".to_owned(),
-            value: format!("{other}:{dir}"),
-        })
+    // `config set` schreibt den Eintrag `sandbox.env.PATH` nicht; die Zeile
+    // steht im Satz und nicht in einem `ChangeSetting` (HUM-507).
+    assert_eq!(finding.fix, None);
+    assert!(
+        finding
+            .why
+            .contains(&format!("set PATH = \"{other}:{dir}\" under [sandbox.env]")),
+        "{}",
+        finding.why
     );
 }
 

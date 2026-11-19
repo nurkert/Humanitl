@@ -379,11 +379,11 @@ registry! {
     /// Ein Schlüssel steht nicht im Schema.
     CONFIG_002 => "config", "Unbekannter Schlüssel", "#config_002",
         "Ein Schlüssel, ein Block oder ein Pfad steht in der Datei, den das Schema nicht kennt.",
-        "`ChangeSetting` auf den ähnlichsten Schlüssel, wenn es einen gibt; sonst ohne Fix.";
+        "`ChangeSetting` auf den ähnlichsten Schlüssel, wenn es einen gibt und `humanitl config set` den Wert dort nimmt (HUM-507); sonst ohne Fix.";
     /// Ein Wert liegt außerhalb des erlaubten Bereichs.
     CONFIG_003 => "config", "Wert außerhalb des Bereichs", "#config_003",
         "Ein Wert liegt außerhalb seines Bereichs, hat den falschen Typ, ein Profil hat die falsche Form, oder ein Projekt-Profil setzt einen Schlüssel, der ihm nicht gehört.",
-        "`ChangeSetting`, wo es einen Schreibweg gibt; beim Projekt-Profil bewusst keiner.";
+        "`ChangeSetting` auf die Vorgabe, oder `-` für ein Feld ohne Vorgabe, wo es einen Schreibweg gibt und `humanitl config set` den Schlüssel kennt (HUM-507); beim Projekt-Profil bewusst keiner, ebenso bei einer Linker-Variablen in `sandbox.env` oder `[env]`: der Text nennt die Variable, die wegmuss.";
     /// `$XDG_RUNTIME_DIR` fehlt; ein Ersatzverzeichnis unter `/run/user` oder `$TMPDIR` wird genutzt (Info).
     CONFIG_004 => "config", "Laufzeitverzeichnis ist ein Ersatz", "#config_004",
         "`XDG_RUNTIME_DIR` fehlt, und der Daemon weicht auf ein geteiltes Verzeichnis aus.",
@@ -424,14 +424,14 @@ registry! {
     /// gehören zusammen (Warning, HUM-087).
     CONFIG_011 => "config", "Test-Wurzel ohne Flag oder Flag ohne Test-Wurzel", "#config_011",
         "Test-Wurzel ohne Flag oder Flag ohne Test-Wurzel: die beiden gehören zusammen.",
-        "Der Fix nennt die fehlende Hälfte.";
+        "Fehlt das Flag, `CopyCommand` mit dem Start samt `--allow-test-ca`; fehlt der Schlüssel, kein Fix, der Text nennt ihn mit einem Beispiel für den Pfad (HUM-507).";
     /// `resolver.test_ca` trägt keinen absoluten Pfad. Ein relativer würde gegen
     /// das Arbeitsverzeichnis des Starts aufgelöst; damit entschiede das
     /// Verzeichnis mit, welcher Wurzel der Daemon vertraut. Abgelehnt wird vor
     /// dem Lesen (Error, HUM-087).
     CONFIG_012 => "config", "Test-Wurzel ohne absoluten Pfad", "#config_012",
         "`resolver.test_ca` ist kein absoluter Pfad und hinge damit am Startverzeichnis des Daemons.",
-        "`ChangeSetting` auf einen absoluten Pfad.";
+        "Kein Fix: Der Text verlangt einen absoluten Pfad und nennt ein Beispiel; den Pfad kennt nur der Mensch (HUM-507).";
     /// Es wurde kein Projektordner gewählt. Der Agent arbeitet in genau einem
     /// Ordner, und solange keiner benannt ist, gibt es nichts zu starten — kein
     /// Fehler des Nutzers, sondern ein offener Schritt der Einrichtung. Der
@@ -473,7 +473,7 @@ registry! {
     /// Ein Mount im Profil zeigt auf eine Host-Quelle, die nie in die Sandbox darf.
     SANDBOX_006 => "sandbox", "Mount verboten", "#sandbox_006",
         "Ein Profil, der Proxy-Socket oder ein Agent-Adapter will einen Pfad einhängen, den die Mount-Regeln verbieten.",
-        "Beim Projektordner `ChangeSetting` auf `sandbox.work_dir`, die Oberfläche bietet die Ordnerauswahl an; sonst kein Fix, der Text nennt Pfad und Regel.";
+        "Beim Projektordner `EditSetting` auf `sandbox.work_dir` (bis HUM-507 ein `ChangeSetting` mit leerem Wert), die Oberfläche bietet die Ordnerauswahl an; sonst kein Fix, der Text nennt Pfad und Regel.";
     /// Eine Bridge im Profil hat eine Richtung, die es nicht gibt.
     SANDBOX_007 => "sandbox", "Bridge-Richtung unbekannt", "#sandbox_007",
         "Ein Profil nennt eine Brücken-Richtung, die es nicht gibt.",
@@ -662,7 +662,7 @@ registry! {
     /// Durchreiche eine Antwort bekommt (HUM-251).
     LLM_001 => "llm", "LLM-Endpoint nicht erreichbar", "#llm_001",
         "Der Endpunkt antwortet nicht, löst nicht auf, die Frist läuft ab, oder sein Zertifikat stammt von einer Stelle, der dieser Rechner nicht vertraut.",
-        "Bei der Probe `CopyCommand` mit einem `curl`, das dasselbe versucht; bei unbekannter Stelle wie `PROXY_003`. Im Lauf `ChangeSetting` auf `llm.endpoint`.";
+        "Bei der Probe `CopyCommand` mit einem `curl`, das dasselbe versucht; bei unbekannter Stelle wie `PROXY_003`. Im Lauf `ChangeSetting` auf `llm.endpoint` mit der geltenden Adresse, ohne sie `EditSetting` auf das Feld (HUM-507).";
     /// Der LLM-Endpunkt antwortet, verlangt aber eine Anmeldung (`401` oder
     /// `403`). Ohne hinterlegten Zugangsschlüssel schickt Humanitl keine
     /// Zugangsdaten (HUM-039); mit einem hat der Endpunkt ihn abgelehnt
@@ -677,7 +677,7 @@ registry! {
     /// `audit.jsonl`, die etwas anderes bedeuten könnte.
     LLM_002 => "llm", "LLM-Endpoint verlangt eine Anmeldung", "#llm_002",
         "Der Endpunkt verlangt eine Anmeldung (`401` oder `403`), ohne Schlüssel oder mit einem, den er ablehnt.",
-        "`ChangeSetting` auf `llm.api_key_ref`: in der Oberfläche ein Knopf, der die Einstellungen am Feld „Zugangsschlüssel“ öffnet; auf der Kommandozeile `humanitl llm key set`.";
+        "`EditSetting` auf `llm.api_key_ref` (bis HUM-507 ein `ChangeSetting` mit leerem Wert): in der Oberfläche ein Knopf, der die Einstellungen am Feld „Zugangsschlüssel“ öffnet; auf der Kommandozeile `humanitl llm key set`.";
     /// Die Verbindung steht, aber die Modellliste des Endpunkts antwortet
     /// nicht als bekannte API (an der Wurzel eines Servers zuvor auch
     /// `/api/tags` nicht). Meist zeigt die Adresse auf eine Oberfläche statt
@@ -933,7 +933,7 @@ registry! {
     /// einen Ort, an dem er erreichbar wäre (HUM-037).
     AGENT_004 => "agent", "Agent-Kommando in der Sandbox nicht erreichbar", "#agent_004",
         "Gesucht wird zuerst in der Sandbox: ihr Suchpfad (`sandbox.env` vor `[env]` des Profils), ihre Einhängungen und die Verweise des Profils, relative Einträge gegen `[mounts].work.dst`. Erst wenn dort nichts liegt, gilt der Host, und der Befund nennt beides. Zwei Fälle: das Kommando liegt unter keiner Einhängung, oder es liegt unter einer, deren Verzeichnis der Suchpfad nicht nennt. Was sich nicht entscheiden lässt, erzeugt keinen Befund (HUM-139).",
-        "`CopyCommand`, das es an eine eingehängte Stelle installiert, oder `ChangeSetting` auf `sandbox.env.PATH`, wenn die Einhängung steht und nur der Suchpfad fehlt.";
+        "`CopyCommand`, das es an eine eingehängte Stelle installiert; steht die Einhängung und fehlt nur der Suchpfad, kein Fix, der Text nennt die Zeile `PATH` für `[sandbox.env]` in `config.toml`, denn `humanitl config set` schreibt keinen Eintrag dieser Tabelle (HUM-507).";
 
     // HUM-039: die Durchreiche zum Sprachmodell und die Probe ihres Endpunkts.
     /// Eine durchgereichte Anfrage an das Sprachmodell trägt Funde: mögliche
@@ -1035,7 +1035,7 @@ registry! {
     /// Host, und ihre Meldung darf ihn nicht an anderer Stelle wieder öffnen.
     PROXY_010 => "proxy", "Verbindungsgrenze erreicht", "#proxy_010",
         "Die Zahl gleichzeitiger Verbindungen aus der Sandbox hat `limits.max_client_connections` erreicht.",
-        "`ChangeSetting` auf eine höhere Grenze.";
+        "`ChangeSetting` auf die doppelte Grenze, höchstens die Obergrenze der Prüfung; steht sie schon dort, kein Fix (HUM-507).";
     /// Der Client hat den Kopf seiner Anfrage vollständig geschickt und im
     /// Rumpf länger als `limits.body_timeout_secs` geschwiegen. Der Proxy
     /// antwortet mit `408` und schließt die Verbindung (HUM-120).
@@ -1050,7 +1050,7 @@ registry! {
     /// [`PROXY_010`] zusammengefasst gemeldet, aus demselben Grund.
     PROXY_011 => "proxy", "Anfrage-Rumpf ist stehengeblieben", "#proxy_011",
         "Ein Anfrage-Rumpf ist stehengeblieben und hat die Frist überschritten.",
-        "`ChangeSetting` auf eine längere Frist.";
+        "`ChangeSetting` auf die doppelte Frist, höchstens die Obergrenze der Prüfung; steht sie schon dort, kein Fix (HUM-507).";
     // HUM-075: `humanitl doctor`. Ein Code je Prüfung, damit eine Zeile der
     // Ausgabe und ihr Befund nicht auseinanderlaufen können, dazu zwei für die
     // beiden Arten, nicht gemessen zu haben.
@@ -1258,7 +1258,7 @@ registry! {
     /// (HUM-024).
     CONFIG_016 => "config", "Feste Namenszuordnungen gesetzt", "#config_016",
         "`resolver.overrides` beantwortet die genannten Namen aus der Konfiguration, statt zu fragen; der Verkehr geht an die Adresse, die dort steht.",
-        "`ChangeSetting` auf eine leere Tabelle, wenn die festen Adressen nicht gemeint waren.";
+        "`ChangeSetting` auf eine leere Tabelle (`{}`), wenn die festen Adressen nicht gemeint waren.";
     /// Die Sandbox ging erst auf `SIGKILL`, oder danach lag kein Exit-Status
     /// vor.
     ///
@@ -1506,7 +1506,7 @@ registry! {
     /// nie, und der `fix` zeigt auf das Cap.
     LIMIT_001 => "limits", "Rumpf über der Haltegrenze", "#limit_001",
         "Eine Anfrage ist größer als `limits.hold_body_cap_bytes`: angekündigt über `Content-Length` oder beim Puffern bemerkt.",
-        "`AddRule` mit `action: ask` und `stream: true` für Host, Methode und Pfad der Anfrage; ohne wirksame Regel oder unter `hold.hard_block_checksum_secrets` (dort greift `stream: true` nie) `ChangeSetting` auf `limits.hold_body_cap_bytes`.";
+        "`AddRule` mit `action: ask` und `stream: true` für Host, Methode und Pfad der Anfrage; ohne wirksame Regel oder unter `hold.hard_block_checksum_secrets` (dort greift `stream: true` nie) `ChangeSetting` auf `limits.hold_body_cap_bytes`, doppelt so hoch, höchstens so hoch, wie die Prüfung annimmt; darüber kein Fix (HUM-507).";
     /// Die Warteschlange ist voll: `limits.hold_max_flows` gehaltene Flüsse
     /// oder `limits.hold_max_bytes` gehaltene Bytes. Die neue Anfrage wird mit
     /// `503` geblockt (`BlockReason::HoldMaxFlows` oder `HoldMemory`); keine
@@ -1530,7 +1530,7 @@ registry! {
     /// die Gesamtdauer (HUM-057, Spanne aus HUM-120).
     LIMIT_004 => "limits", "Antwort des Ziels verstummt", "#limit_004",
         "Das Ziel hat nach den Antwort-Kopfzeilen länger als `limits.body_timeout_secs` kein Stück des Rumpfs mehr geschickt, oder bei einem gestreamten Upload kein Stück mehr angenommen (`limits.body_timeout_secs`) beziehungsweise nach dem ganzen Rumpf keine Kopfzeilen geschickt (`limits.header_timeout_secs`).",
-        "`ChangeSetting` auf die Grenze, die ablief, mit dem doppelten Wert.";
+        "`ChangeSetting` auf die Grenze, die ablief, mit dem doppelten Wert, höchstens der Obergrenze der Prüfung; steht sie schon dort, kein Fix (HUM-507).";
     /// Ein Client der Sandbox hat seinen Anfrage-Kopf nicht innerhalb von
     /// `limits.header_timeout_secs` vollständig geschickt. Die Verbindung wird
     /// geschlossen; ein Fluss entsteht nicht, weil es keinen Kopf gibt. Der
@@ -1598,7 +1598,7 @@ registry! {
     /// `AGENT_004`; undecidable lookups produce no finding (HUM-274).
     AGENT_006 => "agent", "Node.js missing in the sandbox", "#agent_006",
         "The command resolves to a script that starts Node.js through its `#!` line, and the sandbox finds no executable `node` on its `PATH` (or at the absolute path the line names). The finding names the script, the sandbox `PATH` and where a `node` lies on the host, if anywhere.",
-        "`ChangeSetting` on `sandbox.env.PATH` when a mounted `node` is only missing from the path, `CopyCommand` that installs the host's `node` under `/usr/local/bin` when it is not mounted, the installer of pi when the `#!` line names an absolute `node` outside the mounts, otherwise `OpenUrl` to the Node.js download page (pi needs 22.19 or newer).";
+        "No fix when a mounted `node` is only missing from the path: the sentence names the `PATH` line for `[sandbox.env]` in `config.toml`, since `humanitl config set` writes no entry of that table (HUM-507); `CopyCommand` that installs the host's `node` under `/usr/local/bin` when it is not mounted, the installer of pi when the `#!` line names an absolute `node` outside the mounts, otherwise `OpenUrl` to the Node.js download page (pi needs 22.19 or newer).";
 
     // HUM-309: pi's web extension.
     /// `agent.pi.web_access = "on"`, and the sandbox finds no package
@@ -1769,7 +1769,7 @@ registry! {
     /// when it opened the source (HUM-437). The shim refuses the start.
     SANDBOX_042 => "sandbox", "Mounted folder is not the checked one", "#sandbox_042",
         "Inside the sandbox, the project folder, an entry of `mounts.ro`, `mounts.extra_ro`, `mounts.extra_rw` or the agent program has another device and inode than the one the launcher opened and checked. The folder was swapped between the check and the mount, for example renamed and replaced. The agent did not start; the sentence names the path, the expected and the found pair.",
-        "`ChangeSetting` on `sandbox.work_dir`, the folder choice: check who replaced the named path since the plan, and start the session again once the folder is the one you chose. A folder that keeps changing (a mount point that is mounted while the session starts) cannot be a mount source.";
+        "`EditSetting` on `sandbox.work_dir`, the folder choice: check who replaced the named path since the plan, and start the session again once the folder is the one you chose. A folder that keeps changing (a mount point that is mounted while the session starts) cannot be a mount source.";
     /// The mount table inside the sandbox differs from the plan: a mount is
     /// missing, extra, stacked onto a planned one, or of another type,
     /// source or option (HUM-437). The shim refuses the start.
@@ -1807,7 +1807,7 @@ registry! {
     /// a missing module directory (HUM-464).
     SANDBOX_045 => "sandbox", "Kernel level prerequisite missing", "#sandbox_045",
         "The kernel level starts a micro VM with a guest kernel of its own and needs on this host: `/dev/kvm` readable and writable for this user, the machine emulator with the machine type and vsock device it uses, the file system daemon with `--readonly`, `--fd` and `--cache`, the vsock device with `--uds-path` and `--groups`, bubblewrap with `--bind-fd` and `--size`, a readable kernel image with virtiofs built in (`CONFIG_VIRTIO_FS=y` in the configuration beside the image, `config-<release>` beside `vmlinuz-<release>`) and the module directory of that kernel. The sentence names the first one that is missing; nothing starts, and no other backend takes over.",
-        "`CopyCommand` with the package that brings the missing piece (for `/dev/kvm` the command that adds this user to the group `kvm`), or `ChangeSetting` on the setting under `sandbox.qemu` that names the path. When the running kernel's image or modules are gone while those of another kernel are installed, an upgrade removed its package: `CopyCommand` with `systemctl reboot` into an installed kernel, since installing the package again changes nothing. When the module directory is hidden from the daemon (its service unit of Humanitl 0.4.0 set `ProtectKernelModules`, HUM-529): with the package, update it and run `systemctl --user daemon-reload && systemctl --user restart humanitld.service` (`CopyCommand`); without the package (archive, AppImage), `InstallService` (`humanitl daemon install`).";
+        "`CopyCommand` with the package that brings the missing piece (for `/dev/kvm` the command that adds this user to the group `kvm`), or, for a configured kernel image that is not there, `ChangeSetting` that removes `sandbox.qemu.kernel` (`-`, the running kernel's); where only the person knows the right path, the sentence names the setting and there is no fix (HUM-507). When the running kernel's image or modules are gone while those of another kernel are installed, an upgrade removed its package: `CopyCommand` with `systemctl reboot` into an installed kernel, since installing the package again changes nothing. When the module directory is hidden from the daemon (its service unit of Humanitl 0.4.0 set `ProtectKernelModules`, HUM-529): with the package, update it and run `systemctl --user daemon-reload && systemctl --user restart humanitld.service` (`CopyCommand`); without the package (archive, AppImage), `InstallService` (`humanitl daemon install`).";
     /// The door of the kernel level could not be set up: the vsock device of
     /// the session or the one listener the daemon opens behind it is missing
     /// (HUM-464, built by HUM-444).
@@ -1852,7 +1852,7 @@ registry! {
     /// instead; the agent gets `502` (HUM-511).
     PROXY_012 => "proxy", "Decision proxy unreachable", "#proxy_012",
         "`egress.proxy` is set, so every allowed request of the agent leaves through that proxy, and the daemon could not open a connection to it within `limits.connect_timeout_secs`. The request did not go out directly instead; the agent got `502`.",
-        "`CopyCommand` with `humanitl egress check` once the proxy runs; or `ChangeSetting` on `egress.proxy` with the address it listens on, or empty to leave without it.";
+        "`CopyCommand` with `humanitl egress check` once the proxy runs; otherwise set `egress.proxy` to the address it listens on (`humanitl config set egress.proxy URL`), or remove it with `-` to leave without it.";
     /// The decision proxy answered the `CONNECT` for a target with a status
     /// other than `200` (and other than `407`), or with something that is
     /// no HTTP answer (HUM-511).
@@ -1869,7 +1869,7 @@ registry! {
     /// `tls.trust_system_store`) (HUM-511).
     PROXY_015 => "proxy", "Certificate does not match the decision proxy CA", "#proxy_015",
         "Through the tunnel of the decision proxy, Humanitl speaks TLS with the name of the target and checks the certificate against the CA in `egress.proxy_ca` and the usual anchors. The certificate came from neither: `egress.proxy_ca` is empty or names another CA than the one the proxy signs with. That CA is trusted only on this way, never on a direct connection.",
-        "`ChangeSetting` on `egress.proxy_ca` with the PEM file of the proxy's CA, for mitmproxy the absolute path of `~/.mitmproxy/mitmproxy-ca-cert.pem`.";
+        "`EditSetting` on `egress.proxy_ca`: the app opens the field, the command line prints `humanitl config set egress.proxy_ca <value>`; the sentence names the PEM file to put there, for mitmproxy the absolute path of `~/.mitmproxy/mitmproxy-ca-cert.pem` (HUM-507).";
     /// Behind a decision proxy Humanitl refuses names that are local by
     /// definition before any resolution and before the proxy sees them,
     /// with either value of `egress.proxy_resolve` (HUM-511, ADR-0022).
@@ -1883,7 +1883,7 @@ registry! {
     /// without the CA or the credentials (HUM-511).
     PROXY_017 => "proxy", "Decision proxy settings unusable", "#proxy_017",
         "`egress.proxy` is set, and a setting it needs cannot be used: `egress.proxy_ca` cannot be read or holds no certificate, or the keyring does not hand out the credentials `egress.proxy_auth_ref` names. The daemon read them at its start; every allowed request fails with this finding and nothing leaves directly.",
-        "`ChangeSetting` on the named key, or `CopyCommand` with `humanitl egress auth set`; then restart the daemon (`humanitl daemon restart`).";
+        "`EditSetting` on the named key (on `egress.proxy` when there is no decision proxy to check): the app opens the field, the command line prints `humanitl egress auth set` or `humanitl config set KEY <value>` (HUM-507); then restart the daemon (`humanitl daemon restart`).";
     /// The TLS handshake through the decision proxy's tunnel failed for
     /// another reason than an unknown CA (a certificate for another name, a
     /// broken handshake) or did not finish in time (HUM-511).

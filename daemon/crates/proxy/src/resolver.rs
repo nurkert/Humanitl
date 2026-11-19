@@ -71,7 +71,7 @@ use hickory_resolver::proto::op::ResponseCode;
 use hickory_resolver::proto::rr::{Name, RData, RecordType};
 use humanitl_config::{IpPreference, ResolverConfig};
 use humanitl_core::diagnostics::codes::CONFIG_003;
-use humanitl_core::{Diagnostic, FixAction, Severity, ip_is_private};
+use humanitl_core::{Diagnostic, Severity, ip_is_private};
 
 /// So viele Namen behält der Zwischenspeicher höchstens.
 ///
@@ -509,13 +509,13 @@ fn parse_nameserver(value: &str) -> Result<Option<SocketAddr>, Diagnostic> {
 /// Der Befund zu einem unbrauchbaren `resolver.nameserver`.
 fn nameserver_diagnostic(value: &str, problem: &str) -> Diagnostic {
     Diagnostic::builder(CONFIG_003, Severity::Error)
-        .why(format!("resolver.nameserver is \"{value}\", {problem}"))
-        .fix(FixAction::ChangeSetting {
-            key: "resolver.nameserver".to_owned(),
-            value: "an address with port, for example 127.0.0.1:5353, or empty for the \
-                    system resolver"
-                .to_owned(),
-        })
+        // Der Rat ist eine Anleitung und kein Wert, den `config set` nimmt;
+        // er steht deshalb im Satz und nicht in einem `ChangeSetting`
+        // (HUM-507).
+        .why(format!(
+            "resolver.nameserver is \"{value}\", {problem}; set it to an address with port, for \
+             example 127.0.0.1:5353, or leave it empty for the system resolver"
+        ))
         .build()
 }
 
@@ -729,13 +729,12 @@ impl OverrideResolver {
         for (host, value) in overrides {
             let ip: IpAddr = value.parse().map_err(|_err| {
                 Diagnostic::builder(CONFIG_003, Severity::Error)
+                    // Ein Eintrag der freien Tabelle ist kein Schlüssel, den
+                    // `config set` kennt; der Rat steht im Satz (HUM-507).
                     .why(format!(
-                        "resolver.overrides[\"{host}\"] is \"{value}\", which is not an IP address"
+                        "resolver.overrides[\"{host}\"] is \"{value}\", which is not an IP \
+                         address; write an IPv4 or IPv6 address there, for example 127.0.0.1"
                     ))
-                    .fix(FixAction::ChangeSetting {
-                        key: format!("resolver.overrides.{host}"),
-                        value: "an IPv4 or IPv6 address, for example 127.0.0.1".to_owned(),
-                    })
                     .build()
             })?;
             map.insert(host.clone(), ip);

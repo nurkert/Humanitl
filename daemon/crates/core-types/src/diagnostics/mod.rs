@@ -122,8 +122,17 @@ pub enum FixAction {
     ChangeSetting {
         /// Schlüssel im Schema, zum Beispiel `limits.hold_body_cap_bytes`.
         key: String,
-        /// Der vorgeschlagene Wert.
+        /// Der vorgeschlagene Wert, immer einer, den
+        /// `humanitl config set` für `key` annimmt (HUM-507).
         value: String,
+    },
+    /// Ein Feld der Konfiguration öffnen, dessen Wert nur der Mensch kennt
+    /// (HUM-507): den Zugangsschlüssel, den Projektordner, den
+    /// Entscheidungs-Proxy. Die Oberfläche zeigt das Feld oder die
+    /// Ordnerauswahl, die Kommandozeile den Befehl dafür; gesetzt wird nichts.
+    EditSetting {
+        /// Schlüssel im Schema, zum Beispiel `llm.api_key_ref`.
+        key: String,
     },
     /// Einen Befehl in die Zwischenablage legen.
     CopyCommand(String),
@@ -142,6 +151,7 @@ impl FixAction {
             Self::AddRule(_) => "add_rule",
             Self::InstallService => "install_service",
             Self::ChangeSetting { .. } => "change_setting",
+            Self::EditSetting { .. } => "edit_setting",
             Self::CopyCommand(_) => "copy_command",
             Self::OpenUrl(_) => "open_url",
             Self::RemountReadOnly(_) => "remount_read_only",
@@ -247,6 +257,19 @@ impl<W> DiagnosticBuilder<W> {
     #[must_use]
     pub fn fix(mut self, fix: FixAction) -> Self {
         self.fix = Some(fix);
+        self
+    }
+
+    /// Hängt einen Behebungsvorschlag an, wenn es einen gibt.
+    ///
+    /// Für einen Vorschlag, der nur unter einer Bedingung gilt, etwa ein
+    /// `ChangeSetting`, dessen Wert `humanitl config set` annehmen muss
+    /// (HUM-507): Ohne ihn bleibt der Rat im Text des Befunds.
+    #[must_use]
+    pub fn maybe_fix(mut self, fix: Option<FixAction>) -> Self {
+        if fix.is_some() {
+            self.fix = fix;
+        }
         self
     }
 

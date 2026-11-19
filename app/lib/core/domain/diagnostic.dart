@@ -40,11 +40,18 @@ sealed class FixAction with _$FixAction {
   /// Install the user service.
   const factory FixAction.installService() = FixActionInstallService;
 
-  /// Change a configuration key.
+  /// Change a configuration key to a value `humanitl config set` takes.
   const factory FixAction.changeSetting({
     required String key,
     required String value,
   }) = FixActionChangeSetting;
+
+  /// Open a configuration field whose value only the person knows: the
+  /// access key, the project folder, the decision proxy (HUM-507). Nothing
+  /// is set; the control opens the field or the folder chooser, exactly as
+  /// for an empty [FixAction.changeSetting] of a daemon before 1.50.
+  const factory FixAction.editSetting({required String key}) =
+      FixActionEditSetting;
 
   /// Copy a shell command to the clipboard.
   const factory FixAction.copyCommand({required String command}) =

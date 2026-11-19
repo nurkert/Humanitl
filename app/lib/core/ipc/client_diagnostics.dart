@@ -241,8 +241,9 @@ abstract final class ClientDiagnostics {
   /// still open, and the register carries the code so both sides name it the
   /// same (`daemon/crates/core-types/src/diagnostics/codes.rs`).
   ///
-  /// The fix is a `ChangeSetting` on `sandbox.work_dir`, the same one the
-  /// daemon puts on a refused folder (`SANDBOX_006`). `FixControl` turns it
+  /// The fix is an `EditSetting` on `sandbox.work_dir`, the same one the
+  /// daemon puts on a refused folder (`SANDBOX_006`; an empty
+  /// `ChangeSetting` before HUM-507). `FixControl` turns it
   /// into a button that opens the folder dialog of the row above, so the card
   /// offers the way out itself instead of pointing at a control somebody has
   /// to find first (HUM-282, which replaces the earlier rule of HUM-044 that
@@ -254,7 +255,7 @@ abstract final class ClientDiagnostics {
       why:
           'No project folder chosen. The agent needs exactly one folder to '
           'work in.',
-      fix: FixAction.changeSetting(key: FormKeys.sandboxWorkDir, value: ''),
+      fix: FixAction.editSetting(key: FormKeys.sandboxWorkDir),
     );
   }
 

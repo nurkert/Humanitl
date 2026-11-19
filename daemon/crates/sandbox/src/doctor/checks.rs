@@ -2205,9 +2205,8 @@ mod tests {
             Box::new(
                 Diagnostic::builder(humanitl_core::diagnostics::codes::LLM_002, Severity::Error)
                     .why("the LLM server answered 401 at https://llm.example.net/api/v1/models")
-                    .fix(FixAction::ChangeSetting {
+                    .fix(FixAction::EditSetting {
                         key: "llm.api_key_ref".to_owned(),
-                        value: String::new(),
                     })
                     .build(),
             )
@@ -2247,9 +2246,8 @@ mod tests {
         );
         assert_eq!(
             missing.diagnostic().expect("a finding").fix,
-            Some(FixAction::ChangeSetting {
+            Some(FixAction::EditSetting {
                 key: "llm.api_key_ref".to_owned(),
-                value: String::new(),
             }),
             "without a key, LLM_002's fix stands: humanitl llm key set"
         );

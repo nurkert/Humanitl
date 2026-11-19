@@ -451,9 +451,18 @@ fn fix_from_proto(fix: &humanitl_ipc::v1::FixAction) -> Option<FixAction> {
             value: set.value.clone(),
         }),
         Action::InstallService(()) => Some(FixAction::InstallService),
+        // Ein Daemon vor 1.50 schickte für ein Feld, das der Mensch füllt,
+        // ein `ChangeSetting` mit leerem Wert (HUM-507); es liest sich wie
+        // das `EditSetting` von heute.
+        Action::ChangeSetting(change) if change.value.is_empty() => Some(FixAction::EditSetting {
+            key: change.key.clone(),
+        }),
         Action::ChangeSetting(change) => Some(FixAction::ChangeSetting {
             key: change.key.clone(),
             value: change.value.clone(),
+        }),
+        Action::EditSetting(edit) => Some(FixAction::EditSetting {
+            key: edit.key.clone(),
         }),
         Action::CopyCommand(command) => Some(FixAction::CopyCommand(command.clone())),
         Action::OpenUrl(url) => Some(FixAction::OpenUrl(url.clone())),
@@ -483,8 +492,36 @@ mod tests {
     use tonic::{Code, Status};
 
     use super::{
-        EXIT_CHECK, EXIT_DAEMON, EXIT_SECURITY, EXIT_USER, exit_code, from_proto, status_diagnostic,
+        EXIT_CHECK, EXIT_DAEMON, EXIT_SECURITY, EXIT_USER, exit_code, fix_from_proto, from_proto,
+        status_diagnostic,
     };
+
+    /// Ein Daemon vor 1.50 schickte für ein Feld, das der Mensch füllt, ein
+    /// leeres `ChangeSetting`; die Kommandozeile liest es als `EditSetting`
+    /// und druckt so den Befehl dafür, nie `config set KEY ''` (HUM-507).
+    #[test]
+    fn an_empty_change_of_an_older_daemon_reads_as_a_field_to_fill_in() {
+        use humanitl_ipc::v1::fix_action::{Action, ChangeSetting, EditSetting};
+        let wire = |action| humanitl_ipc::v1::FixAction {
+            action: Some(action),
+        };
+        let edit = Some(FixAction::EditSetting {
+            key: "sandbox.work_dir".to_owned(),
+        });
+        assert_eq!(
+            fix_from_proto(&wire(Action::ChangeSetting(ChangeSetting {
+                key: "sandbox.work_dir".to_owned(),
+                value: String::new(),
+            }))),
+            edit
+        );
+        assert_eq!(
+            fix_from_proto(&wire(Action::EditSetting(EditSetting {
+                key: "sandbox.work_dir".to_owned(),
+            }))),
+            edit
+        );
+    }
 
     fn diagnostic(code: humanitl_core::DiagnosticCode) -> Diagnostic {
         Diagnostic::builder(code, Severity::Blocking)

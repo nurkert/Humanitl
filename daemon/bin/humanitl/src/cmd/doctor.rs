@@ -1050,9 +1050,8 @@ mod tests {
                     "the LLM server answered 401 at https://llm.example.net/api/v1/models. It \
                      requires an access key, and none was sent.",
                 )
-                .fix(humanitl_core::FixAction::ChangeSetting {
+                .fix(humanitl_core::FixAction::EditSetting {
                     key: "llm.api_key_ref".to_owned(),
-                    value: String::new(),
                 })
                 .build()
         };

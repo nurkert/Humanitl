@@ -114,17 +114,17 @@ pub const API_KEY_REF_SETTING: &str = "llm.api_key_ref";
 /// Der Vorschlag jedes `LLM_002`: die Einstellung des Zugangsschlüssels
 /// (HUM-275).
 ///
-/// Ein `ChangeSetting` und kein `CopyCommand`, damit die Oberfläche daraus
+/// Ein `EditSetting` und kein `CopyCommand`, damit die Oberfläche daraus
 /// einen Knopf machen kann, der die Einstellungen am Feld „Zugangsschlüssel"
-/// öffnet. Der Wert bleibt leer: Der Schlüssel selbst steht nie in einem
-/// Befund, und eine Oberfläche, die den Fix wörtlich anwendete, setzte nur den
-/// Verweis zurück, nicht den Schlüssel. Die Kommandozeile zeigt für diesen
-/// Schlüssel weiterhin `humanitl llm key set` (`render::fix_line`).
+/// öffnet. Einen Wert trägt es nicht: Der Schlüssel selbst steht nie in
+/// einem Befund (HUM-507; bis dahin ein `ChangeSetting` mit leerem Wert).
+/// Die Kommandozeile zeigt für dieses Feld `humanitl llm key set`
+/// (`render::fix_line`).
 #[must_use]
 pub fn api_key_fix() -> FixAction {
-    FixAction::ChangeSetting {
+    // Das Feld, kein Wert (HUM-507).
+    FixAction::EditSetting {
         key: API_KEY_REF_SETTING.to_owned(),
-        value: String::new(),
     }
 }
 

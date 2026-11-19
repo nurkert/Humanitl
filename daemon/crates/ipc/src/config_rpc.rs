@@ -36,7 +36,7 @@ use humanitl_config::catalog;
 use humanitl_config::value::{check_value, parse_value, to_toml};
 use humanitl_config::{Language, Paths, PolicyLocks, ProfileSelection, Resolved, schema};
 use humanitl_core::diagnostics::codes::{CONFIG_003, CONFIG_014};
-use humanitl_core::{Diagnostic, FixAction, Severity};
+use humanitl_core::{Diagnostic, Severity};
 use humanitl_sandbox::profile::CA_CERT_DST;
 use humanitl_sandbox::{AdapterRegistry, WORK_DIR_KEY, WorkDirSource};
 
@@ -246,13 +246,14 @@ fn known_adapter(value: &serde_json::Value) -> Result<(), Diagnostic> {
             shown(&value.to_string()),
             registry.ids().join(", ")
         ))
-        .fix(FixAction::ChangeSetting {
-            key: AGENT_ADAPTER_KEY.to_owned(),
-            value: registry
+        // Die erste Kennung nur, wenn `config set` sie nimmt; ein leeres
+        // Register schlägt nichts vor (HUM-507).
+        .maybe_fix(
+            registry
                 .ids()
                 .first()
-                .map_or_else(String::new, |first| (*first).to_owned()),
-        })
+                .and_then(|id| humanitl_config::value::change_setting(AGENT_ADAPTER_KEY, *id)),
+        )
         .build())
 }
 

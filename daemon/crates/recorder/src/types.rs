@@ -494,7 +494,8 @@ pub struct DiagnosticRecord {
     pub docs: Option<String>,
     /// Die Art des Vorschlags, wie [`FixAction::as_str`] sie nennt.
     pub fix_kind: Option<String>,
-    /// Der Schlüssel des Vorschlags (`set_env`, `change_setting`).
+    /// Der Schlüssel des Vorschlags (`set_env`, `change_setting`,
+    /// `edit_setting`).
     pub fix_key: Option<String>,
     /// Der Wert des Vorschlags; bei `add_rule` die Regel in der Form von
     /// `rules.yaml`.
@@ -515,6 +516,7 @@ pub(crate) fn fix_columns(
         FixAction::SetEnv { key, value } | FixAction::ChangeSetting { key, value } => {
             (Some(key.clone()), Some(value.clone()))
         }
+        FixAction::EditSetting { key } => (Some(key.clone()), None),
         FixAction::AddRule(rule) => (None, Some(encode_rule(rule))),
         FixAction::InstallService => (None, None),
         FixAction::CopyCommand(text) | FixAction::OpenUrl(text) => (None, Some(text.clone())),
@@ -554,10 +556,13 @@ impl DiagnosticRecord {
                 key: key()?,
                 value: value()?,
             }),
-            "change_setting" => Some(FixAction::ChangeSetting {
-                key: key()?,
-                value: value()?,
-            }),
+            // Ein leerer Wert war vor HUM-507 die Aufforderung, das Feld zu
+            // öffnen; eine ältere Aufnahme liest sich so als `EditSetting`.
+            "change_setting" => match value()? {
+                value if value.is_empty() => Some(FixAction::EditSetting { key: key()? }),
+                value => Some(FixAction::ChangeSetting { key: key()?, value }),
+            },
+            "edit_setting" => key().map(|key| FixAction::EditSetting { key }),
             "add_rule" => decode_rule(self.fix_value.as_deref()?)
                 .map(|rule| FixAction::AddRule(Box::new(rule))),
             "install_service" => Some(FixAction::InstallService),
@@ -593,6 +598,41 @@ mod tests {
     use std::time::{Duration, UNIX_EPOCH};
 
     use super::{Dir, FlowQuery, MAX_LIMIT, SortKey, millis};
+
+    /// Ein Feld ohne Wert (`EditSetting`) geht durch die Aufnahme und kommt
+    /// so zurück; eine ältere Aufnahme mit leerem `change_setting` liest sich
+    /// als `EditSetting`, nie als `ChangeSetting` mit leerem Wert (HUM-507).
+    #[test]
+    fn a_field_to_fill_in_round_trips_and_an_old_empty_change_reads_as_one() {
+        use humanitl_core::FixAction;
+        let record = |kind: &str, key: Option<&str>, value: Option<&str>| super::DiagnosticRecord {
+            idx: 0,
+            code: "LLM_002".to_owned(),
+            severity: "error".to_owned(),
+            title: String::new(),
+            why: String::new(),
+            docs: None,
+            fix_kind: Some(kind.to_owned()),
+            fix_key: key.map(str::to_owned),
+            fix_value: value.map(str::to_owned),
+        };
+        let edit = FixAction::EditSetting {
+            key: "llm.api_key_ref".to_owned(),
+        };
+        let (kind, key, value) = super::fix_columns(&edit, |_| String::new());
+        let written = record(&kind, key.as_deref(), value.as_deref());
+        assert_eq!(written.fix(|_| None), Some(edit.clone()));
+        let old = record("change_setting", Some("llm.api_key_ref"), Some(""));
+        assert_eq!(old.fix(|_| None), Some(edit));
+        let kept = record("change_setting", Some("sandbox.backend"), Some("auto"));
+        assert_eq!(
+            kept.fix(|_| None),
+            Some(FixAction::ChangeSetting {
+                key: "sandbox.backend".to_owned(),
+                value: "auto".to_owned(),
+            })
+        );
+    }
 
     #[test]
     fn millis_counts_from_the_epoch() {

@@ -183,6 +183,9 @@ pub fn fix_to_proto(fix: &FixAction) -> v1::FixAction {
                 value: value.clone(),
             })
         }
+        FixAction::EditSetting { key } => {
+            Action::EditSetting(v1::fix_action::EditSetting { key: key.clone() })
+        }
         FixAction::CopyCommand(command) => Action::CopyCommand(command.clone()),
         FixAction::OpenUrl(url) => Action::OpenUrl(url.clone()),
         FixAction::RemountReadOnly(path) => {

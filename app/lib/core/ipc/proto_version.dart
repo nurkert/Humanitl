@@ -140,7 +140,11 @@ abstract final class ProtoVersion {
   /// order, names and help from `ConfigSnapshot.catalog` and reload on
   /// `FlowEvent.config_changed` (HUM-534). 44 to 46 have no reader here.
   /// Raising the number without a reader would claim otherwise.
-  static const int minor = 47;
+  /// Raised to 50 with the field without a value: `FixAction.edit_setting`
+  /// opens the same field or folder chooser as an empty `ChangeSetting` of
+  /// a daemon before 1.50, which the app still reads that way (HUM-507).
+  /// 48 and 49 have no reader here.
+  static const int minor = 50;
 
   /// `major.minor` as text.
   static const String text = '$major.$minor';
