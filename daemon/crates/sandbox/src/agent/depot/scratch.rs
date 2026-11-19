@@ -47,8 +47,12 @@ impl Scratch {
     pub fn hand_to(mut self, handle: &crate::SandboxHandle) {
         handle.remove_at_exit(self.dir.clone());
         handle.remove_at_exit(self.owner.clone());
-        if let Some(reservation) = self.reservation.take() {
-            handle.hold_until_exit(reservation.into_fd());
+        if let Some(fd) = self
+            .reservation
+            .take()
+            .and_then(super::store::Reservation::into_fd)
+        {
+            handle.hold_until_exit(fd);
         }
         self.armed = false;
     }

@@ -991,9 +991,10 @@ angemeldet, `AGENT_010` Quelle durch Firmenvorgabe festgelegt, `AGENT_013`
 Depot unbrauchbar (Besitzer, Rechte, Symlink, Größe), `AGENT_015` Adapter oder
 Backend kennt das Depot nicht, `AGENT_017` Kommando nennt ein Programm des
 Hosts eines Depot-Agenten, `AGENT_018` Depot von der laufenden Sitzung
-eingehängt (`agents remove`). `AGENT_011`, `AGENT_012`, `AGENT_014` und
-`AGENT_016` registrieren HUM-519 und HUM-520. Dazu `LLM_004` für „kein Modell
-konfiguriert".
+eingehängt (`agents remove`). HUM-519: `AGENT_011` Installation oder Update
+gescheitert, mit dem Schritt (`run`, `result`, `pin`, `signature`, `checksum`,
+`tree`, `commit`) im `why`. `AGENT_012`, `AGENT_014` und `AGENT_016`
+registriert HUM-520. Dazu `LLM_004` für „kein Modell konfiguriert".
 
 ### 4.18 Aus der Umsetzung des History-Bildschirms (HUM-032, 2026-09-04)
 

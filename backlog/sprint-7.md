@@ -4652,6 +4652,73 @@ Download-Hosts des Agenten.
 4. `docs/SECURITY.md` und `docs/THREAT-MODEL.md` (K-36) nennen
    Wartungsläufe, Signaturprüfung und Anheften im selben Commit.
 
+### Stand nach der Umsetzung (2026-11-19, Kern)
+
+Gebaut ist der Kern im Sandbox-Crate, noch ohne Sitzung, RPC und CLI:
+`InstallRecipe` im Rezept (Skript, Hosts mit Beleg, Ort des Programms,
+Plattformnamen, `SignedManifest`) mit belegten Werten für Claude Code;
+`depot/maintenance.rs` bereitet einen Lauf vor (Sitzungsart
+`DepotMaintenance { agent, task }`, Arbeitsordner als `HOME` neben den
+Depots, Kommando `/bin/sh -c`, Variablen des Vertrags, `allow`-Regeln nur
+für die Hosts des Rezepts mit `Expiry::Session`) und übernimmt das Ergebnis.
+Der Lauf lädt nur herunter und meldet kein Urteil. `depot/adopt.rs` liest
+das Ergebnis nur über geöffnete Ordner mit `O_NOFOLLOW`, prüft den Baum
+(reguläre Dateien, Ordner, relative Links innerhalb mit `..` nur am Anfang
+des Ziels, sodass auch Ketten von Links nicht hinausführen; keine Sockets,
+FIFOs, Geräte, harten Links, Set-ID-Bits, Namen außer UTF-8; 2 GiB, 50 000
+Einträge, Tiefe 64) und kopiert mit SHA-256 je Datei in einen eigenen
+Zwischenordner neben den Depots. `depot/verify.rs`: Der Daemon prüft seine
+eigene Kopie von Manifest, Signatur und Schlüssel selbst mit dem `gpg` des
+Hosts (frisches `GNUPGHOME`, `--no-autostart`, `--disable-dirmngr`, Status
+aus dem eigenen Kindprozess); der Import muss genau den festen Schlüssel
+nennen, `VALIDSIG` den festen Fingerabdruck; danach SHA-256 des Programms
+gegen das geprüfte Manifest. Die Version eines signierten Laufs kommt aus
+dem geprüften Manifest (Claude Code: Feld `version`); nennt der Lauf eine
+andere, wird abgelehnt, sodass keine ältere echte Fassung unter einer
+neueren Nummer landet. Bei einem Rezept ohne Signatur bindet nichts die
+Version: sie ist das Wort des Laufs, geprüft nur auf Form und gegen die
+verlangte. Fehlt `gpg` auf dem Host, scheitert ein signiertes Rezept
+geschlossen. Erst danach entstehen die Ordner des Depots
+(eine abgelehnte Erstinstallation hinterlässt kein Depot), dann Journal
+(`.committing`), `rename` nach `program/<version>/`, Umschalten von
+`current`, Ende des Journals; synchronisiert werden die Ordner des
+Zwischenbaums von den Blättern aufwärts, neu angelegte Ordner des Depots samt
+Eltern und beide Ordner jedes `rename`. Ein Absturz dazwischen wird vor der
+nächsten Übernahme oder Umschaltung zurückgenommen. Scheitert nach dem
+`rename` von `current` das `fsync` oder das Ende des Journals, setzt die
+Übernahme `current` zurück und entfernt die neue Version, aber nur unter der
+exklusiven Sperre des Depots (eine Sitzung kann auf ihr gestartet sein; dann
+bleibt sie für das spätere Aufräumen); misslingt auch das Zurücksetzen, sagt
+der Befund, dass `current` die neue Version nennen kann. Das erste Anlegen von
+`agents/` (auch über eine Sperrdatei) synchronisiert den Datenordner darüber.
+Ein vorbereiteter Lauf hält die Wartungssperre des Agenten und eine
+geteilte Reservierung des Depots (kein `remove` darunter); die Übernahme
+prüft die Voraussetzung des Updates erneut. Das Umschalten zurück nimmt die
+Wartungssperre; das Aufräumen alter Versionen entscheidet unter der
+exklusiven Sperre mit `current`, wie es dann auf der Platte steht, und
+behält die vorige Version. Version angeheftet: `install` auf ein
+installiertes Depot und eine andere Version als verlangt ergeben `AGENT_011`
+(Schritt `pin`), ein Update auf eine vorhandene Version schaltet ohne Lauf
+um. Sperren des Depots werden achtmal im Abstand von 10 ms versucht (ein
+gerade freigegebenes Schloss kann ein abgezweigter Kindprozess vor seinem
+`exec` noch halten). `AGENT_011` registriert.
+
+Abweichung: Das Rezept für Claude Code lädt Manifest, Signatur, Schlüssel und
+Programm direkt von `downloads.claude.ai` (dorthin leitet
+`claude.ai/install.sh` um) und führt `claude install` nicht aus. So läuft
+während der Installation nichts Heruntergeladenes, und nur ein Host ist
+nötig.
+
+Offen, für ein Folge-Issue: die Sitzungsart im Daemon (`SandboxService`:
+Start ohne `/work`, Arbeitsordner als `HOME` unter
+`MAINTENANCE_HOME_DST`, Sitzungsregeln in den Regelspeicher, Briefing aus,
+`commit` nach dem Ende), RPC `Agents` mit `install`/`update` samt Sitzung
+(Protokoll-Minor), CLI `humanitl agents install|update [--version] [--yes]`
+mit Anhängen an das Terminal, Parität, `docs/cli.md`, Ende-zu-Ende-Test im
+bwrap mit Stellvertreter-Server hinter dem Proxy (gehaltener fremder Host,
+Folgesitzung), Selbst-Update scheitert am nur lesbaren Ordner im Lauf,
+`docs/SECURITY.md` und K-36 (en, de).
+
 ---
 
 ## HUM-520 · Agent-Depot: Anmeldung in der Sandbox und Wächter für das Zurückschreiben der Zugangsdatei

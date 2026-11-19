@@ -33,6 +33,15 @@ pub const MANIFEST_FILE: &str = "manifest.json";
 /// The link at the depot's root that names the installed version.
 pub const CURRENT_LINK: &str = "current";
 
+/// How often a lock of the depot is tried, 10 ms apart, before it counts as
+/// held: a lock just released can stay held for a moment by a child process
+/// another thread of the daemon forked and that has not reached its `exec`
+/// yet; the descriptor is `CLOEXEC`, so the window is short (HUM-519, seen
+/// in parallel tests, for shared and exclusive locks alike). The cost: an
+/// answer "in use" or "being removed" comes at most 70 ms later than it
+/// could; a lock that is free is taken at the first try.
+const LOCK_TRIES: u32 = 8;
+
 /// The largest `manifest.json` the daemon reads.
 const MANIFEST_CAP: u64 = 1024 * 1024;
 
@@ -51,6 +60,10 @@ pub struct Manifest {
     /// `unsigned` where the vendor publishes no signature.
     #[serde(default)]
     pub signature: String,
+    /// The fingerprint of the key whose signature was checked (HUM-519);
+    /// empty when unsigned.
+    #[serde(default)]
+    pub signed_by: String,
     /// When the install was committed, RFC 3339.
     #[serde(default)]
     pub installed_at: String,
@@ -58,14 +71,28 @@ pub struct Manifest {
 
 /// A held reservation of a depot ([`Depot::reserve_for_session`]); the lock
 /// goes with this value or with the sandbox it was handed to.
+///
+/// Dropping it unlocks explicitly (`flock(LOCK_UN)`) before the descriptor
+/// closes: a child process another thread forked meanwhile holds a copy of
+/// the descriptor until its `exec`, and without the unlock the lock would
+/// live on in that copy for that moment (HUM-519, seen in CI).
 #[derive(Debug)]
-pub struct Reservation(std::os::fd::OwnedFd);
+pub struct Reservation(Option<std::os::fd::OwnedFd>);
 
 impl Reservation {
-    /// The descriptor that holds the lock.
+    /// The descriptor that holds the lock; the lock then goes with it.
+    /// Always `Some` for a reservation [`Depot`] made.
     #[must_use]
-    pub fn into_fd(self) -> std::os::fd::OwnedFd {
-        self.0
+    pub fn into_fd(mut self) -> Option<std::os::fd::OwnedFd> {
+        self.0.take()
+    }
+}
+
+impl Drop for Reservation {
+    fn drop(&mut self) {
+        if let Some(fd) = self.0.take() {
+            let _ = rustix::fs::flock(&fd, rustix::fs::FlockOperation::Unlock);
+        }
     }
 }
 
@@ -205,9 +232,19 @@ impl Depot {
         if !meta.is_dir() {
             return Err(self.unusable(&dir, "is not a directory"));
         }
-        let manifest_path = dir.join(MANIFEST_FILE);
+        let manifest = self.manifest_of(&version)?;
+        Ok(Installed {
+            version,
+            dir,
+            manifest,
+        })
+    }
+
+    /// The manifest of `program/<version>/`, checked to name that version.
+    fn manifest_of(&self, version: &str) -> Result<Manifest, Diagnostic> {
+        let manifest_path = self.program_dir().join(version).join(MANIFEST_FILE);
         let manifest_meta = std::fs::symlink_metadata(&manifest_path)
-            .map_err(|_| self.not_installed("the current version has no manifest.json"))?;
+            .map_err(|_| self.not_installed(&format!("version {version} has no manifest.json")))?;
         if !manifest_meta.is_file() || manifest_meta.len() > MANIFEST_CAP {
             return Err(self.unusable(&manifest_path, "is not a regular file of at most 1 MiB"));
         }
@@ -224,11 +261,7 @@ impl Depot {
                 ),
             ));
         }
-        Ok(Installed {
-            version,
-            dir,
-            manifest,
-        })
+        Ok(manifest)
     }
 
     /// Whether `credentials/` holds a credential file.
@@ -286,19 +319,46 @@ impl Depot {
         std::fs::symlink_metadata(self.lock_path()).is_ok() && self.reserve(true).is_err()
     }
 
+    /// The version `current` names, without any other check; `None` without
+    /// a valid link.
+    pub(crate) fn current_version(&self) -> Option<String> {
+        self.current_target().ok()
+    }
+
     fn lock_path(&self) -> PathBuf {
         let parent = self.root.parent().unwrap_or(&self.root);
         parent.join(format!("{}.lock", self.agent))
     }
 
+    /// An exclusive lock on `agents/<id>.<name>.lock`, without waiting
+    /// (HUM-519: one maintenance run per agent).
+    ///
+    /// # Errors
+    ///
+    /// `AGENT_018` while another holds it, `AGENT_013` when the lock file
+    /// cannot be opened.
+    pub(crate) fn lock_named(&self, name: &str) -> Result<Reservation, Diagnostic> {
+        let parent = self.root.parent().unwrap_or(&self.root);
+        self.lock_at(
+            &parent.join(format!("{}.{name}.lock", self.agent)),
+            true,
+            LOCK_TRIES,
+        )
+    }
+
+    /// The depot's reservation; shared for a session or a takeover,
+    /// exclusive for a removal or a pruning ([`LOCK_TRIES`]).
     pub(crate) fn reserve(&self, exclusive: bool) -> Result<Reservation, Diagnostic> {
+        self.lock_at(&self.lock_path(), exclusive, LOCK_TRIES)
+    }
+
+    fn lock_at(&self, path: &Path, exclusive: bool, tries: u32) -> Result<Reservation, Diagnostic> {
         use rustix::fs::{FlockOperation, Mode, OFlags};
-        let path = self.lock_path();
+        let path = path.to_path_buf();
         if let Some(parent) = path.parent() {
-            std::fs::create_dir_all(parent)
-                .and_then(|()| {
-                    std::fs::set_permissions(parent, std::fs::Permissions::from_mode(0o700))
-                })
+            // `agents/` on a first use: created with its parents synced, so a
+            // crash cannot lose the entry of a depot made right after.
+            super::adopt::create_synced(parent)
                 .map_err(|err| self.unusable(parent, &format!("cannot be created ({err})")))?;
         }
         let fd = rustix::fs::open(
@@ -312,7 +372,15 @@ impl Depot {
         } else {
             FlockOperation::NonBlockingLockShared
         };
-        rustix::fs::flock(&fd, operation).map_err(|_| {
+        let mut taken = rustix::fs::flock(&fd, operation);
+        for _ in 1..tries {
+            if taken.is_ok() {
+                break;
+            }
+            std::thread::sleep(std::time::Duration::from_millis(10));
+            taken = rustix::fs::flock(&fd, operation);
+        }
+        taken.map_err(|_| {
             Diagnostic::builder(AGENT_018, Severity::Error)
                 .why(if exclusive {
                     format!(
@@ -328,7 +396,7 @@ impl Depot {
                 .fix(FixAction::CopyCommand("humanitl agents status".to_owned()))
                 .build()
         })?;
-        Ok(Reservation(fd))
+        Ok(Reservation(Some(fd)))
     }
 
     /// The version `current` names: a relative link `program/<version>`.
@@ -456,6 +524,24 @@ impl Depot {
     }
 }
 
+/// The manifest of `program/<version>/` of `depot`, checked like the one of
+/// the current version.
+///
+/// # Errors
+///
+/// `AGENT_008` without the version's manifest, `AGENT_013` for one that fails
+/// its checks or a depot that does.
+pub(crate) fn read_manifest(depot: &Depot, version: &str) -> Result<Manifest, Diagnostic> {
+    if !version_name_ok(version) {
+        return Err(depot.unusable(
+            &depot.program_dir(),
+            &format!("holds no version {version:?}"),
+        ));
+    }
+    depot.check()?;
+    depot.manifest_of(version)
+}
+
 /// `AGENT_013` for this agent and path.
 pub(crate) fn unusable(agent: &str, path: &Path, what: &str) -> Diagnostic {
     Diagnostic::builder(AGENT_013, Severity::Blocking)
@@ -506,12 +592,21 @@ pub(crate) fn link_stays_inside(root: &Path, link: &Path, target: &Path) -> bool
             _ => None,
         })
         .collect();
+    // `..` only before the first name: after a name, that name may itself be
+    // a link, and `..` would then climb from wherever the link leads, which
+    // a lexical check cannot see (`up -> ..`, `out -> up/..`; HUM-519,
+    // review). With `..` only at the start, every link lands inside by
+    // itself, and so does every chain of them.
+    let mut named = false;
     for part in target.components() {
         match part {
-            Component::Normal(name) => depth.push(name),
+            Component::Normal(name) => {
+                named = true;
+                depth.push(name);
+            }
             Component::CurDir => {}
             Component::ParentDir => {
-                if depth.pop().is_none() {
+                if named || depth.pop().is_none() {
                     return false;
                 }
             }
@@ -586,6 +681,7 @@ pub(crate) mod tests {
             source: "https://example.invalid/".to_owned(),
             files: std::collections::BTreeMap::new(),
             signature: "unsigned".to_owned(),
+            signed_by: String::new(),
             installed_at: "2026-11-17T00:00:00Z".to_owned(),
         };
         std::fs::write(
@@ -717,5 +813,67 @@ pub(crate) mod tests {
             Path::new("/d/a/b"),
             Path::new("/d/c")
         ));
+        // `..` after a name: the name may be a link (HUM-519, review).
+        assert!(!link_stays_inside(
+            root,
+            Path::new("/d/escape"),
+            Path::new("sub/up/..")
+        ));
+        assert!(!link_stays_inside(
+            root,
+            Path::new("/d/l"),
+            Path::new("d/a/../..")
+        ));
+        assert!(link_stays_inside(
+            root,
+            Path::new("/d/sub/up"),
+            Path::new("..")
+        ));
+    }
+
+    /// A dropped reservation unlocks although a copy of its descriptor
+    /// lives on, as in a child process another thread forked and that has
+    /// not reached its `exec` yet. Mutation proof (HUM-519, CI): without the
+    /// explicit unlock in `Drop` this turns red.
+    #[test]
+    fn a_dropped_reservation_unlocks_while_a_copy_lives() {
+        let base = tempfile::tempdir().unwrap();
+        let depot = filled(base.path(), "claude", "claude");
+        let held = depot.lock_named("maintenance").unwrap();
+        let copy = held
+            .0
+            .as_ref()
+            .map(|fd| rustix::io::dup(fd).unwrap())
+            .unwrap();
+        drop(held);
+        let again = depot.lock_at(
+            &depot
+                .root()
+                .parent()
+                .unwrap()
+                .join("claude.maintenance.lock"),
+            true,
+            1,
+        );
+        assert!(again.is_ok(), "the copy still holds the lock");
+        drop(copy);
+    }
+
+    /// A chain of links that each look inside and together lead out is
+    /// refused by the depot's walk. Mutation proof: without the rule on `..`
+    /// after a name this turns red.
+    #[test]
+    fn a_chain_of_links_out_of_the_depot_is_unusable() {
+        let base = tempfile::tempdir().unwrap();
+        let depot = filled(base.path(), "claude", "claude");
+        let config = depot.config_dir();
+        std::fs::create_dir(config.join("sub")).unwrap();
+        std::fs::set_permissions(config.join("sub"), std::fs::Permissions::from_mode(0o700))
+            .unwrap();
+        std::os::unix::fs::symlink("..", config.join("sub/up")).unwrap();
+        std::os::unix::fs::symlink("sub/up/../../..", config.join("escape")).unwrap();
+        let found = depot.installed().unwrap_err();
+        assert_eq!(found.code, AGENT_013);
+        assert!(found.why.contains("escape"), "{}", found.why);
     }
 }

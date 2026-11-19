@@ -14,8 +14,9 @@
 //!    program name, the host install locations to mask (always, recipe or
 //!    not), and, once every value is sourced from the vendor's documentation,
 //!    its [`DepotRecipe`] (program inside the version directory,
-//!    configuration variable, self-update switch, credential file, install
-//!    hosts for HUM-519, login flow for HUM-520). Without a recipe `depot`
+//!    configuration variable, self-update switch, credential file, the
+//!    [`InstallRecipe`] of HUM-519 (script, hosts with evidence, program
+//!    path, platforms, signature), login flow for HUM-520). Without a recipe `depot`
 //!    answers `AGENT_015`;
 //! 2. one line in the macro `known_agents!` in
 //!    `daemon/crates/config/src/agents.rs`, which gives the identifier, the
@@ -57,10 +58,104 @@ pub struct DepotRecipe {
     /// The credential file, relative to the configuration directory; the
     /// one file HUM-520 takes back through its guard.
     pub credential_file: Option<&'static str>,
-    /// The hosts an install or update downloads from (HUM-519); exact names.
-    pub install_hosts: &'static [&'static str],
+    /// How an install or update runs in a maintenance sandbox (HUM-519);
+    /// `None` until every value is sourced, then `install` answers
+    /// `AGENT_015`.
+    pub install: Option<InstallRecipe>,
     /// How a login works (HUM-520).
     pub login: LoginFlow,
+}
+
+/// One host an install or update reaches, with the place of the vendor's
+/// documentation that names it (ADR-0023 point 5). Exact names only: the
+/// maintenance run allows exactly these, everything else is held.
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+pub struct InstallHost {
+    /// The host, as the rule names it: `downloads.claude.ai`.
+    pub host: &'static str,
+    /// Where the vendor documents it, a URL with the date it was read.
+    pub evidence: &'static str,
+}
+
+/// A platform the daemon can run on, as the daemon names it; the recipe
+/// maps it to the vendor's name ([`InstallRecipe::platforms`]).
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+pub enum HostPlatform {
+    /// Linux on `x86_64` with glibc.
+    LinuxX64,
+    /// Linux on `aarch64` with glibc.
+    LinuxArm64,
+    /// Linux on `x86_64` with musl.
+    LinuxX64Musl,
+    /// Linux on `aarch64` with musl.
+    LinuxArm64Musl,
+    /// macOS on Intel.
+    MacX64,
+    /// macOS on Apple silicon.
+    MacArm64,
+}
+
+/// The vendor signs a manifest of checksums (Claude Code: `manifest.json`
+/// with a detached `OpenPGP` signature). The run only downloads manifest,
+/// signature and the vendor's key; the daemon verifies its own copy of them
+/// with the host's `gpg` against [`SignedManifest::fingerprint`] and compares
+/// the program's SHA-256 with the verified manifest (`super::verify`). No
+/// cryptography of its own.
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+pub struct SignedManifest {
+    /// The fingerprint of the vendor's primary key, 40 hex digits in capitals
+    /// without spaces.
+    pub fingerprint: &'static str,
+    /// The JSON pointer of the program's SHA-256 in the manifest, with
+    /// `{platform}` for the vendor's platform name.
+    pub checksum_pointer: &'static str,
+    /// The JSON pointer of the version in the manifest. The version of a
+    /// signed install comes from here, not from the run: a run that names
+    /// another version than the signed manifest is refused.
+    pub version_pointer: &'static str,
+    /// Where the vendor documents key and manifest.
+    pub evidence: &'static str,
+}
+
+/// What an install or update runs in its maintenance sandbox (HUM-519).
+///
+/// The daemon builds the run around [`InstallRecipe::script`]: it sets the
+/// variables of the contract and runs the script under `/bin/sh -eu`. The
+/// script only downloads; where [`InstallRecipe::signature`] is set, the
+/// daemon verifies the download after the run, never the run itself.
+/// The contract of the script:
+///
+/// - in: `HUMANITL_DEPOT_VERSION` (the version asked for, empty for the
+///   vendor's current one), `HUMANITL_DEPOT_PLATFORM` (the vendor's name of
+///   the platform), `HUMANITL_DEPOT_OUT` (the result directory), `HOME`;
+/// - out: `$HUMANITL_DEPOT_OUT/version` with the version installed (one
+///   line), the program tree under `$HUMANITL_DEPOT_OUT/program/`, and for a
+///   signed recipe the manifest, its signature and the vendor's public key
+///   as `signed/manifest`, `signed/signature` and `signed/key.asc`.
+///
+/// Only the program tree is taken over; a launcher or anything else the
+/// installer leaves in `HOME` is discarded with the run.
+///
+/// What binds the version: for a signed recipe the verified manifest
+/// ([`SignedManifest::version_pointer`]), and the run's `version` file must
+/// say the same. For an unsigned recipe nothing does: the version is the
+/// run's word, checked only for its form and against the version asked for.
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+pub struct InstallRecipe {
+    /// Shell commands for `/bin/sh`, run in the sandbox.
+    pub script: &'static str,
+    /// The hosts the run reaches; each becomes an `allow` rule of this run's
+    /// session and of no other.
+    pub hosts: &'static [InstallHost],
+    /// Where the program lies inside the program tree after the run, a
+    /// relative path; the program the session starts.
+    pub program: &'static str,
+    /// The vendor's names of the platforms it builds for.
+    pub platforms: &'static [(HostPlatform, &'static str)],
+    /// The vendor's signature, where it signs.
+    pub signature: Option<SignedManifest>,
+    /// The source the manifest names: where the program comes from.
+    pub source: &'static str,
 }
 
 /// One agent `agents.<id>` knows.
@@ -132,7 +227,7 @@ pub const KNOWN: &[KnownAgent] = &[
             config_env: "CLAUDE_CONFIG_DIR",
             update_off: &[("DISABLE_UPDATES", "1")],
             credential_file: Some(".credentials.json"),
-            install_hosts: &["claude.ai", "downloads.claude.ai"],
+            install: Some(CLAUDE_INSTALL),
             login: LoginFlow::PastedCode,
         }),
     },
@@ -170,6 +265,83 @@ pub const KNOWN: &[KnownAgent] = &[
         recipe: None,
     },
 ];
+
+/// Claude Code from the vendor's release bucket, verified against its signed
+/// manifest (HUM-519).
+///
+/// Sources, read 2026-11-19:
+///
+/// - code.claude.com/docs/en/setup, section "Binary integrity and code
+///   signing": every release publishes `manifest.json` with the SHA-256 of
+///   every platform binary under `platforms.<platform>.checksum`, signed with
+///   the key `31DD DE24 DDFA B679 F42D 7BD2 BAA9 29FF 1A7E CACE`, which lies at
+///   `https://downloads.claude.ai/keys/claude-code.asc`; manifest and
+///   signature at `https://downloads.claude.ai/claude-code-releases/<version>/
+///   manifest.json` and `manifest.json.sig`, signed from 2.1.89 on.
+/// - `https://claude.ai/install.sh` answers with a redirect to
+///   `https://downloads.claude.ai/claude-code-releases/bootstrap.sh`, which
+///   reads the current version from `<base>/latest`, the binary from
+///   `<base>/<version>/<platform>/claude`, and contacts no other host.
+///   It then runs `claude install`, which writes a launcher under
+///   `~/.local/bin` and the version under `~/.local/share/claude/versions/`.
+///   The recipe takes the same files without running the vendor's program:
+///   nothing downloaded executes during the run, and only the one binary is
+///   taken over, never a launcher.
+/// - Platform names (same page, "Install with npm"): `linux-x64`,
+///   `linux-arm64`, `linux-x64-musl`, `linux-arm64-musl`, `darwin-x64`,
+///   `darwin-arm64`.
+pub const CLAUDE_INSTALL: InstallRecipe = InstallRecipe {
+    script: r#"base=https://downloads.claude.ai/claude-code-releases
+out=$HUMANITL_DEPOT_OUT
+version=$HUMANITL_DEPOT_VERSION
+if [ -z "$version" ]; then
+    version=$(curl -fsSL "$base/latest")
+fi
+case $version in
+    [0-9]*.[0-9]*.[0-9]*) ;;
+    *) echo "humanitl: the vendor named no version: $version" >&2; exit 1 ;;
+esac
+mkdir -p "$out/program" "$out/signed"
+curl -fsSL -o "$out/signed/manifest" "$base/$version/manifest.json"
+curl -fsSL -o "$out/signed/signature" "$base/$version/manifest.json.sig"
+curl -fsSL -o "$out/signed/key.asc" https://downloads.claude.ai/keys/claude-code.asc
+curl -fsSL -o "$out/program/claude" "$base/$version/$HUMANITL_DEPOT_PLATFORM/claude"
+chmod 0700 "$out/program/claude"
+printf '%s
+' "$version" > "$out/version"
+"#,
+    hosts: &[InstallHost {
+        host: "downloads.claude.ai",
+        evidence: concat!(
+            "https://code.claude.com/docs/en/setup#binary-integrity-and-code-signing ",
+            "(2026-11-19); https://claude.ai/install.sh redirects to ",
+            "https://downloads.claude.ai/claude-code-releases/bootstrap.sh, ",
+            "which contacts only this host"
+        ),
+    }],
+    program: "claude",
+    platforms: &[
+        (HostPlatform::LinuxX64, "linux-x64"),
+        (HostPlatform::LinuxArm64, "linux-arm64"),
+        (HostPlatform::LinuxX64Musl, "linux-x64-musl"),
+        (HostPlatform::LinuxArm64Musl, "linux-arm64-musl"),
+        (HostPlatform::MacX64, "darwin-x64"),
+        (HostPlatform::MacArm64, "darwin-arm64"),
+    ],
+    signature: Some(SignedManifest {
+        fingerprint: "31DDDE24DDFAB679F42D7BD2BAA929FF1A7ECACE",
+        checksum_pointer: "/platforms/{platform}/checksum",
+        // `https://downloads.claude.ai/claude-code-releases/2.1.89/manifest.json`
+        // (read 2026-11-19): top-level `version` ("2.1.89"), `buildDate` and
+        // `platforms.<platform>.{binary,checksum,size}`.
+        version_pointer: "/version",
+        evidence: concat!(
+            "https://code.claude.com/docs/en/setup#verify-the-manifest-signature ",
+            "(2026-11-19)"
+        ),
+    }),
+    source: "https://downloads.claude.ai/claude-code-releases",
+};
 
 /// The known agent with this identifier.
 #[must_use]
@@ -229,6 +401,7 @@ mod tests {
 
     /// Every registered recipe, present and future, keeps these.
     #[test]
+    #[allow(clippy::too_many_lines)]
     fn every_registered_agent_keeps_the_invariants() {
         let mut programs = std::collections::BTreeSet::new();
         for agent in KNOWN {
@@ -280,12 +453,58 @@ mod tests {
                 assert_ne!(file, recipe.program, "{}", agent.id);
                 assert_ne!(file, super::super::store::MANIFEST_FILE, "{}", agent.id);
             }
-            for host in recipe.install_hosts {
+            if let Some(install) = recipe.install {
+                assert!(!install.hosts.is_empty(), "{}: install hosts", agent.id);
+                for host in install.hosts {
+                    assert!(
+                        !host.host.contains(['*', '/', ':']) && host.host.contains('.'),
+                        "{}: install host {}",
+                        agent.id,
+                        host.host
+                    );
+                    assert!(
+                        humanitl_core::HostName::parse(host.host).is_ok(),
+                        "{}: install host {}",
+                        agent.id,
+                        host.host
+                    );
+                    assert!(
+                        host.evidence.starts_with("https://"),
+                        "{}: every install host names its evidence",
+                        agent.id
+                    );
+                }
                 assert!(
-                    !host.contains(['*', '/', ':']) && host.contains('.'),
-                    "{}: install host {host}",
+                    super::super::adopt::relative_inside(install.program),
+                    "{}: install program {}",
+                    agent.id,
+                    install.program
+                );
+                assert_eq!(
+                    install.program, recipe.program,
+                    "{}: the session starts program/<version>/<program>",
                     agent.id
                 );
+                assert!(!install.platforms.is_empty(), "{}", agent.id);
+                assert!(install.source.starts_with("https://"), "{}", agent.id);
+                if let Some(signature) = install.signature {
+                    assert_eq!(signature.fingerprint.len(), 40, "{}", agent.id);
+                    assert!(
+                        signature
+                            .fingerprint
+                            .chars()
+                            .all(|c| c.is_ascii_digit() || c.is_ascii_uppercase()),
+                        "{}",
+                        agent.id
+                    );
+                    assert!(
+                        signature.checksum_pointer.starts_with('/')
+                            && signature.checksum_pointer.contains("{platform}")
+                            && signature.version_pointer.starts_with('/'),
+                        "{}",
+                        agent.id
+                    );
+                }
             }
             for (key, _) in recipe.update_off {
                 assert!(

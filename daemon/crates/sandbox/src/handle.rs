@@ -2343,7 +2343,7 @@ mod tests {
         std::fs::create_dir_all(depot.root()).unwrap();
         let shared = Arc::new(Shared::default());
         *lock(&shared.removal) = Removal::AfterExit;
-        lock(&shared.held).push(depot.reserve_for_session().unwrap().into_fd());
+        lock(&shared.held).push(depot.reserve_for_session().unwrap().into_fd().unwrap());
         shared.set_exit(ExitStatus::from_raw(0));
         assert!(depot.in_use(), "the container is still being removed");
         assert_eq!(depot.remove().unwrap_err().code.as_str(), "AGENT_018");

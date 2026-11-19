@@ -1706,6 +1706,14 @@ Agent depot in use
 
 **Fix.** `CopyCommand` with `humanitl sandbox stop`, then remove again.
 
+#### AGENT_011
+
+Agent install or update failed
+
+**Auslöser.** Install and update of a depot agent run in a sandbox, and the daemon takes the result over only when every check passes: the version is the one asked for and only an update changes an installed one; where the vendor signs, the daemon itself verified its own copy of the vendor's manifest with the host's `gpg` and the key the adapter fixes, and the program's SHA-256 matches that manifest (the run only downloads, and no verdict of it counts); the program tree holds only regular files, directories and relative links inside it, no socket, FIFO, device, hard link, set-ID bit or name that is not UTF-8, within its caps. A missing `gpg` is a failure, never an unsigned install. The sentence names the step that failed; the depot is as it was before.
+
+**Fix.** `CopyCommand` with `humanitl agents install <id>` to run again after a failed download; `humanitl agents update <id>` when a version is installed already; install `gnupg` on the host when `gpg` is missing. A failed signature, checksum or tree check has no fix to go around it.
+
 ### Bereich edit
 
 #### EDIT_001

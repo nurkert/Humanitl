@@ -15,15 +15,24 @@
 //!   every [`crate::SandboxBackend::plan`] calls first.
 //! - [`plan_session`]: what a start path asks before it plans; the daemon and
 //!   the local CLI call it alike.
+//! - [`maintenance`]: install and update as a maintenance run in a sandbox,
+//!   the version pinned (HUM-519).
+//! - [`adopt`]: the takeover of a run's result: tree checks, manifest,
+//!   `program/<version>/` and the switch of `current`, with a journal.
+//! - [`verify`]: the vendor's signature, checked by the daemon with the
+//!   host's `gpg` on its own copy; the run reports no verdict.
 //!
 //! **Never on the host.** No function here starts anything from the depot,
 //! not even `--version`: the version comes from `manifest.json`.
 
+pub mod adopt;
 pub mod guard;
+pub mod maintenance;
 pub mod recipe;
 pub mod scratch;
 pub mod store;
 pub(crate) mod tree;
+pub mod verify;
 
 use std::ffi::{OsStr, OsString};
 use std::path::{Path, PathBuf};
@@ -34,7 +43,13 @@ use humanitl_core::diagnostics::codes::{AGENT_015, AGENT_017};
 use humanitl_core::ids::SessionId;
 use humanitl_core::{Diagnostic, FixAction, Severity};
 
-pub use self::recipe::{DepotRecipe, KNOWN, KnownAgent, LoginFlow};
+pub use self::maintenance::{
+    Committed, DepotMaintenance, Maintenance, MaintenanceRequest, MaintenanceRun, MaintenanceTask,
+};
+pub use self::recipe::{
+    DepotRecipe, HostPlatform, InstallHost, InstallRecipe, KNOWN, KnownAgent, LoginFlow,
+    SignedManifest,
+};
 pub use self::scratch::Scratch;
 pub use self::store::{Depot, Installed, Manifest, Reservation};
 use crate::agent::AGENT_PROGRAM_DIR;
