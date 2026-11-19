@@ -473,8 +473,35 @@ Every code is explained in [DIAGNOSTICS.md](../DIAGNOSTICS.md).
 
 ## Uninstall
 
-First remove the access key of the model server from the keyring, if you stored
-one, while the command line is still there:
+One command for Linux and macOS undoes what the install script or a package
+did:
+
+```sh
+curl -fsSL https://humanitl.de/uninstall | sh
+```
+
+It finds how Humanitl is installed (the package in dpkg, rpm or pacman, the
+archive under `~/.local` or `--prefix`, the app in Applications) and lists
+every finding; when it finds nothing, it says so and changes nothing. Then,
+each step shown and asked for first: it stops while an agent session runs
+(end it yourself, then run the script again), runs `humanitl daemon uninstall`
+while the program is still there, removes the program the way it came
+(`apt-get remove --purge`, `dnf remove`, the AUR helper or `pacman -R`, the
+paths in `INSTALLED-FILES`, the app), calling `sudo` only for the package step,
+and on a question of its own, asked before that step, removes the source and
+the key of `apt.nurkert.de` in the same `sudo` call. When the installed
+command line does not run, it stops before changing anything and says how to
+make it run, because only that program can remove its service. Your data
+stays; `--purge` deletes it, see
+[Your data](#your-data). Read it first at
+[humanitl.de/en/uninstall-script](https://humanitl.de/en/uninstall-script/),
+the same file as
+[`uninstall.sh`](https://github.com/nurkert/Humanitl/blob/main/uninstall.sh).
+It takes `--dry-run`, `--yes` (needed without a terminal), `--method
+apt|rpm|aur|tarball|dmg`, `--prefix DIR` and `--purge` after `sh -s --`.
+
+By hand, first remove the access key of the model server from the keyring, if
+you stored one, while the command line is still there:
 
 ```sh
 humanitl llm key remove
@@ -550,7 +577,11 @@ package, and stay where they are:
 | `$XDG_RUNTIME_DIR/humanitl/` | socket and token of the daemon; gone after logout |
 
 The table assumes the default `XDG_CONFIG_HOME=~/.config` and
-`XDG_DATA_HOME=~/.local/share`. The recording and the audit log may hold
+`XDG_DATA_HOME=~/.local/share`; `humanitl config paths` prints the directories
+as they are on your machine, on macOS together with
+`~/Library/Application Support/Humanitl` and `~/Library/Logs/Humanitl`. The
+uninstall script with `--purge` deletes exactly these directories, after
+listing each with its size and asking; project folders are never among them. The recording and the audit log may hold
 request bodies, so delete them on purpose, not by accident. To remove
 everything:
 

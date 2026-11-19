@@ -72,7 +72,7 @@
 
 set -u
 
-# ---- Shared with uninstall.sh (HUM-550): output, questions, platform -------
+# ---- Shared by install.sh and uninstall.sh (HUM-550), kept equal by a test ---
 
 say() { printf '%s\n' "$*"; }
 warn() { printf 'warning: %s\n' "$*" >&2; }

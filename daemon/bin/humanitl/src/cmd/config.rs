@@ -67,7 +67,72 @@ pub async fn run(ctx: &Context, cmd: &ConfigCmd) -> Result<u8, Failure> {
         ConfigCmd::Catalog { project, language } => {
             catalog(ctx, project.as_deref(), language.as_deref()).await
         }
+        ConfigCmd::Paths => paths_out(ctx),
     }
+}
+
+/// `config paths` (HUM-550): die Orte mit Daten des Nutzers, wie
+/// `humanitl_config::Paths::data_locations` sie nennt. Lokal und ohne
+/// Daemon: Die Frage stellt `uninstall.sh` auch, wenn keiner läuft.
+///
+/// Ein Ort mit Zeilenumbruch oder anderem Steuerzeichen wird nie ausgegeben
+/// (`CONFIG_025`): Zeilenweise gelesen nennte er andere Verzeichnisse, und
+/// `uninstall.sh --purge` löscht, was hier steht.
+fn paths_out(ctx: &Context) -> Result<u8, Failure> {
+    let locations = ctx.paths.data_locations();
+    if let Some(bad) = locations.iter().find(|location| {
+        location
+            .path
+            .to_string_lossy()
+            .chars()
+            .any(char::is_control)
+    }) {
+        return Err(Failure::new(unprintable_location(bad)));
+    }
+    if ctx.render.is_json() {
+        let rows: Vec<Value> = locations
+            .iter()
+            .map(|location| {
+                json!({
+                    "name": location.name,
+                    "path": location.path.display().to_string(),
+                })
+            })
+            .collect();
+        ctx.render.value(&json!({ "locations": rows }));
+        return Ok(EXIT_OK);
+    }
+    let rows: Vec<Vec<String>> = locations
+        .iter()
+        .map(|location| {
+            vec![
+                location.name.to_owned(),
+                location.path.display().to_string(),
+            ]
+        })
+        .collect();
+    ctx.render
+        .line(crate::render::table(&["NAME", "PATH"], &rows).trim_end());
+    Ok(EXIT_OK)
+}
+
+/// `CONFIG_025`: ein Datenort mit Steuerzeichen, mit der Variablen, aus der
+/// er kommt.
+fn unprintable_location(location: &humanitl_config::DataLocation) -> Diagnostic {
+    let from = match location.name {
+        "config" => "XDG_CONFIG_HOME (or HOME without it)",
+        "data" => "XDG_DATA_HOME (or HOME without it)",
+        _ => "HOME",
+    };
+    Diagnostic::builder(codes::CONFIG_025, Severity::Error)
+        .why(format!(
+            "the data location {} comes from {from} and holds a line break or another control \
+             character (\"{}\"); printed one per line it would name other directories, so \
+             nothing was printed",
+            location.name,
+            location.path.to_string_lossy().escape_debug()
+        ))
+        .build()
 }
 
 /// `config catalog`: der Einstellungskatalog des laufenden Daemons

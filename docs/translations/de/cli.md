@@ -1186,6 +1186,7 @@ humanitl config get [KEY] [--origin] [--json]
 humanitl config set KEY VALUE [--project]
 humanitl config schema [--profiles] [--json]
 humanitl config edit
+humanitl config paths [--json]
 ```
 
 ### `config get`
@@ -1331,6 +1332,16 @@ Terminal folgt die einzige interaktive Frage dieser Kommandozeile:
 dann endet der Befehl mit der Diagnostic und Exit 1. Die Diagnostic wird in jedem
 Fall genau einmal gezeigt, unter `--json` als ein Objekt. Findet sich kein Editor,
 ist das `CONFIG_017` mit dem Vorschlag `export EDITOR=nano`.
+
+### `config paths`
+
+Nennt die Verzeichnisse mit deinen Daten, eines je Zeile mit kurzem Namen: `config`
+(Konfiguration, Regeln, Profile) und `data` (Aufzeichnung, Projektregister, Agent-Depot,
+Audit-Kette, die lokale CA), unter macOS dazu `support` (`~/Library/Application Support/Humanitl`)
+und `logs` (`~/Library/Logs/Humanitl`). `--json` liefert `{"locations":[{"name":…,"path":…}]}`.
+Der Befehl braucht keinen Daemon und öffnet und legt keine Datei an; die Liste kommt von derselben
+Stelle, aus der der Daemon seine Pfade nimmt. Projektordner gehören nie dazu.
+`uninstall.sh --purge` löscht genau diese Verzeichnisse (HUM-550).
 
 ## `humanitl audit`
 

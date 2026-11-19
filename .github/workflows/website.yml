@@ -10,8 +10,10 @@ on:
       - 'website/**'
       # Die Docs-Seiten entstehen aus docs/ (HUM-336).
       - 'docs/**'
-      # Unter /install liegt install.sh selbst, dazu seine Leseseite (HUM-528).
+      # Unter /install liegt install.sh selbst, dazu seine Leseseite (HUM-528),
+      # unter /uninstall ebenso uninstall.sh (HUM-550).
       - 'install.sh'
+      - 'uninstall.sh'
       - '.github/workflows/website.yml'
   # Ein neues Release erscheint sofort auf der Download-Seite. Ein Release aus release.yml
   # löst dieses Ereignis nicht aus (GITHUB_TOKEN startet keine Workflows); dort stößt der

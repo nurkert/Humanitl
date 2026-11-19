@@ -44,6 +44,16 @@ pub struct RuntimeDir {
     pub diagnostic: Option<Diagnostic>,
 }
 
+/// Ein Ort mit Daten des Nutzers, wie [`Paths::data_locations`] ihn nennt.
+#[derive(Debug, Clone, PartialEq, Eq)]
+pub struct DataLocation {
+    /// Ein kurzer, fester Name für Skripte: `config`, `data`, `support` oder
+    /// `logs`.
+    pub name: &'static str,
+    /// Das Verzeichnis.
+    pub path: PathBuf,
+}
+
 /// Alle Pfade, abgeleitet aus einer Umgebung.
 #[derive(Debug, Clone, PartialEq, Eq)]
 pub struct Paths {
@@ -327,6 +337,53 @@ impl Paths {
             .join(MAC_APP_DIR)
     }
 
+    /// `~/Library/Logs/Humanitl`, wohin der launchd-Agent die Ausgabe des
+    /// Daemons schreibt (HUM-324).
+    #[must_use]
+    pub fn mac_logs_dir(&self) -> PathBuf {
+        self.home().join("Library").join("Logs").join(MAC_APP_DIR)
+    }
+
+    /// Jeder Ort, an dem Humanitl Daten des Nutzers ablegt (HUM-550):
+    /// Konfiguration, Aufzeichnungen, Projektregister, Agent-Depot und
+    /// Audit-Kette, unter macOS dazu `Application Support` und die Logs.
+    ///
+    /// Das ist die eine Liste, aus der `uninstall.sh --purge` löscht; das
+    /// Skript führt keine eigene. Ein Projektordner steht nie darin, und jeder
+    /// Ort endet auf [`APP_DIR`] oder [`MAC_APP_DIR`]. Das Laufzeitverzeichnis
+    /// fehlt mit Absicht: Es hält nur Socket und Token des laufenden Daemons
+    /// und überlebt keinen Neustart.
+    #[must_use]
+    pub fn data_locations(&self) -> Vec<DataLocation> {
+        self.data_locations_for(cfg!(target_os = "macos"))
+    }
+
+    /// Wie [`Paths::data_locations`], mit dem System als Argument, damit die
+    /// Tests beide Fassungen auf jedem Rechner prüfen.
+    fn data_locations_for(&self, macos: bool) -> Vec<DataLocation> {
+        let mut locations = vec![
+            DataLocation {
+                name: "config",
+                path: self.config_dir(),
+            },
+            DataLocation {
+                name: "data",
+                path: self.data_dir(),
+            },
+        ];
+        if macos {
+            locations.push(DataLocation {
+                name: "support",
+                path: self.mac_support_dir(),
+            });
+            locations.push(DataLocation {
+                name: "logs",
+                path: self.mac_logs_dir(),
+            });
+        }
+        locations
+    }
+
     /// Der gRPC-Socket des Daemons. Rechte `0600` in einem Verzeichnis `0700`.
     #[must_use]
     pub fn daemon_socket(&self) -> PathBuf {
@@ -383,7 +440,7 @@ mod tests {
     #[cfg(not(target_os = "macos"))]
     use humanitl_core::Severity;
 
-    use super::Paths;
+    use super::{APP_DIR, MAC_APP_DIR, Paths};
     use crate::env::Env;
 
     fn paths(pairs: &[(&str, &str)]) -> Paths {
@@ -533,6 +590,65 @@ mod tests {
         assert_eq!(
             paths.blob_path("a"),
             PathBuf::from("/data/humanitl/blobs/a/a")
+        );
+    }
+
+    /// Was `uninstall.sh --purge` löscht (HUM-550): jeder Ort mit Daten des
+    /// Nutzers liegt unter einem der genannten, jeder genannte endet auf dem
+    /// Namen von Humanitl, und das Laufzeitverzeichnis gehört nicht dazu.
+    #[test]
+    fn data_locations_cover_every_place_with_user_data() {
+        let paths = paths(&[
+            ("HOME", "/home/x"),
+            ("XDG_CONFIG_HOME", "/cfg"),
+            ("XDG_DATA_HOME", "/data"),
+            ("XDG_RUNTIME_DIR", "/run/user/1000"),
+        ]);
+        for macos in [false, true] {
+            let locations = paths.data_locations_for(macos);
+            let names: Vec<&str> = locations.iter().map(|l| l.name).collect();
+            let want: &[&str] = if macos {
+                &["config", "data", "support", "logs"]
+            } else {
+                &["config", "data"]
+            };
+            assert_eq!(names, want, "macos={macos}");
+            let covered = |path: &Path| locations.iter().any(|l| path.starts_with(&l.path));
+            for held in [
+                paths.config_path(),
+                paths.rules_path(),
+                paths.profiles_dir(),
+                paths.db_path(),
+                paths.blobs_dir(),
+                paths.audit_path(),
+                paths.audit_key_path(),
+                paths.ca_key_path(),
+                paths.agents_dir(),
+                paths.project_servers_path(),
+                paths.cloud_inference_path(),
+            ] {
+                assert!(
+                    covered(&held),
+                    "{} is not covered (macos={macos})",
+                    held.display()
+                );
+            }
+            assert!(
+                !covered(&paths.daemon_socket()),
+                "the runtime directory is no data"
+            );
+            for location in &locations {
+                let last = location.path.file_name().and_then(|name| name.to_str());
+                assert!(
+                    matches!(last, Some(APP_DIR | MAC_APP_DIR)),
+                    "{} does not end in the name of Humanitl",
+                    location.path.display()
+                );
+            }
+        }
+        assert_eq!(
+            paths.mac_logs_dir(),
+            PathBuf::from("/home/x/Library/Logs/Humanitl")
         );
     }
 

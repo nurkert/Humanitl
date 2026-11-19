@@ -39,6 +39,7 @@ put tools/x.sh 'echo'
 put proto/humanitl.proto 'syntax = "proto3";'
 put README.md '# Humanitl'
 put install.sh '#!/bin/sh'
+put uninstall.sh '#!/bin/sh'
 g add -A
 g commit -q -m base
 base="$(g rev-parse HEAD)"
@@ -114,6 +115,11 @@ expect install_branch --base "$base" install -- full=false area-install=true are
   install-script=true install-linux=true install-macos=true "${not_install[@]}"
 expect install_main --main --base "$base" install -- full=false install-script=true install-linux=true \
   install-macos=true "${not_install[@]}"
+# uninstall.sh (HUM-550): dieselben drei Jobs.
+change uninstall uninstall.sh '#!/bin/sh
+# macOS: rm -rf /Applications/Humanitl.app'
+expect uninstall_branch --base "$base" uninstall -- full=false area-install=true area-macos=false \
+  install-script=true install-linux=true install-macos=true "${not_install[@]}"
 # backlog/ und BACKLOG.md: nur rust-test, das config_readers.rs sie liest.
 change backlog backlog/sprint-1.md '# Sprint 1, done' website/index.md '# x'
 expect backlog_main --main --base "$base" backlog -- full=false area-backlog=true rust-test=true \

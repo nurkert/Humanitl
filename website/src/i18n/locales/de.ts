@@ -314,6 +314,9 @@ const de = {
     toGitHub: 'Zu den Releases auf GitHub',
     older: 'Frühere Versionen',
     steps: 'So geht es weiter',
+    uninstall: 'Wieder entfernen, auf demselben Weg, auf dem es kam; deine Daten bleiben ohne --purge:',
+    uninstallCommand: 'curl -fsSL https://humanitl.de/uninstall | sh',
+    uninstallRead: 'Das Deinstallationsskript vorher lesen',
     kinds: {
       dmg: 'Disk-Image',
       zip: 'Zip-Archiv',
@@ -947,6 +950,22 @@ const de = {
     unsigned:
       'Releases vor 1.0.0 sind unsigniert. Das Skript prüft jeden Download gegen die `SHA256SUMS` des Releases. Das schützt vor einem beschädigten Download, nicht vor einem manipulierten Release. Unter macOS entfernt es die Quarantäne nie: Gatekeeper prüft die App wie nach einem Download im Browser.',
     source: 'install.sh auf GitHub',
+    raw: 'Die Datei selbst',
+  },
+  // Das Deinstallationsskript (HUM-550): dieselbe Leseseite für uninstall.sh.
+  uninstall: {
+    command: 'curl -fsSL https://humanitl.de/uninstall | sh',
+    label: 'Wieder entfernen, unter Linux und macOS:',
+    copy: 'Befehl kopieren',
+    read: 'Das Skript vorher lesen',
+    title: 'Das Deinstallationsskript',
+    metaDescription: 'Der Quelltext hinter curl -fsSL https://humanitl.de/uninstall | sh, genau so, wie er ausgeliefert wird.',
+    lede: 'Das ist das Skript, das `curl -fsSL https://humanitl.de/uninstall | sh` ausführt, Byte für Byte: Der Bau der Website kopiert `uninstall.sh` aus dem Repository nach `/uninstall` und erzeugt diese Seite aus derselben Datei. Es erkennt, wie Humanitl installiert ist, entfernt erst den Hintergrunddienst und dann das Programm auf demselben Weg und fragt vor jedem Schritt.',
+    dryRun: 'Was es auf deinem Rechner täte, ohne etwas zu ändern:',
+    dryRunCommand: 'curl -fsSL https://humanitl.de/uninstall | sh -s -- --dry-run',
+    unsigned:
+      'Deine Daten bleiben: Konfiguration, Aufzeichnungen, Projektregister, Agent-Depot und Audit-Kette. Nur mit `--purge` löscht das Skript sie, nachdem es jeden Ort mit Größe aufgelistet und du zugestimmt hast; die Orte nennt das Programm selbst (`humanitl config paths`). Projektordner gehören nie dazu. Läuft eine Agenten-Sitzung, bricht es ab, statt sie zu beenden.',
+    source: 'uninstall.sh auf GitHub',
     raw: 'Die Datei selbst',
   },
 };

@@ -177,6 +177,16 @@ const older = releases.filter((release) => release !== current).slice(0, 6);
                     <p class="panel__note">
                       <a href={path('installer', lang)}>{info.script}</a>
                     </p>
+                    <p class="panel__note panel__note--more">{d.uninstall}</p>
+                    <div class="cmd">
+                      <pre tabindex="0"><code>{d.uninstallCommand}</code></pre>
+                      <button class="cmd__copy" type="button" data-copy={d.uninstallCommand} aria-label={lang === 'de' ? 'Befehl kopieren' : 'Copy command'}>
+                        <Icon name="copy" />
+                      </button>
+                    </div>
+                    <p class="panel__note">
+                      <a href={path('uninstaller', lang)}>{d.uninstallRead}</a>
+                    </p>
                     {'rpm' in info && files.some((file) => file.kind === 'rpm') && (
                       <>
                         <p class="panel__note panel__note--more">{info.rpm}</p>

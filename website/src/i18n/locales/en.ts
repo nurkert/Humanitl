@@ -315,6 +315,9 @@ const en: Copy = {
     toGitHub: 'To the releases on GitHub',
     older: 'Earlier versions',
     steps: 'What comes next',
+    uninstall: 'To remove it the way it came; your data stays without --purge:',
+    uninstallCommand: 'curl -fsSL https://humanitl.de/uninstall | sh',
+    uninstallRead: 'Read the uninstall script first',
     kinds: {
       dmg: 'Disk image',
       zip: 'Zip archive',
@@ -942,6 +945,21 @@ const en: Copy = {
     unsigned:
       'Releases before 1.0.0 are not signed. The script checks every download against the release’s `SHA256SUMS`. That protects against a damaged download, not against a tampered release. On macOS it never removes the quarantine: Gatekeeper checks the app as after a download in a browser.',
     source: 'install.sh on GitHub',
+    raw: 'The file itself',
+  },
+  uninstall: {
+    command: 'curl -fsSL https://humanitl.de/uninstall | sh',
+    label: 'To remove it, on Linux and macOS:',
+    copy: 'Copy command',
+    read: 'Read the script first',
+    title: 'The uninstall script',
+    metaDescription: 'The source behind curl -fsSL https://humanitl.de/uninstall | sh, exactly as it is served.',
+    lede: 'This is the script that `curl -fsSL https://humanitl.de/uninstall | sh` runs, byte for byte: the website build copies `uninstall.sh` from the repository to `/uninstall` and renders this page from the same file. It finds out how Humanitl is installed, removes the background service first and then the program the way it came, and asks before every step.',
+    dryRun: 'What it would do on your machine, without changing anything:',
+    dryRunCommand: 'curl -fsSL https://humanitl.de/uninstall | sh -s -- --dry-run',
+    unsigned:
+      'Your data stays: configuration, recordings, the project register, the agent depot and the audit chain. Only `--purge` deletes it, after the script has listed every location with its size and you agreed; the program itself names the locations (`humanitl config paths`). Project folders are never part of it. If an agent session runs, the script stops instead of ending it.',
+    source: 'uninstall.sh on GitHub',
     raw: 'The file itself',
   },
 };

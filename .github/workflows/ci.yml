@@ -1643,9 +1643,10 @@ jobs:
 
   install-script:
     name: install-script
-    # The universal installer install.sh (HUM-528) and its two faces on
-    # humanitl.de: the file under /install and the read page. Runs for
-    # install.sh and for website/**; nothing else reads either.
+    # The universal installer install.sh (HUM-528), its counterpart
+    # uninstall.sh (HUM-550) and their faces on humanitl.de: the files under
+    # /install and /uninstall and their read pages. Runs for both scripts and
+    # for website/**; nothing else reads them.
     needs: changes
     if: needs.changes.outputs.install-script == 'true'
     runs-on: ubuntu-24.04
@@ -1672,6 +1673,21 @@ jobs:
         env:
           INSTALL_TEST_STRICT: "1"
         run: make install-script-test
+      - name: uninstall.sh against stubs (HUM-550)
+        # shellcheck, sh -n under dash and busybox sh, the part shared with
+        # install.sh byte for byte, every way of removal, a running session
+        # stopping before any step, --purge only after a yes, and the two
+        # mutation proofs (no session check, no question before --purge).
+        env:
+          INSTALL_TEST_STRICT: "1"
+        # The run log needs admin rights to read; on failure the last lines
+        # also go out as an annotation, which the public API shows.
+        run: |
+          set -o pipefail
+          if ! make uninstall-script-test 2>&1 | tee "$RUNNER_TEMP/uninstall-sh-test.log"; then
+            echo "::error title=uninstall-script::$(grep -E '^(FAIL|uninstall_sh_test)' "$RUNNER_TEMP/uninstall-sh-test.log" | tail -c 3000 | tr '\n' ' ')"
+            exit 1
+          fi
       - name: --dry-run against the real releases
         # The only path the stubs cannot cover: finding the newest release
         # through the redirect of github.com/.../releases/latest.
@@ -1687,10 +1703,11 @@ jobs:
           node-version: 24
           cache: npm
           cache-dependency-path: website/package-lock.json
-      - name: Website, /install and the read page
-        # The build copies install.sh byte for byte to dist/install and renders
-        # the read page from the same file; check-install compares both with
-        # install.sh. check-links covers the new links.
+      - name: Website, /install, /uninstall and the read pages
+        # The build copies install.sh and uninstall.sh byte for byte to
+        # dist/install and dist/uninstall and renders each read page from the
+        # same file; check-install compares all of them with the scripts.
+        # check-links covers the new links.
         working-directory: website
         env:
           GITHUB_TOKEN: ${{ secrets.GITHUB_TOKEN }}
@@ -1718,7 +1735,9 @@ jobs:
     timeout-minutes: 45
     steps:
       - uses: actions/checkout@11d5960a326750d5838078e36cf38b85af677262 # v4.4.0
-      - name: install.sh on six Linux systems
+      - name: install.sh, then uninstall.sh, on six Linux systems
+        # HUM-550: after the install checks, uninstall.sh --dry-run, --yes and
+        # --purge --yes in the same container (tools/tests/install_sh_containers.sh).
         env:
           ENGINE: docker
         run: ./tools/tests/install_sh_containers.sh
@@ -1739,8 +1758,13 @@ jobs:
       - name: Syntax under the shells of macOS
         run: |
           /bin/sh -n install.sh
+          /bin/sh -n uninstall.sh
       - name: install.sh with a stand-in disk image
         run: ./tools/tests/install_sh_macos.sh
+      - name: uninstall.sh against an app install.sh placed (HUM-550)
+        # App and launchd agent gone, data kept without --purge, the four
+        # locations gone with it, a running session stops before any step.
+        run: ./tools/tests/uninstall_sh_macos.sh
 
   ci-ok:
     name: ci-ok

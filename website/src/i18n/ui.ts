@@ -24,6 +24,8 @@ export const pages = {
   // Die Leseseite von install.sh (HUM-528). Nicht unter /install/: Dort liegt das Skript selbst
   // als Datei ohne Endung, ein gleichnamiges Verzeichnis daneben kann es nicht geben.
   installer: { de: 'installationsskript', en: 'install-script' },
+  // Die Leseseite von uninstall.sh (HUM-550), aus demselben Grund nicht unter /uninstall/.
+  uninstaller: { de: 'deinstallationsskript', en: 'uninstall-script' },
 } satisfies Record<string, Record<Lang, string>>;
 
 export type Page = keyof typeof pages;
