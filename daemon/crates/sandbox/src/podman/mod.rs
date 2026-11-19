@@ -118,7 +118,7 @@ use sha2::{Digest as _, Sha256};
 
 use crate::backend::PODMAN_BACKEND;
 use crate::bwrap::{BwrapBackend, PinnedMounts, Version, isolation_from_report, launch_plan};
-use crate::doctor::BackendCheckId;
+use crate::doctor::{BackendCheckId, StaticLine};
 use crate::fd_handover::HandoverListener;
 use crate::handle::SandboxHandle;
 use crate::launcher::{
@@ -998,17 +998,18 @@ fn no_image_named() -> Diagnostic {
 /// nur Podman selbst; die fragt erst [`PodmanBackend::detect`], also erst nach
 /// der Zulassung. Für ein anderes Backend als dieses: keine Zeile.
 ///
-/// Je Zeile die Kennung und bei Erfolg der Beleg, sonst der Befund.
+/// Je Zeile die Kennung und bei Erfolg der Beleg, sonst der Befund; jede
+/// prüft für sich ([`StaticLine::Checked`]).
 pub(crate) fn static_lines(
     name: &str,
     paths: &Paths,
     sandbox: &humanitl_config::SandboxRef,
-) -> Vec<(BackendCheckId, Result<String, Diagnostic>)> {
+) -> Vec<(BackendCheckId, StaticLine)> {
     if name != PODMAN_BACKEND {
         return Vec::new();
     }
     let read = |path: &str| std::fs::read_to_string(path).unwrap_or_default();
-    vec![
+    let lines: [(BackendCheckId, Result<String, Diagnostic>); 3] = [
         (
             BackendCheckId::Program,
             detect::find_program(&sandbox.podman, paths.env())
@@ -1030,7 +1031,11 @@ pub(crate) fn static_lines(
             detect::check_selinux(detect::selinux_enforce().as_deref())
                 .map(|()| "SELinux does not enforce labels".to_owned()),
         ),
-    ]
+    ];
+    lines
+        .into_iter()
+        .map(|(id, line)| (id, line.into()))
+        .collect()
 }
 
 /// `CONFIG_003`, wenn `name` dieses Backend ist und die gesetzten Werte von

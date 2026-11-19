@@ -3001,6 +3001,23 @@ Aus dem Review von HUM-488: Fehlt das Kernel-Abbild, wiederholt die Zeile
 ### Akzeptanzkriterien
 1. Keine Zeile meldet einen Fehler, den sie nicht geprüft hat.
 
+### Stand nach der Umsetzung
+Die Adapter melden eine Voraussetzung ohne Start jetzt als `StaticLine`
+(`daemon/crates/sandbox/src/doctor/backends.rs`): geprüft mit Beleg oder
+Befund, oder `Unchecked { after, needs }`, wenn die Prüfung eine andere,
+gescheiterte Voraussetzung braucht. Der Doctor macht daraus eine Zeile ohne
+Messung (`warn`, `DOCTOR_012`, Beleg `not measured: it needs the kernel image,
+and the line kernel reports it missing; fix the line kernel first, ...`). Der
+Vorschlag bleibt `humanitl doctor`, wie bei jeder Zeile ohne Messung der
+Befehl, der sie misst; einen Verweis auf eine andere Zeile kennt `FixAction`
+nicht. Die Kernel-Stufe meldet `virtio_fs` so, wenn das Kernel-Abbild fehlt;
+nur `kernel` trägt dann `SANDBOX_045`. Die übrigen Zeilen der Kernel-Stufe
+(`kvm`, die vier Programme, `modules`) und die drei der Container-Engine
+prüfen je für sich und erben keinen Befund; `modules` sucht sein Verzeichnis
+selbst und hängt nicht am Abbild. Kein neuer Code, kein neuer Zustand im
+Protokoll: Der Zustand „nicht gemessen" war schon da, die App zeigt ihn ohne
+Änderung. `docs/cli.md` und die deutsche Übersetzung nennen den Fall.
+
 ---
 
 ## HUM-496 · CLI: a disposable session in one command, like an agent started natively, with a boot animation

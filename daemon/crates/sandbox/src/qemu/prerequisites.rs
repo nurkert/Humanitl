@@ -31,6 +31,7 @@ use humanitl_config::{Env, QemuConfig};
 use humanitl_core::diagnostics::codes::SANDBOX_045;
 use humanitl_core::{Diagnostic, FixAction, Severity};
 
+use crate::doctor::StaticLine;
 use crate::os_release::PackageManager;
 
 /// Der Suchpfad, wenn die Umgebung keinen hat; derselbe wie bei bwrap.
@@ -363,10 +364,14 @@ pub(crate) enum Prerequisite {
 /// Jede Voraussetzung für sich, in der Reihenfolge der Prüfung, mit dem Beleg
 /// oder dem Befund; anders als [`resolve`] hört es beim ersten Fehlenden
 /// nicht auf. `env` liefert den `PATH`.
+///
+/// Eine Prüfung, die eine fehlende Voraussetzung braucht, ist ohne Messung
+/// und verweist auf deren Zeile (HUM-495): virtiofs liest die Konfiguration
+/// neben dem Kernel-Abbild, und fehlt das Abbild, gibt es nichts zu lesen.
 pub(crate) fn each_prerequisite(
     env: &Env,
     config: &QemuConfig,
-) -> Vec<(Prerequisite, Result<String, Diagnostic>)> {
+) -> Vec<(Prerequisite, StaticLine<Prerequisite>)> {
     each_on(&Host::system(), env, config, PackageManager::detect())
 }
 
@@ -376,7 +381,7 @@ fn each_on(
     env: &Env,
     config: &QemuConfig,
     manager: PackageManager,
-) -> Vec<(Prerequisite, Result<String, Diagnostic>)> {
+) -> Vec<(Prerequisite, StaticLine<Prerequisite>)> {
     let usable = |program: &Program, configured: Option<&Path>| {
         let found = find(program, configured, env, host, manager)?;
         for question in program.questions {
@@ -385,36 +390,45 @@ fn each_on(
         Ok::<_, Diagnostic>(found.display().to_string())
     };
     let kernel = kernel_readable(host, config, manager);
+    // Ohne Abbild gibt es keine Konfiguration daneben: Die Zeile wiederholt
+    // dann nicht den Befund des Abbilds, sondern verweist auf ihn.
     let virtio_fs = match &kernel {
-        Ok(image) => virtio_fs_built_in(image),
-        Err(missing) => Err(missing.clone()),
+        Ok(image) => StaticLine::Checked(virtio_fs_built_in(image)),
+        Err(_) => StaticLine::Unchecked {
+            after: Prerequisite::Kernel,
+            needs: "the kernel image",
+        },
     };
     vec![
         (
             Prerequisite::Kvm,
-            kvm_usable(host).map(|()| host.kvm.display().to_string()),
+            kvm_usable(host)
+                .map(|()| host.kvm.display().to_string())
+                .into(),
         ),
         (
             Prerequisite::Emulator,
-            usable(&EMULATOR, config.qemu.as_deref()),
+            usable(&EMULATOR, config.qemu.as_deref()).into(),
         ),
         (
             Prerequisite::FileDaemon,
-            usable(&FILE_DAEMON, config.virtiofsd.as_deref()),
+            usable(&FILE_DAEMON, config.virtiofsd.as_deref()).into(),
         ),
         (
             Prerequisite::VsockDevice,
-            usable(&VSOCK_DEVICE, config.vhost_device_vsock.as_deref()),
+            usable(&VSOCK_DEVICE, config.vhost_device_vsock.as_deref()).into(),
         ),
-        (Prerequisite::Bubblewrap, usable(&BUBBLEWRAP, None)),
+        (Prerequisite::Bubblewrap, usable(&BUBBLEWRAP, None).into()),
         (
             Prerequisite::Kernel,
-            kernel.map(|image| image.display().to_string()),
+            kernel.map(|image| image.display().to_string()).into(),
         ),
         (Prerequisite::VirtioFs, virtio_fs),
         (
             Prerequisite::Modules,
-            modules_present(host, config, manager).map(|dir| dir.display().to_string()),
+            modules_present(host, config, manager)
+                .map(|dir| dir.display().to_string())
+                .into(),
         ),
     ]
 }
@@ -1064,7 +1078,7 @@ mod tests {
             )
             .into_iter()
             .find(|(which, _)| *which == Prerequisite::VirtioFs)
-            .map(|(_, line)| line)
+            .map(|(_, line)| checked(line))
             .unwrap()
         };
 
@@ -1098,7 +1112,12 @@ mod tests {
             PackageManager::Apt,
         );
         assert_eq!(lines.len(), 8);
-        assert!(lines.iter().all(|(_, line)| line.is_ok()), "{lines:?}");
+        assert!(
+            lines
+                .iter()
+                .all(|(_, line)| matches!(line, StaticLine::Checked(Ok(_)))),
+            "{lines:?}"
+        );
     }
 
     /// HUM-444: virtiofs must be built in; a module, a missing line and a
@@ -1132,7 +1151,7 @@ mod tests {
             );
             let failed: Vec<_> = lines
                 .iter()
-                .filter(|(_, line)| line.is_err())
+                .filter(|(_, line)| matches!(line, StaticLine::Checked(Err(_))))
                 .map(|(id, _)| *id)
                 .collect();
             assert_eq!(failed, [Prerequisite::VirtioFs]);
@@ -1150,12 +1169,62 @@ mod tests {
         assert_eq!(config_beside(Path::new("/k/bzImage")), None);
     }
 
+    /// Das Ergebnis einer Zeile, die geprüft hat; eine ohne Messung ist hier
+    /// ein Fehler des Tests.
+    fn checked(line: StaticLine<Prerequisite>) -> Result<String, Diagnostic> {
+        match line {
+            StaticLine::Checked(result) => result,
+            StaticLine::Unchecked { after, .. } => panic!("unchecked after {after:?}"),
+        }
+    }
+
     fn modules_line(fixture: &Fixture, config: &QemuConfig) -> Result<String, Diagnostic> {
         each_on(&fixture.host, &fixture.env, config, PackageManager::Apt)
             .into_iter()
             .find(|(which, _)| *which == Prerequisite::Modules)
-            .map(|(_, line)| line)
+            .map(|(_, line)| checked(line))
             .expect("a line for the modules")
+    }
+
+    /// HUM-495: Fehlt das Kernel-Abbild, ist `virtio_fs` ohne Messung und
+    /// verweist auf die Zeile `kernel`, statt deren Befund zu wiederholen;
+    /// nur die Zeile `kernel` ist ein Befund. Mutationsbeweis: die Zeile
+    /// `virtio_fs` erbt wieder den Befund des Abbilds (`Err(missing.clone())`),
+    /// und der Test wird rot.
+    #[test]
+    fn without_a_kernel_image_virtio_fs_is_unchecked_and_names_the_kernel_line() {
+        let fixture = Fixture::complete();
+        std::fs::remove_file(fixture.host.boot.join(format!("vmlinuz-{RELEASE}"))).unwrap();
+        let lines = each_on(
+            &fixture.host,
+            &fixture.env,
+            &QemuConfig::default(),
+            PackageManager::Apt,
+        );
+        let line = |which: Prerequisite| {
+            lines
+                .iter()
+                .find(|(id, _)| *id == which)
+                .map(|(_, line)| line.clone())
+                .expect("a line")
+        };
+        assert!(
+            matches!(line(Prerequisite::Kernel), StaticLine::Checked(Err(_))),
+            "{lines:?}"
+        );
+        assert_eq!(
+            line(Prerequisite::VirtioFs),
+            StaticLine::Unchecked {
+                after: Prerequisite::Kernel,
+                needs: "the kernel image",
+            }
+        );
+        let failed: Vec<_> = lines
+            .iter()
+            .filter(|(_, line)| matches!(line, StaticLine::Checked(Err(_))))
+            .map(|(id, _)| *id)
+            .collect();
+        assert_eq!(failed, [Prerequisite::Kernel]);
     }
 
     /// HUM-529: Ein Verzeichnis, das der Blick nicht erreicht (hier: ein

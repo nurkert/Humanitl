@@ -70,6 +70,7 @@ use humanitl_core::{Diagnostic, FixAction, Severity, sanitize_note};
 
 use crate::bwrap::Version;
 
+pub(crate) use self::backends::StaticLine;
 pub use self::backends::{
     BackendCheckId, BackendGroup, ProbeMode, backend_groups, backend_groups_within,
 };
