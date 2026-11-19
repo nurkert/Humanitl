@@ -139,6 +139,7 @@ Diagnose-Codes, hier nur geplant (registriert vom genannten Issue in `codes.rs` 
 | HUM-553 | Gemeinsamer Probedurchgang mit dem Eigentümer: gesammelte Handprüfungen | S | HUM-524 |
 | HUM-555 | Entscheidungs-Proxy: ein „Drop" des Proxys dahinter erscheint im Audit als `200`, die `502`-Meldung nennt Humanitl | S | HUM-524 |
 | HUM-556 | Speicher des Daemons: Flow-Registry ohne Obergrenze, Audit-Kanal unbegrenzt | M | HUM-479 |
+| HUM-557 | Kernel-Stufe: die letzten Wege zu eigenem Code in der Unit (memfd, Mounts von bubblewrap, sh und bwrap zusammen) | M | HUM-480 |
 
 ## HUM-428 · Port neutral: `PlanRequest`, `LaunchOptions`, `IsolationLevel`, Enum `Backend` statt `PlatformBackend`
 
@@ -5110,3 +5111,44 @@ HUM-467) begrenzen nur Gleichzeitiges, nicht die Summe über die Zeit.
 1. Eine Sitzung mit beliebig vielen Anfragen hält den Speicher des Daemons
    begrenzt, ohne gehaltene Flows oder Audit-Einträge der Sandbox zu
    verlieren.
+
+---
+
+## HUM-557 · Kernel-Stufe: die letzten Wege zu eigenem Code in der Unit
+
+### Kontext
+Aus HUM-480. Die Unit der Kernel-Stufe führt nur noch ihre eigenen Dateien
+aus (`NoExecPaths=/`, `ExecPaths=` mit einzelnen Dateien, beschreibbare Pfade
+in `NoExecPaths=`), gemessen auch nach der Zulassung. Offen blieben, mit
+einem statischen Programm in einer Test-Unit gemessen:
+- `fexecve` eines memfd läuft; `vm.memfd_noexec` ist 0, und kein Prozess der
+  Unit darf es anheben.
+- Ein Mount, den bubblewrap im Gefängnis selbst anlegt (tmpfs-Wurzel, Masken
+  über `/work`, `--file`), trägt kein `noexec`:
+  `bwrap --tmpfs /t --file 3 /t/p /t/p` läuft.
+- Beides braucht einen Prozess, der schon eigenen Code ausführt, oder `sh`
+  und `bwrap` aus der Liste zusammen. QEMU verbietet sich `exec`
+  (`-sandbox spawn=deny`), virtiofsd hat einen eigenen seccomp-Filter,
+  vhost-device-vsock hat keinen.
+
+### Spezifikation
+1. In jedem Gefängnis die übrigen Programme der Unit verdecken (etwa
+   `/dev/null` über `sh`, `bwrap` und die anderen Helfer binden), so dass
+   jeder Helfer nur sich selbst erreicht; messen, ob das den Weg „sh und
+   bwrap zusammen" schließt.
+2. Die Mounts, die bubblewrap im Gefängnis anlegt, mit `noexec` versehen,
+   soweit bubblewrap das erlaubt (Optionen oder ein Remount danach);
+   messen.
+3. memfd: einen seccomp-Filter für vhost-device-vsock (wie bei virtiofsd)
+   prüfen, der `memfd_create` mit `MFD_EXEC` und `execveat` mit leerem Pfad
+   verweigert; oder begründet festhalten, warum nicht.
+4. `docs/SECURITY.md` und `docs/THREAT-MODEL.md` K-33 (en, de) nachziehen.
+
+### Tests
+- KVM, mit dem wartenden Prozess im Gefängnis aus HUM-480 (läuft ohne
+  `nsenter`, auch auf dem CI-Runner): jeder geschlossene Weg scheitert.
+  Mutationsbeweis je Weg.
+
+### Akzeptanzkriterien
+1. Jeder geschlossene Weg ist gemessen und getestet; was offen bleibt, steht
+   mit Grund in K-33.
