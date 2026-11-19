@@ -253,6 +253,16 @@ fn limits_are_well_formed(limits: &Limits) -> Result<(), Diagnostic> {
         1,
         65_536,
     )?;
+    // Unten mindestens ein Flow, damit der gerade abgeschlossene noch zu sehen
+    // ist; oben eine Million, nach der Messung von HUM-556 (rund 3,7 KiB je
+    // behaltenem Flow samt Luft der Tabelle) gut 3,5 GiB. Darüber wäre die
+    // Grenze keine mehr.
+    between(
+        "limits.registry_max_finished_flows",
+        u64::from(limits.registry_max_finished_flows),
+        1,
+        1_000_000,
+    )?;
 
     if limits.hold_max_bytes < limits.hold_body_cap_bytes {
         return Err(out_of_range(

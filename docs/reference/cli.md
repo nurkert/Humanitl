@@ -156,6 +156,7 @@ below lists the flag names and their short aliases.
 | `--limits-max-decompress-ratio` | - | `INTEGER` | `limits.max_decompress_ratio` |
 | `--limits-preview-cap-bytes` | - | `INTEGER` | `limits.preview_cap_bytes` |
 | `--limits-recorder-max-body-bytes` | - | `INTEGER` | `limits.recorder_max_body_bytes` |
+| `--limits-registry-max-finished-flows` | - | `INTEGER` | `limits.registry_max_finished_flows` |
 | `--llm-active` | - | `STRING,_OPTIONAL` | `llm.active` |
 | `--llm-api-key-ref` | - | `STRING,_OPTIONAL` | `llm.api_key_ref` |
 | `--llm-endpoint` | `--llm` | `STRING,_OPTIONAL` | `llm.endpoint` |

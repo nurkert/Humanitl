@@ -50,6 +50,29 @@
 //! **fsync.** Nach `fsync_every` Records oder spätestens nach
 //! `fsync_interval`, außerdem vor jedem Anker und beim Beenden.
 //!
+//! **Gegendruck (HUM-556).** Der Kanal fasst höchstens
+//! [`WriterOptions::queue_capacity`] Aufträge. Ist er voll, wartet
+//! [`AuditHandle::record`], bis der Schreiber Platz gemacht hat, statt den
+//! Record fallen zu lassen oder den Kanal wachsen zu lassen: Ein Schwall von
+//! Records bei langsamer Platte bindet so höchstens diese Zahl im Speicher,
+//! und kein Record geht hier verloren, auch keine Meldung der Sandbox
+//! (HUM-477). Wer wartet, ist der Absender; auf einem Arbeitsfaden der
+//! mehrfädigen `tokio`-Laufzeit gibt er den Faden vorher frei
+//! (`block_in_place`); ein Aufrufer darf deshalb nicht in einem
+//! `tokio::task::LocalSet` laufen, dort bricht `block_in_place` ab (der Daemon
+//! hat keines). Der Sink des Ereignisstroms bleibt dabei hinter dem
+//! Rundfunk zurück und verliert Flow-Ereignisse mit `Lagged`, wie zuvor bei
+//! einem Schwall von Flows (`docs/SECURITY.md`, Abschnitt 8); die Meldungen
+//! der Sandbox kommen nicht über den Strom und sind davon nicht betroffen.
+//!
+//! **Beim Beenden geht nichts verloren, was angenommen wurde.** Ein Absender
+//! legt seinen Auftrag nur unter einer Sperre in den Kanal, die auch sagt, ob
+//! der Schreiber schließt. Bei `Stop` oder beim Schließen setzt der Schreiber
+//! unter dieser Sperre das Zeichen und arbeitet danach alles ab, was schon im
+//! Kanal liegt, bevor `daemon.stopped` folgt. Wer später kommt, bekommt keinen
+//! Platz mehr, und `tracing` sagt, dass sein Record fehlt; still verworfen
+//! wird keiner.
+//!
 //! **Aufbewahrung.** [`AuditHandle::prune`] löscht den Anfang der Kette im
 //! selben Thread, der anhängt (HUM-157); wie und mit welchem Beleg, beschreibt
 //! `humanitl_audit::retention`, die Schritte auf der Datei stehen in
@@ -62,7 +85,8 @@ use std::os::unix::fs::{
     DirBuilderExt as _, FileExt as _, OpenOptionsExt as _, PermissionsExt as _,
 };
 use std::path::{Path, PathBuf};
-use std::sync::mpsc::{self, RecvTimeoutError};
+use std::sync::mpsc::{self, RecvTimeoutError, SyncSender, TryRecvError, TrySendError};
+use std::sync::{Arc, Mutex, PoisonError};
 use std::thread::JoinHandle;
 use std::time::{Duration, Instant, SystemTime};
 
@@ -99,6 +123,14 @@ pub const FSYNC_INTERVAL: Duration = Duration::from_secs(1);
 pub const LOG_MODE: u32 = 0o600;
 /// Rechte des Audit-Verzeichnisses.
 pub const LOG_DIR_MODE: u32 = 0o700;
+/// Vorgabe für [`WriterOptions::queue_capacity`].
+///
+/// Gemessen mit `tests/writer.rs`
+/// (`a_burst_against_a_stalled_writer_is_bounded_and_loses_no_sandbox_record`):
+/// Eine Art (`RecordKind`) belegt im Kanal 176 Bytes, dazu kommen ihre
+/// Zeichenketten auf dem Heap. 4096 wartende Aufträge sind damit knapp 1 MiB
+/// im Kanal selbst; vorher wuchs die Warteschlange ohne Grenze.
+pub const DEFAULT_QUEUE_CAPACITY: usize = 4096;
 pub use humanitl_audit::record::MAX_LINE_BYTES;
 
 /// So viele Befunde warten höchstens im Strom.
@@ -116,6 +148,9 @@ pub struct WriterOptions {
     pub fsync_every: u32,
     /// Spätestens nach dieser Zeit wird synchronisiert.
     pub fsync_interval: Duration,
+    /// So viele Aufträge fasst der Kanal zum Schreiber höchstens; `0` gilt
+    /// als `1`. Ist er voll, wartet der Absender (siehe Modulkommentar).
+    pub queue_capacity: usize,
 }
 
 impl Default for WriterOptions {
@@ -124,6 +159,7 @@ impl Default for WriterOptions {
             anchor_every: DEFAULT_ANCHOR_EVERY,
             fsync_every: DEFAULT_FSYNC_EVERY,
             fsync_interval: FSYNC_INTERVAL,
+            queue_capacity: DEFAULT_QUEUE_CAPACITY,
         }
     }
 }
@@ -164,11 +200,14 @@ enum Command {
 
 /// Das Handle, über das jeder Teil des Daemons Records schickt.
 ///
-/// Billig zu klonen. `record` blockiert nie; ist der Schreiber schon beendet,
-/// geht der Record verloren, und `tracing` sagt es.
+/// Billig zu klonen. `record` wartet nur, solange der Kanal voll ist; ist der
+/// Schreiber schon beendet, geht der Record verloren, und `tracing` sagt es.
 #[derive(Clone)]
 pub struct AuditHandle {
-    tx: mpsc::Sender<Command>,
+    tx: SyncSender<Command>,
+    /// Wahr, sobald der Schreiber schließt; nur unter dieser Sperre kommt ein
+    /// Auftrag in den Kanal (siehe Modulkommentar).
+    closing: Arc<Mutex<bool>>,
 }
 
 impl fmt::Debug for AuditHandle {
@@ -195,8 +234,63 @@ impl AuditHandle {
             );
             return;
         }
-        if self.tx.send(Command::Record { session, kind }).is_err() {
+        if !self.send(Command::Record { session, kind }) {
             tracing::warn!("the audit writer has ended; a record was dropped");
+        }
+    }
+
+    /// Legt `command` in den Kanal, solange der Schreiber nicht schließt.
+    fn try_offer(&self, command: Command) -> Result<(), TrySendError<Command>> {
+        let closing = self.closing.lock().unwrap_or_else(PoisonError::into_inner);
+        if *closing {
+            return Err(TrySendError::Disconnected(command));
+        }
+        self.tx.try_send(command)
+    }
+
+    /// Schickt `command` und wartet, solange der Kanal voll ist. Falsch, wenn
+    /// der Schreiber schließt oder schon beendet ist; dann ist der Auftrag
+    /// nicht angenommen.
+    fn send(&self, command: Command) -> bool {
+        match self.try_offer(command) {
+            Ok(()) => true,
+            Err(TrySendError::Disconnected(_)) => false,
+            Err(TrySendError::Full(command)) => {
+                tracing::debug!("the audit queue is full; the sender waits for the writer");
+                self.wait_for_room(command)
+            }
+        }
+    }
+
+    /// Versucht es wieder, bis Platz ist oder der Schreiber schließt.
+    ///
+    /// Gewartet wird außerhalb der Sperre, in Pausen von 1 bis 20 ms, damit
+    /// der Schreiber sie zum Schließen bekommt. Auf einem Arbeitsfaden der
+    /// mehrfädigen `tokio`-Laufzeit über `block_in_place`, damit die anderen
+    /// Aufgaben dieses Fadens weiterlaufen; sonst (eigener Faden, einfädige
+    /// Laufzeit) wartet der Faden selbst. Der Schreiber braucht die Laufzeit
+    /// nicht, also kommt er in beiden Fällen voran, und das Warten endet.
+    fn wait_for_room(&self, command: Command) -> bool {
+        let wait = move || {
+            let mut command = command;
+            let mut pause = Duration::from_millis(1);
+            loop {
+                std::thread::sleep(pause);
+                match self.try_offer(command) {
+                    Ok(()) => return true,
+                    Err(TrySendError::Disconnected(_)) => return false,
+                    Err(TrySendError::Full(again)) => command = again,
+                }
+                pause = (pause * 2).min(Duration::from_millis(20));
+            }
+        };
+        let multi_thread = tokio::runtime::Handle::try_current().is_ok_and(|runtime| {
+            runtime.runtime_flavor() == tokio::runtime::RuntimeFlavor::MultiThread
+        });
+        if multi_thread {
+            tokio::task::block_in_place(wait)
+        } else {
+            wait()
         }
     }
 
@@ -205,7 +299,9 @@ impl AuditHandle {
     #[must_use]
     pub fn sync(&self) -> Option<Head> {
         let (reply, answer) = mpsc::channel();
-        self.tx.send(Command::Sync(reply)).ok()?;
+        if !self.send(Command::Sync(reply)) {
+            return None;
+        }
         answer.recv().ok()
     }
 
@@ -271,14 +367,14 @@ impl AuditHandle {
                 .fix(FixAction::CopyCommand("humanitl daemon logs".to_owned()))
                 .build()
         };
-        self.tx
-            .send(Command::Prune {
-                cutoff: limits.before.map(humanitl_core::time::from_system_time),
-                max_bytes: limits.max_bytes,
-                anchors,
-                reply,
-            })
-            .map_err(|_| ended())?;
+        if !self.send(Command::Prune {
+            cutoff: limits.before.map(humanitl_core::time::from_system_time),
+            max_bytes: limits.max_bytes,
+            anchors,
+            reply,
+        }) {
+            return Err(ended());
+        }
         answer.recv().map_err(|_| ended())?
     }
 }
@@ -353,8 +449,10 @@ impl AuditWriter {
         );
 
         let (diagnostics, _idle) = broadcast::channel(DIAGNOSTIC_BUFFER);
-        let (tx, rx) = mpsc::channel();
+        let (tx, rx) = mpsc::sync_channel(options.queue_capacity.max(1));
+        let closing = Arc::new(Mutex::new(false));
         let mut chain = Chain {
+            closing: Arc::clone(&closing),
             file,
             len,
             key: Zeroizing::new(*key.bytes()),
@@ -388,7 +486,7 @@ impl AuditWriter {
             .map_err(|err| not_writable(path, &format!("cannot start the writer thread: {err}")))?;
         Ok((
             Self {
-                handle: AuditHandle { tx },
+                handle: AuditHandle { tx, closing },
                 join: Some(join),
                 diagnostics,
                 path: path.to_owned(),
@@ -430,14 +528,10 @@ impl AuditWriter {
     #[must_use]
     pub fn stop(mut self, reason: &str) -> Option<Head> {
         let (reply, answer) = mpsc::channel();
-        let sent = self
-            .handle
-            .tx
-            .send(Command::Stop {
-                reason: reason.to_owned(),
-                reply,
-            })
-            .is_ok();
+        let sent = self.handle.send(Command::Stop {
+            reason: reason.to_owned(),
+            reply,
+        });
         let head = if sent { answer.recv().ok() } else { None };
         if let Some(join) = self.join.take() {
             let _ = join.join();
@@ -451,7 +545,7 @@ impl Drop for AuditWriter {
     /// kein Anker. Das ist der Weg eines Abbruchs, nicht der eines Endes.
     fn drop(&mut self) {
         if let Some(join) = self.join.take() {
-            let _ = self.handle.tx.send(Command::Close);
+            let _ = self.handle.send(Command::Close);
             let _ = join.join();
         }
     }
@@ -478,6 +572,8 @@ pub fn checked_data(kind: &str, data: Value) -> (Value, Option<Diagnostic>) {
 
 /// Der Zustand des Schreib-Threads.
 struct Chain {
+    /// Geteilt mit jedem [`AuditHandle`]; siehe Modulkommentar.
+    closing: Arc<Mutex<bool>>,
     file: File,
     len: u64,
     key: Zeroizing<[u8; KEY_LEN]>,
@@ -530,12 +626,17 @@ impl Chain {
                     let _ = reply.send(self.head());
                 }
                 Command::Stop { reason, reply } => {
+                    // Erst was schon angenommen ist, dann das Ende.
+                    let more = self.close(rx);
                     self.record(None, &RecordKind::DaemonStopped(DaemonStopped { reason }));
                     if !self.last_was_anchor {
                         self.anchor_or_report();
                     }
                     self.sync();
                     let _ = reply.send(self.head());
+                    for reply in more {
+                        let _ = reply.send(self.head());
+                    }
                     return;
                 }
                 Command::Prune {
@@ -543,17 +644,60 @@ impl Chain {
                     max_bytes,
                     anchors,
                     reply,
-                } => {
-                    let outcome = self.prune(cutoff, max_bytes, &anchors);
-                    if let Err(diagnostic) = &outcome {
-                        self.report(diagnostic.clone());
+                } => self.prune_and_answer(cutoff, max_bytes, &anchors, &reply),
+                Command::Close => {
+                    for reply in self.close(rx) {
+                        let _ = reply.send(self.head());
                     }
-                    let _ = reply.send(outcome);
+                    break;
                 }
-                Command::Close => break,
             }
         }
         self.sync();
+    }
+
+    /// Ein Lauf der Aufbewahrung samt Antwort an den, der ihn bestellt hat.
+    fn prune_and_answer(
+        &mut self,
+        cutoff: Option<Timestamp>,
+        max_bytes: u64,
+        anchors: &[Anchor],
+        reply: &mpsc::Sender<Result<PruneOutcome, Diagnostic>>,
+    ) {
+        let outcome = self.prune(cutoff, max_bytes, anchors);
+        if let Err(diagnostic) = &outcome {
+            self.report(diagnostic.clone());
+        }
+        let _ = reply.send(outcome);
+    }
+
+    /// Nimmt keine Aufträge mehr an und arbeitet ab, was schon im Kanal liegt.
+    ///
+    /// Unter der Sperre, unter der jeder Absender anbietet, steht danach
+    /// fest, dass nichts mehr dazukommt; was bis dahin angenommen wurde, liegt
+    /// im Kanal und wird hier geschrieben. Zurück kommen die Antworten weiterer
+    /// `Stop`, die erst das Ende der Kette bekommen.
+    fn close(&mut self, rx: &mpsc::Receiver<Command>) -> Vec<mpsc::Sender<Head>> {
+        *self.closing.lock().unwrap_or_else(PoisonError::into_inner) = true;
+        let mut stops = Vec::new();
+        loop {
+            match rx.try_recv() {
+                Ok(Command::Record { session, kind }) => self.record(session, &kind),
+                Ok(Command::Sync(reply)) => {
+                    self.sync();
+                    let _ = reply.send(self.head());
+                }
+                Ok(Command::Prune {
+                    cutoff,
+                    max_bytes,
+                    anchors,
+                    reply,
+                }) => self.prune_and_answer(cutoff, max_bytes, &anchors, &reply),
+                Ok(Command::Stop { reply, .. }) => stops.push(reply),
+                Ok(Command::Close) => {}
+                Err(TryRecvError::Empty | TryRecvError::Disconnected) => return stops,
+            }
+        }
     }
 
     fn head(&self) -> Head {

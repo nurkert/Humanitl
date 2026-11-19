@@ -12,7 +12,7 @@ Names, defaults and tiers are defined by the output of `humanitl config schema`
 limit does. Values are set with `humanitl config set limits.<key> <value>` or in
 the settings dialog (tiers `advanced` and `expert`).
 
-## The eleven limits
+## The twelve limits
 
 | Key | Default | Tier | When exceeded | Diagnostic |
 |---|---|---|---|---|
@@ -27,6 +27,7 @@ the settings dialog (tiers `advanced` and `expert`).
 | `limits.body_timeout_secs` | 300 s | expert | Silence **between two chunks** of a body, never the total duration. Request body: `408` with `Connection: close`. Streamed response body: the stream is cut and recorded as truncated. Streamed upload the destination no longer reads: it fails. | `PROXY_011` (request), `LIMIT_004` (response, upload) |
 | `limits.recorder_max_body_bytes` (alias `recorder.max_body_bytes`) | 32 MiB | expert | What lies beyond is not stored by the recording; the row carries `truncated` and the full size. | none, `truncated` mark on the body |
 | `limits.max_client_connections` | 256 | expert | The accept loop answers `503` with `Connection: close` instead of accepting and leaving the connection lying. | `PROXY_010` (summarised once per minute) |
+| `limits.registry_max_finished_flows` | 10,000 | expert | The oldest finished flow leaves the daemon's memory; the recording already has it. Held and running flows never count and never leave. Without a recording, `ListFlows` shows only the last finished flows. Closed to project profiles. | none |
 
 The specification of HUM-057 named three keys differently
 (`limits.hold_memory_cap_bytes`, `limits.upstream_connect_timeout_secs`,

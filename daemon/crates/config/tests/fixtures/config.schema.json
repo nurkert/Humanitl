@@ -592,7 +592,8 @@
         "max_client_connections": 256,
         "max_decompress_ratio": 100,
         "preview_cap_bytes": 8388608,
-        "recorder_max_body_bytes": 33554432
+        "recorder_max_body_bytes": 33554432,
+        "registry_max_finished_flows": 10000
       },
       "description": "Alle Caps und Zeitgrenzen an einer Stelle.",
       "properties": {
@@ -690,6 +691,15 @@
           "default": 33554432,
           "description": "Größter Body, den die Aufzeichnung als Blob ablegt. Alles darüber wird nur mit Prüfsumme vermerkt.",
           "format": "uint64",
+          "minimum": 0,
+          "type": "integer",
+          "x-project-scope": "denied",
+          "x-tier": "expert"
+        },
+        "registry_max_finished_flows": {
+          "default": 10000,
+          "description": "Größte Zahl abgeschlossener Flows, die der Daemon im Speicher behält. Darüber fällt der älteste abgeschlossene heraus; die Aufzeichnung hat ihn da längst. Gehaltene und laufende Flows zählen nicht und fallen nie heraus. Ohne Aufzeichnung zeigt die Liste nur diese letzten Flows.",
+          "format": "uint32",
           "minimum": 0,
           "type": "integer",
           "x-project-scope": "denied",

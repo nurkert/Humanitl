@@ -184,6 +184,7 @@ Alle Caps und Zeitgrenzen an einer Stelle.
 | `limits.max_decompress_ratio` | integer | `100` | expert | allowed | ja | Höchstes erlaubtes Verhältnis von entpackten zu gepackten Bytes einer Vorschau. |
 | `limits.preview_cap_bytes` | integer | `8388608` | expert | allowed | ja | Größte Menge Body, die die Oberfläche als Vorschau bekommt. |
 | `limits.recorder_max_body_bytes` | integer | `33554432` | expert | denied | ja | Größter Body, den die Aufzeichnung als Blob ablegt. Alles darüber wird nur mit Prüfsumme vermerkt. |
+| `limits.registry_max_finished_flows` | integer | `10000` | expert | denied | ja | Größte Zahl abgeschlossener Flows, die der Daemon im Speicher behält. Darüber fällt der älteste abgeschlossene heraus; die Aufzeichnung hat ihn da längst. Gehaltene und laufende Flows zählen nicht und fallen nie heraus. Ohne Aufzeichnung zeigt die Liste nur diese letzten Flows. |
 
 ### `llm`
 

@@ -5656,6 +5656,44 @@ HUM-467) begrenzen nur Gleichzeitiges, nicht die Summe über die Zeit.
    begrenzt, ohne gehaltene Flows oder Audit-Einträge der Sandbox zu
    verlieren.
 
+### Stand nach der Umsetzung (2026-11-19)
+
+- **Messung** (`daemon/crates/proxy/tests/registry_memory.rs`, zählender
+  Allokator, Linux x86_64): Ein abgeschlossener Flow einer kleinen Anfrage
+  (sechs Kopfzeilen, Pfad mit Query) belegt in der Registry 2,3 bis 2,6 KiB
+  Heap, davon 816 Bytes im `FlowRecord` selbst. Ohne Grenze wuchs die Registry
+  um so viel je Anfrage (100 000 Anfragen rund 250 MiB). Mit Grenze 10 000
+  steigt sie bis 37,6 MB und bleibt dort, nach 80 000 wie nach 1 280 000
+  Anfragen; mit Grenze 1 000 bei 4,6 MB ab 32 000 Anfragen. Die Luft über
+  der reinen Datensatzgröße sind die Splitter der `DashMap`.
+- **Registry:** neuer Schlüssel `limits.registry_max_finished_flows`
+  (Vorgabe 10 000, `1..=1_000_000`, `expert`, für das Projekt-Profil
+  gesperrt, im Einstellungskatalog `file_only`). Gezählt wird beim Übergang
+  nach `Recorded`; verdrängt wird der älteste abgeschlossene, und nur, wenn er
+  noch `Recorded` steht. Zahl statt Alter, weil eine Zahl den Speicher
+  unabhängig von der Rate des Gasts begrenzt.
+- **Audit:** `std::sync::mpsc::sync_channel` mit 4096 Plätzen
+  (`WriterOptions::queue_capacity`). Ein voller Kanal lässt den Absender
+  warten (Gegendruck), auf einem Arbeitsfaden der mehrfädigen Laufzeit über
+  `block_in_place`; kein Record wird verworfen. Die Meldungen der Sandbox
+  gehen direkt in diesen Kanal und kommen damit immer an. Der Sink des
+  Ereignisstroms fällt bei vollem Kanal hinter den Rundfunk zurück und
+  verliert Flow-Ereignisse mit `Lagged`; das ist die schon dokumentierte
+  Grenze „nie geschriebene Ereignisse" (`docs/SECURITY.md` 8), jetzt auch
+  bei langsamer Platte statt nur bei einem Schwall von Flows.
+- **Aus dem Review:** Ein Absender legt seinen Auftrag nur unter einer
+  Sperre in den Kanal, die auch das Schließen kennt; wer auf Platz wartet,
+  wartet außerhalb davon in Pausen von 1 bis 20 ms. Bei `Stop` und beim
+  Schließen setzt der Schreiber das Zeichen und schreibt alles, was schon im
+  Kanal liegt, vor `daemon.stopped`; ein angenommener Record geht also nie
+  verloren, ein späterer bekommt keinen Platz und `tracing` meldet ihn. Der
+  Sink des Audit-Logs schließt bei `Lagged` alle offenen Flows ab (ein
+  ausstehendes `flow.received` wird noch geschrieben), sonst wüchse seine
+  Tabelle mit jedem verlorenen `Recorded`. Die Registry erreicht `Recorded`
+  über `HoldQueue::publish`; `FlowRegistry::transition` sendet nur in den
+  Strom, treibt aber gehaltene Flows, die nie verdrängt werden.
+- `docs/THREAT-MODEL.md` K-38 nennt beide Grenzen.
+
 ---
 
 ## HUM-557 · Kernel-Stufe: die letzten Wege zu eigenem Code in der Unit
