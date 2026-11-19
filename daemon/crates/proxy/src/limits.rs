@@ -304,7 +304,7 @@ mod tests {
             request.authority.port,
         );
         assert_eq!(
-            set.evaluate(&key, chrono::Utc::now(), SessionId::new()),
+            set.evaluate(&key, jiff::Timestamp::now(), SessionId::new()),
             Verdict::Matched {
                 rule: rule.id,
                 action: Action::Ask

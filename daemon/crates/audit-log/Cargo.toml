@@ -13,7 +13,7 @@ workspace = true
 humanitl-audit.workspace = true
 humanitl-core.workspace = true
 
-chrono.workspace = true
+jiff.workspace = true
 # Der Zufall des Kerns für einen neuen Dateischlüssel.
 getrandom.workspace = true
 hex.workspace = true

@@ -37,6 +37,7 @@ pub mod sandbox_notice;
 pub mod secret_mask;
 pub mod shell;
 pub mod terminal;
+pub mod time;
 
 /// Zweiter Name für [`diagnostics`], wie ihn HUM-063 verwendet.
 pub use crate::diagnostics as diag;

@@ -12,7 +12,7 @@ workspace = true
 [dependencies]
 humanitl-core.workspace = true
 
-chrono.workspace = true
+jiff.workspace = true
 dashmap.workspace = true
 flate2.workspace = true
 psl.workspace = true

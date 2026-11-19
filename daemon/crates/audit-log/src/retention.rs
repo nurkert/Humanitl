@@ -12,9 +12,9 @@ use std::io::{self, BufRead as _, BufReader, Read, Write as _};
 use std::os::unix::fs::{FileExt as _, OpenOptionsExt as _};
 use std::path::{Path, PathBuf};
 
-use chrono::{DateTime, Utc};
 use humanitl_audit::record::{AuditRecord, format_ts};
 use humanitl_audit::retention::AuditPruned;
+use jiff::Timestamp;
 
 use crate::writer::LOG_MODE;
 
@@ -34,7 +34,7 @@ pub(crate) struct Cut {
 impl Cut {
     /// Der Record, der diesen Schnitt dokumentiert, mit den Grenzen des
     /// Laufs.
-    pub(crate) fn record(&self, cutoff: Option<DateTime<Utc>>, max_bytes: u64) -> AuditPruned {
+    pub(crate) fn record(&self, cutoff: Option<Timestamp>, max_bytes: u64) -> AuditPruned {
         AuditPruned {
             through_seq: self.through_seq,
             through_hash: self.through_hash.clone(),
@@ -71,10 +71,9 @@ impl Cut {
 /// # Errors
 ///
 /// Der Lesefehler.
-pub(crate) fn find_cut(file: &File, len: u64, cutoff: DateTime<Utc>) -> io::Result<Option<Cut>> {
+pub(crate) fn find_cut(file: &File, len: u64, cutoff: Timestamp) -> io::Result<Option<Cut>> {
     scan(file, len, |record, _, _| {
-        DateTime::parse_from_rfc3339(&record.body.ts)
-            .is_ok_and(|ts| ts.with_timezone(&Utc) < cutoff)
+        humanitl_core::time::parse_rfc3339(&record.body.ts).is_ok_and(|ts| ts < cutoff)
     })
 }
 

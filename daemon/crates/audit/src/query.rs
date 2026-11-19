@@ -32,7 +32,7 @@ mod quick;
 use std::collections::VecDeque;
 use std::io::{self, BufRead};
 
-use chrono::{DateTime, DurationRound as _, TimeDelta, Utc};
+use jiff::{RoundMode, Timestamp, TimestampRound, Unit};
 
 use crate::record::{AuditRecord, format_ts};
 
@@ -69,11 +69,11 @@ impl TimeRange {
     /// der vor der unteren Grenze liegt, im Zeitraum, weil seine Mikrosekunde
     /// dieselbe ist.
     #[must_use]
-    pub fn new(from: Option<DateTime<Utc>>, to: Option<DateTime<Utc>>) -> Self {
-        let micro = TimeDelta::microseconds(1);
+    pub fn new(from: Option<Timestamp>, to: Option<Timestamp>) -> Self {
+        let micro = |mode| TimestampRound::new().smallest(Unit::Microsecond).mode(mode);
         Self {
-            from: from.map(|at| format_ts(at.duration_round_up(micro).unwrap_or(at))),
-            to: to.map(|at| format_ts(at.duration_trunc(micro).unwrap_or(at))),
+            from: from.map(|at| format_ts(at.round(micro(RoundMode::Ceil)).unwrap_or(at))),
+            to: to.map(|at| format_ts(at.round(micro(RoundMode::Floor)).unwrap_or(at))),
         }
     }
 
@@ -274,7 +274,7 @@ fn for_each_record(
 mod tests {
     #![allow(clippy::unwrap_used, clippy::expect_used, clippy::panic)]
 
-    use chrono::{TimeZone as _, Utc};
+    use jiff::{SignedDuration, Timestamp};
 
     use super::TimeRange;
 
@@ -282,10 +282,10 @@ mod tests {
     /// die Grenze nach innen, nie nach außen.
     #[test]
     fn a_range_is_inclusive_and_rounds_inwards() {
-        let from = Utc.with_ymd_and_hms(2026, 9, 2, 10, 0, 0).unwrap()
-            + chrono::TimeDelta::nanoseconds(500);
-        let to = Utc.with_ymd_and_hms(2026, 9, 2, 11, 0, 0).unwrap()
-            + chrono::TimeDelta::nanoseconds(500);
+        let from =
+            "2026-09-02T10:00:00Z".parse::<Timestamp>().unwrap() + SignedDuration::from_nanos(500);
+        let to =
+            "2026-09-02T11:00:00Z".parse::<Timestamp>().unwrap() + SignedDuration::from_nanos(500);
         let range = TimeRange::new(Some(from), Some(to));
         assert!(range.is_bounded());
         assert!(!range.contains("2026-09-02T10:00:00.000000Z"));

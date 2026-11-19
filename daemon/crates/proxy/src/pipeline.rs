@@ -489,7 +489,7 @@ impl RulesPipeline {
             tracing::error!(flow = %flow.id, "the rule set is poisoned; asking instead of matching");
             return Verdict::Default;
         };
-        rules.evaluate(&key, chrono::Utc::now(), flow.session)
+        rules.evaluate(&key, jiff::Timestamp::now(), flow.session)
     }
 
     /// Wendet eine Entscheidung an, die eine Regel getroffen hat.
@@ -625,7 +625,7 @@ impl FlowPipeline for RulesPipeline {
         let key = Self::key(flow);
         let rules = self.rules.read().ok()?;
         let Verdict::Matched { rule, action } =
-            rules.evaluate(&key, chrono::Utc::now(), flow.session)
+            rules.evaluate(&key, jiff::Timestamp::now(), flow.session)
         else {
             return None;
         };

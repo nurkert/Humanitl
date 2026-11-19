@@ -12,7 +12,7 @@ workspace = true
 [dependencies]
 humanitl-core.workspace = true
 
-chrono.workspace = true
+jiff.workspace = true
 globset.workspace = true
 regex.workspace = true
 serde.workspace = true

@@ -43,7 +43,7 @@ humanitl-rules.workspace = true
 # startet sie; `tools/deps-allow.toml` erlaubt die Kante seit Sprint 0.
 humanitl-sandbox.workspace = true
 
-chrono.workspace = true
+jiff.workspace = true
 
 base64.workspace = true
 dashmap.workspace = true

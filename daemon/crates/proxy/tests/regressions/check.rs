@@ -23,7 +23,6 @@ use std::sync::OnceLock;
 use std::time::Duration;
 
 use bytes::Bytes;
-use chrono::{DateTime, Utc};
 use http_body_util::Full;
 use humanitl_core::{HostName, SessionId};
 use humanitl_proxy::body::{self, BufferError};
@@ -34,6 +33,7 @@ use hyper::body::Incoming;
 use hyper::service::service_fn;
 use hyper::{Request, Response};
 use hyper_util::rt::{TokioIo, TokioTimer};
+use jiff::Timestamp;
 use tokio::io::{AsyncReadExt as _, AsyncWriteExt as _};
 
 /// Die Obergrenze des Request-Bodys im Target `chunked_decoder`.
@@ -193,8 +193,8 @@ fn rules() -> &'static RuleSet {
 }
 
 /// Der feste Zeitpunkt jeder Auswertung; ein Target liest keine Uhr.
-fn fixed_now() -> DateTime<Utc> {
-    DateTime::from_timestamp(1_790_000_000, 0).unwrap_or_default()
+fn fixed_now() -> Timestamp {
+    Timestamp::from_second(1_790_000_000).unwrap_or_default()
 }
 
 /// Ein normalisierter Host: siehe [`http_request_path`].

@@ -265,7 +265,7 @@ impl RulesService {
         let verdict = self
             .store
             .effective()
-            .evaluate(&key, chrono::Utc::now(), self.session());
+            .evaluate(&key, jiff::Timestamp::now(), self.session());
         let rule = verdict.rule().and_then(|id| self.store.get(id));
         Ok(v1::RuleTest {
             action: convert::action_to_proto(verdict.action()) as i32,
@@ -325,7 +325,7 @@ impl RulesService {
         };
         let scanned = u32::try_from(page.rows.len()).unwrap_or(u32::MAX);
         let set = RuleSet::from_rules([rule.clone()]);
-        let now = chrono::Utc::now();
+        let now = jiff::Timestamp::now();
         let session = self.session();
         let hits = page
             .rows
@@ -345,7 +345,7 @@ impl RulesService {
 fn would_hit(
     set: &RuleSet,
     row: &humanitl_recorder::FlowSummary,
-    now: chrono::DateTime<chrono::Utc>,
+    now: jiff::Timestamp,
     session: SessionId,
 ) -> bool {
     let Ok(host) = HostName::parse(&row.host) else {

@@ -17,9 +17,9 @@
 
 #![allow(clippy::unwrap_used, clippy::expect_used, clippy::panic)]
 
-use chrono::Utc;
 use humanitl_core::{HostName, Method, Scheme, SessionId, Upgrade};
 use humanitl_rules::{RequestKey, RuleSet, parse_rules, parse_rules_for_session};
+use jiff::Timestamp;
 
 /// Die Referenzseite.
 const REFERENCE: &str = include_str!("../../../../docs/reference/rules.md");
@@ -212,7 +212,7 @@ fn verdict(rules: &RuleSet, probe: &Probe, session: SessionId) -> String {
         key = key.with_upgrade(upgrade);
     }
     rules
-        .evaluate(&key, Utc::now(), session)
+        .evaluate(&key, Timestamp::now(), session)
         .action()
         .to_string()
 }

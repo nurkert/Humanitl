@@ -545,10 +545,7 @@ fn expiry_to_proto(expiry: Expiry) -> v1::RuleExpiry {
     let expiry = match expiry {
         Expiry::Never => v1::rule_expiry::Expiry::Never(()),
         Expiry::Session(_) => v1::rule_expiry::Expiry::Session(()),
-        Expiry::At(at) => v1::rule_expiry::Expiry::At(prost_types::Timestamp {
-            seconds: at.timestamp(),
-            nanos: i32::try_from(at.timestamp_subsec_nanos().min(999_999_999)).unwrap_or(0),
-        }),
+        Expiry::At(at) => v1::rule_expiry::Expiry::At(wire_instant(at)),
     };
     v1::RuleExpiry {
         expiry: Some(expiry),
@@ -1123,6 +1120,17 @@ pub fn timestamp(at: SystemTime) -> prost_types::Timestamp {
     )
 }
 
+/// Ein Zeitpunkt aus `jiff` in der Wire-Form: Sekunden abgerundet,
+/// Nanosekunden von 0 bis 999 999 999, auch vor 1970.
+#[must_use]
+pub fn wire_instant(at: jiff::Timestamp) -> prost_types::Timestamp {
+    let (seconds, nanos) = humanitl_core::time::unix_parts(at);
+    prost_types::Timestamp {
+        seconds,
+        nanos: i32::try_from(nanos).unwrap_or(0),
+    }
+}
+
 /// Die Spanne zwischen zwei Zeitpunkten in der Wire-Form.
 #[must_use]
 pub fn duration_between(from: SystemTime, to: SystemTime) -> prost_types::Duration {
@@ -1210,10 +1218,7 @@ pub fn domain_to_proto(info: &humanitl_catalog::DomainInfo) -> v1::DomainInfo {
         apex: info.apex.clone().unwrap_or_default(),
         catalog_id: info.catalog_id.clone().unwrap_or_default(),
         tranco_rank: info.popularity_rank.unwrap_or(0),
-        first_seen: info.first_seen.map(|at| prost_types::Timestamp {
-            seconds: at.timestamp(),
-            nanos: i32::try_from(at.timestamp_subsec_nanos()).unwrap_or(0),
-        }),
+        first_seen: info.first_seen.map(wire_instant),
         seen_count: info.seen_count,
     }
 }
@@ -2035,7 +2040,7 @@ fn expiry_from_proto(
         v1::rule_expiry::Expiry::Never(()) => Ok(Expiry::Never),
         v1::rule_expiry::Expiry::Session(()) => Ok(Expiry::Session(session)),
         v1::rule_expiry::Expiry::At(at) => {
-            chrono::DateTime::from_timestamp(at.seconds, u32::try_from(at.nanos).unwrap_or(0))
+            humanitl_core::time::from_unix_parts(at.seconds, u32::try_from(at.nanos).unwrap_or(0))
                 .map(Expiry::At)
                 .ok_or(RuleError::Expiry)
         }

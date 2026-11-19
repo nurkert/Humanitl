@@ -1852,11 +1852,11 @@ async fn running_sandbox(events: &mut tonic::Streaming<v1::SandboxEvent>, marker
 ///
 /// Das Protokoll ist eine JSON-Zeile je Ereignis; gelesen wird das Feld
 /// `timestamp` der ersten Zeile, die die Meldung trägt.
-fn stamp_of(log: &str, message: &str) -> Option<chrono::DateTime<chrono::FixedOffset>> {
+fn stamp_of(log: &str, message: &str) -> Option<jiff::Timestamp> {
     let line = log.lines().find(|line| line.contains(message))?;
     let (_, rest) = line.split_once("\"timestamp\":\"")?;
     let (stamp, _) = rest.split_once('"')?;
-    chrono::DateTime::parse_from_rfc3339(stamp).ok()
+    stamp.parse().ok()
 }
 
 /// Die PID aus der Startzeile, wenn die Zeile eine trägt.
@@ -2020,7 +2020,7 @@ async fn the_end_of_the_daemon_ends_the_agent_it_started() {
     ) {
         eprintln!(
             "hum142: the sandbox ended {} ms before the service had drained its clients",
-            (served_at - ended_at).num_milliseconds()
+            served_at.duration_since(ended_at).as_millis()
         );
     }
     eprintln!(

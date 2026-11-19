@@ -8,7 +8,6 @@
 
 #![allow(clippy::unwrap_used, clippy::expect_used, clippy::panic)]
 
-use chrono::Utc;
 use humanitl_core::diagnostics::codes::{RULES_002, RULES_003};
 use humanitl_core::rule::{Action, HostPattern, Matcher};
 use humanitl_core::{
@@ -16,6 +15,7 @@ use humanitl_core::{
     Upgrade,
 };
 use humanitl_rules::{RequestKey, RuleSet, Verdict, host_matches};
+use jiff::Timestamp;
 
 /// Ein Muster aus der Tabelle, ohne seine Warnungen.
 fn pattern(text: &str) -> HostPattern {
@@ -325,7 +325,7 @@ fn host_37() {
     let key = RequestKey::new(&target, &Method::GET, "/", Scheme::Https, 443)
         .with_upgrade(Upgrade::WebSocket);
     assert_eq!(
-        rules.evaluate(&key, Utc::now(), SessionId::new()),
+        rules.evaluate(&key, Timestamp::now(), SessionId::new()),
         Verdict::Default
     );
 }
@@ -338,7 +338,7 @@ fn host_38() {
     let target = host("api.github.com");
     let key = RequestKey::new(&target, &Method::GET, "/", Scheme::Https, 443);
     assert_eq!(
-        rules.evaluate(&key, Utc::now(), SessionId::new()),
+        rules.evaluate(&key, Timestamp::now(), SessionId::new()),
         Verdict::Default
     );
 }
@@ -382,7 +382,7 @@ fn host_42() {
 
     let key = RequestKey::new(&target, &Method::GET, "/", Scheme::Https, 8443);
     assert_eq!(
-        rules.evaluate(&key, Utc::now(), SessionId::new()),
+        rules.evaluate(&key, Timestamp::now(), SessionId::new()),
         Verdict::Matched {
             rule: id,
             action: Action::Allow
@@ -391,7 +391,7 @@ fn host_42() {
 
     let key = RequestKey::new(&target, &Method::GET, "/", Scheme::Https, 443);
     assert_eq!(
-        rules.evaluate(&key, Utc::now(), SessionId::new()),
+        rules.evaluate(&key, Timestamp::now(), SessionId::new()),
         Verdict::Default
     );
 }

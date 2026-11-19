@@ -9,7 +9,6 @@
 
 use std::net::IpAddr;
 
-use chrono::Utc;
 use humanitl_core::diagnostics::codes::{
     RULES_001, RULES_002, RULES_003, RULES_005, RULES_006, RULES_007, RULES_008, RULES_010,
 };
@@ -20,6 +19,7 @@ use humanitl_core::{
 use humanitl_rules::{
     RequestKey, RuleSet, Verdict, parse_rules, parse_rules_for_session, serialize_rules,
 };
+use jiff::Timestamp;
 
 /// Die mitgelieferte Datei, damit sie nie ungültig ins Paket kommt.
 const DEFAULT_RULES: &str = include_str!("../../../../rules/default.yaml");
@@ -330,6 +330,38 @@ rules:
     assert_eq!(codes(&broken), vec![RULES_001]);
 }
 
+/// Ein Ablauf, wie ihn `rules.yaml` vor dem Wechsel von `chrono` auf `jiff`
+/// trug (HUM-526), liest sich und schreibt sich Byte für Byte gleich zurück:
+/// UTC, ganze Sekunden, `Z`. Ein Versatz oder ein Bruchteil von Hand wird wie
+/// vorher nach UTC umgerechnet und auf die Sekunde abgeschnitten.
+#[test]
+fn a_stored_expiry_is_written_back_unchanged() {
+    let file = |stamp: &str| {
+        format!(
+            "version: 1\nrules:\n  - id: 018f6c1e-7a2b-7c3d-8e4f-0123456789ab\n    action: allow\n    match:\n      host: \"c.example\"\n    expires: \"{stamp}\"\n"
+        )
+    };
+    for (stored, written) in [
+        ("2026-09-03T10:00:00Z", "2026-09-03T10:00:00Z"),
+        ("2026-09-03T12:00:00+02:00", "2026-09-03T10:00:00Z"),
+        ("2026-09-03T10:00:00.999Z", "2026-09-03T10:00:00Z"),
+        // Mehr als neun Stellen las `chrono` und schnitt ab; die Datei bleibt
+        // lesbar.
+        ("2026-09-03T10:00:00.1234567890Z", "2026-09-03T10:00:00Z"),
+    ] {
+        let (set, warnings) = ok(&file(stored));
+        assert!(warnings.is_empty());
+        let out = serialize_rules(&set);
+        assert!(
+            out.contains(&format!("expires: {written}\n")),
+            "{stored}:\n{out}"
+        );
+        if stored == written {
+            assert_eq!(serialize_rules(&ok(&out).0), out);
+        }
+    }
+}
+
 #[test]
 fn a_session_rule_from_the_file_belongs_to_no_running_session() {
     // Der Fallstrick aus HUM-022: eine gespeicherte Sitzungsregel ist beim
@@ -340,7 +372,7 @@ fn a_session_rule_from_the_file_belongs_to_no_running_session() {
     let Some(rule) = set.iter().next() else {
         panic!("one rule");
     };
-    assert!(rule.is_expired(chrono::Utc::now(), SessionId::new()));
+    assert!(rule.is_expired(jiff::Timestamp::now(), SessionId::new()));
 }
 
 /// Alle Felder, die eine Datei setzen darf, ueberleben Schreiben und Lesen.
@@ -788,7 +820,7 @@ fn the_private_address_suggestion_survives_the_file_and_still_matches() {
     let path = "/v1/chat/completions?stream=true";
     let key = RequestKey::new(&host, &Method::POST, path, Scheme::Http, 11434);
     assert_eq!(
-        set.evaluate(&key, Utc::now(), SessionId::new()),
+        set.evaluate(&key, Timestamp::now(), SessionId::new()),
         Verdict::Matched {
             rule: rule.id,
             action: Action::Ask

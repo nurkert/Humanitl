@@ -824,7 +824,7 @@ fn seconds_left(deadline: Option<&prost_types::Timestamp>) -> u64 {
     let Some(deadline) = deadline else {
         return 0;
     };
-    let now = chrono::Utc::now().timestamp();
+    let now = jiff::Timestamp::now().as_second();
     u64::try_from(deadline.seconds.saturating_sub(now)).unwrap_or(0)
 }
 

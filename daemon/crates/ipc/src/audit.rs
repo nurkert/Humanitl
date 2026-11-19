@@ -53,7 +53,6 @@
 use std::path::{Path, PathBuf};
 use std::sync::Arc;
 
-use chrono::{DateTime, Utc};
 use humanitl_audit::{
     Anchor, AuditKey, AuditVerifier, VerifyReport, VerifyStatus, VerifyWarning, canonical_json,
 };
@@ -63,6 +62,7 @@ use humanitl_audit_log::{AuditHandle, VerifyFile as _};
 use humanitl_core::diagnostics::codes;
 use humanitl_core::shell::shell_path;
 use humanitl_core::{Diagnostic, FixAction, Severity};
+use jiff::Timestamp;
 
 use crate::convert::diagnostic_to_proto;
 use crate::v1;
@@ -446,11 +446,8 @@ fn anchored(anchors: &[Anchor]) -> v1::AuditResponse {
         last_anchor_at: anchors
             .iter()
             .max_by_key(|anchor| anchor.seq)
-            .and_then(|anchor| DateTime::parse_from_rfc3339(&anchor.ts).ok())
-            .map(|at| prost_types::Timestamp {
-                seconds: at.timestamp(),
-                nanos: i32::try_from(at.timestamp_subsec_nanos()).unwrap_or(0),
-            }),
+            .and_then(|anchor| humanitl_core::time::parse_rfc3339(&anchor.ts).ok())
+            .map(crate::convert::wire_instant),
         anchors_reported: true,
         ..v1::AuditResponse::default()
     }
@@ -534,10 +531,10 @@ fn range(
 }
 
 /// Ein Zeitpunkt der Leitung als UTC.
-fn instant(at: &prost_types::Timestamp) -> Result<DateTime<Utc>, Diagnostic> {
+fn instant(at: &prost_types::Timestamp) -> Result<Timestamp, Diagnostic> {
     u32::try_from(at.nanos)
         .ok()
-        .and_then(|nanos| DateTime::from_timestamp(at.seconds, nanos))
+        .and_then(|nanos| humanitl_core::time::from_unix_parts(at.seconds, nanos))
         .ok_or_else(|| {
             invalid(format!(
                 "the time {}s + {}ns is not a point in time this daemon can compare",

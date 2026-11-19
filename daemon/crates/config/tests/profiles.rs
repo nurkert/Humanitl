@@ -705,7 +705,7 @@ fn llm_only_blocks_everything_but_passthrough() {
     rules.add_bundled(passthrough.iter().cloned());
 
     let session = SessionId::new();
-    let now = chrono::Utc::now();
+    let now = jiff::Timestamp::now();
     let llm = HostName::parse("ollama.lan").expect("a host");
     let key = RequestKey::new(
         &llm,
@@ -778,7 +778,7 @@ fn a_profile_cannot_declare_its_own_rule_bundled() {
     // Ohne den Vermerk gilt die Reihenfolge der Liste: die Blockregel steht
     // davor und entscheidet.
     let session = SessionId::new();
-    let now = chrono::Utc::now();
+    let now = jiff::Timestamp::now();
     let llm = HostName::parse("ollama.lan").expect("a host");
     let key = RequestKey::new(
         &llm,

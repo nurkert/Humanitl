@@ -30,11 +30,11 @@
 
 use std::time::SystemTime;
 
-use chrono::{DateTime, Utc};
 use humanitl_core::rule::{Expiry, Rule};
 use humanitl_core::{
     DecidedFindings, Decision, DecisionSource, Finding, FlowId, HttpRequest, ResumeReason,
 };
+use jiff::Timestamp;
 use serde_json::{Value, json};
 
 use crate::record::{format_ts, sha256_hex};
@@ -617,13 +617,13 @@ impl RetentionApplied {
     ///
     /// Die Grenze kommt als [`SystemTime`], so wie die Aufzeichnung sie
     /// rechnet (`humanitl_recorder::Retention::horizon`), und wird hier in das
-    /// Format des Logs gebracht; der Aufrufer braucht dafür kein `chrono`.
+    /// Format des Logs gebracht; der Aufrufer braucht dafür keine Zeitbibliothek.
     #[must_use]
     pub fn new(deleted_flows: u64, deleted_blobs: u64, cutoff: SystemTime) -> Self {
         Self {
             deleted_flows,
             deleted_blobs,
-            cutoff: format_ts(DateTime::<Utc>::from(cutoff)),
+            cutoff: format_ts(humanitl_core::time::from_system_time(cutoff)),
         }
     }
 
@@ -946,7 +946,7 @@ impl RecordKind {
 
 /// Ein Zeitpunkt als Text für `data`, über denselben Formatter wie `ts`.
 #[must_use]
-pub fn data_ts(at: DateTime<Utc>) -> String {
+pub fn data_ts(at: Timestamp) -> String {
     format_ts(at)
 }
 

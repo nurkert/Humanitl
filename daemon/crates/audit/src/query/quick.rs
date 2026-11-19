@@ -269,7 +269,8 @@ mod tests {
 
     use std::io::{self, Cursor};
 
-    use chrono::{TimeZone as _, Utc};
+    use jiff::civil::date;
+    use jiff::tz::Offset;
 
     use super::Fields;
     use crate::query::{Page, QueryFilter, TimeRange};
@@ -357,7 +358,11 @@ mod tests {
 
     /// Ohne Filter, nach Art, nach Sitzung, nach Zeitraum und alles zugleich.
     fn filters() -> Vec<QueryFilter> {
-        let at = |second| Utc.with_ymd_and_hms(2026, 9, 24, 10, 0, second).unwrap();
+        let at = |second| {
+            Offset::UTC
+                .to_timestamp(date(2026, 9, 24).at(10, 0, second, 0))
+                .unwrap()
+        };
         let range = TimeRange::new(Some(at(3)), Some(at(7)));
         vec![
             QueryFilter::default(),

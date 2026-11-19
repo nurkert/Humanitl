@@ -5106,6 +5106,33 @@ ipc, proxy, recorder, rules, sandbox), teils in öffentlichen Schnittstellen
 1. Kein direkter Gebrauch von `chrono` mehr; Ausgaben und gespeicherte
    Formate unverändert.
 
+### Stand nach der Umsetzung (2026-11-19)
+Alle Crates und `daemon/fuzz` rechnen mit `jiff::Timestamp`; `chrono` steht
+in keiner Lock-Datei mehr, die Ausnahme `RUSTSEC-2026-0543` in
+`daemon/deny.toml` ist entfernt. Die Textformen stehen von Hand in
+`humanitl_core::time`, weil `jiff` Bruchteile mit so wenigen Stellen wie
+nötig schreibt (`.5` statt `.500`): `rfc3339_secs` für `rules.yaml` und
+`intercept`, `rfc3339_micros` für Audit-Log und `audit_anchors.ts`,
+`rfc3339_auto` als Serde-Form von `Expiry::At`, `rfc3339_auto_offset`
+(`+00:00`) für die Statusseite des Proxys, `compact_micros` für den Namen
+einer beiseitegelegten Audit-Datei. Ein Differenzlauf gegen
+`chrono` 0.4.45 über zwei Millionen Zeitpunkte zwischen den Jahren -9999 und
+9999 ergab für alle Formen, die Millisekunden des Recorder-Filters, die
+Wire-Form und die drei lokalen Zeitformen der CLI dieselben Bytes. Die CLI
+liest die Zeitzone über `tz-system` und `tzdb-zoneinfo` wie vorher
+`chrono::Local` aus `TZ` und `/etc/localtime`.
+
+Abweichungen, bewusst nicht nachgebaut: Fehlertexte der Zeitparser in
+`CLI_004` kommen jetzt aus `jiff`; `parse_rfc3339` nimmt etwas mehr an als
+`chrono` (zum Beispiel `2026-09-03T10:00Z` ohne Sekunden, `+0200`, ein
+Komma vor dem Bruchteil), lehnt aber nichts ab, was je geschrieben wurde;
+mehr als neun Stellen Bruchteil schneidet es wie `chrono` ab. Eine von Hand
+geschriebene Schaltsekunde `23:59:60` wird zu `23:59:59`, die Regel läuft
+also eine Sekunde früher ab und wird mit `:59` zurückgeschrieben. Das bleibt
+bewusst so: Humanitl schreibt nie `:60`, Schaltsekunden werden abgeschafft,
+und eine eigene Darstellung dafür stünde in keinem Verhältnis zum Nutzen; Zeitpunkte jenseits des Jahres 9999 gibt es in
+`jiff` nicht, die CLI zeigt dort `-`.
+
 ---
 
 ## HUM-527 · Website: `astro` auf 7.4.7 oder neuer (zwei Dependabot-Meldungen)

@@ -7,9 +7,9 @@
 
 use std::net::{IpAddr, Ipv4Addr};
 
-use chrono::{DateTime, Utc};
 use humanitl_core::{HostName, Method, Scheme, SessionId, Upgrade};
 use humanitl_rules::{RequestKey, parse_rules_for_session, serialize_rules};
+use jiff::Timestamp;
 
 /// Liest `data` als `rules.yaml`, schreibt den Regelsatz zurück und wertet ihn
 /// aus.
@@ -57,6 +57,6 @@ pub fn rules_yaml(data: &[u8]) {
 }
 
 /// Der feste Zeitpunkt jeder Auswertung; ein Target liest keine Uhr.
-fn fixed_now() -> DateTime<Utc> {
-    DateTime::from_timestamp(1_790_000_000, 0).unwrap_or_default()
+fn fixed_now() -> Timestamp {
+    Timestamp::from_second(1_790_000_000).unwrap_or_default()
 }

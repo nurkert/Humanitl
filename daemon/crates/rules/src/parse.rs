@@ -11,7 +11,6 @@
 //! Regelsatz wäre die schlechtere Antwort, weil niemand ihm ansieht, welche
 //! Hälfte fehlt. Warnungen kommen mit dem Regelsatz zusammen zurück.
 
-use chrono::{DateTime, Utc};
 use humanitl_core::diagnostics::codes::{
     RULES_001, RULES_005, RULES_006, RULES_007, RULES_008, RULES_010,
 };
@@ -763,9 +762,9 @@ fn parse_expiry(text: &str, session: SessionId) -> Option<Expiry> {
     match text {
         "never" => Some(Expiry::Never),
         "session" => Some(Expiry::Session(session)),
-        stamp => DateTime::parse_from_rfc3339(stamp)
+        stamp => humanitl_core::time::parse_rfc3339(stamp)
             .ok()
-            .map(|at| Expiry::At(at.with_timezone(&Utc))),
+            .map(Expiry::At),
     }
 }
 
@@ -844,7 +843,7 @@ impl OutRule {
             expires: match rule.expires {
                 Expiry::Never => "never".to_owned(),
                 Expiry::Session(_) => "session".to_owned(),
-                Expiry::At(at) => at.to_rfc3339_opts(chrono::SecondsFormat::Secs, true),
+                Expiry::At(at) => humanitl_core::time::rfc3339_secs(at),
             },
             stream: rule.stream,
             allow_private: rule.allow_private,

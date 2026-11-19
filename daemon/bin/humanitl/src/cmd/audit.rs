@@ -33,13 +33,13 @@
 use std::fmt::Write as _;
 use std::path::{Path, PathBuf};
 
-use chrono::{DateTime, DurationRound as _, TimeDelta, Utc};
 use humanitl_audit::{AuditVerifier, BreakReason, TimeRange, VerifyStatus, VerifyWarning};
 use humanitl_audit_log::VerifyFile as _;
 use humanitl_audit_log::export::{self, ExportFormat};
 use humanitl_core::diagnostics::codes;
 use humanitl_core::{Diagnostic, FixAction, Severity};
 use humanitl_ipc::v1;
+use jiff::{RoundMode, SignedDuration, Timestamp, TimestampRound, Unit};
 use serde_json::{Value, json};
 use tonic::{Code, Status};
 
@@ -252,12 +252,7 @@ async fn verify_over_rpc(ctx: &Context) -> Result<Summary, Refusal> {
     });
     let anchors = answer.anchors_reported.then(|| Anchors {
         count: answer.anchors,
-        last_at: answer.last_anchor_at.as_ref().and_then(|at| {
-            u32::try_from(at.nanos)
-                .ok()
-                .and_then(|nanos| DateTime::from_timestamp(at.seconds, nanos))
-                .map(humanitl_audit::format_ts)
-        }),
+        last_at: answer.last_anchor_at.as_ref().and_then(log_time),
     });
     let warnings = answer
         .warnings
@@ -481,9 +476,9 @@ fn summary_json(summary: &Summary) -> Value {
 #[derive(Debug, Default)]
 struct Range {
     /// Ab diesem Zeitpunkt, einschließlich.
-    since: Option<DateTime<Utc>>,
+    since: Option<Timestamp>,
     /// Die letzte Mikrosekunde vor `--until`, einschließlich.
-    last: Option<DateTime<Utc>>,
+    last: Option<Timestamp>,
 }
 
 impl Range {
@@ -493,13 +488,16 @@ impl Range {
     ///
     /// `CLI_004`, wenn ein Zeitpunkt sich nicht lesen lässt.
     fn new(since: Option<&str>, until: Option<&str>) -> Result<Self, Failure> {
-        let micro = TimeDelta::microseconds(1);
+        let up = TimestampRound::new()
+            .smallest(Unit::Microsecond)
+            .mode(RoundMode::Ceil);
+        let micro = SignedDuration::from_micros(1);
         Ok(Self {
             since: since.map(parse_ts).transpose()?,
             last: until
                 .map(parse_ts)
                 .transpose()?
-                .map(|until| until.duration_round_up(micro).unwrap_or(until) - micro),
+                .map(|until| until.round(up).unwrap_or(until) - micro),
         })
     }
 
@@ -509,17 +507,29 @@ impl Range {
     }
 
     /// Ein Zeitpunkt für die Leitung.
-    fn wire(at: Option<DateTime<Utc>>) -> Option<prost_types::Timestamp> {
-        at.map(|at| prost_types::Timestamp {
-            seconds: at.timestamp(),
-            nanos: i32::try_from(at.timestamp_subsec_nanos()).unwrap_or(0),
+    fn wire(at: Option<Timestamp>) -> Option<prost_types::Timestamp> {
+        at.map(|at| {
+            let (seconds, nanos) = humanitl_core::time::unix_parts(at);
+            prost_types::Timestamp {
+                seconds,
+                nanos: i32::try_from(nanos).unwrap_or(0),
+            }
         })
     }
 }
 
+/// Ein Zeitpunkt der Leitung in der Form des Logs, wie ihn der Daemon aus
+/// `audit_anchors.ts` gelesen hat; `None`, wenn es ihn nicht gibt.
+fn log_time(at: &prost_types::Timestamp) -> Option<String> {
+    u32::try_from(at.nanos)
+        .ok()
+        .and_then(|nanos| humanitl_core::time::from_unix_parts(at.seconds, nanos))
+        .map(humanitl_audit::format_ts)
+}
+
 /// Ein Zeitpunkt der Kommandozeile.
-fn parse_ts(text: &str) -> Result<DateTime<Utc>, Failure> {
-    let parsed = DateTime::parse_from_rfc3339(text).map_err(|error| {
+fn parse_ts(text: &str) -> Result<Timestamp, Failure> {
+    humanitl_core::time::parse_rfc3339(text).map_err(|error| {
         Failure::new(
             Diagnostic::builder(codes::CLI_004, Severity::Error)
                 .why(format!("{text} is not an RFC 3339 timestamp: {error}"))
@@ -528,8 +538,7 @@ fn parse_ts(text: &str) -> Result<DateTime<Utc>, Failure> {
                 ))
                 .build(),
         )
-    })?;
-    Ok(parsed.to_utc())
+    })
 }
 
 /// `audit export`.
@@ -709,6 +718,28 @@ mod tests {
             .time_range();
         assert!(range.contains("2026-09-02T11:00:00.000000Z"));
         assert!(!range.contains("2026-09-02T11:00:00.000001Z"));
+    }
+
+    /// Der Zeitpunkt des letzten Ankers, den `audit verify --json` als
+    /// `last_anchor_at` zeigt, kommt Zeichen für Zeichen so heraus, wie er in
+    /// `audit_anchors.ts` steht, auch nach dem Wechsel von `chrono` auf
+    /// `jiff` (HUM-526): gelesen im Daemon, über die Leitung, geschrieben hier.
+    #[test]
+    fn the_last_anchor_reads_as_stored() {
+        for stored in [
+            "2026-09-02T10:00:00.123456Z",
+            "2026-09-02T10:00:00.000000Z",
+            "1970-01-01T00:00:00.000001Z",
+        ] {
+            let at = humanitl_core::time::parse_rfc3339(stored).expect("stored form parses");
+            let wire = humanitl_ipc::convert::wire_instant(at);
+            assert_eq!(super::log_time(&wire).as_deref(), Some(stored));
+        }
+        let broken = prost_types::Timestamp {
+            seconds: 0,
+            nanos: -1,
+        };
+        assert_eq!(super::log_time(&broken), None);
     }
 
     #[test]

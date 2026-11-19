@@ -12,10 +12,10 @@ use std::collections::BTreeSet;
 use std::io::Read as _;
 use std::path::{Path, PathBuf};
 
-use chrono::Utc;
 use humanitl_catalog::RANKS_FILE;
 use humanitl_catalog::{Catalog, RANKS_LICENSE_FILE};
 use humanitl_core::HostName;
+use jiff::Timestamp;
 use sha2::{Digest as _, Sha256};
 
 /// Das ausgelieferte Datenverzeichnis, vom Quellbaum aus.
@@ -190,7 +190,7 @@ fn no_two_entries_claim_the_same_pattern() {
 #[test]
 fn the_targets_an_agent_reaches_are_recognised() {
     let catalog = catalog();
-    let now = Utc::now();
+    let now = Timestamp::now();
     let expected = [
         ("api.github.com", "github"),
         ("raw.githubusercontent.com", "github"),
@@ -234,7 +234,7 @@ fn the_targets_an_agent_reaches_are_recognised() {
 #[test]
 fn a_lookalike_is_not_recognised() {
     let catalog = catalog();
-    let now = Utc::now();
+    let now = Timestamp::now();
     // Genau die Namen, mit denen jemand auf einen Katalogtreffer hoffen würde.
     for name in [
         "evil-github.com",
@@ -258,7 +258,7 @@ fn a_lookalike_is_not_recognised() {
 #[test]
 fn an_address_never_gets_a_catalog_entry() {
     let catalog = catalog();
-    let now = Utc::now();
+    let now = Timestamp::now();
     for name in ["140.82.112.3", "169.254.169.254", "[::1]"] {
         let info = catalog.info(&host(name), now);
         assert_eq!(info.catalog_id, None, "{name}");

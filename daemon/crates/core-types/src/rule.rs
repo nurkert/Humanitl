@@ -11,7 +11,7 @@ use core::fmt;
 use core::str::FromStr;
 use std::net::IpAddr;
 
-use chrono::{DateTime, Utc};
+use jiff::Timestamp;
 use serde::{Deserialize, Serialize};
 
 use crate::host::HostName;
@@ -62,7 +62,10 @@ pub enum Expiry {
     /// Nur für diese Sitzung; nicht in `rules.yaml`.
     Session(SessionId),
     /// Bis zu einem Zeitpunkt.
-    At(DateTime<Utc>),
+    ///
+    /// Die Serde-Form bleibt die von `chrono` (HUM-526), siehe
+    /// [`crate::time::rfc3339_auto`].
+    At(#[serde(with = "crate::time::serde_rfc3339")] Timestamp),
 }
 
 impl Expiry {
@@ -71,7 +74,7 @@ impl Expiry {
     /// Eine Sitzungsregel einer anderen Sitzung gilt nie. `At` läuft mit
     /// Erreichen des Zeitpunkts ab.
     #[must_use]
-    pub fn is_expired(&self, now: DateTime<Utc>, session: SessionId) -> bool {
+    pub fn is_expired(&self, now: Timestamp, session: SessionId) -> bool {
         match self {
             Self::Never => false,
             Self::Session(owner) => *owner != session,
@@ -634,7 +637,7 @@ impl Rule {
 
     /// Wahr, wenn die Regel zu diesem Zeitpunkt in dieser Sitzung nicht mehr gilt.
     #[must_use]
-    pub fn is_expired(&self, now: DateTime<Utc>, session: SessionId) -> bool {
+    pub fn is_expired(&self, now: Timestamp, session: SessionId) -> bool {
         self.expires.is_expired(now, session)
     }
 }
@@ -643,7 +646,7 @@ impl Rule {
 mod tests {
     #![allow(clippy::unwrap_used, clippy::expect_used, clippy::panic)]
 
-    use chrono::{TimeZone, Utc};
+    use jiff::{SignedDuration, Timestamp};
 
     use super::{Action, Expiry, HostPattern, Matcher, PathPattern, Rule, path_prefix_is_valid};
     use crate::ids::{RuleId, SessionId};
@@ -699,7 +702,7 @@ mod tests {
     fn expiry_depends_on_session_and_time() {
         let session = SessionId::new();
         let other = SessionId::new();
-        let now = Utc.with_ymd_and_hms(2026, 9, 3, 10, 0, 0).single();
+        let now: Option<Timestamp> = "2026-09-03T10:00:00Z".parse().ok();
         let Some(now) = now else {
             panic!("fixed timestamp must exist");
         };
@@ -708,7 +711,32 @@ mod tests {
         assert!(!Expiry::Session(session).is_expired(now, session));
         assert!(Expiry::Session(other).is_expired(now, session));
         assert!(Expiry::At(now).is_expired(now, session));
-        assert!(!Expiry::At(now + chrono::Duration::seconds(1)).is_expired(now, session));
+        assert!(!Expiry::At(now + SignedDuration::from_secs(1)).is_expired(now, session));
+    }
+
+    /// Die Serde-Form von `Expiry::At` ist die, die `chrono::DateTime<Utc>`
+    /// schrieb (HUM-526): `Z`, Bruchteil nur, wenn es einen gibt, und dann in
+    /// Gruppen zu drei Stellen. Was so gespeichert wurde, liest sich zurück
+    /// und schreibt sich gleich wieder; ein Versatz wird nach UTC umgerechnet.
+    #[test]
+    fn expiry_serde_keeps_the_stored_form() {
+        for stored in [
+            r#"{"at":"2026-09-03T10:00:00Z"}"#,
+            r#"{"at":"2026-09-03T10:00:00.500Z"}"#,
+            r#"{"at":"2026-09-03T10:00:00.123456Z"}"#,
+            r#"{"at":"2026-09-03T10:00:00.123456789Z"}"#,
+        ] {
+            let expiry: Expiry = serde_json::from_str(stored).unwrap();
+            assert_eq!(serde_json::to_string(&expiry).unwrap(), stored);
+        }
+        let shifted: Expiry =
+            serde_json::from_str(r#"{"at":"2026-09-03T12:00:00+02:00"}"#).unwrap();
+        assert_eq!(
+            serde_json::to_string(&shifted).unwrap(),
+            r#"{"at":"2026-09-03T10:00:00Z"}"#
+        );
+        assert_eq!(serde_json::to_string(&Expiry::Never).unwrap(), r#""never""#);
+        assert!(serde_json::from_str::<Expiry>(r#"{"at":"tomorrow"}"#).is_err());
     }
 
     #[test]

@@ -939,16 +939,10 @@ fn short_id(id: &str) -> String {
 /// Die Sekunden kommen aus `google.protobuf.Timestamp`; der Typ selbst wird
 /// hier nicht genannt, damit diese Crate `prost-types` nicht braucht.
 fn clock(seconds: Option<i64>) -> String {
-    seconds
-        .and_then(|seconds| chrono::DateTime::from_timestamp(seconds, 0))
-        .map_or_else(
-            || "-".to_owned(),
-            |time| {
-                chrono::DateTime::<chrono::Local>::from(time)
-                    .format("%H:%M:%S")
-                    .to_string()
-            },
-        )
+    seconds.map_or_else(
+        || "-".to_owned(),
+        |seconds| crate::render::local_time(seconds, "%H:%M:%S"),
+    )
 }
 
 /// Der Name der Methode, mit dem Rohwert bei `METHOD_OTHER`.
