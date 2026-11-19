@@ -56,6 +56,7 @@ class SettingRow extends ConsumerStatefulWidget {
     this.help,
     this.details,
     this.status = const <Widget>[],
+    this.footer = const <Widget>[],
     this.refusal,
     this.refusalKey,
     super.key,
@@ -90,6 +91,13 @@ class SettingRow extends ConsumerStatefulWidget {
 
   /// Lines under the help that say what the daemon made of the value.
   final List<Widget> status;
+
+  /// Lines under name, help and control together, across the whole width of
+  /// the row (HUM-494): for an explanation too long for the column beside a
+  /// wide control, such as the reasons and commands under the choice of the
+  /// sandbox backend. [status] stays in the text column; a line there next
+  /// to a control of four segments keeps about a third of the row.
+  final List<Widget> footer;
 
   /// The refusal of a row that writes through its own RPC; otherwise the
   /// overlay's last refusal of [settingId].
@@ -229,13 +237,37 @@ class _SettingRowState extends ConsumerState<SettingRow> {
         horizontal: SettingRowGrid.inset,
         vertical: tokens.spacing.x3,
       ),
-      child: _SettingRowLayout(
-        key: ValueKey<String>('setting-row-${widget.settingId}'),
-        fill: widget.fill,
-        gap: tokens.spacing.x2,
-        text: text,
-        control: control,
+      child: _withFooter(
+        tokens,
+        _SettingRowLayout(
+          key: ValueKey<String>('setting-row-${widget.settingId}'),
+          fill: widget.fill,
+          gap: tokens.spacing.x2,
+          text: text,
+          control: control,
+        ),
       ),
+    );
+  }
+
+  /// [row] alone, or with [SettingRow.footer] under it at full width.
+  Widget _withFooter(HTokens tokens, Widget row) {
+    if (widget.footer.isEmpty) {
+      return row;
+    }
+    // Die Fußzeilen stehen unter Text und Control zugleich, so breit wie die
+    // Zeile: Neben einem breiten Control bliebe ihnen nur ein Streifen.
+    return Column(
+      crossAxisAlignment: CrossAxisAlignment.start,
+      mainAxisSize: MainAxisSize.min,
+      children: <Widget>[
+        row,
+        for (final Widget line in widget.footer)
+          Padding(
+            padding: EdgeInsets.only(top: tokens.spacing.x2),
+            child: line,
+          ),
+      ],
     );
   }
 }

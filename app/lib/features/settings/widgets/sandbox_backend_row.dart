@@ -88,7 +88,11 @@ class SandboxBackendRow extends ConsumerWidget {
       key: rowKey,
       settingId: FormKeys.sandboxBackend,
       refusalKey: const Key('settings-sandbox-backend-refusal'),
-      status: <Widget>[
+      // Die Zeilen der Backends samt Grund und Befehl stehen unter Wahl und
+      // Hilfe in voller Breite (HUM-494): Neben vier Segmenten blieb ihnen
+      // ein Drittel der Zeile, der Grund lief über ein Dutzend Zeilen und
+      // der Befehl zum Kopieren schrumpfte auf einen Streifen.
+      footer: <Widget>[
         SandboxBackendLines(list: list, keyPrefix: 'settings-sandbox-backend'),
       ],
       child: offersBackendChoice(list)
