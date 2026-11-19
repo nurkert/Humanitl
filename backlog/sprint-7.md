@@ -141,6 +141,7 @@ Diagnose-Codes, hier nur geplant (registriert vom genannten Issue in `codes.rs` 
 | HUM-556 | Speicher des Daemons: Flow-Registry ohne Obergrenze, Audit-Kanal unbegrenzt | M | HUM-479 |
 | HUM-557 | Kernel-Stufe: die letzten Wege zu eigenem Code in der Unit (memfd, Mounts von bubblewrap, sh und bwrap zusammen) | M | HUM-480 |
 | HUM-558 | Test `fd_handover::nobody_coming_ends_the_wait_and_the_socket` wackelt unter paralleler Last | S | — |
+| HUM-559 | Plan-Vorschau kennt die Untergrenze der Kommandozeile nicht | S | HUM-489 |
 
 ## HUM-428 · Port neutral: `PlanRequest`, `LaunchOptions`, `IsolationLevel`, Enum `Backend` statt `PlatformBackend`
 
@@ -5265,3 +5266,31 @@ echte Fehler.
 
 ### Akzeptanzkriterien
 1. Kein Fehlschlag in 50 Läufen unter Last; die Aussage des Tests bleibt.
+
+---
+
+## HUM-559 · Plan-Vorschau kennt die Untergrenze der Kommandozeile nicht
+
+### Kontext
+Aus dem Review von HUM-489. `humanitl run` und `humanitl go` schicken seit
+HUM-489 die Untergrenze der Isolation, die der Client aufgelöst hat
+(Flag, Umgebung, `--config`), mit dem Start an den Daemon. Die Vorschau über
+`Sandbox(Plan)` (`daemon/bin/humanitl/src/cmd/plan.rs`, Bau von
+`v1::sandbox_request::Plan`) trägt keine Overrides der Sitzung. Eine
+Vorschau mit `--sandbox-min-isolation kernel` zeigt dann den Plan mit der
+schwächeren Untergrenze des Daemons, der Start danach scheitert mit
+`SANDBOX_035` oder wählt ein anderes Backend als gezeigt.
+
+### Spezifikation
+1. Die Vorschau bekommt dieselben Overrides der Sitzung wie der Start
+   (derselbe Weg wie `start_overrides` aus HUM-489), samt Sperre
+   `CLI_004` für einen Daemon vor 1.49.
+2. Prüfen, ob weitere Wege einen Plan ohne diese Overrides zeigen (App,
+   `Projects.proposal` aus HUM-536).
+
+### Tests
+- Vorschau mit `--sandbox-min-isolation kernel` und `auto` zeigt
+  `SANDBOX_035` wie der Start. Mutationsbeweis: ohne Overrides rot.
+
+### Akzeptanzkriterien
+1. Vorschau und Start zeigen bei gleichen Eingaben dieselbe Untergrenze.
