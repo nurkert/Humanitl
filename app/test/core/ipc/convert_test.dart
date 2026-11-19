@@ -51,6 +51,40 @@ void checkParity<T extends Enum>(
 }
 
 void main() {
+  // HUM-507: a field the person fills in travels as `EditSetting`; a daemon
+  // before 1.50 sent an empty `ChangeSetting` for it, and that still opens
+  // the same control. A `ChangeSetting` with a value stays one.
+  test('an empty ChangeSetting of an older daemon reads as EditSetting', () {
+    FixAction? read(pb.FixAction action) => action.toDomain();
+    expect(
+      read(
+        pb.FixAction(
+          editSetting: pb.FixAction_EditSetting(key: 'llm.api_key_ref'),
+        ),
+      ),
+      const FixAction.editSetting(key: 'llm.api_key_ref'),
+    );
+    expect(
+      read(
+        pb.FixAction(
+          changeSetting: pb.FixAction_ChangeSetting(key: 'sandbox.work_dir'),
+        ),
+      ),
+      const FixAction.editSetting(key: 'sandbox.work_dir'),
+    );
+    expect(
+      read(
+        pb.FixAction(
+          changeSetting: pb.FixAction_ChangeSetting(
+            key: 'sandbox.backend',
+            value: 'auto',
+          ),
+        ),
+      ),
+      const FixAction.changeSetting(key: 'sandbox.backend', value: 'auto'),
+    );
+  });
+
   test('every domain enum lists the wire members in wire order', () {
     checkParity(pb.FlowState.values, FlowState.values, 'FLOW_STATE_');
     checkParity(pb.DecisionKind.values, DecisionKind.values, 'DECISION_KIND_');

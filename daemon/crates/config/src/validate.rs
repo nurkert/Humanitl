@@ -34,16 +34,14 @@ fn out_of_range(key: &str, found: &str, allowed: &str) -> Diagnostic {
     let field = schema::field(key);
     let shown = field.map_or_else(|| "-".to_owned(), schema::Field::default_literal);
     // Der Fix trägt den Wert, wie `humanitl config set` ihn nimmt: ohne
-    // Anführungszeichen (HUM-503).
-    let value = field.map_or_else(|| "-".to_owned(), schema::Field::default_value);
+    // Anführungszeichen (HUM-503), und nur für einen Schlüssel, den
+    // `config set` kennt; ein Eintrag unter `llm.servers.NAME` bekommt keinen
+    // (HUM-507).
     Diagnostic::builder(CONFIG_003, Severity::Error)
         .why(format!(
             "{key} = {found} is out of range; allowed is {allowed} (default {shown})"
         ))
-        .fix(FixAction::ChangeSetting {
-            key: key.to_owned(),
-            value,
-        })
+        .maybe_fix(crate::value::reset_fix(key))
         .build()
 }
 
@@ -519,10 +517,9 @@ pub fn loader_variable_refused(key: &str, name: &str) -> Diagnostic {
              and a process forked there would never inherit it. That is the third guarantee, and \
              no setting may take it away. Remove {name} from {key}."
         ))
-        .fix(FixAction::ChangeSetting {
-            key: key.to_owned(),
-            value: format!("remove {name}"),
-        })
+        // Kein `ChangeSetting`: Den Rest der Tabelle kennt dieser Befund
+        // nicht, und `remove NAME` ist kein Wert, den `config set` nimmt
+        // (HUM-507). Der Rat steht im Satz.
         .build()
 }
 
@@ -787,10 +784,7 @@ fn within_host(key: &str, value: u64, min: u64, max: u64, what: &str) -> Result<
         .why(format!(
             "{key} = {value} is out of range; allowed is {min} to {max}, {what}"
         ))
-        .fix(FixAction::ChangeSetting {
-            key: key.to_owned(),
-            value: max.to_string(),
-        })
+        .maybe_fix(crate::value::change_setting(key, max.to_string()))
         .build())
 }
 

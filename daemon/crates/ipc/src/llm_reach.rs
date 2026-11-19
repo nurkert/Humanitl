@@ -184,10 +184,15 @@ fn unreachable(endpoint: &str, cause: &str) -> Diagnostic {
             "the agent's last request to {target} failed: {cause}; until a request gets \
              through again, the agent works without its model"
         ))
-        .fix(FixAction::ChangeSetting {
-            key: "llm.endpoint".to_owned(),
-            value: endpoint.to_owned(),
-        })
+        // Die Adresse, die gerade gilt, wenn `config set` sie nimmt; ohne
+        // sie das Feld, damit die Oberfläche es trotzdem öffnet (HUM-507).
+        .fix(
+            humanitl_config::value::change_setting("llm.endpoint", endpoint).unwrap_or_else(|| {
+                FixAction::EditSetting {
+                    key: "llm.endpoint".to_owned(),
+                }
+            }),
+        )
         .build()
 }
 

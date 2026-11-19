@@ -483,9 +483,10 @@ class FixControl extends ConsumerStatefulWidget {
     bool chooseFolder = false,
   }) => switch (fix) {
     FixActionInstallService() => true,
-    FixActionChangeSetting(:final key) when key == workDirSettingKey =>
+    FixActionChangeSetting(:final key) || FixActionEditSetting(:final key)
+        when key == workDirSettingKey =>
       chooseFolder,
-    FixActionChangeSetting(:final key) =>
+    FixActionChangeSetting(:final key) || FixActionEditSetting(:final key) =>
       SettingsOpener.maybeOf(context) != null &&
           FormKeys.shownInSheet.contains(key),
     _ => false,
@@ -493,7 +494,8 @@ class FixControl extends ConsumerStatefulWidget {
 
   /// Opens the folder chooser of the screen that draws this control.
   ///
-  /// A `ChangeSetting` on [workDirSettingKey] is the daemon's way of saying
+  /// An `EditSetting` on [workDirSettingKey] (before HUM-507 an empty
+  /// `ChangeSetting`) is the daemon's way of saying
   /// "this project folder cannot be used, take another one" (`SANDBOX_006`,
   /// HUM-262). `SetConfig` does not write that key, but this client can still
   /// carry the fix out: the project folder is chosen in the folder picker and
@@ -668,7 +670,10 @@ class _FixControlState extends ConsumerState<FixControl> {
         value: value,
         style: mono,
       ),
-      FixActionChangeSetting(:final key)
+      // `EditSetting` (HUM-507) opens the same controls as the empty
+      // `ChangeSetting` of a daemon before 1.50, which `convert.dart` already
+      // reads as an `EditSetting`.
+      FixActionChangeSetting(:final key) || FixActionEditSetting(:final key)
           when key == workDirSettingKey &&
               (widget.onChooseFolder != null ||
                   widget.chooseFolderLocked != null) =>
@@ -683,7 +688,7 @@ class _FixControlState extends ConsumerState<FixControl> {
       // des Bildschirms (oben), und wo der gesperrt ist, weil eine Sandbox
       // läuft, soll auch kein anderer Knopf den Ordner wählen lassen
       // (HUM-262).
-      FixActionChangeSetting(:final key)
+      FixActionChangeSetting(:final key) || FixActionEditSetting(:final key)
           when settings != null &&
               key != workDirSettingKey &&
               FormKeys.shownInSheet.contains(key) =>
@@ -694,9 +699,8 @@ class _FixControlState extends ConsumerState<FixControl> {
           onPressed: () => settings.open(key),
           child: Text(l10n.setupFixOpenSettings),
         ),
-      FixActionChangeSetting(:final key) => HBadge(
-        text: l10n.setupFixChangeSetting(key),
-      ),
+      FixActionChangeSetting(:final key) || FixActionEditSetting(:final key) =>
+        HBadge(text: l10n.setupFixChangeSetting(key)),
       FixActionInstallService() => _installService(tokens, l10n, style: mono),
       FixActionAddRule() => HBadge(text: l10n.setupFixAddRule),
       FixActionRemountReadOnly() => HBadge(text: l10n.setupFixRemountReadOnly),

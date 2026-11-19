@@ -3505,6 +3505,91 @@ Schema kennt.
 ### Akzeptanzkriterien
 1. Kein `ChangeSetting` mit einem Wert, den `config set` ablehnt.
 
+### Stand nach der Umsetzung (2026-11-19)
+Neu in `humanitl_config::value`: `check_setting(key, value)` fährt die
+Prüfung von `config set` ohne Datei (Blatt des Schemas unter heutigem
+Namen, `parse_value`, `check_value`, dazu die Vorgabe-Konfiguration mit
+genau diesem Wert durch `Config::validate`, also auch die Grenzen, die nur
+in der Prüfung stehen). Darauf drei Wege für Werte, die erst zur Laufzeit
+feststehen: `change_setting` (ein Fix nur, wenn die Prüfung ihn nimmt),
+`reset_fix` (Vorgabe oder `-`, nur für ein Blatt des Schemas) und `raised`
+(das Doppelte, höchstens der größte Wert, den die Prüfung durchlässt; an
+der Obergrenze kein Fix). `DiagnosticBuilder::maybe_fix` hängt einen
+optionalen Fix an.
+
+Neue Art von Fix `FixAction::EditSetting { key }` (Protokoll 1.50,
+`FixAction.edit_setting`; Dart `FixAction.editSetting`): ein Feld, dessen Wert
+nur der Mensch kennt. Sie ersetzt jedes `ChangeSetting` mit leerem Wert
+(`LLM_002`, `SANDBOX_006`/`CONFIG_013`, `SANDBOX_042`, `PROXY_017`,
+`LLM_001` ohne geltende Adresse) und die Beispielwerte von `PROXY_015`
+(`/home/USER/.mitmproxy/…`) und `PROXY_017` ohne Proxy
+(`http://127.0.0.1:8080`). Die App öffnet damit dieselbe Ordnerauswahl oder
+dasselbe Feld wie zuvor (`FixControl`), die Kommandozeile druckt
+`humanitl llm key set`, `humanitl egress auth set`, die Wahl des
+Projektordners oder `humanitl config set KEY <value>`. Verträglichkeit: Ein
+leeres `ChangeSetting` eines Daemons vor 1.50 lesen App (`convert.dart`),
+Kommandozeile (`fix_from_proto`) und Aufnahme (`DiagnosticRecord::fix`) als
+`EditSetting`. Seither gibt es kein `ChangeSetting` mit leerem Wert mehr.
+
+Umgestellt: `out_of_range` und `bad_value` über `reset_fix` (ein Schlüssel
+unter `llm.servers.NAME` bekommt keinen Fix mehr), der Vorschlag zu einem
+vertippten oder alten Schlüssel über `change_setting` (der alte Name schlug
+eine Zeichenkette noch mit Anführungszeichen vor), die bereinigte
+LLM-Adresse, die erste Adapter-Kennung (vier Stellen), das Backend des
+Dienstes (`SANDBOX_034`), `LLM_001` mit der geltenden Adresse,
+`agent.command` als JSON über `serde_json` statt `format!`. Verdoppelte
+Grenzen (`LIMIT_001`, `LIMIT_004`, `PROXY_010`, `PROXY_011`) über
+`raised`; `FINDINGS_002` (ohne Abhängigkeit zu `humanitl-config`) bleibt
+mit `doubled_cap` unter `i64::MAX`. In Prosa, ohne Fix: `remove NAME` für
+eine Linker-Variable, `resolver.nameserver`, `resolver.overrides.HOST`,
+`resolver.test_ca` (beide Fälle), `sandbox.env.PATH` bei `AGENT_004` und
+`AGENT_006` (die Zeile für `[sandbox.env]` steht im Satz) und die
+Kernel-Stufe, wo nur der Mensch den Pfad kennt; ein konfigurierter Kernel,
+den es nicht gibt, bekommt `-` (der laufende Kernel). `CONFIG_016` schlägt
+`{}` vor. Der Fake (`fake/player.rs`) prüft die Vorschläge einer
+Sitzungsdatei beim Lesen mit `check_setting` und kennt `edit_setting`. Die
+Fix-Texte in `codes.rs` und `docs/DIAGNOSTICS.md` sind nachgezogen,
+`backlog/CONVENTIONS.md` 4.56 hält die Regel fest.
+
+Sperren einer Firmenvorgabe (HUM-534): Der Fix bleibt, auch wenn der
+Schlüssel gesperrt ist. Die Erzeuger kennen die Sperren meist nicht, und
+`config set` lehnt einen gesperrten Schlüssel mit eigenem Befund ab, der
+die Vorgabe nennt; der Vorschlag führt so zu dem Satz, wer ihn verbietet.
+
+Test `every_change_setting_fix_is_a_value_config_set_takes`
+(`daemon/crates/config/tests/change_setting_fixes.rs`, Scanner in
+`tests/support/scan.rs`): liest den Quelltext aller Crates und Programme,
+überspringt Testcode (`#[cfg(test)]`, `#[cfg(all(test, …))]`, deren
+Moduldateien samt `#[path]`) und Muster, und prüft jeden Bau eines
+`ChangeSetting`: Literale direkt mit `check_setting`, eine Konstante
+`…_BACKEND` auf `sandbox.backend` gegen jeden erlaubten Wert, jede andere
+Stelle muss mit ihrem Quelltext und ihren möglichen Werten im Register
+`SITES` stehen; neue, geänderte und verwaiste Stellen machen ihn rot.
+`every_change_setting_the_app_builds_is_a_value_config_set_takes` tut
+dasselbe für `FixAction.changeSetting` unter `app/lib/` (`DART_SITES`,
+Konstanten von `FormKeys` aufgelöst). Dazu Tests für alle Vorgaben und das
+Zurücksetzen jedes Blattes, den ersten Wert jeder Aufzählung, `raised` an
+den Grenzen, die Scanner selbst, die Sitzungsdatei des Fakes, die Zeilen
+der Kommandozeile und die Verträglichkeit in App, Kommandozeile und
+Aufnahme. Mutationen, jeweils rot: `secs.saturating_mul(2).to_string()`
+zurück in `proxy/src/limits.rs`, `format!("remove {name}")` zurück in
+`validate.rs`, ein Literal `sandbox.env = "remove LD_PRELOAD"` in
+`humanitld`, `raised` ohne die Suche nach der Grenze, `doubled_cap` ohne
+`min`, `check_fix` aus `check_line` des Fakes entfernt, das leere
+`changeSetting` zurück in `client_diagnostics.dart`, `EditSetting` aus
+dem Zweig der Ordnerauswahl in `FixControl` entfernt, die Lesart des leeren
+`ChangeSetting` aus `convert.dart` entfernt, der Zweig des Projektordners
+aus `render.rs`.
+
+Kandidaten für eigene Issues: `config set resolver.test_ca` nimmt jeden
+Text, auch einen relativen Pfad oder die frühere Anleitung „an absolute
+path, for example …", weil erst der Start des Daemons `CONFIG_012` prüft;
+Beispielwerte, die `config set` annimmt, die aber Platzhalter sind
+(`https://api.example.com/v1` für `llm.endpoint` in den Befunden des
+Agenten und der Probe); die Gegenprobe gegen die wirkliche Datei (etwa
+`limits.hold_body_cap_bytes` über einem kleineren `limits.hold_max_bytes`)
+kennt nur `config set` selbst.
+
 ---
 
 ## HUM-508 · doctor: `doctor-probe.json` ohne den Klartextpfad des Programms

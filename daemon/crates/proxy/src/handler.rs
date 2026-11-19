@@ -2394,10 +2394,10 @@ pub fn idle_streamed_request_body(idle: Duration) -> Diagnostic {
     );
     Diagnostic::builder(PROXY_011, Severity::Warning)
         .why(why)
-        .fix(FixAction::ChangeSetting {
-            key: "limits.body_timeout_secs".to_owned(),
-            value: secs.saturating_mul(2).to_string(),
-        })
+        .maybe_fix(humanitl_config::value::raised(
+            "limits.body_timeout_secs",
+            secs,
+        ))
         .build()
 }
 
@@ -2409,7 +2409,7 @@ pub fn idle_streamed_request_body(idle: Duration) -> Diagnostic {
 /// ihre Häufung ein Prozess, der Ressourcen bindet.
 ///
 /// Der `fix` zeigt auf `limits.body_timeout_secs` mit dem doppelten heutigen
-/// Wert. Das ist der Fall, den ein Mensch tatsächlich hat: Ein Werkzeug in der
+/// Wert, höchstens einem Tag, der Obergrenze der Prüfung (HUM-507). Das ist der Fall, den ein Mensch tatsächlich hat: Ein Werkzeug in der
 /// Sandbox lädt über eine langsame Leitung hoch, und die Vorgabe ist ihm zu
 /// knapp. Ein Vorschlag, die Grenze abzuschalten, steht nicht darin — es gibt
 /// keinen Wert, der das täte, und es wäre der falsche Rat.
@@ -2426,10 +2426,10 @@ pub fn idle_request_body(idle: Duration, since_last: u64) -> Diagnostic {
     );
     Diagnostic::builder(PROXY_011, Severity::Warning)
         .why(why)
-        .fix(FixAction::ChangeSetting {
-            key: "limits.body_timeout_secs".to_owned(),
-            value: secs.saturating_mul(2).to_string(),
-        })
+        .maybe_fix(humanitl_config::value::raised(
+            "limits.body_timeout_secs",
+            secs,
+        ))
         .build()
 }
 

@@ -324,7 +324,8 @@ fn started_script(ctx: &AgentContext, command: &OsStr) -> Option<PathBuf> {
 /// a bare `node` on the sandbox path, an absolute one through the mounts.
 /// Unknown is silent (`backlog/CONVENTIONS.md` 4.13). The fix follows from
 /// where a `node` lies on the host: mounted but not on the sandbox path gives
-/// a `ChangeSetting` of `sandbox.env.PATH`, unmounted gives the `install`
+/// the line for `sandbox.env.PATH` in the text (no fix: `config set` does not
+/// write an entry of that table, HUM-507), unmounted gives the `install`
 /// command that copies it under `/usr/local/bin`, none at all gives the
 /// download page. An absolute interpreter outside the mounts gives the
 /// installer of pi: a copy of node elsewhere would not change the `#!` line.
@@ -362,7 +363,7 @@ fn node_preflight(ctx: &AgentContext, command: &OsStr) -> Option<Diagnostic> {
                  as the one of Homebrew, whose npm writes a #! line the sandbox can start: \
                  {INSTALL_COMMAND}"
             ),
-            FixAction::CopyCommand(INSTALL_COMMAND.to_owned()),
+            Some(FixAction::CopyCommand(INSTALL_COMMAND.to_owned())),
         ),
         _ if absolute && own_program => (
             format!(
@@ -370,7 +371,7 @@ fn node_preflight(ctx: &AgentContext, command: &OsStr) -> Option<Diagnostic> {
                  reinstall pi with a Node.js under /usr or /usr/local, whose npm writes a \
                  #! line the sandbox can start: {INSTALL_COMMAND}"
             ),
-            FixAction::CopyCommand(INSTALL_COMMAND.to_owned()),
+            Some(FixAction::CopyCommand(INSTALL_COMMAND.to_owned())),
         ),
         // Another command than pi with such a line: copying node elsewhere
         // does not change the line, and pi's installer is not its fix.
@@ -384,7 +385,7 @@ fn node_preflight(ctx: &AgentContext, command: &OsStr) -> Option<Diagnostic> {
                  the line at a Node.js under one of the mounts"
                     .to_owned()
             },
-            FixAction::OpenUrl(NODE_DOWNLOAD_URL.to_owned()),
+            Some(FixAction::OpenUrl(NODE_DOWNLOAD_URL.to_owned())),
         ),
         Some(node) if ctx.reaches_program(&node) => {
             let dir = node
@@ -392,16 +393,18 @@ fn node_preflight(ctx: &AgentContext, command: &OsStr) -> Option<Diagnostic> {
                 .unwrap_or(Path::new("/"))
                 .display()
                 .to_string();
+            // `sandbox.env.PATH` ist ein Eintrag einer freien Tabelle und kein
+            // Schlüssel, den `config set` schreibt; der Rat mit dem Wert steht
+            // im Satz (HUM-507).
             (
                 format!(
-                    "{} is {}, but the sandbox PATH does not name {dir}",
+                    "{} is {}, but the sandbox PATH does not name {dir}; set PATH = \"{dir}:{}\" \
+                     under [sandbox.env] in config.toml",
                     node.display(),
-                    if seatbelt { "readable" } else { "mounted" }
+                    if seatbelt { "readable" } else { "mounted" },
+                    ctx.sandbox_path_value()
                 ),
-                FixAction::ChangeSetting {
-                    key: "sandbox.env.PATH".to_owned(),
-                    value: format!("{dir}:{}", ctx.sandbox_path_value()),
-                },
+                None,
             )
         }
         Some(node) => (
@@ -414,11 +417,11 @@ fn node_preflight(ctx: &AgentContext, command: &OsStr) -> Option<Diagnostic> {
                     "does not mount it"
                 }
             ),
-            FixAction::CopyCommand(install_fix_for(ctx, &node)),
+            Some(FixAction::CopyCommand(install_fix_for(ctx, &node))),
         ),
         None => (
             "this machine has no Node.js in PATH either".to_owned(),
-            FixAction::OpenUrl(NODE_DOWNLOAD_URL.to_owned()),
+            Some(FixAction::OpenUrl(NODE_DOWNLOAD_URL.to_owned())),
         ),
     };
     Some(
@@ -430,7 +433,7 @@ fn node_preflight(ctx: &AgentContext, command: &OsStr) -> Option<Diagnostic> {
                 script.display(),
                 ctx.sandbox_path_display(),
             ))
-            .fix(fix)
+            .maybe_fix(fix)
             .docs(DOCS_URL)
             .build(),
     )

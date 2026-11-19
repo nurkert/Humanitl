@@ -14,7 +14,7 @@ import 'package:humanitl_ui/humanitl_ui.dart';
 import 'harness.dart';
 
 /// Der Befund, den der Daemon für ein Heimatverzeichnis als Projektordner
-/// schickt (`MountPolicy::check_work_dir`).
+/// schickt (`MountPolicy::check_work_dir`), seit HUM-507 mit `EditSetting`.
 const Diagnostic refusedHome = Diagnostic(
   code: DiagnosticCodes.workDirRefused,
   severity: Severity.blocking,
@@ -23,7 +23,7 @@ const Diagnostic refusedHome = Diagnostic(
       "/home/nik/.config/humanitl, Humanitl's own configuration directory: "
       'config.toml, rules.yaml and the profiles; choose the folder of a single '
       'project instead, such as ~/projects/xyz',
-  fix: FixAction.changeSetting(key: 'sandbox.work_dir', value: ''),
+  fix: FixAction.editSetting(key: 'sandbox.work_dir'),
 );
 
 /// Ein Client, dessen Schnappschuss den Ordner mit [state] ablehnt.

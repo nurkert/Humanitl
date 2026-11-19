@@ -31,9 +31,9 @@ pub const WORK_DIR_KEY: &str = "sandbox.work_dir";
 /// Kommandozeile sie zeigt (HUM-293): erst der Weg, einen Ordner dauerhaft zu
 /// wählen, dann der Platzhalter für ihn.
 ///
-/// Der Befund trägt dafür `FixAction::ChangeSetting` auf [`WORK_DIR_KEY`] mit
-/// leerem Wert; die Oberfläche öffnet daran die Ordnerauswahl, die
-/// Kommandozeile druckt diesen Satz.
+/// Der Befund trägt dafür `FixAction::EditSetting` auf [`WORK_DIR_KEY`]
+/// (bis HUM-507 ein `ChangeSetting` mit leerem Wert); die Oberfläche öffnet
+/// daran die Ordnerauswahl, die Kommandozeile druckt diesen Satz.
 pub const CHOOSE_PROJECT_FOLDER: &str =
     "choose a project folder: humanitl config set sandbox.work_dir <dir>";
 
@@ -122,9 +122,9 @@ pub fn work_dir_refused(dir: &Path, from: &WorkDirSource, why: &str) -> Diagnost
 /// [`CHOOSE_PROJECT_FOLDER`] auf der Kommandozeile.
 #[must_use]
 pub fn choose_folder_fix() -> FixAction {
-    FixAction::ChangeSetting {
+    // Das Feld, kein Wert: Den Ordner wählt der Mensch (HUM-507).
+    FixAction::EditSetting {
         key: WORK_DIR_KEY.to_owned(),
-        value: String::new(),
     }
 }
 

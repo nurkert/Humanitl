@@ -480,10 +480,9 @@ fn config_release(text: &str) -> Option<(u32, u32)> {
 /// Der Beleg bei Erfolg: die Zeile der Konfiguration und die Fassung aus
 /// ihrem Kopf, oder dass sie unbekannt ist.
 fn virtio_fs_built_in(image: &Path) -> Result<String, Diagnostic> {
-    let fix = || FixAction::ChangeSetting {
-        key: "sandbox.qemu.kernel".to_owned(),
-        value: String::new(),
-    };
+    // Welcher Kernel der richtige ist, weiß nur der Mensch: Der Rat steht im
+    // Satz, ein leerer Wert wäre keiner, den `config set` nimmt (HUM-507).
+    let fix = || None::<FixAction>;
     let Some(config) = config_beside(image) else {
         return Err(missing(
             &format!(
@@ -541,13 +540,13 @@ fn virtio_fs_built_in(image: &Path) -> Result<String, Diagnostic> {
 }
 
 /// `SANDBOX_045` mit dem, was fehlt, und dem Weg dorthin.
-fn missing(what: &str, fix: FixAction) -> Diagnostic {
+fn missing(what: &str, fix: impl Into<Option<FixAction>>) -> Diagnostic {
     Diagnostic::builder(SANDBOX_045, Severity::Blocking)
         .why(format!(
             "the kernel level needs {what}; nothing starts, and no other backend takes over. \
              Start with --backend bwrap for the shared kernel"
         ))
-        .fix(fix)
+        .maybe_fix(fix.into())
         .build()
 }
 
@@ -783,10 +782,9 @@ fn kernel_readable(
                 "a kernel image, and sandbox.qemu.kernel names {shown}, where there is no file; \
                  name an existing image there, or leave it empty for the running kernel's"
             ),
-            FixAction::ChangeSetting {
-                key: "sandbox.qemu.kernel".to_owned(),
-                value: String::new(),
-            },
+            // Leer heißt: der Kernel, der läuft; `-` entfernt den Schlüssel
+            // (HUM-507).
+            humanitl_config::value::reset_fix("sandbox.qemu.kernel"),
         ));
     }
     let others = other_kernels(&host.boot, host.release.as_deref());
@@ -866,10 +864,9 @@ fn modules_present(
         (None, None) => return Err(release_unknown("sandbox.qemu.modules")),
     };
     let shown = dir.display();
-    let setting = || FixAction::ChangeSetting {
-        key: "sandbox.qemu.modules".to_owned(),
-        value: String::new(),
-    };
+    // Das richtige Verzeichnis kennt nur der Mensch; der Rat steht im Satz
+    // (HUM-507).
+    let setting = || None::<FixAction>;
     match std::fs::metadata(&dir) {
         Ok(meta) if meta.is_dir() => Ok(dir),
         Ok(_) if config.modules.is_some() => Err(missing(
@@ -943,10 +940,8 @@ fn release_unknown(key: &str) -> Diagnostic {
             "the release of the running kernel to find its files, and \
              /proc/sys/kernel/osrelease is unreadable; name the path in {key}"
         ),
-        FixAction::ChangeSetting {
-            key: key.to_owned(),
-            value: String::new(),
-        },
+        // Den Pfad kennt nur der Mensch; der Rat steht im Satz (HUM-507).
+        None::<FixAction>,
     )
 }
 
@@ -1139,10 +1134,10 @@ mod tests {
             }
             let err = fixture.finding(&QemuConfig::default());
             assert!(err.why.contains(needle), "{needle}: {}", err.why);
-            assert!(matches!(
-                &err.fix,
-                Some(FixAction::ChangeSetting { key, .. }) if key == "sandbox.qemu.kernel"
-            ));
+            // Welcher Kernel der richtige ist, weiß nur der Mensch: Der Rat
+            // steht im Satz, kein leerer Wert als `ChangeSetting` (HUM-507).
+            assert!(err.why.contains("sandbox.qemu.kernel"), "{}", err.why);
+            assert_eq!(err.fix, None);
             let lines = each_on(
                 &fixture.host,
                 &fixture.env,
@@ -1315,10 +1310,10 @@ mod tests {
             ..QemuConfig::default()
         };
         let err = modules_line(&fixture, &configured).expect_err("unset");
-        assert!(matches!(
-            &err.fix,
-            Some(FixAction::ChangeSetting { key, .. }) if key == "sandbox.qemu.modules"
-        ));
+        // Das richtige Verzeichnis kennt nur der Mensch; der Rat steht im
+        // Satz (HUM-507).
+        assert!(err.why.contains("sandbox.qemu.modules"), "{}", err.why);
+        assert_eq!(err.fix, None);
     }
 
     /// Der erste fehlende Punkt wird genannt, mit dem Paket, das ihn bringt;

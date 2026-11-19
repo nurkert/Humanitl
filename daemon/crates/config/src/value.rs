@@ -277,6 +277,143 @@ pub fn check_value(field: &schema::Field, value: &Value) -> Result<(), Diagnosti
     Ok(())
 }
 
+/// Ob `humanitl config set KEY VALUE` diesen Wert für sich annähme (HUM-507).
+///
+/// Die Prüfung, die jeder Fix der Art `ChangeSetting` bestehen muss: Der
+/// Schlüssel ist ein Blatt des Schemas unter seinem heutigen Namen, der Text
+/// liest sich nach dem Typ des Feldes ([`parse_value`]), liegt in Aufzählung
+/// und Grenzen ([`check_value`]), und die Vorgabe-Konfiguration mit genau
+/// diesem einen Wert besteht die Prüfung, die auch die Gegenprobe von
+/// `config set` fährt (etwa `hold.timeout_secs` bis zu einem Tag). Was eine
+/// wirkliche Datei sonst noch enthält, kennt der Erzeuger eines Befunds
+/// nicht; dafür bleibt die Gegenprobe beim Schreiben.
+///
+/// Ein Text, der eine Anleitung ist (`remove NAME`), ein leerer Text als
+/// Eingabeaufforderung oder ein Schlüssel unter einer freien Tabelle
+/// (`sandbox.env.PATH`) besteht sie nicht. Solch ein Rat gehört in den Text
+/// des Befunds; ein Feld, dessen Wert nur der Mensch kennt, öffnet
+/// `FixAction::EditSetting`.
+///
+/// # Errors
+///
+/// `CONFIG_002` für einen Schlüssel, den `config set` nicht kennt oder der
+/// eine Gruppe ist, sonst der Befund der Prüfung, die den Wert ablehnt.
+pub fn check_setting(key: &str, text: &str) -> Result<(), Diagnostic> {
+    let field = schema::field(key)
+        .filter(|field| !field.group)
+        .ok_or_else(|| {
+            Diagnostic::builder(
+                humanitl_core::diagnostics::codes::CONFIG_002,
+                Severity::Error,
+            )
+            .why(format!(
+                "{key} is not a key humanitl config set writes; humanitl config schema lists \
+                     every one"
+            ))
+            .fix(FixAction::CopyCommand("humanitl config schema".to_owned()))
+            .build()
+        })?;
+    let value = parse_value(field, text)?;
+    check_value(field, &value)?;
+    let edit = crate::edit::Edit::at(key, to_toml(field, &value)?);
+    let table = crate::edit::apply_edits(&toml::Table::new(), &[edit]).ok_or_else(|| {
+        Diagnostic::builder(CONFIG_003, Severity::Error)
+            .why(format!("{key} cannot be placed in an empty configuration"))
+            .build()
+    })?;
+    let config: crate::Config = toml::Value::Table(table).try_into().map_err(|error| {
+        Diagnostic::builder(CONFIG_003, Severity::Error)
+            .why(format!("{key} = {text} does not load: {error}"))
+            .build()
+    })?;
+    config.validate()
+}
+
+/// Ein `ChangeSetting` auf `key`, aber nur mit einem Wert, den
+/// [`check_setting`] annimmt; sonst keiner (HUM-507).
+///
+/// Der Weg für jeden Vorschlag, dessen Wert erst zur Laufzeit feststeht (ein
+/// Tippfehler im Schlüssel, die erste Kennung eines Registers, eine bereinigte
+/// Adresse): Was `humanitl config set` ablehnte, ist kein Vorschlag, und der
+/// Befund behält seinen Rat im Text.
+///
+/// Eine Firmenvorgabe, die `key` sperrt (HUM-534), prüft das nicht: Der
+/// Erzeuger eines Befunds kennt die Sperren meist nicht, und `config set`
+/// lehnt einen gesperrten Schlüssel mit eigenem Befund ab, der die Vorgabe
+/// nennt. Ein Vorschlag, den die Firma verbietet, führt so nicht ins Leere,
+/// sondern zu dem Satz, wer ihn verbietet.
+#[must_use]
+pub fn change_setting(key: &str, value: impl Into<String>) -> Option<FixAction> {
+    let value = value.into();
+    check_setting(key, &value).ok()?;
+    Some(FixAction::ChangeSetting {
+        key: key.to_owned(),
+        value,
+    })
+}
+
+/// Der Vorgabewert eines Feldes als `ChangeSetting`, oder `-` für ein Feld,
+/// das leer sein darf und keine Vorgabe hat; sonst keiner (HUM-507).
+///
+/// Für einen Wert außerhalb seines Bereichs: Die Vorgabe besteht jede
+/// Prüfung, und ein Feld ohne sie wird mit `-` wieder leer. Ein Schlüssel,
+/// den das Schema nicht als Blatt kennt (ein Eintrag unter
+/// `llm.servers.NAME`, eine Gruppe), bekommt keinen Vorschlag, denn
+/// `humanitl config set` nähme ihn nicht.
+#[must_use]
+pub fn reset_fix(key: &str) -> Option<FixAction> {
+    let field = schema::field(key).filter(|field| !field.group)?;
+    let value = match field.default.as_ref() {
+        Some(default) if !default.is_null() => scalar(default),
+        _ if field.types.iter().any(|kind| kind == "null") => "-".to_owned(),
+        _ => return None,
+    };
+    change_setting(key, value)
+}
+
+/// Eine höhere Grenze für `key`: das Doppelte von `current`, höchstens so
+/// viel, wie [`check_setting`] noch annimmt; keiner, wenn `current` schon
+/// an der Obergrenze steht (HUM-507).
+///
+/// Die Obergrenze steht in der Prüfung der Konfiguration (etwa
+/// `limits.body_timeout_secs` bis zu einem Tag) und nicht im Schema; statt
+/// sie ein zweites Mal aufzuschreiben, sucht die Funktion den größten Wert
+/// zwischen `current` und dem Doppelten, den die Prüfung durchlässt. Die
+/// Prüfung läuft gegen die Vorgaben der übrigen Werte; was die wirkliche
+/// Datei daneben enthält, prüft `config set` beim Schreiben.
+#[must_use]
+pub fn raised(key: &str, current: u64) -> Option<FixAction> {
+    let takes = |value: u64| check_setting(key, &value.to_string()).is_ok();
+    // Ein Wert über `i64::MAX` ist keine Zahl, die `config set` liest.
+    let ceiling = u64::try_from(i64::MAX).unwrap_or(u64::MAX);
+    let wanted = current.saturating_mul(2).min(ceiling);
+    if wanted <= current {
+        return None;
+    }
+    let best = if takes(wanted) {
+        wanted
+    } else {
+        // Die Grenze liegt zwischen `current` und `wanted`: Halbieren, bis
+        // `low` der größte angenommene Wert ist. Oben begrenzt ist jede
+        // Prüfung eines Bereichs, also wächst die Menge der angenommenen
+        // Werte von unten nach oben ohne Lücke.
+        let (mut low, mut high) = (current, wanted);
+        while high - low > 1 {
+            let middle = low + (high - low) / 2;
+            if takes(middle) {
+                low = middle;
+            } else {
+                high = middle;
+            }
+        }
+        low
+    };
+    (best > current && takes(best)).then(|| FixAction::ChangeSetting {
+        key: key.to_owned(),
+        value: best.to_string(),
+    })
+}
+
 /// `CONFIG_003`: Der Wert liegt außerhalb des Bereichs.
 ///
 /// Der Vorschlag ist der Vorgabewert und nicht die Grenze: Die Grenze des

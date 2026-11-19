@@ -631,13 +631,13 @@ fn llm_passthrough_rule(config: &Config, diagnostics: &mut Vec<Diagnostic>) -> O
                     config.agent.adapter,
                     registry.ids().join(", ")
                 ))
-                .fix(FixAction::ChangeSetting {
-                    key: "agent.adapter".to_owned(),
-                    value: registry
-                        .ids()
-                        .first()
-                        .map_or_else(String::new, |id| (*id).to_owned()),
-                })
+                // Die erste Kennung nur, wenn `config set` sie nimmt; ein leeres
+                // Register schlägt nichts vor (HUM-507).
+                .maybe_fix(
+                    registry.ids().first().and_then(|id| {
+                        humanitl_config::value::change_setting("agent.adapter", *id)
+                    }),
+                )
                 .build(),
         );
         return None;

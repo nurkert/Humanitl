@@ -26,7 +26,7 @@ use std::time::{Duration, SystemTime};
 
 use dashmap::DashMap;
 use humanitl_core::diagnostics::codes::PROXY_010;
-use humanitl_core::{Diagnostic, FixAction, FlowEvent, SessionId, Severity};
+use humanitl_core::{Diagnostic, FlowEvent, SessionId, Severity};
 use tokio::io::{AsyncReadExt as _, AsyncWriteExt as _};
 use tokio::net::UnixStream;
 use tokio::sync::Semaphore;
@@ -303,7 +303,8 @@ async fn write_refusal(mut stream: UnixStream) {
 /// `fix` schlägt den doppelten Wert vor: Wer wirklich mehr gleichzeitige
 /// Verbindungen braucht — ein Agent, der viele Downloads parallel fährt —,
 /// braucht in der Regel nicht viel mehr, und ein Vorschlag ohne Grenze wäre die
-/// Empfehlung, die Grenze aufzugeben.
+/// Empfehlung, die Grenze aufzugeben. Höchstens die Obergrenze der Prüfung;
+/// steht die Grenze schon dort, bleibt der Befund ohne `fix` (HUM-507).
 #[must_use]
 pub fn connection_limit_reached(limit: u32, since_last: u64) -> Diagnostic {
     let why = format!(
@@ -317,9 +318,9 @@ pub fn connection_limit_reached(limit: u32, since_last: u64) -> Diagnostic {
     );
     Diagnostic::builder(PROXY_010, Severity::Warning)
         .why(why)
-        .fix(FixAction::ChangeSetting {
-            key: "limits.max_client_connections".to_owned(),
-            value: limit.saturating_mul(2).to_string(),
-        })
+        .maybe_fix(humanitl_config::value::raised(
+            "limits.max_client_connections",
+            u64::from(limit),
+        ))
         .build()
 }

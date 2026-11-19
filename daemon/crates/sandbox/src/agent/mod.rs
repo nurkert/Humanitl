@@ -834,6 +834,19 @@ pub trait AgentAdapter: Send + Sync {
     }
 }
 
+/// `agent.command` mit genau dem einen Programm `program` als
+/// `ChangeSetting`, so geschrieben, wie `humanitl config set` eine Liste
+/// liest: als JSON (HUM-507).
+///
+/// `serde_json` setzt Anführungszeichen und Rückstriche im Namen so, dass
+/// die Liste lesbar bleibt; was `config set` trotzdem ablehnte, wird kein
+/// Vorschlag.
+#[must_use]
+pub(crate) fn command_fix(program: &str) -> Option<humanitl_core::FixAction> {
+    let list = serde_json::to_string(&[program]).ok()?;
+    humanitl_config::value::change_setting("agent.command", list)
+}
+
 /// Wahr, wenn dieses Kommando der Agent dieser Konfiguration ist.
 ///
 /// Eine Stelle für beide Seiten: Der Daemon entscheidet damit, ob der Adapter

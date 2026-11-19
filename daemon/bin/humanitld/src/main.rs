@@ -247,6 +247,7 @@ fn fix_hint(fix: Option<&FixAction>) -> Option<String> {
     Some(match fix? {
         FixAction::SetEnv { key, value } => format!("export {key}={value}"),
         FixAction::ChangeSetting { key, value } => format!("{key} = {value}"),
+        FixAction::EditSetting { key } => format!("set {key}"),
         FixAction::CopyCommand(command) | FixAction::OpenUrl(command) => command.clone(),
         FixAction::RemountReadOnly(path) => format!("remount read-only: {}", path.display()),
         other @ (FixAction::AddRule(_) | FixAction::InstallService) => other.as_str().to_owned(),
@@ -1797,10 +1798,12 @@ fn announce_overrides(resolver: &ResolverConfig) -> Option<Diagnostic> {
             hosts.len(),
             hosts.join(", ")
         ))
-        .fix(FixAction::ChangeSetting {
-            key: "resolver.overrides".to_owned(),
-            value: "an empty table, unless the fixed addresses are meant".to_owned(),
-        })
+        // Der Wert, der alle festen Antworten entfernt, so, wie `config set`
+        // eine Tabelle liest; ob sie gemeint sind, sagt der Satz (HUM-507).
+        .maybe_fix(humanitl_config::value::change_setting(
+            "resolver.overrides",
+            "{}",
+        ))
         .build();
     tracing::warn!(code = %note.code, why = %note.why, "name overrides");
     Some(note)
@@ -1883,25 +1886,25 @@ fn test_ca_roots(allow: bool, resolver: &ResolverConfig) -> Result<TestCa, Diagn
     // stehen in verschiedene Richtungen schief, und ein Vorschlag, der die
     // Richtung nicht trifft, ist keine Hilfe. Wer das Flag schon getippt hat,
     // soll nicht lesen, er möge es tippen — ihm fehlt der Schlüssel.
-    let half = |why: &str, fix: FixAction| TestCa {
+    let half = |why: &str, fix: Option<FixAction>| TestCa {
         roots: Vec::new(),
         note: Some(
             Diagnostic::builder(codes::CONFIG_011, Severity::Warning)
                 .why(why.to_owned())
-                .fix(fix)
+                .maybe_fix(fix)
                 .build(),
         ),
     };
     let Some(path) = resolver.test_ca.as_ref() else {
         return Ok(if allow {
+            // Den Pfad kennt nur der Mensch: Der Rat steht im Satz und nicht
+            // in einem `ChangeSetting`, dessen Wert eine Anleitung wäre
+            // (HUM-507).
             half(
-                "--allow-test-ca was given but resolver.test_ca is not set; no extra root is trusted",
-                FixAction::ChangeSetting {
-                    key: "resolver.test_ca".to_owned(),
-                    value: "an absolute path to the test root, for example \
-                            /etc/humanitl/test-ca.crt"
-                        .to_owned(),
-                },
+                "--allow-test-ca was given but resolver.test_ca is not set; no extra root is \
+                 trusted. Set resolver.test_ca to the absolute path of the test root, for example \
+                 /etc/humanitl/test-ca.crt",
+                None,
             )
         } else {
             TestCa::default()
@@ -1910,7 +1913,9 @@ fn test_ca_roots(allow: bool, resolver: &ResolverConfig) -> Result<TestCa, Diagn
     if !allow {
         return Ok(half(
             "resolver.test_ca is set but the daemon was started without --allow-test-ca; the root is ignored",
-            FixAction::CopyCommand("humanitld --allow-test-ca".to_owned()),
+            Some(FixAction::CopyCommand(
+                "humanitld --allow-test-ca".to_owned(),
+            )),
         ));
     }
     // Vor dem Lesen, nicht danach: Ein relativer Pfad wird gegen das
@@ -1942,13 +1947,10 @@ fn not_absolute(path: &Path) -> Diagnostic {
         .why(format!(
             "resolver.test_ca is {}, which is not an absolute path; it would be resolved against \
              the directory the daemon was started in, so that directory would decide which root \
-             is trusted",
+             is trusted; set an absolute path there, for example /etc/humanitl/test-ca.crt",
             path.display()
         ))
-        .fix(FixAction::ChangeSetting {
-            key: "resolver.test_ca".to_owned(),
-            value: "an absolute path, for example /etc/humanitl/test-ca.crt".to_owned(),
-        })
+        // Kein `ChangeSetting`: Der Wert wäre eine Anleitung (HUM-507).
         .build()
 }
 
@@ -3250,18 +3252,19 @@ mod tests {
         assert_eq!(note.severity, Severity::Warning);
         assert!(note.why.contains("resolver.test_ca"), "{}", note.why);
 
-        // Und der Vorschlag zeigt in die Richtung, in der es schiefsteht: Wer
-        // das Flag schon getippt hat, dem fehlt der Schlüssel, nicht der
-        // Befehl. Ein `CopyCommand("humanitld --allow-test-ca")` wäre hier die
+        // Und der Rat zeigt in die Richtung, in der es schiefsteht: Wer das
+        // Flag schon getippt hat, dem fehlt der Schlüssel, nicht der Befehl.
+        // Ein `CopyCommand("humanitld --allow-test-ca")` wäre hier die
         // Aufforderung, genau das noch einmal zu tun, was gerade getan wurde.
-        let Some(FixAction::ChangeSetting { key, value }) = note.fix else {
-            panic!(
-                "the missing half is the key, so the fix sets it: {:?}",
-                note.fix
-            );
-        };
-        assert_eq!(key, "resolver.test_ca");
-        assert!(value.contains("absolute"), "{value}");
+        // Den Pfad kennt nur der Mensch; der Rat steht deshalb im Satz und
+        // nicht als `ChangeSetting`, dessen Wert eine Anleitung wäre (HUM-507).
+        assert_eq!(note.fix, None);
+        assert!(
+            note.why
+                .contains("Set resolver.test_ca to the absolute path"),
+            "{}",
+            note.why
+        );
     }
 
     #[test]
@@ -3285,10 +3288,13 @@ mod tests {
             "the count belongs in it: {}",
             note.why
         );
-        let Some(FixAction::ChangeSetting { key, .. }) = note.fix else {
+        // Der Wert, der die Tabelle leert, so, wie `config set` ihn nimmt
+        // (HUM-507).
+        let Some(FixAction::ChangeSetting { key, value }) = note.fix else {
             panic!("the way out is the setting itself: {:?}", note.fix);
         };
-        assert_eq!(key, "resolver.overrides");
+        assert_eq!((key.as_str(), value.as_str()), ("resolver.overrides", "{}"));
+        humanitl_config::value::check_setting(&key, &value).expect("config set takes it");
     }
 
     #[test]
@@ -3321,9 +3327,9 @@ mod tests {
             key_without_flag.fix
         );
         assert!(
-            matches!(flag_without_key.fix, Some(FixAction::ChangeSetting { .. })),
-            "what is missing is the key in the configuration: {:?}",
-            flag_without_key.fix
+            flag_without_key.fix.is_none() && flag_without_key.why.contains("Set resolver.test_ca"),
+            "what is missing is the key in the configuration, named in the text: \
+             {flag_without_key:?}"
         );
     }
 
@@ -3411,13 +3417,14 @@ mod tests {
                 "the why has to say what is wrong with the path: {}",
                 error.why
             );
-            assert_eq!(
-                error.fix,
-                Some(FixAction::ChangeSetting {
-                    key: "resolver.test_ca".to_owned(),
-                    value: "an absolute path, for example /etc/humanitl/test-ca.crt".to_owned(),
-                })
+            // Der Rat steht im Satz; ein `ChangeSetting` mit einer Anleitung
+            // als Wert nähme `config set` nicht (HUM-507).
+            assert!(
+                error.why.contains("/etc/humanitl/test-ca.crt"),
+                "{}",
+                error.why
             );
+            assert_eq!(error.fix, None);
         }
     }
 

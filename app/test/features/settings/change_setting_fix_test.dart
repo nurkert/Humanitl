@@ -18,7 +18,8 @@ import 'package:humanitl/core/ui/ui.dart';
 
 import '../../harness/app_harness.dart';
 
-/// `LLM_002` so, wie der Daemon ihn seit HUM-275 schickt.
+/// `LLM_002` so, wie der Daemon ihn seit HUM-275 schickt; seit HUM-507 als
+/// `EditSetting` ohne Wert.
 Diagnostic llm002({String key = FormKeys.llmApiKeyRef}) => Diagnostic(
   code: 'LLM_002',
   severity: Severity.error,
@@ -26,7 +27,7 @@ Diagnostic llm002({String key = FormKeys.llmApiKeyRef}) => Diagnostic(
   why:
       'the LLM server answered 401 at http://192.168.1.20:11434/v1/models. '
       'It requires an access key, and none was sent.',
-  fix: FixAction.changeSetting(key: key, value: ''),
+  fix: FixAction.editSetting(key: key),
 );
 
 FakeDaemonClient needsKey({String key = FormKeys.llmApiKeyRef}) =>

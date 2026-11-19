@@ -1308,24 +1308,23 @@ fn agent_contribution(
     command: &[OsString],
 ) -> Result<AgentContribution, Failure> {
     let registry = AdapterRegistry::builtin();
-    let adapter = registry.get(&config.agent.adapter).ok_or_else(|| {
-        Failure::new(
-            Diagnostic::builder(codes::CONFIG_003, Severity::Blocking)
-                .why(format!(
-                    "agent.adapter is {:?}, and no adapter of that name exists; known: {}",
-                    config.agent.adapter,
-                    registry.ids().join(", ")
-                ))
-                .fix(FixAction::ChangeSetting {
-                    key: "agent.adapter".to_owned(),
-                    value: registry
-                        .ids()
-                        .first()
-                        .map_or_else(String::new, |id| (*id).to_owned()),
-                })
-                .build(),
-        )
-    })?;
+    let adapter =
+        registry.get(&config.agent.adapter).ok_or_else(|| {
+            Failure::new(
+                Diagnostic::builder(codes::CONFIG_003, Severity::Blocking)
+                    .why(format!(
+                        "agent.adapter is {:?}, and no adapter of that name exists; known: {}",
+                        config.agent.adapter,
+                        registry.ids().join(", ")
+                    ))
+                    // Die erste Kennung nur, wenn `config set` sie nimmt; ein leeres
+                    // Register schlägt nichts vor (HUM-507).
+                    .maybe_fix(registry.ids().first().and_then(|id| {
+                        humanitl_config::value::change_setting("agent.adapter", *id)
+                    }))
+                    .build(),
+            )
+        })?;
 
     let agent_ctx = AgentContext::new(session, work_src.to_path_buf(), config.llm.clone())
         // Das Kommando, das wirklich läuft, steht weiter unten: Es hängt daran,

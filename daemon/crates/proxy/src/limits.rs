@@ -86,10 +86,9 @@ pub fn body_over_cap(
         size = size.phrase(),
     );
     let diagnostic = Diagnostic::builder(LIMIT_001, Severity::Warning);
-    let change_cap = FixAction::ChangeSetting {
-        key: "limits.hold_body_cap_bytes".to_owned(),
-        value: cap.saturating_mul(2).to_string(),
-    };
+    // Das Doppelte, höchstens so viel, wie `config set` annimmt; an der
+    // Obergrenze bleibt der Rat im Text (HUM-507).
+    let change_cap = humanitl_config::value::raised("limits.hold_body_cap_bytes", cap);
     if hard_block {
         why.push_str(
             "A rule with stream: true does not apply while hold.hard_block_checksum_secrets is \
@@ -97,7 +96,7 @@ pub fn body_over_cap(
              secrets in a body that is never held. Raise the limit if requests this large are \
              expected.",
         );
-        return diagnostic.why(why).fix(change_cap).build();
+        return diagnostic.why(why).maybe_fix(change_cap).build();
     }
     match stream_rule(request) {
         Ok(rule) => {
@@ -132,7 +131,7 @@ pub fn body_over_cap(
                      not know, so no rule would ever match it."
                 }
             });
-            diagnostic.why(why).fix(change_cap).build()
+            diagnostic.why(why).maybe_fix(change_cap).build()
         }
     }
 }
@@ -191,7 +190,7 @@ pub fn stream_rule(request: &HttpRequest) -> Result<Rule, NoRule> {
 ///
 /// Der `fix` zeigt auf `limits.body_timeout_secs` mit dem doppelten Wert,
 /// wie [`crate::handler::idle_request_body`] für die andere Richtung derselben
-/// Grenze.
+/// Grenze, höchstens bis zur Obergrenze der Prüfung (HUM-507).
 #[must_use]
 pub fn response_went_silent(idle: Duration) -> Diagnostic {
     let secs = idle.as_secs();
@@ -203,10 +202,10 @@ pub fn response_went_silent(idle: Duration) -> Diagnostic {
              measures the silence between two chunks, never the total duration, so a long \
              stream from a language model is not affected as long as it keeps sending."
         ))
-        .fix(FixAction::ChangeSetting {
-            key: "limits.body_timeout_secs".to_owned(),
-            value: secs.saturating_mul(2).to_string(),
-        })
+        .maybe_fix(humanitl_config::value::raised(
+            "limits.body_timeout_secs",
+            secs,
+        ))
         .build()
 }
 
@@ -216,7 +215,7 @@ pub fn response_went_silent(idle: Duration) -> Diagnostic {
 /// Zwei Spannen, zwei Grenzen: Das Ziel nimmt kein Stück mehr an
 /// (`limits.body_timeout_secs`), oder es hat den ganzen Rumpf und schickt nie
 /// Kopfzeilen (`limits.header_timeout_secs`). Der `fix` verdoppelt die Grenze,
-/// die abgelaufen ist.
+/// die abgelaufen ist, höchstens bis zur Obergrenze der Prüfung (HUM-507).
 #[must_use]
 pub fn upload_stalled(stall: Stall, idle: Duration, head: Duration) -> Diagnostic {
     let (why, key, secs) = match stall {
@@ -243,10 +242,7 @@ pub fn upload_stalled(stall: Stall, idle: Duration, head: Duration) -> Diagnosti
     };
     Diagnostic::builder(LIMIT_004, Severity::Warning)
         .why(why)
-        .fix(FixAction::ChangeSetting {
-            key: key.to_owned(),
-            value: secs.saturating_mul(2).to_string(),
-        })
+        .maybe_fix(humanitl_config::value::raised(key, secs))
         .build()
 }
 

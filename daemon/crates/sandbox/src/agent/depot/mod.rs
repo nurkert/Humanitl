@@ -372,10 +372,7 @@ pub(crate) fn host_program(agent: &str, named: &OsStr) -> Diagnostic {
              host; only the depot program, by its bare name {program}, starts",
             named.to_string_lossy()
         ))
-        .fix(FixAction::ChangeSetting {
-            key: "agent.command".to_owned(),
-            value: format!("[\"{program}\"]"),
-        })
+        .maybe_fix(crate::agent::command_fix(program))
         .build()
 }
 

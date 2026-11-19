@@ -2382,9 +2382,8 @@ name = "minimal"
             assert!(err.why.ends_with(WORK_DIR_INSTEAD), "{bad}: {}", err.why);
             assert_eq!(
                 err.fix,
-                Some(FixAction::ChangeSetting {
+                Some(FixAction::EditSetting {
                     key: "sandbox.work_dir".to_owned(),
-                    value: String::new(),
                 }),
                 "{bad}"
             );

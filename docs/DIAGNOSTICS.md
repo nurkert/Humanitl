@@ -226,7 +226,7 @@ Unbekannter Schlüssel
 
 **Auslöser.** Ein Schlüssel, ein Block oder ein Pfad steht in der Datei, den das Schema nicht kennt.
 
-**Fix.** `ChangeSetting` auf den ähnlichsten Schlüssel, wenn es einen gibt; sonst ohne Fix.
+**Fix.** `ChangeSetting` auf den ähnlichsten Schlüssel, wenn es einen gibt und `humanitl config set` den Wert dort nimmt (HUM-507); sonst ohne Fix.
 
 #### CONFIG_003
 
@@ -234,7 +234,7 @@ Wert außerhalb des Bereichs
 
 **Auslöser.** Ein Wert liegt außerhalb seines Bereichs, hat den falschen Typ, ein Profil hat die falsche Form, oder ein Projekt-Profil setzt einen Schlüssel, der ihm nicht gehört.
 
-**Fix.** `ChangeSetting`, wo es einen Schreibweg gibt; beim Projekt-Profil bewusst keiner.
+**Fix.** `ChangeSetting` auf die Vorgabe, oder `-` für ein Feld ohne Vorgabe, wo es einen Schreibweg gibt und `humanitl config set` den Schlüssel kennt (HUM-507); beim Projekt-Profil bewusst keiner, ebenso bei einer Linker-Variablen in `sandbox.env` oder `[env]`: der Text nennt die Variable, die wegmuss.
 
 #### CONFIG_004
 
@@ -298,7 +298,7 @@ Test-Wurzel ohne Flag oder Flag ohne Test-Wurzel
 
 **Auslöser.** Test-Wurzel ohne Flag oder Flag ohne Test-Wurzel: die beiden gehören zusammen.
 
-**Fix.** Der Fix nennt die fehlende Hälfte.
+**Fix.** Fehlt das Flag, `CopyCommand` mit dem Start samt `--allow-test-ca`; fehlt der Schlüssel, kein Fix, der Text nennt ihn mit einem Beispiel für den Pfad (HUM-507).
 
 #### CONFIG_012
 
@@ -306,7 +306,7 @@ Test-Wurzel ohne absoluten Pfad
 
 **Auslöser.** `resolver.test_ca` ist kein absoluter Pfad und hinge damit am Startverzeichnis des Daemons.
 
-**Fix.** `ChangeSetting` auf einen absoluten Pfad.
+**Fix.** Kein Fix: Der Text verlangt einen absoluten Pfad und nennt ein Beispiel; den Pfad kennt nur der Mensch (HUM-507).
 
 #### CONFIG_013
 
@@ -338,7 +338,7 @@ Feste Namenszuordnungen gesetzt
 
 **Auslöser.** `resolver.overrides` beantwortet die genannten Namen aus der Konfiguration, statt zu fragen; der Verkehr geht an die Adresse, die dort steht.
 
-**Fix.** `ChangeSetting` auf eine leere Tabelle, wenn die festen Adressen nicht gemeint waren.
+**Fix.** `ChangeSetting` auf eine leere Tabelle (`{}`), wenn die festen Adressen nicht gemeint waren.
 
 #### CONFIG_017
 
@@ -452,7 +452,7 @@ Mount verboten
 
 **Auslöser.** Ein Profil, der Proxy-Socket oder ein Agent-Adapter will einen Pfad einhängen, den die Mount-Regeln verbieten.
 
-**Fix.** Beim Projektordner `ChangeSetting` auf `sandbox.work_dir`, die Oberfläche bietet die Ordnerauswahl an; sonst kein Fix, der Text nennt Pfad und Regel.
+**Fix.** Beim Projektordner `EditSetting` auf `sandbox.work_dir` (bis HUM-507 ein `ChangeSetting` mit leerem Wert), die Oberfläche bietet die Ordnerauswahl an; sonst kein Fix, der Text nennt Pfad und Regel.
 
 #### SANDBOX_007
 
@@ -724,7 +724,7 @@ Mounted folder is not the checked one
 
 **Auslöser.** Inside the sandbox, the project folder, an entry of `mounts.ro`, `mounts.extra_ro`, `mounts.extra_rw` or the agent program has another device and inode than the one the launcher opened and checked. The folder was swapped between the check and the mount, for example renamed and replaced. The agent did not start; the sentence names the path, the expected and the found pair.
 
-**Fix.** `ChangeSetting` on `sandbox.work_dir`, the folder choice: check who replaced the named path since the plan, and start the session again once the folder is the one you chose. A folder that keeps changing (a mount point that is mounted while the session starts) cannot be a mount source.
+**Fix.** `EditSetting` on `sandbox.work_dir`, the folder choice: check who replaced the named path since the plan, and start the session again once the folder is the one you chose. A folder that keeps changing (a mount point that is mounted while the session starts) cannot be a mount source.
 
 #### SANDBOX_049
 
@@ -756,7 +756,7 @@ Kernel level prerequisite missing
 
 **Auslöser.** The kernel level starts a micro VM with a guest kernel of its own and needs on this host: `/dev/kvm` readable and writable for this user, the machine emulator with the machine type and vsock device it uses, the file system daemon with `--readonly`, `--fd` and `--cache`, the vsock device with `--uds-path` and `--groups`, bubblewrap with `--bind-fd` and `--size`, a readable kernel image with virtiofs built in (`CONFIG_VIRTIO_FS=y` in the configuration beside the image, `config-<release>` beside `vmlinuz-<release>`) and the module directory of that kernel. The sentence names the first one that is missing; nothing starts, and no other backend takes over.
 
-**Fix.** `CopyCommand` with the package that brings the missing piece (for `/dev/kvm` the command that adds this user to the group `kvm`), or `ChangeSetting` on the setting under `sandbox.qemu` that names the path. When the running kernel's image or modules are gone while those of another kernel are installed, an upgrade removed its package: `CopyCommand` with `systemctl reboot` into an installed kernel, since installing the package again changes nothing. When the module directory is hidden from the daemon (its service unit of Humanitl 0.4.0 set `ProtectKernelModules`, HUM-529): with the package, update it and run `systemctl --user daemon-reload && systemctl --user restart humanitld.service` (`CopyCommand`); without the package (archive, AppImage), `InstallService` (`humanitl daemon install`).
+**Fix.** `CopyCommand` with the package that brings the missing piece (for `/dev/kvm` the command that adds this user to the group `kvm`), or, for a configured kernel image that is not there, `ChangeSetting` that removes `sandbox.qemu.kernel` (`-`, the running kernel's); where only the person knows the right path, the sentence names the setting and there is no fix (HUM-507). When the running kernel's image or modules are gone while those of another kernel are installed, an upgrade removed its package: `CopyCommand` with `systemctl reboot` into an installed kernel, since installing the package again changes nothing. When the module directory is hidden from the daemon (its service unit of Humanitl 0.4.0 set `ProtectKernelModules`, HUM-529): with the package, update it and run `systemctl --user daemon-reload && systemctl --user restart humanitld.service` (`CopyCommand`); without the package (archive, AppImage), `InstallService` (`humanitl daemon install`).
 
 #### SANDBOX_046
 
@@ -878,7 +878,7 @@ Verbindungsgrenze erreicht
 
 **Auslöser.** Die Zahl gleichzeitiger Verbindungen aus der Sandbox hat `limits.max_client_connections` erreicht.
 
-**Fix.** `ChangeSetting` auf eine höhere Grenze.
+**Fix.** `ChangeSetting` auf die doppelte Grenze, höchstens die Obergrenze der Prüfung; steht sie schon dort, kein Fix (HUM-507).
 
 #### PROXY_011
 
@@ -886,7 +886,7 @@ Anfrage-Rumpf ist stehengeblieben
 
 **Auslöser.** Ein Anfrage-Rumpf ist stehengeblieben und hat die Frist überschritten.
 
-**Fix.** `ChangeSetting` auf eine längere Frist.
+**Fix.** `ChangeSetting` auf die doppelte Frist, höchstens die Obergrenze der Prüfung; steht sie schon dort, kein Fix (HUM-507).
 
 #### PROXY_012
 
@@ -894,7 +894,7 @@ Decision proxy unreachable
 
 **Auslöser.** `egress.proxy` is set, so every allowed request of the agent leaves through that proxy, and the daemon could not open a connection to it within `limits.connect_timeout_secs`. The request did not go out directly instead; the agent got `502`.
 
-**Fix.** `CopyCommand` with `humanitl egress check` once the proxy runs; or `ChangeSetting` on `egress.proxy` with the address it listens on, or empty to leave without it.
+**Fix.** `CopyCommand` with `humanitl egress check` once the proxy runs; otherwise set `egress.proxy` to the address it listens on (`humanitl config set egress.proxy URL`), or remove it with `-` to leave without it.
 
 #### PROXY_013
 
@@ -918,7 +918,7 @@ Certificate does not match the decision proxy CA
 
 **Auslöser.** Through the tunnel of the decision proxy, Humanitl speaks TLS with the name of the target and checks the certificate against the CA in `egress.proxy_ca` and the usual anchors. The certificate came from neither: `egress.proxy_ca` is empty or names another CA than the one the proxy signs with. That CA is trusted only on this way, never on a direct connection.
 
-**Fix.** `ChangeSetting` on `egress.proxy_ca` with the PEM file of the proxy's CA, for mitmproxy the absolute path of `~/.mitmproxy/mitmproxy-ca-cert.pem`.
+**Fix.** `EditSetting` on `egress.proxy_ca`: the app opens the field, the command line prints `humanitl config set egress.proxy_ca <value>`; the sentence names the PEM file to put there, for mitmproxy the absolute path of `~/.mitmproxy/mitmproxy-ca-cert.pem` (HUM-507).
 
 #### PROXY_016
 
@@ -934,7 +934,7 @@ Decision proxy settings unusable
 
 **Auslöser.** `egress.proxy` is set, and a setting it needs cannot be used: `egress.proxy_ca` cannot be read or holds no certificate, or the keyring does not hand out the credentials `egress.proxy_auth_ref` names. The daemon read them at its start; every allowed request fails with this finding and nothing leaves directly.
 
-**Fix.** `ChangeSetting` on the named key, or `CopyCommand` with `humanitl egress auth set`; then restart the daemon (`humanitl daemon restart`).
+**Fix.** `EditSetting` on the named key (on `egress.proxy` when there is no decision proxy to check): the app opens the field, the command line prints `humanitl egress auth set` or `humanitl config set KEY <value>` (HUM-507); then restart the daemon (`humanitl daemon restart`).
 
 #### PROXY_018
 
@@ -1002,7 +1002,7 @@ LLM-Endpoint nicht erreichbar
 
 **Auslöser.** Der Endpunkt antwortet nicht, löst nicht auf, die Frist läuft ab, oder sein Zertifikat stammt von einer Stelle, der dieser Rechner nicht vertraut.
 
-**Fix.** Bei der Probe `CopyCommand` mit einem `curl`, das dasselbe versucht; bei unbekannter Stelle wie `PROXY_003`. Im Lauf `ChangeSetting` auf `llm.endpoint`.
+**Fix.** Bei der Probe `CopyCommand` mit einem `curl`, das dasselbe versucht; bei unbekannter Stelle wie `PROXY_003`. Im Lauf `ChangeSetting` auf `llm.endpoint` mit der geltenden Adresse, ohne sie `EditSetting` auf das Feld (HUM-507).
 
 #### LLM_002
 
@@ -1010,7 +1010,7 @@ LLM-Endpoint verlangt eine Anmeldung
 
 **Auslöser.** Der Endpunkt verlangt eine Anmeldung (`401` oder `403`), ohne Schlüssel oder mit einem, den er ablehnt.
 
-**Fix.** `ChangeSetting` auf `llm.api_key_ref`: in der Oberfläche ein Knopf, der die Einstellungen am Feld „Zugangsschlüssel“ öffnet; auf der Kommandozeile `humanitl llm key set`.
+**Fix.** `EditSetting` auf `llm.api_key_ref` (bis HUM-507 ein `ChangeSetting` mit leerem Wert): in der Oberfläche ein Knopf, der die Einstellungen am Feld „Zugangsschlüssel“ öffnet; auf der Kommandozeile `humanitl llm key set`.
 
 #### LLM_003
 
@@ -1286,7 +1286,7 @@ Rumpf über der Haltegrenze
 
 **Auslöser.** Eine Anfrage ist größer als `limits.hold_body_cap_bytes`: angekündigt über `Content-Length` oder beim Puffern bemerkt.
 
-**Fix.** `AddRule` mit `action: ask` und `stream: true` für Host, Methode und Pfad der Anfrage; ohne wirksame Regel oder unter `hold.hard_block_checksum_secrets` (dort greift `stream: true` nie) `ChangeSetting` auf `limits.hold_body_cap_bytes`.
+**Fix.** `AddRule` mit `action: ask` und `stream: true` für Host, Methode und Pfad der Anfrage; ohne wirksame Regel oder unter `hold.hard_block_checksum_secrets` (dort greift `stream: true` nie) `ChangeSetting` auf `limits.hold_body_cap_bytes`, doppelt so hoch, höchstens so hoch, wie die Prüfung annimmt; darüber kein Fix (HUM-507).
 
 #### LIMIT_002
 
@@ -1310,7 +1310,7 @@ Antwort des Ziels verstummt
 
 **Auslöser.** Das Ziel hat nach den Antwort-Kopfzeilen länger als `limits.body_timeout_secs` kein Stück des Rumpfs mehr geschickt, oder bei einem gestreamten Upload kein Stück mehr angenommen (`limits.body_timeout_secs`) beziehungsweise nach dem ganzen Rumpf keine Kopfzeilen geschickt (`limits.header_timeout_secs`).
 
-**Fix.** `ChangeSetting` auf die Grenze, die ablief, mit dem doppelten Wert.
+**Fix.** `ChangeSetting` auf die Grenze, die ablief, mit dem doppelten Wert, höchstens der Obergrenze der Prüfung; steht sie schon dort, kein Fix (HUM-507).
 
 #### LIMIT_005
 
@@ -1624,7 +1624,7 @@ Agent-Kommando in der Sandbox nicht erreichbar
 
 **Auslöser.** Gesucht wird zuerst in der Sandbox: ihr Suchpfad (`sandbox.env` vor `[env]` des Profils), ihre Einhängungen und die Verweise des Profils, relative Einträge gegen `[mounts].work.dst`. Erst wenn dort nichts liegt, gilt der Host, und der Befund nennt beides. Zwei Fälle: das Kommando liegt unter keiner Einhängung, oder es liegt unter einer, deren Verzeichnis der Suchpfad nicht nennt. Was sich nicht entscheiden lässt, erzeugt keinen Befund (HUM-139).
 
-**Fix.** `CopyCommand`, das es an eine eingehängte Stelle installiert, oder `ChangeSetting` auf `sandbox.env.PATH`, wenn die Einhängung steht und nur der Suchpfad fehlt.
+**Fix.** `CopyCommand`, das es an eine eingehängte Stelle installiert; steht die Einhängung und fehlt nur der Suchpfad, kein Fix, der Text nennt die Zeile `PATH` für `[sandbox.env]` in `config.toml`, denn `humanitl config set` schreibt keinen Eintrag dieser Tabelle (HUM-507).
 
 #### AGENT_005
 
@@ -1640,7 +1640,7 @@ Node.js missing in the sandbox
 
 **Auslöser.** The command resolves to a script that starts Node.js through its `#!` line, and the sandbox finds no executable `node` on its `PATH` (or at the absolute path the line names). The finding names the script, the sandbox `PATH` and where a `node` lies on the host, if anywhere.
 
-**Fix.** `ChangeSetting` on `sandbox.env.PATH` when a mounted `node` is only missing from the path, `CopyCommand` that installs the host's `node` under `/usr/local/bin` when it is not mounted, the installer of pi when the `#!` line names an absolute `node` outside the mounts, otherwise `OpenUrl` to the Node.js download page (pi needs 22.19 or newer).
+**Fix.** No fix when a mounted `node` is only missing from the path: the sentence names the `PATH` line for `[sandbox.env]` in `config.toml`, since `humanitl config set` writes no entry of that table (HUM-507); `CopyCommand` that installs the host's `node` under `/usr/local/bin` when it is not mounted, the installer of pi when the `#!` line names an absolute `node` outside the mounts, otherwise `OpenUrl` to the Node.js download page (pi needs 22.19 or newer).
 
 #### AGENT_007
 

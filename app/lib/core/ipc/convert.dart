@@ -73,9 +73,16 @@ extension FixActionToDomain on pb.FixAction {
     ),
     pb.FixAction_Action.addRule => FixAction.addRule(rule: addRule.toDomain()),
     pb.FixAction_Action.installService => const FixAction.installService(),
+    // A daemon before 1.50 sent an empty `ChangeSetting` for a field the
+    // person fills in; it reads as the `EditSetting` of today (HUM-507).
+    pb.FixAction_Action.changeSetting when changeSetting.value.isEmpty =>
+      FixAction.editSetting(key: changeSetting.key),
     pb.FixAction_Action.changeSetting => FixAction.changeSetting(
       key: changeSetting.key,
       value: changeSetting.value,
+    ),
+    pb.FixAction_Action.editSetting => FixAction.editSetting(
+      key: editSetting.key,
     ),
     pb.FixAction_Action.copyCommand => FixAction.copyCommand(
       command: copyCommand,

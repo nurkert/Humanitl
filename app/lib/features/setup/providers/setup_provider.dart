@@ -966,7 +966,7 @@ SetupCheck _projectCheck(
 /// True when [diagnostic] is about the project folder (HUM-384).
 ///
 /// The daemon raises `SANDBOX_006` for a folder it will not mount and marks
-/// it with the one fix that cures it, a `ChangeSetting` on `sandbox.work_dir`
+/// it with the one fix that cures it, an `EditSetting` on `sandbox.work_dir`
 /// -- "choose another folder" (`humanitl_sandbox::choose_folder_fix`). The
 /// client adds `CONFIG_013` for a folder nobody chose. Every other finding a
 /// plan carries is about something else: an old daemon that reads a newer
@@ -978,8 +978,8 @@ bool isProjectFolderFinding(Diagnostic diagnostic) =>
     diagnostic.code == DiagnosticCodes.noProjectFolder ||
     diagnostic.code == DiagnosticCodes.workDirRefused ||
     switch (diagnostic.fix) {
-      FixActionChangeSetting(:final String key) =>
-        key == FormKeys.sandboxWorkDir,
+      FixActionChangeSetting(:final String key) ||
+      FixActionEditSetting(:final String key) => key == FormKeys.sandboxWorkDir,
       _ => false,
     };
 

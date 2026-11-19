@@ -51,7 +51,13 @@ pub const PROTO_MAJOR: u32 = 1;
 /// Minor-Version des Vertrags. Steigt bei jeder additiven Änderung
 /// (`Info.proto_minor`).
 ///
-/// `49` seit der Untergrenze der Sitzung (HUM-489): `Start.cli_overrides`
+/// `50` seit dem Feld ohne Wert (HUM-507): `FixAction.edit_setting`
+/// (`EditSetting`, nur der Schlüssel) öffnet ein Feld, dessen Wert nur der
+/// Mensch kennt (Zugangsschlüssel, Projektordner, Entscheidungs-Proxy, Adresse
+/// des Modells). Ein `ChangeSetting` trägt seither immer einen Wert, den
+/// `humanitl config set` annimmt; ein Daemon davor schickte für das Feld ein
+/// `ChangeSetting` mit leerem Wert, und die App liest das weiter so.
+/// `49` war die Untergrenze der Sitzung (HUM-489): `Start.cli_overrides`
 /// nimmt `sandbox.min_isolation` an. Der Wunsch hebt die Untergrenze der
 /// Sitzung und senkt sie nie, weil über alle Ebenen der strengste Wert gilt;
 /// ein älterer Daemon antwortet mit `CONFIG_003`, und `humanitl run` sagt
@@ -265,7 +271,7 @@ pub const PROTO_MAJOR: u32 = 1;
 /// Spiegelung in `app/lib/core/ipc/proto_version.dart` darf nachziehen: eine
 /// abweichende Minor ist verabredetermaßen kein Grund, die Verbindung
 /// abzulehnen (`docs/PROTOCOL.md`).
-pub const PROTO_MINOR: u32 = 49;
+pub const PROTO_MINOR: u32 = 50;
 
 /// Metadata-Schlüssel für das Session-Token aus
 /// `$XDG_RUNTIME_DIR/humanitl/token` (CONVENTIONS.md 3.6).

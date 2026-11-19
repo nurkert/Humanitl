@@ -628,10 +628,7 @@ fn not_executable(command: &OsString, from_caller: bool, default_command: &str) 
     // (`agent.command` ist entweder nichts oder mindestens das Programm). Der
     // Vorschlag ist deshalb die Vorgabe des Adapters.
     finding
-        .fix(FixAction::ChangeSetting {
-            key: "agent.command".to_owned(),
-            value: format!("[\"{default_command}\"]"),
-        })
+        .maybe_fix(super::command_fix(default_command))
         .build()
 }
 
@@ -818,22 +815,22 @@ fn not_on_the_sandbox_path(ctx: &AgentContext, binary: &Path, docs: &str) -> Dia
         .why(format!(
             "{} is on this machine and the sandbox {}, but its PATH is {} and does not \
              name {dir}; inside, execvp searches only that PATH, so the exec would fail after \
-             the start.",
+             the start. Set PATH = \"{dir}:{}\" under [sandbox.env] in config.toml.",
             binary.display(),
             if ctx.sandbox_view.seatbelt {
                 "may read it".to_owned()
             } else {
                 format!("mounts {}", mounts_of(ctx))
             },
-            ctx.sandbox_path_display()
+            ctx.sandbox_path_display(),
+            // Der nackte Pfad, nicht die erklärte Fassung: Der Wert wird
+            // kopiert und eingetragen, und ein Satz in Klammern gehört nicht
+            // in die Konfiguration des Nutzers.
+            ctx.sandbox_path_value()
         ))
-        // Der nackte Pfad, nicht die erklärte Fassung: Der Wert wird kopiert
-        // und eingetragen, und ein Satz in Klammern gehört nicht in die
-        // Konfiguration des Nutzers.
-        .fix(FixAction::ChangeSetting {
-            key: "sandbox.env.PATH".to_owned(),
-            value: format!("{dir}:{}", ctx.sandbox_path_value()),
-        })
+        // Kein `ChangeSetting`: `sandbox.env.PATH` ist ein Eintrag einer
+        // freien Tabelle, den `config set` nicht schreibt (HUM-507); die
+        // Zeile steht im Satz.
         .docs(docs)
         .build()
 }
