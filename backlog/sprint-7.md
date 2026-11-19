@@ -142,6 +142,7 @@ Diagnose-Codes, hier nur geplant (registriert vom genannten Issue in `codes.rs` 
 | HUM-557 | Kernel-Stufe: die letzten Wege zu eigenem Code in der Unit (memfd, Mounts von bubblewrap, sh und bwrap zusammen) | M | HUM-480 |
 | HUM-558 | Test `fd_handover::nobody_coming_ends_the_wait_and_the_socket` wackelt unter paralleler Last | S | — |
 | HUM-559 | Plan-Vorschau kennt die Untergrenze der Kommandozeile nicht | S | HUM-489 |
+| HUM-560 | App: im Reiter Isolation verliert eine Wahl des Backends per Tastatur den Fokus | S | HUM-510 |
 
 ## HUM-428 · Port neutral: `PlanRequest`, `LaunchOptions`, `IsolationLevel`, Enum `Backend` statt `PlatformBackend`
 
@@ -5634,3 +5635,31 @@ schwächeren Untergrenze des Daemons, der Start danach scheitert mit
 
 ### Akzeptanzkriterien
 1. Vorschau und Start zeigen bei gleichen Eingaben dieselbe Untergrenze.
+
+---
+
+## HUM-560 · App: im Reiter Isolation verliert eine Wahl des Backends per Tastatur den Fokus
+
+### Kontext
+Aus HUM-510. Wählt man in den Einstellungen das Backend per Tastatur,
+schreibt die App `sandbox.backend`, das Mitglied des
+`sandboxBackendsProvider` lädt neu und sperrt die Segmente kurz; ein
+gesperrtes Segment verliert den Fokus. HUM-510 gibt ihn in der
+Einstellungszeile nach dem Neuladen zurück. Im Abschnitt des Reiters
+Isolation (`SandboxBackendSection`) passiert dasselbe seit HUM-504 (neues
+Mitglied ohne Wert, Segmente gesperrt), dort kommt der Fokus nicht zurück.
+
+### Spezifikation
+1. Der Abschnitt gibt den Fokus nach dem Neuladen dem gewählten Segment
+   zurück, wenn er vorher in der Wahl lag, wie die Zeile aus HUM-510; wer
+   woanders war, wird nicht hineingezogen.
+2. Möglichst ein gemeinsamer Baustein für Zeile und Abschnitt statt einer
+   Kopie.
+
+### Tests
+- Wahl per Enter im Abschnitt, Neuladen zurückgehalten, danach Fokus wieder
+  in der Wahl; Linux und macOS. Mutationsbeweis: ohne Rückgabe rot.
+
+### Akzeptanzkriterien
+1. Eine Wahl per Tastatur lässt den Fokus in der Wahl, in Zeile und
+   Abschnitt.
