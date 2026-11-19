@@ -983,11 +983,13 @@ fn sandbox_ports(
 /// Flows zurück, verliert er Ereignisse (`Lagged`). Für einen Flow ist das
 /// die dokumentierte Grenze; der Vermerk der Tür aber kommt je Start nur
 /// einmal, und verloren wäre er für immer. Jede Meldung geht deshalb zuerst
-/// über die unbegrenzte Warteschlange des Schreibers
-/// ([`AuditHandle::record`]) ins Log und erst danach als `FlowEvent::Sandbox`
-/// in den Strom, für jeden anderen Zuhörer; der Sink des Audit-Logs liest
-/// sie dort nicht ein zweites Mal. Beide Wege warten nicht; das Backend ruft
-/// den Kanal auch von seinen eigenen Fäden.
+/// über die Warteschlange des Schreibers ([`AuditHandle::record`]) ins Log
+/// und erst danach als `FlowEvent::Sandbox` in den Strom, für jeden anderen
+/// Zuhörer; der Sink des Audit-Logs liest sie dort nicht ein zweites Mal. Die
+/// Warteschlange ist begrenzt (HUM-556): Ist sie voll, wartet die Meldung auf
+/// Platz, statt verloren zu gehen. Das Backend ruft den Kanal auch von seinen
+/// eigenen Fäden; gewartet wird nur, solange die Platte hinter einem Schwall
+/// zurückliegt.
 fn sandbox_notices(
     queue: &Arc<HoldQueue>,
     audit: AuditHandle,

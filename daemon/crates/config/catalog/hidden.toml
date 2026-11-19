@@ -51,6 +51,7 @@ env_ca_only = "only the CA variable of a TLS_001 fix goes through SetConfig, nev
 "limits.max_decompress_ratio" = "file_only"
 "limits.preview_cap_bytes" = "file_only"
 "limits.recorder_max_body_bytes" = "file_only"
+"limits.registry_max_finished_flows" = "file_only"
 "llm.active" = "server_table"
 "llm.passthrough_paths" = "file_only"
 "pseudonyms.max_response_bytes" = "file_only"

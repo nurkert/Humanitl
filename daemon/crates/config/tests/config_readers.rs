@@ -132,6 +132,9 @@ const REGISTER: &[(&str, &str)] = &[
     ("limits.max_decompress_ratio", "effective"),
     ("limits.preview_cap_bytes", "effective"),
     ("limits.recorder_max_body_bytes", "effective"),
+    // Gelesen in `FlowRegistry::new`: so viele abgeschlossene Flows behält
+    // die Registry (HUM-556).
+    ("limits.registry_max_finished_flows", "effective"),
     // Gelesen in `SandboxService::agent_key` beim Start einer Sitzung: Der
     // Schlüssel geht als Datei in die Sandbox, und `IpcServer::probe_key`
     // gibt ihn der Probe, wenn sie ihn verlangt (HUM-140).

@@ -110,6 +110,7 @@ Aliase.
 | `--limits-hold-max-bytes` | - | `INTEGER` | `limits.hold_max_bytes` |
 | `--limits-hold-max-flows` | - | `INTEGER` | `limits.hold_max_flows` |
 | `--limits-max-client-connections` | - | `INTEGER` | `limits.max_client_connections` |
+| `--limits-registry-max-finished-flows` | - | `INTEGER` | `limits.registry_max_finished_flows` |
 | `--limits-max-decompress-ratio` | - | `INTEGER` | `limits.max_decompress_ratio` |
 | `--limits-preview-cap-bytes` | - | `INTEGER` | `limits.preview_cap_bytes` |
 | `--limits-recorder-max-body-bytes` | - | `INTEGER` | `limits.recorder_max_body_bytes` |

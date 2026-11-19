@@ -156,6 +156,7 @@ fn every_key_of_the_conventions_is_reachable() {
         "limits.body_timeout_secs",
         "limits.max_client_connections",
         "limits.recorder_max_body_bytes",
+        "limits.registry_max_finished_flows",
         "upstream.connect_timeout_secs",
         "preview.cap_bytes",
         "preview.max_decompress_ratio",

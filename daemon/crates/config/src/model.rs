@@ -365,6 +365,12 @@ pub struct Limits {
     /// Größte Zahl gleichzeitiger Verbindungen aus der Sandbox je Sitzung. Darüber antwortet der Proxy mit 503 und schließt; eine Uhr je Spanne allein hindert einen Prozess nicht daran, dieselben Ressourcen über viele Verbindungen zu binden.
     #[schemars(extend("x-tier" = "expert", "x-project-scope" = "allowed"))]
     pub max_client_connections: u32,
+    /// Größte Zahl abgeschlossener Flows, die der Daemon im Speicher behält. Darüber fällt der älteste abgeschlossene heraus; die Aufzeichnung hat ihn da längst. Gehaltene und laufende Flows zählen nicht und fallen nie heraus. Ohne Aufzeichnung zeigt die Liste nur diese letzten Flows.
+    // Gesperrt für das Projekt-Profil (HUM-556): Der Wert begrenzt den Speicher
+    // des Daemons über eine lange Sitzung. Ein geklontes Repository könnte ihn
+    // sonst so weit heben, dass die Grenze keine mehr ist.
+    #[schemars(extend("x-tier" = "expert", "x-project-scope" = "denied"))]
+    pub registry_max_finished_flows: u32,
 }
 
 impl Default for Limits {
@@ -381,6 +387,7 @@ impl Default for Limits {
             body_timeout_secs: 300,
             recorder_max_body_bytes: 32 * MIB,
             max_client_connections: 256,
+            registry_max_finished_flows: 10_000,
         }
     }
 }

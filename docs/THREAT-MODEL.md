@@ -148,6 +148,7 @@ Five further channels complete the model:
 | K-34 | the shared file systems of the kernel level (virtiofs): the guest root, the project folder at `/work` and the layer of a disposable session | b | high | every shared folder is opened and checked by the daemon and reaches its file system daemon only as that descriptor (`--bind-fd`), never as a path; the shim compares the inode of `/work`, or of the overlay's lower layer, with the plan; the host check finds the opened folder itself at the one daemon that shares it, a descriptor that names the share and carries the plan's device and inode (`SANDBOX_047`), which root in the guest cannot forge; in a disposable session the project is read-only twice (its daemon with `--readonly`, its jail binding the checked folder with `--ro-bind-fd`), the layer comes through a third daemon, and the daemon reads it only after every process of the unit has ended, with the scan of bubblewrap's disposable sandbox plus a refusal of every change on, under or above a mask of the profile; the shim lays the profile's masks over the overlay as bubblewrap does, and the layer's daemon takes only `user.overlay.*` attributes (`--xattrmap`, HUM-481) | mitigated | `daemon/crates/sandbox/src/qemu/kvm_tests.rs` (`a_folder_swapped_after_the_plan_stays_the_checked_folder`, `a_disposable_session_never_writes_to_the_project`), `daemon/crates/sandbox/src/qemu/kvm_tests/masks.rs` (HUM-481), `daemon/crates/sandbox/src/qemu/host_check.rs`, `daemon/crates/sandbox/tests/escape_worktree.rs` (ESC-5 against `qemu`, HUM-446); CI jobs `kvm-tests` and `escape-tests-qemu` (ESC-1 to ESC-5 and `tests/escape/guest-root.sh` with root in the guest, HUM-445, HUM-449) |
 | K-35 | a decision proxy of the user behind Humanitl (`egress.proxy`, opt-in), and with `hold.ask_mode = "upstream"` the one who decides requests without a rule | a, b, c | high | off by default; `upstream` only with a proxy the running daemon uses (`CONFIG_003` otherwise), `block` never reaches it (the declared LLM passthrough, ranked ahead of block rules, does, as any allow), `redact` and the hard block on verified secrets stay in Humanitl, recorded as `forward` by `upstream` with the proxy's status (HUM-512); only `http://` to it, from the daemon on the host, never reachable from the sandbox; every allowed request of the agent leaves through it or not at all (`PROXY_012` to `PROXY_017`, never a direct fallback); its CA trusted only on that way, in a `ClientConfig` of its own; with `egress.proxy_resolve = "proxy"` (default of the opt-in) Humanitl resolves nothing and refuses private literals and local names before forwarding, with `"humanitl"` it resolves and checks every address, which binds only a proxy that connects to the address in `CONNECT` (not Burp Suite 2026.11.2, HUM-524) (ADR-0022); all keys closed to project profiles; credentials in the keyring, or the `0600` fallback file (`CONFIG_019`), never in `config.toml` | declared | `daemon/crates/proxy/tests/decision_proxy.rs` (HUM-511), `daemon/crates/proxy/tests/upstream_ask_mode.rs` (HUM-512) |
 | K-36 | the agent depot (`agents.source = "depot"`, opt-in, or a company lock), first part: the agent's origin, its mounts and the masks of host installs | b, d | high | off by default; all keys closed to project profiles; a lock may only name `depot` and binds every way of writing the source (`AGENT_010`); the depot owned by the daemon's user, `0700`/`0600`, checked on every open (`AGENT_013`), nothing of it run on the host; one guard on the final plan request in every backend (`AGENT_017`); the resolved version directory read-only, trust-checked entry by entry before the bind; the configuration as a writable scratch copy outside the depot, deleted with the session; host install locations masked (empty read-only mounts under Linux only where they exist, deny rules `file-read*` and `process-exec` after the read rule under Seatbelt); the kernel level refuses a depot session (`AGENT_015`) | mitigated | `daemon/crates/sandbox/src/agent/depot/`, `daemon/crates/sandbox/tests/agent_depot.rs`, `daemon/crates/config/src/agents.rs`, `daemon/crates/ipc/src/agents/tests.rs` (HUM-518) |
+| K-38 | the daemon's memory over a long session | b | medium | at most `limits.registry_max_finished_flows` (default 10,000, closed to project profiles) finished flows stay in the flow registry, the oldest leaves first and only once the recording has had all its events; held and running flows never leave and are bounded by `limits.hold_max_flows` and `limits.max_client_connections`; the queue to the audit writer holds at most 4,096 records, and a full queue makes the sender wait instead of dropping, so a sandbox notice (HUM-477) is never lost there (HUM-556) | mitigated | `daemon/crates/proxy/src/registry.rs` (`finished_flows_above_the_cap_are_evicted_and_a_held_flow_stays`), `daemon/crates/proxy/tests/registry_memory.rs`, `daemon/crates/audit-log/tests/writer.rs` (`a_burst_against_a_stalled_writer_is_bounded_and_loses_no_sandbox_record`, `a_record_queued_behind_stop_is_written_before_the_end`), `daemon/bin/humanitld/src/audit_sink.rs` (`a_lagging_sink_keeps_no_flow_whose_end_it_missed`) |
 
 K-13 is the obvious channel and the only one considered closed outright. K-14 is here so that
 attacker (d) appears in a row. K-15 came with HUM-041: the check that proves the guarantees runs
@@ -1048,6 +1049,35 @@ run leaves one `projects.cleaned` record with kinds and amounts only. *Residual 
 the daemon socket can request and confirm a plan without a human, as it can call `SetConfig`; the
 plan still lists what goes, and the audit chain records that it went.
 
+### K-38 The daemon's memory over a long session
+
+**Attacker:** a process in the sandbox (b) that sends a great many small requests over a single
+connection. The caps per connection and per session (HUM-120, HUM-467) bound only what runs at the
+same time, not the sum over time. Before HUM-556 every request left a record in the flow registry
+for the life of the daemon, about 2.3 to 2.6 KiB of heap each (measured with
+`daemon/crates/proxy/tests/registry_memory.rs`), and the queue to the audit writer had no bound;
+filling the daemon's memory would take gRPC, the recording and the audit log down with it.
+**Defence:** the registry keeps at most `limits.registry_max_finished_flows` finished flows
+(default 10,000, `1..=1,000,000`, closed to project profiles); above that the oldest finished flow
+leaves. A flow reaches `Recorded` through the hold queue, which hands each event to the registry
+and then to the recorder, so the oldest finished flow has already passed its `Recorded` to the
+recorder; the gRPC layer's transitions only broadcast, but they drive held flows, which never
+leave. Held and running flows never count and never
+leave; their number is bounded by `limits.hold_max_flows` and `limits.max_client_connections`.
+With the default the registry levels out at about 36 MiB (37.6 MB after 80,000 and after 1,280,000
+requests alike). The queue to the audit writer holds at most 4,096 records; a full queue makes the
+sender wait until the writer has made room, on a worker of the runtime through `block_in_place`,
+rather than drop a record or grow. A notice of the sandbox (HUM-477) goes straight into that queue
+and therefore always arrives; when the writer stops it first takes no more and writes everything
+already queued before `daemon.stopped`, so an accepted record is never discarded. The audit sink
+closes the flows it held open whenever it falls behind the broadcast, so its own table does not
+grow with every lost `Recorded`. *Residual risk:* while the audit sink waits on a full queue it falls
+behind the event broadcast and loses flow events with `Lagged`, the documented limit "events never
+written" (`docs/SECURITY.md`, section 8); a warning in the daemon log names the number. A finished
+flow that has left the registry loses what only the registry knew (whether the scan saw the whole
+request, the hard-block finding of its row), and without a recording `ListFlows` shows only the
+last finished flows.
+
 ## Assumptions
 
 | ID | Assumption | How to check it | If it breaks |
@@ -1173,6 +1203,7 @@ These attackers are not defended against, and Humanitl does not claim to:
 | 2026-11-19 | K-33: the unit of a kernel-level session runs only its programs, their loaders and libraries (`NoExecPaths=/`, `ExecPaths=` with single files), in every bubblewrap jail and also after admission; the host check counts shells, bubblewraps and file system daemons; residual: code in a `memfd` or in a mount bubblewrap creates inside a jail still runs | HUM-480 |
 | 2026-11-19 | K-34: in a disposable session of the kernel level the shim lays the profile's masks over the overlay in the guest as bubblewrap does, each in the expected mount table; the layer's file system daemon takes only `user.overlay.*` attributes (`--xattrmap`), any other fails with `ENOTSUP` | HUM-481 |
 | 2026-11-19 | K-24: on macOS the scan of the clone finds a mask by looking its name up in the clone itself and comparing device and inode, so no spelling that APFS folds to a mask (Kelvin sign, long s, another normalization) is applied; a mask the human spelled otherwise in the project is no deletion; not covered: a differently folding volume mounted inside the project (ASCII comparison only for a mask present there, nothing for a missing one) | HUM-491 |
+| 2026-11-19 | K-38: the flow registry keeps at most `limits.registry_max_finished_flows` finished flows (default 10,000), held and running flows never leave; the audit writer's queue holds at most 4,096 records and a full queue makes the sender wait, so no sandbox notice is dropped | HUM-556 |
 
 Every security-relevant change to the shim, the mount allowlist, the filter or the passthrough gets
 a line here. Vulnerabilities are reported as described in

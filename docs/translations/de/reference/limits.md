@@ -17,7 +17,7 @@ Namen, Vorgaben und Stufen legt die Ausgabe von `humanitl config schema` fest
 jede Grenze tut. Werte setzt du mit `humanitl config set limits.<key> <value>`
 oder im Einstellungsdialog (Stufen `advanced` und `expert`).
 
-## Die elf Grenzen
+## Die zwölf Grenzen
 
 | Schlüssel | Vorgabe | Stufe | Bei Überschreitung | Diagnose |
 |---|---|---|---|---|
@@ -32,6 +32,7 @@ oder im Einstellungsdialog (Stufen `advanced` und `expert`).
 | `limits.body_timeout_secs` | 300 s | expert | Stille **zwischen zwei Chunks** eines Bodys, nie die Gesamtdauer. Anfrage-Body: `408` mit `Connection: close`. Gestreamter Antwort-Body: Der Strom wird abgeschnitten und als gekürzt aufgezeichnet. Gestreamter Upload, den das Ziel nicht mehr liest: Er scheitert. | `PROXY_011` (Anfrage), `LIMIT_004` (Antwort, Upload) |
 | `limits.recorder_max_body_bytes` (Alias `recorder.max_body_bytes`) | 32 MiB | expert | Was darüber hinausgeht, speichert die Aufzeichnung nicht; die Zeile trägt `truncated` und die volle Größe. | keine, Markierung `truncated` am Body |
 | `limits.max_client_connections` | 256 | expert | Die Accept-Schleife antwortet mit `503` und `Connection: close`, statt die Verbindung anzunehmen und liegen zu lassen. | `PROXY_010` (einmal pro Minute zusammengefasst) |
+| `limits.registry_max_finished_flows` | 10 000 | expert | Der älteste abgeschlossene Flow verlässt den Speicher des Daemons; die Aufzeichnung hat ihn schon. Gehaltene und laufende Flows zählen nie und fallen nie heraus. Ohne Aufzeichnung zeigt `ListFlows` nur die letzten abgeschlossenen Flows. Für das Projekt-Profil gesperrt. | keine |
 
 Die Spezifikation von HUM-057 nannte drei Schlüssel anders
 (`limits.hold_memory_cap_bytes`, `limits.upstream_connect_timeout_secs`,

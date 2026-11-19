@@ -34,11 +34,42 @@
 //! [`Flow::received_at`], nicht der `DateTime<Utc>` aus der Skizze des Issues
 //! (der Kern kannte damals keine Zeitbibliothek).
 //!
-//! Auch kein Aufräumen: ein abgeschlossener Flow bleibt stehen, bis ihn jemand
-//! mit [`FlowRegistry::forget`] entfernt. Eine Aufbewahrungsgrenze gehört zum
-//! Recorder (HUM-026), nicht hierher; in M1 lebt eine Registry so lange wie die
-//! Sitzung, die sie beschreibt.
+//! # Wie viel sie behält (HUM-556)
+//!
+//! Abgeschlossene Flows ([`FlowState::Recorded`]) behält die Registry nur bis
+//! zur Zahl `limits.registry_max_finished_flows`; darüber fällt der älteste
+//! abgeschlossene heraus. Ein Flow erreicht `Recorded` über
+//! [`HoldQueue::publish`](crate::hold::HoldQueue::publish), das jedes Ereignis
+//! zuerst hierher und dann an den Recorder reicht; der älteste
+//! abgeschlossene hat sein `Recorded` deshalb schon an den Recorder gegeben.
+//! [`FlowRegistry::transition`] (die gRPC-Schicht) sendet nur in den Strom,
+//! nicht an den Recorder; es treibt aber gehaltene Flows, die nie
+//! herausfallen, und ein Abschluss auf diesem Weg zählt nur gegen dieselbe
+//! Grenze.
+//! Gehaltene und laufende Flows zählen nicht mit und fallen nie heraus: Ihre
+//! Zahl begrenzen schon `limits.hold_max_flows` und
+//! `limits.max_client_connections`. Ohne diese Grenze wuchs die Registry mit
+//! jeder Anfrage, und ein Gast mit vielen kleinen Anfragen über eine einzige
+//! Verbindung füllte über die Zeit den Speicher des Daemons.
+//!
+//! Gemessen mit `tests/registry_memory.rs` (2026-11-19, Linux auf `x86_64`): Ein
+//! Datensatz einer kleinen Anfrage (sechs Kopfzeilen, Pfad mit Query,
+//! durchlaufen bis `Recorded`) belegt samt seinem Platz in der Tabelle 2,3
+//! bis 2,6 KiB auf dem Heap, davon 816 Bytes im Datensatz selbst. Ohne Grenze
+//! wuchs die Registry um so viel je Anfrage, nach 100 000 Anfragen also um
+//! rund 250 MiB. Mit der Vorgabe von 10 000 steigt sie bis rund 36 MiB, weil
+//! die Splitter der Tabelle Luft behalten, und bleibt dort: nach 80 000
+//! Anfragen 37,6 MB, nach 1 280 000 Anfragen ebenso.
+//!
+//! Was danach nur noch die Registry wusste, ist mit dem Datensatz weg: ob der
+//! Scan die ganze Anfrage gesehen hat ([`FlowRecord::findings_truncated`]) und
+//! der Befund der harten Sperre ([`FlowRecord::send_refusal`]). Beides braucht
+//! die Oberfläche, solange der Flow frisch ist, nicht zehntausend Flows
+//! später. Ohne Aufzeichnung zeigt `ListFlows` nur die letzten abgeschlossenen
+//! Flows.
 
+use std::collections::VecDeque;
+use std::sync::Mutex;
 use std::time::{Instant, SystemTime};
 
 use dashmap::DashMap;
@@ -345,6 +376,11 @@ impl FlowFilter {
 pub struct FlowRegistry {
     flows: DashMap<FlowId, FlowRecord>,
     events: broadcast::Sender<FlowEvent>,
+    /// Die abgeschlossenen Flows in der Reihenfolge ihres Abschlusses, der
+    /// älteste vorn; nie länger als `max_finished`.
+    finished: Mutex<VecDeque<FlowId>>,
+    /// `limits.registry_max_finished_flows`, mindestens 1.
+    max_finished: usize,
 }
 
 impl FlowRegistry {
@@ -360,16 +396,28 @@ impl FlowRegistry {
     pub fn new(limits: &Limits) -> Self {
         let capacity = limits.event_buffer.clamp(1, MAX_EVENT_BUFFER);
         let (events, _idle) = broadcast::channel(capacity);
+        let max_finished =
+            usize::try_from(limits.registry_max_finished_flows.max(1)).unwrap_or(usize::MAX);
         Self {
             flows: DashMap::new(),
             events,
+            finished: Mutex::new(VecDeque::new()),
+            max_finished,
         }
     }
 
     /// Nimmt einen Flow auf. Ein vorhandener Datensatz derselben Id wird
     /// ersetzt.
+    ///
+    /// Ist der Flow schon abgeschlossen, zählt er sofort gegen die Grenze der
+    /// abgeschlossenen Flows (siehe Modulkommentar).
     pub fn insert(&self, rec: FlowRecord) {
-        self.flows.insert(rec.id, rec);
+        let id = rec.id;
+        let finished = rec.state.is_terminal();
+        self.flows.insert(id, rec);
+        if finished {
+            self.retire(id);
+        }
     }
 
     /// Wendet einen Übergang auf den Datensatz an und veröffentlicht sein
@@ -390,7 +438,7 @@ impl FlowRegistry {
         id: FlowId,
         input: TransitionInput,
     ) -> Result<FlowEvent, InvalidTransition> {
-        let event = {
+        let (event, finished) = {
             let mut entry = self.flows.get_mut(&id).ok_or(InvalidTransition {
                 from: UNREGISTERED,
                 input: input.name(),
@@ -401,12 +449,17 @@ impl FlowRegistry {
                     .state
                     .clone()
                     .on(Transition::new(id, SystemTime::now(), input))?;
+            let finished = !record.state.is_terminal() && next.is_terminal();
             record.state = next;
             record.absorb(&event);
-            event
+            (event, finished)
         };
-        // Erst den Guard fallen lassen, dann senden: kein Guard über einen
-        // fremden Aufruf hinweg.
+        // Erst den Guard fallen lassen, dann verdrängen und senden: kein Guard
+        // über einen fremden Aufruf hinweg, und keiner, während `retire` in
+        // derselben Tabelle löscht.
+        if finished {
+            self.retire(id);
+        }
         let _ = self.events.send(event.clone());
         Ok(event)
     }
@@ -439,8 +492,16 @@ impl FlowRegistry {
         let at = event.at().unwrap_or_else(SystemTime::now);
         match record.state.clone().on(Transition::new(id, at, input)) {
             Ok((next, _mirrored)) => {
+                let finished = !record.state.is_terminal() && next.is_terminal();
                 record.state = next;
                 record.absorb(event);
+                // Der Guard muss weg sein, bevor `retire` in derselben
+                // Tabelle löscht: `DashMap` sperrt je Splitter, und der
+                // älteste Flow kann im selben liegen.
+                drop(entry);
+                if finished {
+                    self.retire(id);
+                }
             }
             Err(err) => {
                 tracing::debug!(
@@ -505,9 +566,46 @@ impl FlowRegistry {
         self.flows.is_empty()
     }
 
-    /// Vergisst einen Flow. Ab HUM-026 übernimmt der Recorder das Aufräumen.
+    /// Vergisst einen Flow.
+    ///
+    /// Abgeschlossene Flows räumt die Registry selbst auf (Modulkommentar,
+    /// „Wie viel sie behält");
+    /// das hier ist der Weg für einen Aufrufer, der einen Flow sofort los
+    /// sein will.
     pub fn forget(&self, id: FlowId) {
         self.flows.remove(&id);
+    }
+
+    /// Wie viele abgeschlossene Flows die Registry höchstens behält
+    /// (`limits.registry_max_finished_flows`, mindestens 1).
+    #[must_use]
+    pub const fn max_finished(&self) -> usize {
+        self.max_finished
+    }
+
+    /// Reiht den gerade abgeschlossenen Flow `id` ein und verdrängt die
+    /// ältesten abgeschlossenen über der Grenze (HUM-556).
+    ///
+    /// Gelöscht wird nur ein Datensatz, der wirklich [`FlowState::Recorded`]
+    /// steht: Ein gehaltener oder laufender Flow fällt hier nie heraus, auch
+    /// wenn seine Id durch ein erneutes [`Self::insert`] noch in der Reihe
+    /// steht. Die Reihe selbst ist nie länger als die Grenze; eine Id, die
+    /// [`Self::forget`] schon entfernt hat, fällt aus ihr, ohne etwas zu
+    /// löschen. Darf nur ohne Guard auf `flows` laufen.
+    fn retire(&self, id: FlowId) {
+        let evicted: Vec<FlowId> = {
+            let mut finished = self
+                .finished
+                .lock()
+                .unwrap_or_else(std::sync::PoisonError::into_inner);
+            finished.push_back(id);
+            let excess = finished.len().saturating_sub(self.max_finished);
+            finished.drain(..excess).collect()
+        };
+        for old in evicted {
+            self.flows
+                .remove_if(&old, |_, record| record.state.is_terminal());
+        }
     }
 }
 
@@ -597,6 +695,147 @@ mod tests {
         )
         .unwrap();
         flow
+    }
+
+    /// Die Eingaben, mit denen ein analysierter Flow bis `Recorded` läuft.
+    fn to_the_end() -> [TransitionInput; 4] {
+        [
+            TransitionInput::Decide {
+                decision: Decision::Allow,
+                source: DecisionSource::Passthrough,
+            },
+            TransitionInput::Forward,
+            TransitionInput::Respond { status: 200 },
+            TransitionInput::Record,
+        ]
+    }
+
+    /// Ein Flow, der bis `Recorded` durchläuft, so wie der Handler ihn über
+    /// [`FlowRegistry::record`] mitschreibt.
+    fn finish_through_events(registry: &FlowRegistry, session: SessionId) -> FlowId {
+        let mut flow = analyzed(session, "example.com");
+        registry.insert(FlowRecord::new(&flow, &ConnectionContext::plain(session)));
+        for input in to_the_end() {
+            let event = flow.apply(input, SystemTime::now()).unwrap();
+            registry.record(&event);
+        }
+        flow.id
+    }
+
+    fn limits_keeping(finished: u32) -> Limits {
+        Limits {
+            registry_max_finished_flows: finished,
+            ..Limits::default()
+        }
+    }
+
+    /// HUM-556: Über der Grenze fallen die ältesten abgeschlossenen Flows
+    /// heraus, ein gehaltener und ein laufender bleiben, auch wenn sie älter
+    /// sind als alle abgeschlossenen.
+    #[test]
+    fn finished_flows_above_the_cap_are_evicted_and_a_held_flow_stays() {
+        const CAP: u32 = 4;
+        let registry = FlowRegistry::new(&limits_keeping(CAP));
+        let session = SessionId::new();
+
+        let mut held = analyzed(session, "held.example.com");
+        registry.insert(FlowRecord::new(&held, &ConnectionContext::plain(session)));
+        let event = held
+            .apply(
+                TransitionInput::Hold {
+                    deadline: Instant::now() + Duration::from_secs(30),
+                    queue_bytes: 7,
+                    queue_count: 1,
+                },
+                SystemTime::now(),
+            )
+            .unwrap();
+        registry.record(&event);
+        let mut running = analyzed(session, "running.example.com");
+        registry.insert(FlowRecord::new(
+            &running,
+            &ConnectionContext::plain(session),
+        ));
+        for input in to_the_end().into_iter().take(2) {
+            registry.record(&running.apply(input, SystemTime::now()).unwrap());
+        }
+
+        let finished: Vec<FlowId> = (0..100)
+            .map(|_| finish_through_events(&registry, session))
+            .collect();
+
+        assert_eq!(registry.len(), CAP as usize + 2);
+        assert!(matches!(
+            registry.get(held.id).unwrap().state,
+            FlowState::Held { .. }
+        ));
+        assert_eq!(
+            registry.get(running.id).unwrap().state,
+            FlowState::Forwarded
+        );
+        let (gone, kept) = finished.split_at(finished.len() - CAP as usize);
+        assert!(gone.iter().all(|id| registry.get(*id).is_none()));
+        assert!(kept.iter().all(|id| registry.get(*id).is_some()));
+        assert_eq!(registry.list(&FlowFilter::held()).len(), 1);
+        // Auch die Reihe der abgeschlossenen wächst nicht mit.
+        assert_eq!(registry.finished.lock().unwrap().len(), CAP as usize);
+    }
+
+    /// Derselbe Abschluss über den Weg der gRPC-Schicht
+    /// ([`FlowRegistry::transition`]) und über einen schon abgeschlossen
+    /// eingefügten Datensatz zählt gegen dieselbe Grenze.
+    #[test]
+    fn transition_and_insert_count_against_the_same_cap() {
+        let registry = FlowRegistry::new(&limits_keeping(2));
+        let session = SessionId::new();
+        let mut ids = Vec::new();
+        for _ in 0..3 {
+            let flow = analyzed(session, "example.com");
+            registry.insert(FlowRecord::new(&flow, &ConnectionContext::plain(session)));
+            for input in to_the_end() {
+                registry.transition(flow.id, input).unwrap();
+            }
+            ids.push(flow.id);
+        }
+        assert_eq!(registry.len(), 2);
+        assert!(registry.get(ids[0]).is_none());
+
+        let mut done = analyzed(session, "example.com");
+        for input in to_the_end() {
+            done.apply(input, SystemTime::now()).unwrap();
+        }
+        registry.insert(FlowRecord::new(&done, &ConnectionContext::plain(session)));
+        assert_eq!(registry.len(), 2);
+        assert!(registry.get(ids[1]).is_none());
+        assert!(registry.get(done.id).is_some());
+    }
+
+    /// Eine Grenze von `0` hieße, den gerade abgeschlossenen Flow sofort zu
+    /// vergessen; die Registry behält mindestens einen.
+    #[test]
+    fn a_cap_of_zero_keeps_the_last_finished_flow() {
+        let registry = FlowRegistry::new(&limits_keeping(0));
+        assert_eq!(registry.max_finished(), 1);
+        let session = SessionId::new();
+        finish_through_events(&registry, session);
+        let last = finish_through_events(&registry, session);
+        assert_eq!(registry.len(), 1);
+        assert!(registry.get(last).is_some());
+    }
+
+    /// Eine Id, die [`FlowRegistry::forget`] schon entfernt hat, verdrängt
+    /// beim Herausfallen keinen anderen Flow.
+    #[test]
+    fn a_forgotten_flow_leaves_the_queue_without_evicting_another() {
+        let registry = FlowRegistry::new(&limits_keeping(2));
+        let session = SessionId::new();
+        let first = finish_through_events(&registry, session);
+        let second = finish_through_events(&registry, session);
+        registry.forget(first);
+        let third = finish_through_events(&registry, session);
+        assert_eq!(registry.len(), 2);
+        assert!(registry.get(second).is_some());
+        assert!(registry.get(third).is_some());
     }
 
     #[test]

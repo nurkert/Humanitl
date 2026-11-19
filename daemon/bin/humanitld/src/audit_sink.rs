@@ -34,7 +34,9 @@
 //! über RPC baut HUM-070).
 //!
 //! Verpasst der Sink Ereignisse, weil er hinter dem Rundfunk zurückbleibt,
-//! fehlen sie im Log; `tracing` sagt, wie viele. Das ist die dokumentierte
+//! fehlen sie im Log; `tracing` sagt, wie viele. Die Flows, die er bis dahin
+//! offen hielt, schließt er dann ab, damit seine Tabelle nicht mit jedem
+//! verlorenen `Recorded` wächst (HUM-556). Das ist die dokumentierte
 //! Grenze „nie geschriebene Ereignisse" (`docs/SECURITY.md`, Abschnitt 8).
 
 use std::collections::HashMap;
@@ -92,14 +94,14 @@ async fn run(
         tokio::select! {
             event = events.recv() => match event {
                 Ok(event) => tally.apply(&event),
-                Err(RecvError::Lagged(n)) => lagged(n),
+                Err(RecvError::Lagged(n)) => tally.lagged(n),
                 Err(RecvError::Closed) => break,
             },
             _ = &mut stopped => {
                 loop {
                     match events.try_recv() {
                         Ok(event) => tally.apply(&event),
-                        Err(TryRecvError::Lagged(n)) => lagged(n),
+                        Err(TryRecvError::Lagged(n)) => tally.lagged(n),
                         Err(_) => break,
                     }
                 }
@@ -108,13 +110,6 @@ async fn run(
         }
     }
     tally.finish()
-}
-
-fn lagged(n: u64) {
-    tracing::warn!(
-        dropped = n,
-        "the audit sink fell behind the event stream; these events are not in the audit log"
-    );
 }
 
 /// Was der Sink je Flow wissen muss, bis der Flow aufgezeichnet ist.
@@ -300,6 +295,33 @@ impl Tally {
             // erst mit dem Rücktausch von Pseudonymen (HUM-079).
             streamed: true,
         }));
+    }
+
+    /// Der Sink ist hinter dem Rundfunk zurückgefallen und hat `n` Ereignisse
+    /// verloren.
+    ///
+    /// Welche Flows betroffen sind, sagt der Rundfunk nicht. Ein Flow, dessen
+    /// `Recorded` verloren ging, bliebe sonst für immer in [`Tally::flows`],
+    /// und seit der Warteschlange des Schreibers mit Gegendruck (HUM-556)
+    /// fällt der Sink gerade bei langsamer Platte zurück: Über eine lange
+    /// Sitzung wüchse die Tabelle ohne Grenze. Verlorene Ereignisse liegen
+    /// immer vor dieser Meldung, also gehört jeder betroffene Flow zu den
+    /// Einträgen von jetzt. Sie werden alle abgeschlossen: Ein ausstehendes
+    /// `flow.received` wird noch geschrieben, dann fällt der Eintrag. Ein Flow,
+    /// der danach weiterläuft, legt mit seinem nächsten Ereignis einen neuen
+    /// an; ihm fehlen dann höchstens Dauer und Zahlen in `flow.responded`, die
+    /// vor der Lücke lagen.
+    fn lagged(&mut self, n: u64) {
+        tracing::warn!(
+            dropped = n,
+            open_flows = self.flows.len(),
+            "the audit sink fell behind the event stream; these events are not in the audit log"
+        );
+        let open: Vec<FlowId> = self.flows.keys().copied().collect();
+        for flow in open {
+            self.flush_received(flow);
+        }
+        self.flows.clear();
     }
 
     /// Schreibt, was noch aussteht, und `session.ended`.
@@ -602,6 +624,61 @@ mod tests {
         assert_eq!(records[2].body.data["decided_by"], "paused");
         assert_eq!(records[3].body.data["reason"], "session_started");
         assert_eq!(records[4].body.data["paused"], 1);
+    }
+
+    /// HUM-556, Review: Ein Sink, der immer wieder hinter den Rundfunk
+    /// zurückfällt und dabei das `Recorded` vieler Flows verliert, behält
+    /// keinen davon. Ohne das Aufräumen bei `Lagged` wüchse die Tabelle um
+    /// jeden solchen Flow. Ein ausstehendes `flow.received` wird vorher noch
+    /// geschrieben, und ein Flow, der nach der Lücke weiterläuft, endet
+    /// trotzdem mit `flow.responded`.
+    #[test]
+    fn a_lagging_sink_keeps_no_flow_whose_end_it_missed() {
+        const ROUNDS: usize = 20;
+        const FLOWS: usize = 50;
+        let (_dir, writer) = log();
+        let mut tally = Tally::new(writer.handle(), SessionId::new());
+        let start = SystemTime::now();
+        let mut last = FlowId::new();
+        for _ in 0..ROUNDS {
+            for _ in 0..FLOWS {
+                last = FlowId::new();
+                tally.apply(&received(last, "/v1/items", b""));
+                tally.apply(&FlowEvent::Forwarded {
+                    flow_id: last,
+                    at: start,
+                });
+            }
+            assert_eq!(tally.flows.len(), FLOWS);
+            // Das `Recorded` dieser Flows ging im Rundfunk verloren.
+            tally.lagged(u64::try_from(FLOWS).unwrap());
+            assert!(tally.flows.is_empty(), "{} flows kept", tally.flows.len());
+        }
+        // Der letzte Flow lief über die Lücke hinweg weiter.
+        tally.apply(&FlowEvent::ResponseHeaders {
+            flow_id: last,
+            at: start,
+            status: 204,
+        });
+        tally.apply(&FlowEvent::Recorded {
+            flow_id: last,
+            at: start,
+        });
+        assert!(tally.flows.is_empty());
+        tally.finish();
+
+        let (_, records) = records(writer);
+        let received = records
+            .iter()
+            .filter(|r| r.body.kind == "flow.received")
+            .count();
+        assert_eq!(received, ROUNDS * FLOWS);
+        let responded: Vec<_> = records
+            .iter()
+            .filter(|r| r.body.kind == "flow.responded")
+            .collect();
+        assert_eq!(responded.len(), 1);
+        assert_eq!(responded[0].body.data["status"], 204);
     }
 
     #[test]

@@ -378,3 +378,185 @@ fn another_key_is_not_appended_with() {
     assert_eq!(error.code.as_str(), "AUDIT_001");
     assert!(error.why.contains("MAC"), "{}", error.why);
 }
+
+/// HUM-556: Ein Schwall von Records gegen einen Schreiber, der nicht
+/// vorankommt, bindet höchstens die Kapazität des Kanals; die Absender
+/// warten, statt den Kanal wachsen zu lassen. Sobald der Schreiber wieder
+/// läuft, steht jeder Record im Log, auch die Meldung der Sandbox, die
+/// mitten im Stau kam.
+///
+/// Der Schreiber hängt an seinem Anker-Spiegel: Mit `anchor_every = 1` folgt
+/// jedem Record ein Anker, und der Spiegel wartet, bis der Test ihn freigibt.
+/// Ein Absender schickt als Aufgabe der mehrfädigen `tokio`-Laufzeit (der Weg
+/// über `block_in_place`), die Meldung der Sandbox kommt von einem eigenen
+/// Faden, wie aus dem Sandbox-Backend.
+#[test]
+fn a_burst_against_a_stalled_writer_is_bounded_and_loses_no_sandbox_record() {
+    use std::sync::atomic::{AtomicUsize, Ordering};
+    use std::sync::{Arc, Mutex};
+    use std::time::{Duration, Instant};
+
+    use humanitl_audit::kinds::SandboxDoorCapped;
+    use humanitl_audit_log::{AnchorMirror, AuditWriter, WriterOptions};
+    use humanitl_core::SessionId;
+
+    const CAPACITY: usize = 8;
+    const BURST: usize = 200;
+
+    println!(
+        "HUM-556: a queued record kind is {} bytes inline",
+        std::mem::size_of::<RecordKind>()
+    );
+
+    let chain = Chain::new();
+    let gate = Arc::new(Mutex::new(()));
+    let mirror_gate = Arc::clone(&gate);
+    let mirror: AnchorMirror = Box::new(move |_anchor| {
+        drop(mirror_gate.lock().unwrap());
+        Ok(())
+    });
+    let (writer, notes) = AuditWriter::open(
+        &chain.log,
+        &chain.key,
+        WriterOptions {
+            anchor_every: 1,
+            queue_capacity: CAPACITY,
+            ..WriterOptions::default()
+        },
+        &[],
+        Some(mirror),
+    )
+    .unwrap();
+    assert!(notes.is_empty(), "{notes:?}");
+
+    let runtime = tokio::runtime::Builder::new_multi_thread()
+        .worker_threads(2)
+        .build()
+        .unwrap();
+    let sent = Arc::new(AtomicUsize::new(0));
+    // Erst nach Schreiber und Laufzeit gesperrt: Fällt eine Prüfung, gibt das
+    // Abwickeln die Sperre vor beiden frei, und der Test hängt nicht.
+    let closed = gate.lock().unwrap();
+    let burst = {
+        let handle = writer.handle();
+        let sent = Arc::clone(&sent);
+        runtime.spawn(async move {
+            for index in 0..BURST {
+                handle.record(None, decided(index));
+                sent.fetch_add(1, Ordering::SeqCst);
+            }
+        })
+    };
+
+    // Der Schreiber nimmt einen Record und hängt dann am Anker; danach füllt
+    // sich der Kanal, und der Absender wartet.
+    let stalled_at = CAPACITY + 1;
+    let deadline = Instant::now() + Duration::from_secs(10);
+    while sent.load(Ordering::SeqCst) < stalled_at {
+        assert!(
+            Instant::now() < deadline,
+            "the burst never filled the queue"
+        );
+        std::thread::sleep(Duration::from_millis(5));
+    }
+    std::thread::sleep(Duration::from_millis(200));
+    assert_eq!(
+        sent.load(Ordering::SeqCst),
+        stalled_at,
+        "more sends returned than the queue holds while the writer stood still: it grew beyond {CAPACITY}, or records were dropped"
+    );
+
+    let session = SessionId::new();
+    let notice = {
+        let handle = writer.handle();
+        std::thread::spawn(move || {
+            handle.record(
+                Some(session),
+                RecordKind::SandboxDoorCapped(SandboxDoorCapped { cap: 64 }),
+            );
+        })
+    };
+    std::thread::sleep(Duration::from_millis(50));
+    assert!(!notice.is_finished(), "the notice did not wait for room");
+
+    drop(closed);
+    runtime.block_on(burst).unwrap();
+    notice.join().unwrap();
+    writer.handle().sync().unwrap();
+    drop(writer);
+
+    let records = chain.records();
+    let decided = records
+        .iter()
+        .filter(|record| record.body.kind == "flow.decided")
+        .count();
+    assert_eq!(decided, BURST, "a record of the burst was lost");
+    let door: Vec<_> = records
+        .iter()
+        .filter(|record| record.body.kind == "sandbox.door_capped")
+        .collect();
+    assert_eq!(door.len(), 1, "the sandbox notice was lost");
+    assert_eq!(door[0].body.session, session.to_string());
+}
+
+/// HUM-556, Review: Ein Record, der hinter `Stop` im Kanal liegt, ist
+/// angenommen und steht im Log, vor `daemon.stopped`. Ein Record nach dem
+/// Ende bekommt keinen Platz mehr, statt still im Kanal zu verschwinden.
+///
+/// Der Schreiber hängt am Anker des ersten Records; währenddessen kommen
+/// `Stop` und danach die Meldung der Sandbox in den Kanal.
+#[test]
+fn a_record_queued_behind_stop_is_written_before_the_end() {
+    use std::sync::{Arc, Mutex};
+    use std::time::Duration;
+
+    use humanitl_audit::kinds::SandboxDoorCapped;
+    use humanitl_audit_log::{AnchorMirror, AuditWriter, WriterOptions};
+    use humanitl_core::SessionId;
+
+    let chain = Chain::new();
+    let gate = Arc::new(Mutex::new(()));
+    let mirror_gate = Arc::clone(&gate);
+    let mirror: AnchorMirror = Box::new(move |_anchor| {
+        drop(mirror_gate.lock().unwrap());
+        Ok(())
+    });
+    let (writer, _) = AuditWriter::open(
+        &chain.log,
+        &chain.key,
+        WriterOptions {
+            anchor_every: 1,
+            ..WriterOptions::default()
+        },
+        &[],
+        Some(mirror),
+    )
+    .unwrap();
+    let handle = writer.handle();
+    let closed = gate.lock().unwrap();
+    handle.record(None, decided(0));
+    let stopping = std::thread::spawn(move || writer.stop("test"));
+    // `stop` legt seinen Auftrag sofort ab und wartet dann auf die Antwort.
+    std::thread::sleep(Duration::from_millis(100));
+    let session = SessionId::new();
+    handle.record(
+        Some(session),
+        RecordKind::SandboxDoorCapped(SandboxDoorCapped { cap: 64 }),
+    );
+    drop(closed);
+    stopping.join().unwrap().unwrap();
+
+    let kinds: Vec<String> = chain
+        .records()
+        .into_iter()
+        .map(|record| record.body.kind)
+        .collect();
+    let door = kinds.iter().position(|kind| kind == "sandbox.door_capped");
+    let stopped = kinds.iter().position(|kind| kind == "daemon.stopped");
+    assert!(door.is_some(), "the notice behind stop was lost: {kinds:?}");
+    assert!(door < stopped, "{kinds:?}");
+
+    // Nach dem Ende ist nichts mehr angenommen, und nichts hängt.
+    handle.record(None, decided(1));
+    assert!(handle.sync().is_none());
+}

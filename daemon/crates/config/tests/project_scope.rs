@@ -64,6 +64,7 @@ const DENIED_BY_CONVENTION: &[&str] = &[
     "experimental.*",
     "recorder.retention_days",
     "limits.recorder_max_body_bytes",
+    "limits.registry_max_finished_flows",
     "audit.*",
     "terminal.*",
     "update.*",

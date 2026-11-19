@@ -157,6 +157,7 @@ All caps and time limits in one place.
 | `limits.max_decompress_ratio` | integer | `100` | expert | allowed | yes | Highest permitted ratio of decompressed to compressed bytes of a preview. |
 | `limits.preview_cap_bytes` | integer | `8388608` | expert | allowed | yes | Largest amount of body that the interface receives as a preview. |
 | `limits.recorder_max_body_bytes` | integer | `33554432` | expert | denied | yes | Largest body that the recording stores as a blob. Everything above that is only noted with a checksum. |
+| `limits.registry_max_finished_flows` | integer | `10000` | expert | denied | yes | Largest number of finished flows the daemon keeps in memory. Above that the oldest finished one drops out; the recording has had it for a long time by then. Held and running flows do not count and never drop out. Without a recording the list shows only these last flows. |
 
 ### `llm`
 
