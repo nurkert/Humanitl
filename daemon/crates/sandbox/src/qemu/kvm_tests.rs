@@ -27,6 +27,7 @@ use crate::bridge_env::{CHECK_NAMES, parse_check_line};
 
 mod hardened;
 mod masks;
+mod own_code;
 
 /// Setzt der CI-Job `kvm-tests`: Fehlt etwas, scheitert der Test.
 const REQUIRE_ENV: &str = "HUMANITL_REQUIRE_KVM";

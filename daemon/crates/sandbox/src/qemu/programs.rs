@@ -75,27 +75,96 @@ enum Start {
 /// Bibliothek nicht findet; `SANDBOX_006`, wenn ein Pfad nicht in die
 /// Eigenschaft passt.
 pub(crate) fn exec_paths(resolved: &Resolved, shim: &Path) -> Result<Vec<String>, Diagnostic> {
+    let mut files = BTreeSet::new();
+    for program in configured_programs(resolved, shim)? {
+        files.extend(program_files(&program, &loader_list).map_err(setup_failed)?);
+    }
+    files.iter().map(|file| property_path(file)).collect()
+}
+
+/// Die Programme der Unit, wie sie eingestellt sind: `env`, der Shim, die
+/// Shell des Skripts, `sleep` (im Suchpfad der Unit), bubblewrap,
+/// virtiofsd, das vsock-Gerät und der Emulator.
+fn configured_programs(resolved: &Resolved, shim: &Path) -> Result<Vec<PathBuf>, Diagnostic> {
     let sleep = in_unit_path(SCRIPT_SLEEP).ok_or_else(|| {
         setup_failed(format!(
             "the script of the kernel level waits with {SCRIPT_SLEEP}, and there is no \
              executable {SCRIPT_SLEEP} in {UNIT_PATH}"
         ))
     })?;
-    let programs = [
-        Path::new(crate::user_unit::ENV_PROGRAM),
-        shim,
-        Path::new(lines::SCRIPT_SHELL),
-        &sleep,
-        &resolved.bubblewrap,
-        &resolved.file_daemon,
-        &resolved.vsock_device,
-        &resolved.emulator,
-    ];
-    let mut files = BTreeSet::new();
-    for program in programs {
-        files.extend(program_files(program, &loader_list).map_err(setup_failed)?);
-    }
-    files.iter().map(|file| property_path(file)).collect()
+    Ok(vec![
+        PathBuf::from(crate::user_unit::ENV_PROGRAM),
+        shim.to_path_buf(),
+        PathBuf::from(lines::SCRIPT_SHELL),
+        sleep,
+        resolved.bubblewrap.clone(),
+        resolved.file_daemon.clone(),
+        resolved.vsock_device.clone(),
+        resolved.emulator.clone(),
+    ])
+}
+
+/// Ein Programm der Unit: wie es eingestellt ist und wohin es aufgelöst ist
+/// (HUM-557).
+#[derive(Debug, Clone, PartialEq, Eq)]
+pub(crate) struct Program {
+    /// Der Pfad aus der Einstellung oder dem Suchpfad.
+    pub(crate) configured: PathBuf,
+    /// Die Datei, die `ExecPaths=` nennt.
+    pub(crate) canonical: PathBuf,
+}
+
+/// Die Programme der Unit, je aufgelöst; die Gefängnisse verdecken sie
+/// einander ([`hidden_in_jail`]).
+///
+/// # Errors
+///
+/// `SANDBOX_011` wie [`exec_paths`].
+pub(crate) fn unit_programs(resolved: &Resolved, shim: &Path) -> Result<Vec<Program>, Diagnostic> {
+    configured_programs(resolved, shim)?
+        .into_iter()
+        .map(|configured| {
+            let canonical = canonical(&configured).map_err(setup_failed)?;
+            Ok(Program {
+                configured,
+                canonical,
+            })
+        })
+        .collect()
+}
+
+/// Was ein Gefängnis mit dem Helfer `own` verdeckt (HUM-557): jedes andere
+/// Programm der Unit, das es unter `/usr` sieht, unter seinem aufgelösten
+/// Pfad, sortiert und je einmal. Nur dort ist es ausführbar (`ExecPaths=`
+/// nennt nur diesen Pfad), und nur `/usr` bindet jedes Gefängnis; ein
+/// Programm außerhalb von `/usr` bindet nur das Gefängnis, dessen Helfer es
+/// ist. Der Helfer selbst bleibt sichtbar, auch wenn ein anderes Programm
+/// auf dieselbe Datei aufgelöst ist.
+pub(crate) fn hidden_in_jail(programs: &[Program], own: &Path) -> Vec<PathBuf> {
+    let own = programs
+        .iter()
+        .find(|program| program.configured == own)
+        .map_or(own, |program| program.canonical.as_path());
+    programs
+        .iter()
+        .map(|program| program.canonical.clone())
+        .filter(|canonical| canonical.starts_with("/usr") && canonical != own)
+        .collect::<BTreeSet<_>>()
+        .into_iter()
+        .collect()
+}
+
+/// Die Dateien, die ein weiteres Programm in der Unit bräuchte, für einen
+/// Test, der es dort zulässt (HUM-557): das Programm, sein Lader und seine
+/// Bibliotheken.
+#[cfg(test)]
+#[allow(clippy::panic)]
+pub(crate) fn exec_files_of(program: &Path) -> Vec<String> {
+    program_files(program, &loader_list)
+        .unwrap_or_else(|why| panic!("{why}"))
+        .iter()
+        .map(|file| file.to_string_lossy().into_owned())
+        .collect()
 }
 
 /// Was die Vorschau als `ExecPaths=` zeigt: die Liste aus [`exec_paths`],
@@ -501,5 +570,47 @@ mod tests {
             }
             assert!(files.iter().all(|file| file.is_file()), "{files:?}");
         }
+    }
+
+    /// HUM-557: Ein Gefängnis verdeckt jedes andere Programm der Unit unter
+    /// `/usr`, unter seinem aufgelösten Pfad; den eigenen Helfer nie, auch
+    /// wenn er über einen Verweis eingestellt ist, und kein Programm
+    /// außerhalb von `/usr`, das es gar nicht sieht.
+    ///
+    /// Mutationsbeweis: Vergleicht [`hidden_in_jail`] den eingestellten Pfad
+    /// statt des aufgelösten, verdeckt das Gefängnis von virtiofsd seinen
+    /// eigenen Helfer, und der Test wird rot.
+    #[test]
+    fn a_jail_hides_every_other_program_of_the_unit() {
+        let program = |configured: &str, canonical: &str| Program {
+            configured: PathBuf::from(configured),
+            canonical: PathBuf::from(canonical),
+        };
+        let programs = [
+            program("/usr/bin/env", "/usr/bin/env"),
+            program("/opt/humanitl/humanitl-shim", "/opt/humanitl/humanitl-shim"),
+            program("/bin/sh", "/usr/bin/dash"),
+            program("/usr/bin/sleep", "/usr/bin/sleep"),
+            program("/usr/bin/bwrap", "/usr/bin/bwrap"),
+            program("/usr/lib/qemu/virtiofsd", "/usr/libexec/virtiofsd"),
+            program("/usr/bin/vhost-device-vsock", "/usr/bin/vhost-device-vsock"),
+            program("/usr/bin/qemu-system-x86_64", "/usr/bin/qemu-system-x86_64"),
+        ];
+        assert_eq!(
+            hidden_in_jail(&programs, Path::new("/usr/lib/qemu/virtiofsd")),
+            [
+                "/usr/bin/bwrap",
+                "/usr/bin/dash",
+                "/usr/bin/env",
+                "/usr/bin/qemu-system-x86_64",
+                "/usr/bin/sleep",
+                "/usr/bin/vhost-device-vsock",
+            ]
+            .map(PathBuf::from)
+        );
+        let machine = hidden_in_jail(&programs, Path::new("/usr/bin/qemu-system-x86_64"));
+        assert!(machine.contains(&PathBuf::from("/usr/libexec/virtiofsd")));
+        assert!(!machine.contains(&PathBuf::from("/usr/bin/qemu-system-x86_64")));
+        assert!(!machine.iter().any(|path| path.starts_with("/opt")));
     }
 }

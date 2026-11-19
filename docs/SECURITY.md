@@ -2441,16 +2441,32 @@ listen).
   folder ran). Every other file reachable through the unit's mounts, a copy the unit wrote
   itself included, fails at `execve` (`EACCES`) and at a mapping as code (`EPERM`), so the
   loader is no detour (`ld.so /usr/bin/id`); measured with `/usr/bin/id` and with copies of it
-  in the project folder and in the runtime directory, from the unit and from a jail. The
-  exception is a mount that bubblewrap creates inside a jail, named below. The bubblewrap jails inherit this: they live in a user namespace
+  in the project folder and in the runtime directory, from the unit and from a jail. The bubblewrap jails inherit this: they live in a user namespace
   below the unit's, where the kernel locks the inherited `noexec`, and `--ro-bind /usr /usr`
   takes the file mounts along. It holds after admission, where the one-time host check sees
   nothing: in the KVM test a process in the emulator's jail waits until the agent runs, then
   `/usr/bin/id` fails there while the emulator itself starts. A program that is no ELF file (a
   wrapper script) refuses the plan (`SANDBOX_011`), since the list would not know what it starts.
-  The list binds files of the host, not code a taken-over process brings along: a copy in a
-  `memfd`, or a file in a mount that bubblewrap creates inside a jail (its root, the masks over
-  the project), still runs (measured; `THREAT-MODEL.md` K-33).
+- **No helper reaches code of its own choosing** (HUM-557). The list binds files of the host; a
+  taken-over helper could still bring code along, in a `memfd` or in a mount that bubblewrap
+  creates inside a jail, which carries no `noexec`. Each jail closes these ways:
+  it binds `/dev/null` over every other program of the unit it sees under `/usr` (the shell,
+  `env`, `sleep`, bubblewrap and the other helpers), so a helper reaches no program but itself,
+  its loader and its libraries; no process in it may create a further user namespace
+  (`--disable-userns`), so it mounts nothing, and a second bubblewrap fails before it does
+  anything (measured: with bubblewrap reachable and without the option, a nested bubblewrap ran a
+  copy of a program from its own tmpfs); its root, its `/dev` and the empty tmpfs of the guest
+  root are remounted read-only, since bubblewrap knows no `noexec` for mounts it creates; the
+  masks over the project, which the guest writes to, are tmpfs mounts of the unit with `noexec`
+  (`TemporaryFileSystem=`) that the jail binds; and a seccomp filter that bubblewrap lays on
+  before the helper starts refuses `execveat` in every jail and, in every jail but the
+  emulator's, `memfd_create` without `MFD_NOEXEC_SEAL`. The emulator keeps its `memfd` (the
+  guest's memory) and denies itself `execve` (`-sandbox spawn=deny`). The KVM test
+  `a_helper_reaches_no_code_of_its_own_choosing` tries every way from the emulator's and the
+  vsock device's jail, also after admission. What stays open is named in `THREAT-MODEL.md` K-33:
+  a process that already runs code of its own choice runs it in its own memory, and the file
+  system daemon of the guest root sees the unit's programs under the guest's `/usr`, which it
+  serves and therefore cannot hide.
 - **Four processes, four jails.** The file system daemon of the guest root, the file system daemon
   of `/work`, the vsock device and the emulator each run in their own bubblewrap jail with every
   namespace unshared and every capability dropped. No jail binds the session's runtime directory

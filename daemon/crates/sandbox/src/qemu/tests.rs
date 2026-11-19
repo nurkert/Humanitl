@@ -223,6 +223,7 @@ fn a_disposable_guest_plan_mounts_an_overlay_over_the_checked_folder() {
             0,
         ),
         &["/usr/bin/dash".to_owned()],
+        &[],
     );
     assert!(
         properties
@@ -445,6 +446,7 @@ fn the_unit_carries_the_hardening_of_the_spike() {
         &["/home/u/p"],
         UnitLimits::of(machine, 300),
         &["/usr/bin/dash".to_owned(), "/usr/lib/libc.so.6".to_owned()],
+        &["/run/user/1000/humanitl-vm-x/s/masks/0".to_owned()],
     );
     for wanted in [
         "PrivateNetwork=yes",
@@ -464,6 +466,10 @@ fn the_unit_carries_the_hardening_of_the_spike() {
         "TasksMax=130",
         "NoExecPaths=/ /run/user/1000/humanitl-vm-x/s /home/u/p",
         "ExecPaths=/usr/bin/dash /usr/lib/libc.so.6",
+        // HUM-557: Die Ordner-Masken unter `/work` sind tmpfs der Unit mit
+        // fester Größe und `noexec`.
+        "TemporaryFileSystem=/run/user/1000/humanitl-vm-x/s/masks/0:size=67108864,mode=0700,\
+         noexec,nosuid,nodev",
     ] {
         assert!(
             properties.iter().any(|p| p == wanted),

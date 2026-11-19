@@ -8,7 +8,10 @@
 //!
 //! **Die vier Gefängnisse** (HUM-442, Endform Q7/Q8), jedes ein bwrap mit
 //! `--unshare-all --die-with-parent --new-session --cap-drop ALL` und nur dem
-//! `/usr` des Hosts:
+//! `/usr` des Hosts, seit HUM-557 ohne weiteren Nutzer-Namensraum
+//! (`--disable-userns`) und mit dem Abschluss aus [`seal`]: die übrigen
+//! Programme der Unit verdeckt, nichts Beschreibbares ohne `noexec`, der
+//! Filter aus [`super::exec_filter`]:
 //!
 //! 1. virtiofsd der Wurzel. Die Wurzel des Gasts liegt im Gefängnis unter
 //!    [`GUEST_ROOT`], gebaut aus den Zeilen des Plans ([`RootEntry`]);
@@ -36,6 +39,7 @@
 use std::ffi::OsString;
 use std::path::{Path, PathBuf};
 
+use super::exec_filter::{ExecFilter, FILTER_FD};
 use super::prerequisites::Resolved;
 
 /// Wo die Wurzel des Gasts im Gefängnis des virtiofsd liegt.
@@ -103,8 +107,9 @@ pub(crate) const LAYER_FD: i32 = 6;
 pub(crate) const FILE_DAEMON_NOFILE: u32 = 65_536;
 
 /// Die Größe jedes tmpfs, mit dem der Dienst für `/work` eine Maske des
-/// Profils über das Projekt legt (HUM-485), in MiB: `--size` vor jedem
-/// `--tmpfs` seines Gefängnisses.
+/// Profils über das Projekt legt (HUM-485), in MiB: `size=` jedes
+/// `TemporaryFileSystem=` der Unit, das sein Gefängnis über die Maske bindet
+/// (seit HUM-557, [`mask_dirs`]; davor `--size` vor `--tmpfs`).
 ///
 /// Der Gast schreibt dorthin über virtiofs (etwa nach `/work/.git/hooks`),
 /// und was dort liegt, ist Speicher der Unit, den der Kernel nicht
@@ -231,6 +236,13 @@ impl Layout {
         self.dir.join("unit")
     }
 
+    /// Das Verzeichnis der Ordner-Masken unter `/work` (HUM-557): je Maske
+    /// ein Unterverzeichnis, über das die Unit ein eigenes tmpfs mit
+    /// `noexec` legt ([`mask_dirs`]).
+    pub(crate) fn masks_dir(&self) -> PathBuf {
+        self.dir.join("masks")
+    }
+
     /// Die Sockets, die das Verzeichnis tragen muss, solange die Sitzung
     /// läuft, relativ zu ihm; die Host-Prüfung hält jeden weiteren für einen
     /// Fund. Der Socket der Wegwerf-Schicht gehört nur zu einer
@@ -308,6 +320,13 @@ fn jail(bubblewrap: &Path) -> Vec<OsString> {
             "--new-session",
             "--cap-drop",
             "ALL",
+            // Kein Prozess im Gefängnis legt einen weiteren
+            // Nutzer-Namensraum an (HUM-557): Ohne ihn hängt er nichts ein,
+            // auch kein tmpfs ohne `noexec`, und ein zweites bubblewrap
+            // scheitert, schon bevor es etwas tut. `--disable-userns`
+            // verlangt den Namensraum ausdrücklich, nicht nur `-try`.
+            "--unshare-user",
+            "--disable-userns",
             "--ro-bind",
             "/usr",
             "/usr",
@@ -335,6 +354,74 @@ fn jail(bubblewrap: &Path) -> Vec<OsString> {
 
 fn push(line: &mut Vec<OsString>, parts: &[&str]) {
     line.extend(parts.iter().map(OsString::from));
+}
+
+/// Worüber ein Gefängnis die übrigen Programme der Unit bindet (HUM-557).
+pub(crate) const HIDE_SOURCE: &str = "/dev/null";
+
+/// Der Abschluss jedes Gefängnisses nach seinen Einhängungen und vor seinem
+/// Programm (HUM-557).
+///
+/// - **Die übrigen Programme der Unit verdeckt** (`hidden`, aus
+///   [`super::programs::hidden_in_jail`]): Über jedes bindet es
+///   [`HIDE_SOURCE`], ein Gerät auf einer Einhängung mit `nodev`; ein
+///   `execve` darauf endet mit `EACCES`. Jeder Helfer erreicht so außer
+///   seinem Lader und seinen Bibliotheken nur sich selbst, keine Shell, kein
+///   bubblewrap, keinen anderen Helfer.
+/// - **Nichts Beschreibbares, das ausführbar wäre.** bubblewrap legt die
+///   Wurzel, `/dev` und jedes `--tmpfs` selbst an, ohne `noexec`, und kennt
+///   keine Option dafür (0.13). Die Wurzel und `/dev` hängt es danach nur
+///   lesbar neu ein, ebenso jeden Pfad aus `read_only` (die leeren tmpfs der
+///   Wurzel des Gasts); die Masken unter `/work`, in die der Gast schreibt,
+///   sind tmpfs der Unit mit `noexec` ([`mask_dirs`]). Was beschreibbar
+///   bleibt (die Verzeichnisse der Sockets, der Projektordner, die Schicht),
+///   liegt in `NoExecPaths=` der Unit (HUM-480).
+/// - **Der Filter** auf [`FILTER_FD`] ([`super::exec_filter`]): kein
+///   `execveat`, für die Helfer außer dem Emulator kein ausführbarer
+///   `memfd`.
+fn seal(line: &mut Vec<OsString>, hidden: &[PathBuf], read_only: &[PathBuf]) {
+    for program in hidden {
+        line.push(OsString::from("--ro-bind"));
+        line.push(OsString::from(HIDE_SOURCE));
+        line.push(program.as_os_str().to_owned());
+    }
+    for path in read_only {
+        push_path(line, "--remount-ro", path);
+    }
+    push(
+        line,
+        &[
+            "--remount-ro",
+            "/dev",
+            "--remount-ro",
+            "/",
+            "--seccomp",
+            &FILTER_FD.to_string(),
+        ],
+    );
+}
+
+/// Wo in einer Zeile der Abschluss aus [`seal`] beginnt; davor darf ein
+/// Test noch Einhängungen einfügen.
+#[cfg(test)]
+pub(crate) fn seal_start(line: &[OsString]) -> Option<usize> {
+    line.windows(2).position(|pair| {
+        (pair[0] == "--ro-bind" && pair[1] == HIDE_SOURCE) || pair[0] == "--remount-ro"
+    })
+}
+
+/// Die Verzeichnisse, über die die Unit je Ordner-Maske unter `/work` ein
+/// tmpfs legt (`TemporaryFileSystem=` mit `noexec`, HUM-557), in der
+/// Reihenfolge der Masken; der Dienst für `/work` bindet sie über die
+/// Masken. bubblewraps eigenes `--tmpfs` trüge kein `noexec`, und dorthin
+/// schreibt der Gast.
+pub(crate) fn mask_dirs(layout: &Layout, masks: &[WorkMask]) -> Vec<PathBuf> {
+    masks
+        .iter()
+        .filter(|mask| matches!(mask, WorkMask::Tmpfs(_)))
+        .enumerate()
+        .map(|(index, _)| layout.masks_dir().join(index.to_string()))
+        .collect()
 }
 
 /// Bindet `dir` unter demselben Pfad, beschreibbar oder nur lesbar.
@@ -418,9 +505,15 @@ fn file_daemon_tail(line: &mut Vec<OsString>, resolved: &Resolved) {
 }
 
 /// Gefängnis 1: virtiofsd der Wurzel, nur lesbar, Socket als Deskriptor.
-pub(crate) fn root_line(resolved: &Resolved, entries: &[RootEntry]) -> Vec<OsString> {
+/// `hidden` sind die Programme, die es verdeckt ([`seal`]).
+pub(crate) fn root_line(
+    resolved: &Resolved,
+    entries: &[RootEntry],
+    hidden: &[PathBuf],
+) -> Vec<OsString> {
     let mut line = jail(&resolved.bubblewrap);
     push(&mut line, &["--dir", GUEST_ROOT]);
+    let mut read_only = Vec::new();
     for entry in entries {
         match entry {
             RootEntry::Bind { source, target } => {
@@ -434,12 +527,17 @@ pub(crate) fn root_line(resolved: &Resolved, entries: &[RootEntry]) -> Vec<OsStr
                 line.push(under(GUEST_ROOT, target).into_os_string());
             }
             RootEntry::Tmpfs(target) => {
-                push_tmpfs(&mut line, ROOT_TMPFS_MIB, &under(GUEST_ROOT, target));
+                let target = under(GUEST_ROOT, target);
+                push_tmpfs(&mut line, ROOT_TMPFS_MIB, &target);
+                read_only.push(target);
             }
             RootEntry::Dir(target) => push_path(&mut line, "--dir", &under(GUEST_ROOT, target)),
         }
     }
     bind_program(&mut line, &resolved.file_daemon);
+    // Die tmpfs der Wurzel liefert der Dienst nur lesbar aus; nur lesbar
+    // eingehängt, schreibt auch ein übernommener Dienst nichts hinein.
+    seal(&mut line, hidden, &read_only);
     line.push(resolved.file_daemon.as_os_str().to_owned());
     push(
         &mut line,
@@ -469,13 +567,15 @@ pub(crate) fn work_read_only(line: &mut Vec<OsString>) {
 }
 
 /// Gefängnis 2: virtiofsd für `/work`, der Ordner als Deskriptor, die
-/// Masken darüber; `empty` ist eine leere Datei für die Masken. Ob er nur
-/// lesbar ausliefert, setzt der Plan ([`work_read_only`]).
+/// Masken darüber; `empty` ist eine leere Datei für die Masken, jede
+/// Ordner-Maske ein tmpfs der Unit ([`mask_dirs`]). Ob er nur lesbar
+/// ausliefert, setzt der Plan ([`work_read_only`]).
 pub(crate) fn work_line(
     resolved: &Resolved,
     layout: &Layout,
     masks: &[WorkMask],
     empty: &Path,
+    hidden: &[PathBuf],
 ) -> Vec<OsString> {
     let mut line = jail(&resolved.bubblewrap);
     bind_dir(&mut line, &layout.work_dir(), true);
@@ -483,14 +583,15 @@ pub(crate) fn work_line(
         &mut line,
         &["--bind-fd", &PROJECT_FD.to_string(), WORK_SHARE],
     );
+    let mut dirs = mask_dirs(layout, masks).into_iter();
     for mask in masks {
         match mask {
             WorkMask::Tmpfs(relative) => {
-                push_tmpfs(
-                    &mut line,
-                    WORK_MASK_MIB,
-                    &Path::new(WORK_SHARE).join(relative),
-                );
+                if let Some(dir) = dirs.next() {
+                    line.push(OsString::from("--bind"));
+                    line.push(dir.into_os_string());
+                    line.push(Path::new(WORK_SHARE).join(relative).into_os_string());
+                }
             }
             WorkMask::Empty(relative) => {
                 line.push(OsString::from("--ro-bind"));
@@ -500,6 +601,7 @@ pub(crate) fn work_line(
         }
     }
     bind_program(&mut line, &resolved.file_daemon);
+    seal(&mut line, hidden, &[]);
     line.push(resolved.file_daemon.as_os_str().to_owned());
     push(&mut line, &["--shared-dir", WORK_SHARE]);
     push_path(&mut line, "--socket-path", &layout.work_socket());
@@ -535,7 +637,11 @@ pub(crate) const LAYER_XATTRMAP: &str = ":ok:all:user.overlay.:user.overlay.::un
 /// beschränkt das auf `user.overlay.*` ([`LAYER_XATTRMAP`]). Alles darin ist vom
 /// Gast geschrieben und damit vom Angreifer (Root im Gast); der Daemon liest
 /// es erst nach dem Ende der Unit.
-pub(crate) fn layer_line(resolved: &Resolved, layout: &Layout) -> Vec<OsString> {
+pub(crate) fn layer_line(
+    resolved: &Resolved,
+    layout: &Layout,
+    hidden: &[PathBuf],
+) -> Vec<OsString> {
     let mut line = jail(&resolved.bubblewrap);
     // Das Overlay im Gast arbeitet als Root: Es legt sein Arbeitsverzeichnis
     // mit den Rechten 0000 an und kopiert auch nur lesbare Dateien nach
@@ -550,6 +656,7 @@ pub(crate) fn layer_line(resolved: &Resolved, layout: &Layout) -> Vec<OsString> 
         &["--bind-fd", &LAYER_FD.to_string(), LAYER_SHARE],
     );
     bind_program(&mut line, &resolved.file_daemon);
+    seal(&mut line, hidden, &[]);
     line.push(resolved.file_daemon.as_os_str().to_owned());
     push(&mut line, &["--shared-dir", LAYER_SHARE]);
     push_path(&mut line, "--socket-path", &layout.layer_socket());
@@ -559,11 +666,17 @@ pub(crate) fn layer_line(resolved: &Resolved, layout: &Layout) -> Vec<OsString> 
 }
 
 /// Gefängnis 3: das vsock-Gerät dieser einen Sitzung.
-pub(crate) fn device_line(resolved: &Resolved, layout: &Layout, group: &str) -> Vec<OsString> {
+pub(crate) fn device_line(
+    resolved: &Resolved,
+    layout: &Layout,
+    group: &str,
+    hidden: &[PathBuf],
+) -> Vec<OsString> {
     let mut line = jail(&resolved.bubblewrap);
     bind_dir(&mut line, &layout.device_dir(), true);
     bind_dir(&mut line, &layout.door_dir(), true);
     bind_program(&mut line, &resolved.vsock_device);
+    seal(&mut line, hidden, &[]);
     line.push(resolved.vsock_device.as_os_str().to_owned());
     push(&mut line, &["--guest-cid", &GUEST_CID.to_string()]);
     push_path(&mut line, "--socket", &layout.device_socket());
@@ -582,6 +695,7 @@ pub(crate) fn machine_line(
     init: &Path,
     plan: &Path,
     disposable: bool,
+    hidden: &[PathBuf],
 ) -> Vec<OsString> {
     let mut line = jail(&resolved.bubblewrap);
     // Nur die vhost-user-Sockets, nur lesbar (ein `connect` braucht keinen
@@ -598,6 +712,7 @@ pub(crate) fn machine_line(
     line.push(resolved.kernel.as_os_str().to_owned());
     line.push(OsString::from("/kernel"));
     bind_program(&mut line, &resolved.emulator);
+    seal(&mut line, hidden, &[]);
     line.push(resolved.emulator.as_os_str().to_owned());
     let memory = machine.memory_mib.to_string();
     push(
@@ -725,6 +840,10 @@ fn quoted(line: &[OsString]) -> Result<String, String> {
 /// tun. Ein nicht geöffneter Deskriptor 6 zu schließen ist in `sh` kein
 /// Fehler; das Skript schließt ihn deshalb in jeder Sitzung.
 ///
+/// Jedes Gefängnis bekommt seinen Filter ([`super::exec_filter`]) auf
+/// [`FILTER_FD`], geöffnet aus `files/` des Laufzeitverzeichnisses
+/// (HUM-557); bubblewrap liest ihn vor dem Start des Helpers.
+///
 /// # Errors
 ///
 /// Der Satz aus [`quoted`].
@@ -734,10 +853,13 @@ pub(crate) fn script(lines: &Lines, layout: &Layout) -> Result<String, String> {
     let work = quoted(&lines.work)?;
     let device = quoted(&lines.device)?;
     let machine = quoted(&lines.machine)?;
+    let filter = |filter: ExecFilter| format!("{FILTER_FD}<\"$r/files/{}\"", filter.file_name());
+    let helper = filter(ExecFilter::Helper);
+    let emulator = filter(ExecFilter::Emulator);
     let (layer, layer_wait) = match &lines.layer {
         Some(line) => (
             format!(
-                "( {} {ROOT_SOCKET_FD}<&- {PROJECT_FD}<&- {LIFELINE_FD}<&-; kill -TERM $$ ) &\n",
+                "( {} {helper} {ROOT_SOCKET_FD}<&- {PROJECT_FD}<&- {LIFELINE_FD}<&-; kill -TERM $$ ) &\n",
                 quoted(line)?
             ),
             " || [ ! -S \"$r/layer/layer.sock\" ]",
@@ -748,18 +870,18 @@ pub(crate) fn script(lines: &Lines, layout: &Layout) -> Result<String, String> {
         "set -u\n\
          r={dir}\n\
          ( read -r _ <&{LIFELINE_FD}; kill -TERM $$ ) {ROOT_SOCKET_FD}<&- {PROJECT_FD}<&- {LAYER_FD}<&- &\n\
-         ( {root} {PROJECT_FD}<&- {LIFELINE_FD}<&- {LAYER_FD}<&-; kill -TERM $$ ) &\n\
-         ( {work} {ROOT_SOCKET_FD}<&- {LIFELINE_FD}<&- {LAYER_FD}<&-; kill -TERM $$ ) &\n\
+         ( {root} {helper} {PROJECT_FD}<&- {LIFELINE_FD}<&- {LAYER_FD}<&-; kill -TERM $$ ) &\n\
+         ( {work} {helper} {ROOT_SOCKET_FD}<&- {LIFELINE_FD}<&- {LAYER_FD}<&-; kill -TERM $$ ) &\n\
          {layer}\
          exec {ROOT_SOCKET_FD}<&- {PROJECT_FD}<&- {LAYER_FD}<&-\n\
-         ( {device} {LIFELINE_FD}<&-; kill -TERM $$ ) &\n\
+         ( {device} {helper} {LIFELINE_FD}<&-; kill -TERM $$ ) &\n\
          n=0\n\
          while [ ! -S \"$r/work/work.sock\" ] || [ ! -S \"$r/vsock/vsock.sock\" ]{layer_wait}; do\n\
          \x20 n=$((n+1))\n\
          \x20 if [ \"$n\" -gt 500 ]; then echo 'humanitl: a helper of the kernel level did not open its socket' >&2; exit 70; fi\n\
          \x20 sleep 0.02\n\
          done\n\
-         ( {machine} {LIFELINE_FD}<&-; kill -TERM $$ ) &\n\
+         ( {machine} {emulator} {LIFELINE_FD}<&-; kill -TERM $$ ) &\n\
          exec {LIFELINE_FD}<&-\n\
          wait\n"
     ))
@@ -789,9 +911,17 @@ mod tests {
         }
     }
 
+    /// Was jedes Gefängnis der Tests verdeckt (HUM-557).
+    fn hidden() -> Vec<PathBuf> {
+        ["/usr/bin/bwrap", "/usr/bin/dash"]
+            .map(PathBuf::from)
+            .to_vec()
+    }
+
     fn lines() -> Lines {
         let resolved = resolved();
         let layout = layout();
+        let hidden = hidden();
         Lines {
             root: root_line(
                 &resolved,
@@ -807,6 +937,7 @@ mod tests {
                     RootEntry::Tmpfs(PathBuf::from("/tmp")),
                     RootEntry::Dir(PathBuf::from("/work")),
                 ],
+                &hidden,
             ),
             work: work_line(
                 &resolved,
@@ -816,9 +947,10 @@ mod tests {
                     WorkMask::Empty(PathBuf::from(".env")),
                 ],
                 &layout.files().join("empty"),
+                &hidden,
             ),
             layer: None,
-            device: device_line(&resolved, &layout, "hum-abcd"),
+            device: device_line(&resolved, &layout, "hum-abcd", &hidden),
             machine: machine_line(
                 &resolved,
                 &layout,
@@ -829,6 +961,7 @@ mod tests {
                 Path::new("/usr/local/bin/humanitl-shim"),
                 Path::new("/run/humanitl/guest-plan.json"),
                 false,
+                &hidden,
             ),
         }
     }
@@ -839,7 +972,7 @@ mod tests {
         let layout = layout();
         let mut lines = lines();
         work_read_only(&mut lines.work);
-        lines.layer = Some(layer_line(&resolved, &layout));
+        lines.layer = Some(layer_line(&resolved, &layout, &hidden()));
         lines.machine = machine_line(
             &resolved,
             &layout,
@@ -850,6 +983,7 @@ mod tests {
             Path::new("/usr/local/bin/humanitl-shim"),
             Path::new("/run/humanitl/guest-plan.json"),
             true,
+            &hidden(),
         );
         lines
     }
@@ -973,12 +1107,18 @@ mod tests {
             !words(&lines.root).iter().any(|word| word.contains(&dir)),
             "the runtime directory stands in no argument of the root's jail"
         );
-        // /work: der Ordner als Deskriptor 4, die Masken darüber.
+        // /work: der Ordner als Deskriptor 4, die Masken darüber, eine
+        // Ordner-Maske als tmpfs der Unit (HUM-557).
         assert!(has(&lines.work, &["--bind-fd", "4", WORK_SHARE]));
         assert!(has(
             &lines.work,
-            &["--size", "67108864", "--tmpfs", "/share/.git/hooks"]
+            &[
+                "--bind",
+                &layout().masks_dir().join("0").to_string_lossy(),
+                "/share/.git/hooks"
+            ]
         ));
+        assert!(!has(&lines.work, &["--tmpfs"]));
         for line in [&lines.root, &lines.work, &lines.device, &lines.machine] {
             assert_eq!(count(line, "--tmpfs"), count(line, "--size"), "{line:?}");
         }
@@ -1044,7 +1184,10 @@ mod tests {
                 .map(|pair| pair[1].clone())
                 .collect::<Vec<_>>()
         };
-        assert_eq!(binds(&lines.work, "--bind"), [dir(layout.work_dir())]);
+        assert_eq!(
+            binds(&lines.work, "--bind"),
+            [dir(layout.work_dir()), dir(layout.masks_dir().join("0"))]
+        );
         assert_eq!(
             binds(&lines.device, "--bind"),
             [dir(layout.device_dir()), dir(layout.door_dir())]
@@ -1101,7 +1244,10 @@ mod tests {
             no_announce_submounts: false,
             ..resolved()
         };
-        assert!(!has(&root_line(&old, &[]), &["--no-announce-submounts"]));
+        assert!(!has(
+            &root_line(&old, &[], &[]),
+            &["--no-announce-submounts"]
+        ));
     }
 
     /// Das Skript: jedes Gefängnis nur mit seinem Deskriptor, die Lebensleine
@@ -1115,7 +1261,7 @@ mod tests {
         assert!(lifeline < first_jail, "{script}");
         assert!(script.contains(
             "--fd 3 --readonly --sandbox none --log-level error --cache auto \
-             --no-announce-submounts 4<&- 5<&- 6<&-"
+             --no-announce-submounts 7<\"$r/files/exec-filter-helper.bpf\" 4<&- 5<&- 6<&-"
         ));
         assert!(script.contains("3<&- 5<&- 6<&-; kill -TERM $$"));
         assert!(script.contains("exec 3<&- 4<&- 6<&-\n"));
@@ -1194,7 +1340,10 @@ mod tests {
         assert_eq!(count(&lines.machine, "-device"), 4);
         assert!(forbidden(&lines).is_empty(), "{:?}", forbidden(&lines));
         let script = script(&lines, &layout).unwrap();
-        assert!(script.contains("--no-announce-submounts 3<&- 4<&- 5<&-; kill -TERM $$"));
+        assert!(script.contains(
+            "--no-announce-submounts 7<\"$r/files/exec-filter-helper.bpf\" 3<&- 4<&- 5<&-; \
+             kill -TERM $$"
+        ));
         assert!(script.contains("|| [ ! -S \"$r/layer/layer.sock\" ]; do"));
         // Der Dienst der Schicht startet, bevor das Skript Deskriptor 6
         // schließt; jeder andere bekommt ihn nicht.
@@ -1206,5 +1355,82 @@ mod tests {
 
     fn script_with(layout: &Layout) -> String {
         script(&lines(), layout).unwrap()
+    }
+
+    /// HUM-557: Jedes Gefängnis verbietet weitere Nutzer-Namensräume,
+    /// verdeckt die übrigen Programme der Unit, hängt seine Wurzel, `/dev`
+    /// und die leeren tmpfs der Wurzel des Gasts nur lesbar neu ein und
+    /// legt seinen Filter auf, alles nach der letzten Einhängung und
+    /// unmittelbar vor dem Programm; das Skript gibt jedem Gefängnis seinen
+    /// Filter, dem Emulator den eigenen.
+    ///
+    /// Mutationsbeweis: Steht der Abschluss vor einer Einhängung (etwa vor
+    /// `bind_program` des Geräts), scheitert die Prüfung der Reihenfolge;
+    /// bekommt der Emulator den Filter der Helfer, die des Skripts.
+    #[test]
+    fn every_jail_ends_sealed_before_its_program() {
+        let lines = disposable_lines();
+        let resolved = resolved();
+        let all = [
+            ("root", &lines.root, &resolved.file_daemon),
+            ("work", &lines.work, &resolved.file_daemon),
+            (
+                "layer",
+                lines.layer.as_ref().unwrap(),
+                &resolved.file_daemon,
+            ),
+            ("device", &lines.device, &resolved.vsock_device),
+            ("machine", &lines.machine, &resolved.emulator),
+        ];
+        for (name, line, program) in all {
+            assert!(has(line, &["--unshare-user", "--disable-userns"]), "{name}");
+            let mut tail = vec![
+                "--ro-bind",
+                HIDE_SOURCE,
+                "/usr/bin/bwrap",
+                "--ro-bind",
+                HIDE_SOURCE,
+                "/usr/bin/dash",
+            ];
+            if name == "root" {
+                tail.extend(["--remount-ro", "/guest/tmp"]);
+            }
+            tail.extend([
+                "--remount-ro",
+                "/dev",
+                "--remount-ro",
+                "/",
+                "--seccomp",
+                "7",
+            ]);
+            tail.push(program.to_str().unwrap());
+            assert!(has(line, &tail), "{name}: {line:?}");
+            assert_eq!(count(line, "--seccomp"), 1, "{name}");
+            // Nach dem Abschluss legt die Zeile nichts mehr an.
+            let words = words(line);
+            let sealed = seal_start(line).unwrap();
+            let program_at = sealed + tail.len() - 1;
+            assert_eq!(words[program_at], tail[tail.len() - 1], "{name}");
+            for word in &words[..sealed] {
+                assert_ne!(word, "--remount-ro", "{name}");
+            }
+        }
+        let script = script(&lines, &layout()).unwrap();
+        assert_eq!(
+            script
+                .matches("7<\"$r/files/exec-filter-helper.bpf\"")
+                .count(),
+            4,
+            "{script}"
+        );
+        let emulator = script
+            .lines()
+            .find(|line| line.contains("qemu-system-x86_64"))
+            .unwrap();
+        assert!(
+            emulator.contains("7<\"$r/files/exec-filter-emulator.bpf\""),
+            "{emulator}"
+        );
+        assert!(!emulator.contains("exec-filter-helper"), "{emulator}");
     }
 }

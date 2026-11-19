@@ -2236,18 +2236,35 @@ Host-Prüfung steht dort als `isolation.check`; an den Garantien ändert das nic
   ist, auch eine Kopie, die die Unit selbst geschrieben hat, scheitert am `execve` (`EACCES`) und
   an einer Abbildung als Code (`EPERM`), so dass auch der Lader kein Umweg ist
   (`ld.so /usr/bin/id`); gemessen mit `/usr/bin/id` und mit Kopien davon im Projektordner und im
-  Laufzeitverzeichnis, aus der Unit und aus einem Gefängnis. Die Ausnahme ist eine Einhängung,
-  die bubblewrap in einem Gefängnis anlegt, unten genannt. Die
+  Laufzeitverzeichnis, aus der Unit und aus einem Gefängnis. Die
   bubblewrap-Gefängnisse erben das: Sie liegen in einem Nutzer-Namensraum unter dem der Unit, wo
   der Kernel das geerbte `noexec` sperrt, und `--ro-bind /usr /usr` nimmt die Einhängungen der
   Dateien mit. Es gilt nach der Zulassung, wo die einmalige Host-Prüfung nichts mehr sieht: Im
   KVM-Test wartet ein Prozess im Gefängnis des Emulators, bis der Agent läuft, dann scheitert
   dort `/usr/bin/id`, während der Emulator selbst startet. Ein Programm, das keine
   ELF-Datei ist (ein Skript als Hülle), lässt den Plan scheitern (`SANDBOX_011`), denn die Liste
-  wüsste nicht, was es startet. Die Liste bindet Dateien des Hosts, nicht Code, den ein
-  übernommener Prozess mitbringt: Eine Kopie in einem `memfd` oder eine Datei auf einer
-  Einhängung, die bubblewrap in einem Gefängnis anlegt (dessen Wurzel, die Masken über dem
-  Projekt), läuft weiter (gemessen; `THREAT-MODEL.md` K-33).
+  wüsste nicht, was es startet.
+- **Kein Helfer erreicht Code eigener Wahl** (HUM-557). Die Liste bindet Dateien des Hosts; ein
+  übernommener Helfer könnte trotzdem Code mitbringen, in einem `memfd` oder auf einer
+  Einhängung, die bubblewrap in einem Gefängnis anlegt und die kein `noexec` trägt. Jedes
+  Gefängnis schließt diese Wege: Es bindet `/dev/null` über jedes andere Programm der Unit, das
+  es unter `/usr` sieht (die Shell, `env`, `sleep`, bubblewrap und die anderen Helfer), so dass
+  ein Helfer außer sich selbst, seinem Lader und seinen Bibliotheken kein Programm erreicht; kein
+  Prozess darin darf einen weiteren Nutzer-Namensraum anlegen (`--disable-userns`), er hängt also
+  nichts ein, und ein zweites bubblewrap scheitert, bevor es etwas tut (gemessen: mit
+  erreichbarem bubblewrap und ohne die Option startete ein verschachteltes bubblewrap eine Kopie
+  eines Programms aus seinem eigenen tmpfs); seine Wurzel, sein `/dev` und die leeren tmpfs der
+  Wurzel des Gasts werden nur lesbar neu eingehängt, weil bubblewrap für eigene Einhängungen kein
+  `noexec` kennt; die Masken über dem Projekt, in die der Gast schreibt, sind tmpfs der Unit mit
+  `noexec` (`TemporaryFileSystem=`), die das Gefängnis bindet; und ein seccomp-Filter, den
+  bubblewrap vor dem Start des Helfers auflegt, verweigert in jedem Gefängnis `execveat` und in
+  jedem außer dem des Emulators `memfd_create` ohne `MFD_NOEXEC_SEAL`. Der Emulator behält seinen
+  `memfd` (den Speicher des Gasts) und verbietet sich `execve` selbst (`-sandbox spawn=deny`). Der
+  KVM-Test `a_helper_reaches_no_code_of_its_own_choosing` versucht jeden Weg aus dem Gefängnis des
+  Emulators und dem des vsock-Geräts, auch nach der Zulassung. Was offen bleibt, nennt
+  `THREAT-MODEL.md` K-33: Ein Prozess, der schon Code eigener Wahl ausführt, führt ihn in seinem
+  eigenen Speicher aus, und der Dateisystemdienst der Wurzel sieht die Programme der Unit unter dem
+  `/usr` des Gasts, das er ausliefert und deshalb nicht verdecken kann.
 - **Vier Prozesse, vier Gefängnisse.** Der Dateisystemdienst der Wurzel, der Dateisystemdienst für
   `/work`, das vsock-Gerät und der Emulator laufen je in einem eigenen bubblewrap-Gefängnis mit
   allen Namensräumen getrennt und ohne jede Fähigkeit. Kein Gefängnis bindet das

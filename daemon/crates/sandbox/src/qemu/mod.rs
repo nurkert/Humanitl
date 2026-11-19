@@ -49,6 +49,7 @@
 //! Außerhalb heißt die Stufe Kernel-Stufe oder VM-Backend.
 
 mod disposable;
+mod exec_filter;
 mod host_check;
 mod instance;
 #[cfg(test)]
@@ -756,20 +757,24 @@ fn property_path(path: &Path) -> Result<String, Diagnostic> {
                 .chars()
                 .any(|c| c.is_whitespace() || matches!(c, '"' | '\'' | '\\' | '%' | ';' | ','))
     });
-    text.map(str::to_owned).ok_or_else(|| {
-        Diagnostic::builder(SANDBOX_006, Severity::Blocking)
-            .why(format!(
-                "the kernel level writes {} into its unit or into an option of the machine, \
-                 and the path holds a space, a quote, a backslash, '%', ';' or ','; use a \
-                 plain path or the bubblewrap backend",
-                path.display()
-            ))
-            .fix(FixAction::ChangeSetting {
-                key: "sandbox.backend".to_owned(),
-                value: crate::backend::BWRAP_BACKEND.to_owned(),
-            })
-            .build()
-    })
+    text.map(str::to_owned).ok_or_else(|| unusable_path(path))
+}
+
+/// `SANDBOX_006`: Ein Pfad passt nicht in die Unit oder in eine Option der
+/// Maschine.
+fn unusable_path(path: &Path) -> Diagnostic {
+    Diagnostic::builder(SANDBOX_006, Severity::Blocking)
+        .why(format!(
+            "the kernel level writes {} into its unit or into an option of the machine, \
+             and the path holds a space, a quote, a backslash, '%', ';', ',' or, for a \
+             mask of /work, ':'; use a plain path or the bubblewrap backend",
+            path.display()
+        ))
+        .fix(FixAction::ChangeSetting {
+            key: "sandbox.backend".to_owned(),
+            value: crate::backend::BWRAP_BACKEND.to_owned(),
+        })
+        .build()
 }
 
 /// Die Unit des Daemons, wenn er selbst als Dienst des Dienstverwalters
@@ -809,12 +814,15 @@ fn user_service_of(path: &str, uid: u32) -> Option<String> {
 /// in einer direkten Sitzung, das Verzeichnis der Schicht in einer
 /// Wegwerf-Sitzung (HUM-446), nie beide. `limits` sind ihre Grenzen an
 /// Speicher und Tasks (HUM-485), `programs` die einzigen Dateien, die ihre
-/// Prozesse ausführen dürfen (HUM-480, [`programs::exec_paths`]).
+/// Prozesse ausführen dürfen (HUM-480, [`programs::exec_paths`]), `masks`
+/// die Verzeichnisse der Ordner-Masken unter `/work`, je eines mit einem
+/// eigenen tmpfs der Unit ([`lines::mask_dirs`], HUM-557).
 fn unit_properties(
     runtime: &str,
     writable: &[&str],
     limits: UnitLimits,
     programs: &[String],
+    masks: &[String],
 ) -> Vec<String> {
     let mut properties: Vec<String> = [
         "PrivateNetwork=yes",
@@ -860,6 +868,16 @@ fn unit_properties(
     // `id` im Projektordner lief).
     properties.push(format!("NoExecPaths=/ {}", paths.join(" ")));
     properties.push(format!("ExecPaths={}", programs.join(" ")));
+    // Die Ordner-Masken unter `/work` (HUM-557): je ein tmpfs der Unit mit
+    // fester Größe (HUM-485) und `noexec`, das das Gefängnis des Dienstes
+    // über die Maske bindet; das `noexec` erbt es gesperrt. Ein `--tmpfs` von
+    // bubblewrap trüge kein `noexec`, und dorthin schreibt der Gast.
+    for mask in masks {
+        properties.push(format!(
+            "TemporaryFileSystem={mask}:size={},mode=0700,noexec,nosuid,nodev",
+            lines::WORK_MASK_MIB * 1024 * 1024
+        ));
+    }
     #[cfg(test)]
     properties.extend(test_machine::unit_properties());
     if let Some(daemon) = daemon_unit() {
@@ -918,8 +936,17 @@ fn unit_line(
     writable: &[&str],
     limits: UnitLimits,
     programs: &[String],
+    masks: &[PathBuf],
 ) -> Result<Vec<OsString>, Diagnostic> {
     let runtime = property_path(&layout.dir)?;
+    // `TemporaryFileSystem=` trennt Pfad und Optionen am Doppelpunkt.
+    let masks = masks
+        .iter()
+        .map(|mask| match property_path(mask) {
+            Ok(text) if text.contains(':') => Err(unusable_path(mask)),
+            other => other,
+        })
+        .collect::<Result<Vec<_>, _>>()?;
     let script = lines::script(lines, layout).map_err(setup_failed)?;
     let handover = layout.handover();
     let args: Vec<OsString> = [
@@ -938,7 +965,7 @@ fn unit_line(
     units
         .session_argv(
             UNIT_DESCRIPTION,
-            &unit_properties(&runtime, writable, limits, programs),
+            &unit_properties(&runtime, writable, limits, programs, &masks),
             unit,
             &session.shim_src,
             &args,
@@ -964,6 +991,8 @@ impl Pending {
 
 /// Die Zeilen einer Sitzung: vier, in einer Wegwerf-Sitzung (`disposable`)
 /// fünf. Dort ist der Projektordner immer nur lesbar (HUM-446).
+/// `programs` sind die Programme der Unit; jedes Gefängnis verdeckt die
+/// übrigen (HUM-557, [`programs::hidden_in_jail`]).
 #[allow(clippy::too_many_arguments)]
 fn session_lines(
     resolved: &Resolved,
@@ -974,8 +1003,16 @@ fn session_lines(
     work_readonly: bool,
     disposable: bool,
     group: &str,
+    programs: &[programs::Program],
 ) -> Lines {
-    let mut work = lines::work_line(resolved, layout, &root.masks, &layout.files().join("empty"));
+    let file_daemon = programs::hidden_in_jail(programs, &resolved.file_daemon);
+    let mut work = lines::work_line(
+        resolved,
+        layout,
+        &root.masks,
+        &layout.files().join("empty"),
+        &file_daemon,
+    );
     if work_readonly || disposable {
         lines::work_read_only(&mut work);
     }
@@ -987,6 +1024,14 @@ fn session_lines(
         init,
         Path::new(GUEST_PLAN),
         disposable,
+        &programs::hidden_in_jail(programs, &resolved.emulator),
+    );
+    #[cfg_attr(not(test), allow(unused_mut))]
+    let mut device = lines::device_line(
+        resolved,
+        layout,
+        group,
+        &programs::hidden_in_jail(programs, &resolved.vsock_device),
     );
     #[cfg(test)]
     {
@@ -995,12 +1040,13 @@ fn session_lines(
                 .with_borrow(|extra| extra.iter().map(OsString::from).collect::<Vec<_>>()),
         );
         test_machine::apply(&mut machine, layout);
+        test_machine::apply_device(&mut device, layout);
     }
     Lines {
-        root: lines::root_line(resolved, &root.entries),
+        root: lines::root_line(resolved, &root.entries, &file_daemon),
         work,
-        layer: disposable.then(|| lines::layer_line(resolved, layout)),
-        device: lines::device_line(resolved, layout, group),
+        layer: disposable.then(|| lines::layer_line(resolved, layout, &file_daemon)),
+        device,
         machine,
     }
 }
@@ -1061,6 +1107,8 @@ impl SandboxBackend for VmBackend {
         // Was die Unit auf tmpfs schreibt, kennt erst der Plan; die Vorschau
         // nennt die Grenzen ohne diesen Teil.
         let limits = UnitLimits::of(machine, 0);
+        let unit_programs =
+            programs::unit_programs(&self.resolved, &session.shim_src).unwrap_or_default();
         let lines = session_lines(
             &self.resolved,
             &layout,
@@ -1070,6 +1118,7 @@ impl SandboxBackend for VmBackend {
             readonly,
             disposable,
             "hum-preview",
+            &unit_programs,
         );
         let programs = programs::shown_in_preview(&self.resolved, &session.shim_src);
         let argv = user_units(&self.paths)
@@ -1092,6 +1141,7 @@ impl SandboxBackend for VmBackend {
                     writable,
                     limits,
                     &programs,
+                    &lines::mask_dirs(&layout, &root.masks),
                 )
             })
             .unwrap_or_else(|_| {
@@ -1544,6 +1594,27 @@ fn write_files(
         plan_text.as_bytes(),
         0o400,
     )?;
+    // Die Filter der Gefängnisse (HUM-557); das Skript öffnet sie für
+    // bubblewrap.
+    for filter in [
+        exec_filter::ExecFilter::Helper,
+        exec_filter::ExecFilter::Emulator,
+    ] {
+        write(
+            &layout.files().join(filter.file_name()),
+            &filter.bytes(),
+            0o400,
+        )?;
+    }
+    // Die Einhängepunkte der Ordner-Masken unter `/work`; die tmpfs darüber
+    // legt die Unit (HUM-557).
+    let mut builder = std::fs::DirBuilder::new();
+    builder.mode(0o700).recursive(true);
+    for dir in lines::mask_dirs(layout, &root.masks) {
+        builder
+            .create(&dir)
+            .map_err(|err| setup_failed(format!("{}: {err}", dir.display())))?;
+    }
     write(&layout.unit_file(), unit.service().as_bytes(), 0o600)
 }
 
@@ -1620,9 +1691,7 @@ impl VmBackend {
             options,
         } = *request;
         let (root, env) = self.write_guest(layout, request, unit, &project)?;
-        let disposable = project.layer.is_some();
         let channels = Channels::open(layout, options)?;
-        let group = session_group(session);
         let machine = self.machine();
         let unit_limits = project.unit_limits(machine, &root.masks);
         let lines = session_lines(
@@ -1632,8 +1701,9 @@ impl VmBackend {
             &root,
             &profile.network.shim_dst,
             project.writable.is_none(),
-            disposable,
-            &group,
+            project.layer.is_some(),
+            &session_group(session),
+            &programs::unit_programs(&self.resolved, &session.shim_src)?,
         );
         let programs = programs::exec_paths(&self.resolved, &session.shim_src)?;
         let argv = unit_line(
@@ -1646,6 +1716,7 @@ impl VmBackend {
             &project.writable_paths(),
             unit_limits,
             &programs,
+            &lines::mask_dirs(layout, &root.masks),
         )?;
         let shares = project.shares();
         let project_fd = project.work.into_fd();
