@@ -140,6 +140,7 @@ Diagnose-Codes, hier nur geplant (registriert vom genannten Issue in `codes.rs` 
 | HUM-555 | Entscheidungs-Proxy: ein „Drop" des Proxys dahinter erscheint im Audit als `200`, die `502`-Meldung nennt Humanitl | S | HUM-524 |
 | HUM-556 | Speicher des Daemons: Flow-Registry ohne Obergrenze, Audit-Kanal unbegrenzt | M | HUM-479 |
 | HUM-557 | Kernel-Stufe: die letzten Wege zu eigenem Code in der Unit (memfd, Mounts von bubblewrap, sh und bwrap zusammen) | M | HUM-480 |
+| HUM-558 | Test `fd_handover::nobody_coming_ends_the_wait_and_the_socket` wackelt unter paralleler Last | S | — |
 
 ## HUM-428 · Port neutral: `PlanRequest`, `LaunchOptions`, `IsolationLevel`, Enum `Backend` statt `PlatformBackend`
 
@@ -5152,3 +5153,28 @@ einem statischen Programm in einer Test-Unit gemessen:
 ### Akzeptanzkriterien
 1. Jeder geschlossene Weg ist gemessen und getestet; was offen bleibt, steht
    mit Grund in K-33.
+
+---
+
+## HUM-558 · Test `fd_handover::nobody_coming_ends_the_wait_and_the_socket` wackelt unter paralleler Last
+
+### Kontext
+Bei HUM-480 und beim Zusammenführen von HUM-480 mit `main` (2026-11-19)
+fiel `fd_handover::tests::nobody_coming_ends_the_wait_and_the_socket` im
+vollen Lauf von `cargo test -p humanitl-sandbox --lib` zweimal um
+(`fd_handover.rs:576`), allein lief er jedes Mal grün (dreimal hintereinander).
+Ein Test, der unter Last kippt, macht die CI unzuverlässig und verdeckt
+echte Fehler.
+
+### Spezifikation
+1. Ursache finden: feste Wartezeit gegen eine Frist, die unter Last nicht
+   reicht, oder ein echter Wettlauf im Code der Übergabe.
+2. Ist es der Test: auf ein Ereignis warten statt auf eine Zeit, ohne die
+   Aussage des Tests zu schwächen. Ist es der Code: beheben, mit Test.
+
+### Tests
+- Der Test läuft 50-mal unter paralleler Last (`cargo test` mit allen
+  Tests des Crates) grün.
+
+### Akzeptanzkriterien
+1. Kein Fehlschlag in 50 Läufen unter Last; die Aussage des Tests bleibt.
