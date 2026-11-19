@@ -104,10 +104,11 @@ and keeps reading the declaration from the file it names.
 
 Every other configuration flag (`--hold-timeout-secs`, `--findings-enabled`
 and so on) belongs to the configuration and not to a session. The daemon
-accepts only four paths from the client — `llm.endpoint`, `hold.timeout_secs`,
-`sandbox.backend` and `sandbox.podman.runtime` — and answers every other one
-with `CONFIG_003`; for the two backend paths it still applies
-`sandbox.min_isolation` and the admission. The reason is in
+accepts only five paths from the client — `llm.endpoint`, `hold.timeout_secs`,
+`sandbox.backend`, `sandbox.podman.runtime` and `sandbox.min_isolation` — and
+answers every other one with `CONFIG_003`; for the two backend paths it still
+applies `sandbox.min_isolation` and the admission, and the floor itself only
+rises. The reason is in
 `backlog/CONVENTIONS.md` 4.26: a client that could set any key would thereby
 decide the mount surface of the sandbox and the process inside it. Whoever
 wants to change another value writes it into `config.toml` or into a profile of
@@ -381,16 +382,21 @@ another backend, with `SANDBOX_036`. `humanitl doctor --probe` starts an
 empty sandbox under every admitted, available backend and checks its five
 `CHECK` lines.
 
-**The floor.** `sandbox.min_isolation` (`policy`, `namespaces` or `kernel`)
-is the weakest level a session may start with. Across all layers the
-strictest value applies: a project profile may raise it, and nothing lowers
-it below what another layer asks for. `--sandbox-min-isolation kernel` on
-`humanitl sandbox run`, `sandbox argv` or `sandbox check` raises it for that
-one call; `humanitl run` does not send it to the daemon, which accepts only
-the four paths named above, so for a session through the daemon it belongs
-in `config.toml` or the project profile. With the floor at `kernel`, only
-`qemu` starts; any other backend ends with `SANDBOX_035` instead of running
-below it.
+**The floor.** `sandbox.min_isolation` (`policy`, `namespaces` or `kernel`) is
+the weakest level a session may start with. Across all layers the strictest
+value applies: a project profile may raise it, and nothing lowers it below what
+another layer asks for. `--sandbox-min-isolation kernel` on `humanitl run`,
+`humanitl go`, `humanitl sandbox run`, `sandbox argv` or `sandbox check` raises
+it for that one call, and so do `HUMANITL_SANDBOX__MIN_ISOLATION` and a file
+named by `--config`. `humanitl run` and `humanitl go` send the daemon the
+strictest of these with the start, never the weaker value of a flag beside a
+stricter variable; the daemon takes the strictest value of `config.toml`, the
+profiles, the project choice, the company policy and the start, so
+`--sandbox-min-isolation policy` never lowers a `namespaces` from
+`config.toml`. A daemon older than contract 1.49 does not know the floor as a
+key of the session, and `humanitl run` then ends with `CLI_004` instead of
+starting without it. With the floor at `kernel`, only `qemu` starts; any other
+backend ends with `SANDBOX_035` instead of running below it.
 
 **What `humanitl doctor` says about the kernel level.** In the group of the
 kernel level the doctor gives one line per prerequisite: `kvm` (`/dev/kvm`),

@@ -61,7 +61,7 @@ use humanitl_core::block::sanitize_note;
 use humanitl_core::diagnostics::codes;
 use humanitl_core::{Diagnostic, FixAction, Severity};
 use humanitl_ipc::client::Client;
-use humanitl_ipc::session::{SESSION_OVERRIDE_KEYS, ask_mode_name};
+use humanitl_ipc::session::{SANDBOX_MIN_ISOLATION_KEY, SESSION_OVERRIDE_KEYS, ask_mode_name};
 use humanitl_ipc::v1;
 use humanitl_sandbox::agent::{AdapterRegistry, AgentAdapter};
 use serde_json::json;
@@ -208,7 +208,7 @@ pub(crate) async fn launch(
             .collect(),
         session_profile: ctx.profile_flag().unwrap_or_default().to_owned(),
         ask_mode: wish::ask_mode(&resolved, named_config),
-        cli_overrides: session_overrides(ctx, &resolved),
+        cli_overrides: session_overrides(ctx, &resolved, info.proto_minor)?,
         work_dir_source: Some(humanitl_ipc::work_dir::source_to_proto(&work_dir_source)),
         sandbox_mode: start_mode(args, wish::mode(&resolved, named_config), info.proto_minor),
         // `--llm NAME`: der gespeicherte Server für genau diesen Lauf
@@ -1244,20 +1244,71 @@ fn refuse_terminal_ask(config: &Config, args: &RunArgs, on_terminal: bool) -> Re
 /// und `--ask` reisen in ihren eigenen Feldern.
 ///
 /// Dazu die Wahl des Sandbox-Backends aus der Umgebung dieses Aufrufs
-/// ([`environment_backend_choice`]); ein Flag gewinnt über sie.
-fn session_overrides(ctx: &Context, resolved: &Resolved) -> Vec<v1::sandbox_request::CliOverride> {
-    merge_overrides(ctx.cli_pairs(), resolved)
+/// ([`environment_backend_choice`]), ein Flag vor ihr, und die strengste
+/// Untergrenze, die nur der Client sieht ([`client_floor`]).
+///
+/// # Errors
+///
+/// `CLI_004` aus [`floor_reaches_the_daemon`], wenn der Daemon `minor` zu alt
+/// für die Untergrenze ist.
+fn session_overrides(
+    ctx: &Context,
+    resolved: &Resolved,
+    minor: u32,
+) -> Result<Vec<v1::sandbox_request::CliOverride>, Failure> {
+    let named_config = ctx.config_file.is_some();
+    floor_reaches_the_daemon(
+        start_overrides(ctx.cli_pairs(), resolved, named_config),
+        minor,
+    )
 }
 
-/// [`session_overrides`] ohne den Kontext: die Paare der Kommandozeile und
-/// die Wahl aus der Umgebung, ein Flag vor der Umgebung.
+/// [`session_overrides`] ohne den Kontext und ohne die Prüfung der Minor:
+/// [`merge_overrides`] und dazu die Untergrenze dieses Aufrufs
+/// ([`client_floor`]).
+fn start_overrides(
+    cli_pairs: Vec<(String, String)>,
+    resolved: &Resolved,
+    named_config: bool,
+) -> Vec<v1::sandbox_request::CliOverride> {
+    let mut overrides = merge_overrides(cli_pairs, resolved);
+    if let Some(level) = client_floor(resolved, named_config) {
+        overrides.push(v1::sandbox_request::CliOverride {
+            path: SANDBOX_MIN_ISOLATION_KEY.to_owned(),
+            value: level.to_owned(),
+        });
+    }
+    overrides
+}
+
+/// Die Untergrenze, die dieser Aufruf dem Daemon schickt (HUM-489): der
+/// aufgelöste Wert von `sandbox.min_isolation`, wenn ihn eine Quelle gesetzt
+/// hat, die nur der Client sieht, also `--sandbox-min-isolation`,
+/// `HUMANITL_SANDBOX__MIN_ISOLATION` oder eine Datei, die `--config` nennt.
+///
+/// Geschickt wird der aufgelöste Wert und nie der rohe Wert des Flags. Beim
+/// Mischen gilt der strengste Wert aller Ebenen, und die Herkunft nennt die
+/// Ebene dieses Werts. Ein schwächeres Flag neben einer strengeren Variable
+/// schickt deshalb die Variable, statt sie zu verdrängen. Kommt der strengste
+/// Wert aus `config.toml` oder einem Profil, liest der Daemon ihn selbst, und
+/// nichts reist mit.
+fn client_floor(resolved: &Resolved, named_config: bool) -> Option<&'static str> {
+    wish::per_run(resolved, SANDBOX_MIN_ISOLATION_KEY, named_config)
+        .then(|| resolved.config.sandbox.min_isolation.as_str())
+}
+
+/// Die Paare der Kommandozeile und die Wahl des Backends aus der Umgebung,
+/// ein Flag vor der Umgebung. Die Untergrenze bleibt hier draußen; sie
+/// setzt [`start_overrides`] aus der Auflösung ([`client_floor`]).
 fn merge_overrides(
     cli_pairs: Vec<(String, String)>,
     resolved: &Resolved,
 ) -> Vec<v1::sandbox_request::CliOverride> {
     let mut pairs: Vec<(String, String)> = cli_pairs
         .into_iter()
-        .filter(|(path, _)| SESSION_OVERRIDE_KEYS.contains(&path.as_str()))
+        .filter(|(path, _)| {
+            SESSION_OVERRIDE_KEYS.contains(&path.as_str()) && path != SANDBOX_MIN_ISOLATION_KEY
+        })
         .collect();
     for (path, value) in environment_backend_choice(resolved) {
         if !pairs.iter().any(|(given, _)| *given == path) {
@@ -1286,7 +1337,8 @@ pub(crate) fn session_backend(
 
 /// `sandbox.backend` und `sandbox.podman.runtime`, wo sie in der Auflösung
 /// dieses Aufrufs aus der Umgebung kommen (`HUMANITL_SANDBOX__BACKEND`,
-/// `HUMANITL_SANDBOX__PODMAN__RUNTIME`, HUM-432).
+/// `HUMANITL_SANDBOX__PODMAN__RUNTIME`, HUM-432). Die Untergrenze aus der
+/// Umgebung reist über [`client_floor`].
 ///
 /// Der Daemon läuft mit seiner eigenen Umgebung, meist als Nutzer-Unit ohne
 /// diese Variablen. Bliebe die Wahl hier, startete er still sein Backend
@@ -1307,6 +1359,49 @@ fn environment_backend_choice(resolved: &Resolved) -> Vec<(String, String)> {
     .filter(|(path, _)| matches!(resolved.origin(path), Some(humanitl_config::Origin::Env(_))))
     .map(|(path, value)| (path.to_owned(), value.to_owned()))
     .collect()
+}
+
+/// Ab dieser Minor nimmt der Daemon `sandbox.min_isolation` in
+/// `Start.cli_overrides` an (HUM-489).
+pub(crate) const SESSION_FLOOR_MINOR: u32 = 49;
+
+/// Die Wünsche des Starts, wenn der Daemon jeden davon annimmt.
+///
+/// Ein Daemon vor Vertrag 1.49 lehnt die Untergrenze in `cli_overrides` mit
+/// `CONFIG_003` ab, als dürfe eine Sitzung sie nie setzen. Das ist falsch
+/// und führt in die Irre; hier sagt `CLI_004` stattdessen, dass der Daemon
+/// zu alt ist und wie er neu startet.
+///
+/// # Errors
+///
+/// `CLI_004`, wenn die Wünsche `sandbox.min_isolation` tragen und der Daemon
+/// vor Vertrag 1.49 spricht.
+fn floor_reaches_the_daemon(
+    overrides: Vec<v1::sandbox_request::CliOverride>,
+    minor: u32,
+) -> Result<Vec<v1::sandbox_request::CliOverride>, Failure> {
+    let Some(floor) = overrides
+        .iter()
+        .find(|pair| pair.path == SANDBOX_MIN_ISOLATION_KEY)
+    else {
+        return Ok(overrides);
+    };
+    if minor >= SESSION_FLOOR_MINOR {
+        return Ok(overrides);
+    }
+    Err(Failure::new(
+        Diagnostic::builder(codes::CLI_004, Severity::Error)
+            .why(format!(
+                "the daemon speaks contract 1.{minor}, and {SANDBOX_MIN_ISOLATION_KEY} = {:?} for \
+                 this run needs 1.{SESSION_FLOOR_MINOR}; restart the daemon so that it applies \
+                 the floor, or set the floor in config.toml",
+                floor.value
+            ))
+            .fix(FixAction::CopyCommand(
+                "systemctl --user restart humanitld.service".to_owned(),
+            ))
+            .build(),
+    ))
 }
 
 /// Der Server aus `--llm NAME` für `Start.llm_server` (HUM-400).
@@ -1436,6 +1531,7 @@ mod tests {
 
     use humanitl_config::{AskMode, Env, ProfileSelection, resolve};
     use humanitl_ipc::session::SESSION_OVERRIDE_KEYS;
+    use humanitl_ipc::v1;
 
     use super::{
         Config, attaches, chain, check_line, inline_rules, refusal_summary, refuse_terminal_ask,
@@ -1982,5 +2078,177 @@ mod tests {
         // Ohne Variable reist nichts mit, was der Daemon nicht ohnehin hat.
         assert!(super::merge_overrides(Vec::new(), &client(&[])).is_empty());
         assert!(SESSION_OVERRIDE_KEYS.contains(&"sandbox.podman.runtime"));
+    }
+
+    /// The environment of client and daemon in `home`, the client's with
+    /// these extra variables.
+    fn floor_env(home: &std::path::Path, extra: &[(&str, &str)]) -> Env {
+        let mut pairs = vec![
+            ("HOME".to_owned(), home.display().to_string()),
+            (
+                "XDG_CONFIG_HOME".to_owned(),
+                home.join("cfg").display().to_string(),
+            ),
+        ];
+        pairs.extend(
+            extra
+                .iter()
+                .map(|(k, v)| ((*k).to_owned(), (*v).to_owned())),
+        );
+        Env::from_pairs(pairs)
+    }
+
+    /// What `humanitl run ARGS` sends as `cli_overrides`, resolved as
+    /// `Context::sources` does: with `--config` the named file replaces the
+    /// global `config.toml`.
+    fn floor_sent(
+        home: &std::path::Path,
+        args: &[&str],
+        extra: &[(&str, &str)],
+        named: Option<&std::path::Path>,
+    ) -> Vec<v1::sandbox_request::CliOverride> {
+        let matches = crate::cli::command()
+            .try_get_matches_from(["humanitl", "run"].iter().chain(args))
+            .expect("the command line parses");
+        let pairs = crate::cli::config_pairs(&matches);
+        let env = floor_env(home, extra);
+        let selection = ProfileSelection::any();
+        let sources = match named {
+            Some(file) => humanitl_config::sources_with_global(
+                &selection,
+                None,
+                &env,
+                &pairs,
+                Some(file.to_path_buf()),
+            ),
+            None => humanitl_config::sources_for(&selection, None, &env, &pairs),
+        }
+        .expect("the sources resolve");
+        let client = humanitl_config::load(&sources).expect("the client resolves");
+        super::start_overrides(pairs, &client, named.is_some())
+    }
+
+    /// The daemon's resolution of a start with these overrides: the same
+    /// paths, none of the client's variables, its `config.toml` read afresh.
+    fn floor_started(
+        home: &std::path::Path,
+        overrides: Vec<v1::sandbox_request::CliOverride>,
+    ) -> humanitl_config::MinIsolation {
+        use humanitl_ipc::session::{SessionRequest, SessionResolver};
+        let env = floor_env(home, &[]);
+        let daemon = SessionResolver::new(
+            humanitl_config::Paths::new(env.clone()),
+            resolve(&ProfileSelection::any(), None, &env, &[]).expect("the daemon resolves"),
+        );
+        let resolved = daemon
+            .resolve(&SessionRequest {
+                overrides: overrides.into_iter().map(|o| (o.path, o.value)).collect(),
+                ..SessionRequest::default()
+            })
+            .expect("the wish resolves");
+        if resolved.config.sandbox.min_isolation == humanitl_config::MinIsolation::Kernel {
+            let refused = humanitl_sandbox::choose_backend(
+                &resolved.config.sandbox,
+                humanitl_sandbox::AUTO_BACKEND,
+            )
+            .expect_err("auto never reaches the kernel level");
+            assert_eq!(refused.code.as_str(), "SANDBOX_035", "{}", refused.why);
+        }
+        resolved.config.sandbox.min_isolation
+    }
+
+    /// `humanitl run --sandbox-min-isolation kernel` raises the floor of the
+    /// session (HUM-489): the floor travels in `cli_overrides`, and the
+    /// daemon's start with `auto` ends with `SANDBOX_035` instead of running
+    /// below it. What travels is the strictest floor of the sources only the
+    /// client sees: the flag, `HUMANITL_SANDBOX__MIN_ISOLATION` and a file
+    /// named by `--config`; a weaker flag never suppresses a stronger one.
+    ///
+    /// Mutation proof: without the key in `SESSION_OVERRIDE_KEYS` the
+    /// daemon refuses the floor with `CONFIG_003`; with the topmost value
+    /// instead of the strictest in `humanitl_config::load`, or with the raw
+    /// flag instead of the resolved floor, `policy` beats the variable
+    /// `kernel`; without `named_config` in `client_floor` the floor of the
+    /// named file stays behind.
+    #[test]
+    fn the_floor_of_the_command_line_reaches_the_daemon_and_only_raises() {
+        let home = tempfile::tempdir().expect("tempdir");
+        let home = home.path();
+        let named = home.join("other.toml");
+        std::fs::write(&named, "[sandbox]\nmin_isolation = \"kernel\"\n").expect("write");
+        let kernel_env = [("HUMANITL_SANDBOX__MIN_ISOLATION", "kernel")];
+        let policy = ["--sandbox-min-isolation", "policy"];
+
+        for (args, extra, file) in [
+            (&["--sandbox-min-isolation", "kernel"][..], &[][..], None),
+            (&[][..], &kernel_env[..], None),
+            // Ein schwächeres Flag verdrängt die strengere Variable nicht.
+            (&policy[..], &kernel_env[..], None),
+            // Die Datei aus `--config`, die der Daemon nie liest, auch unter
+            // einem schwächeren Flag.
+            (&[][..], &[][..], Some(named.as_path())),
+            (&policy[..], &[][..], Some(named.as_path())),
+        ] {
+            let overrides = floor_sent(home, args, extra, file);
+            let floors: Vec<&str> = overrides
+                .iter()
+                .filter(|o| o.path == "sandbox.min_isolation")
+                .map(|o| o.value.as_str())
+                .collect();
+            assert_eq!(floors, ["kernel"], "{args:?} {extra:?} {file:?}");
+            assert_eq!(
+                floor_started(home, overrides),
+                humanitl_config::MinIsolation::Kernel,
+                "{args:?} {extra:?} {file:?}"
+            );
+        }
+        // Ohne Quelle des Clients reist keine Untergrenze mit.
+        assert!(floor_sent(home, &[], &[], None).is_empty());
+    }
+
+    /// A weaker floor never lowers a higher one from the daemon's
+    /// `config.toml` (HUM-489): the client, which reads the same file, sends
+    /// nothing, and a weaker floor that arrives anyway stays out.
+    #[test]
+    fn a_weaker_floor_does_not_lower_the_floor_of_the_configuration() {
+        let home = tempfile::tempdir().expect("tempdir");
+        let home = home.path();
+        let config = humanitl_config::Paths::new(floor_env(home, &[])).config_path();
+        std::fs::create_dir_all(config.parent().expect("a directory")).expect("mkdir");
+        std::fs::write(&config, "[sandbox]\nmin_isolation = \"namespaces\"\n").expect("write");
+
+        assert!(floor_sent(home, &["--sandbox-min-isolation", "policy"], &[], None).is_empty());
+        let lowered = vec![v1::sandbox_request::CliOverride {
+            path: "sandbox.min_isolation".to_owned(),
+            value: "policy".to_owned(),
+        }];
+        assert_eq!(
+            floor_started(home, lowered),
+            humanitl_config::MinIsolation::Namespaces
+        );
+    }
+
+    /// A daemon before contract 1.49 would refuse the floor with a
+    /// misleading `CONFIG_003`; the client says `CLI_004` instead, and only
+    /// when the floor travels (HUM-489).
+    #[test]
+    fn an_old_daemon_gets_no_floor_it_would_misread() {
+        let floor = vec![humanitl_ipc::v1::sandbox_request::CliOverride {
+            path: humanitl_ipc::session::SANDBOX_MIN_ISOLATION_KEY.to_owned(),
+            value: "kernel".to_owned(),
+        }];
+        let refused = super::floor_reaches_the_daemon(floor.clone(), 48)
+            .expect_err("the old daemon is too old");
+        assert_eq!(refused.diagnostic.code.as_str(), "CLI_004");
+        assert_eq!(
+            super::floor_reaches_the_daemon(floor.clone(), super::SESSION_FLOOR_MINOR)
+                .expect("a new daemon takes it"),
+            floor
+        );
+        assert!(
+            super::floor_reaches_the_daemon(Vec::new(), 48)
+                .expect("nothing to refuse")
+                .is_empty()
+        );
     }
 }
