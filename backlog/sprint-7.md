@@ -2855,6 +2855,50 @@ Escape-Suite; am 2026-11-15 lagen 117 da, drei davon nicht leer.
 ### Akzeptanzkriterien
 1. Nach einem Lauf der Escape-Suite bleibt kein Verzeichnis zurück.
 
+### Stand nach der Umsetzung (2026-11-19)
+Neues Modul `daemon/crates/sandbox/src/qemu/instance.rs`. Ein Prozess, der
+unter `humanitl-vm-<Instanz>` eine Sitzung anlegt, hält vorher eine geteilte
+`flock`-Sperre auf die Datei `lock` darin; mit dem Ende seiner letzten
+Sitzung wandelt er sie in eine exklusive und entfernt Sperrdatei und
+Verzeichnis, wenn nichts anderes mehr darin liegt. Das Ende des
+Sitzungsverzeichnisses meldet `handle.rs` über
+`backend::session_dir_removed`; am Ende des Daemons gibt
+`humanitl_sandbox::release_runtime_dirs` den Rest frei. Damit verschwindet das
+Verzeichnis auch in Prozessen ohne Daemon (Escape-Tests, `escape-launch`).
+
+Der Start eines Daemons räumt verwaiste Instanzen (`LeftSandboxes`): nur
+Einträge mit genau `humanitl-vm-` und 16 kleinen Hex-Ziffern, Verzeichnisse
+dieses Nutzers, mit Sperrdatei, die sich exklusiv sperren lässt; geöffnet
+mit `openat2` (`O_NOFOLLOW | O_DIRECTORY`, `RESOLVE_NO_XDEV`,
+`RESOLVE_NO_SYMLINKS`) und dem Vergleich des Geräts, verglichen mit dem
+Eintrag unter dem Namen, entfernt mit `unlinkat` relativ zum geprüften
+Verzeichnis. Nicht leere verwaiste Instanzen werden ganz entfernt (Units
+vorher gestoppt, je Sitzung `SANDBOX_041`), denn ihr Besitzer ist
+nachweislich tot und der Inhalt liegt auf tmpfs, womöglich mit dem
+Gastplan. Die gestoppte Unit ergibt sich aus dem Namen des
+Sitzungsverzeichnisses (`humanitl-vm-<Sitzung>`, 32 Hex-Ziffern), nie aus der
+Datei `unit` darin, die sonst jede laufende Unit nennen könnte. Ein
+eingehängtes Dateisystem oder ein Bind-Mount in einer Waise wird nie
+betreten, eine Instanz, die selbst eingehängt ist, nie als verwaist
+genommen; eine Sitzung, die tiefer als 32 Ebenen reicht, bleibt liegen. Beides
+meldet `SANDBOX_041` mit einem Befehl (`findmnt -R`, `rm -r
+--one-file-system`). Verzeichnisse ohne Sperrdatei, also
+die aus der Zeit vor diesem Issue, bleiben liegen: Für sie gibt es keinen
+Beweis, dass niemand sie benutzt. Nur die eigene Instanz eines Daemons
+bekommt beim Start eine Sperrdatei, weil der Start schon bewiesen hat, dass
+kein zweiter Daemon dieser Instanz läuft. Ein Start, der auf eine Instanz
+trifft, die ein anderer Daemon gerade räumt, wartet höchstens 30 s, ohne
+dabei Starts in anderen Instanzen aufzuhalten. Ein Rest: Endet der Daemon,
+während ein Sitzungsverzeichnis wegen offener Shells noch verzögert
+entfernt wird (`SESSION_DIR_GRACE`), bleibt die Instanz bis zum nächsten
+Start liegen, der sie räumt.
+
+Gemessen am 2026-11-19 mit `HUMANITL_ESCAPE_BACKEND=qemu` und
+`escape_worktree` (4 Fälle, grün): vorher kamen 4 leere Verzeichnisse je Lauf
+dazu (11 auf 15), nachher keins (11 auf 11, dieselben Namen). Die Reste aus
+der Zeit vor diesem Issue entfernt man einmal von Hand:
+`rmdir /run/user/$(id -u)/humanitl-vm-*` (nur leere).
+
 ---
 
 ## HUM-493 · The path for unadmitted levels without a level behind it

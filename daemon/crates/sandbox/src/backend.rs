@@ -520,6 +520,27 @@ impl LeftSandboxes {
     }
 }
 
+/// Nach dem Entfernen des Laufzeitverzeichnisses einer Sitzung (HUM-492):
+/// Unter der Kernel-Stufe geht mit der letzten Sitzung dieses Prozesses das
+/// Verzeichnis seiner Instanz unter dem Laufzeitverzeichnis des Nutzers.
+/// Für jedes andere Verzeichnis ändert es nichts.
+pub(crate) fn session_dir_removed(dir: &std::path::Path) {
+    #[cfg(all(target_os = "linux", target_arch = "x86_64"))]
+    vm::session_dir_removed(dir);
+    #[cfg(not(all(target_os = "linux", target_arch = "x86_64")))]
+    let _ = dir;
+}
+
+/// Gibt am Ende des Daemons frei, was er für Sitzungen der Kernel-Stufe
+/// unter dem Laufzeitverzeichnis des Nutzers belegt, und entfernt das
+/// Verzeichnis seiner Instanz, wenn keine Sitzung mehr darin liegt (HUM-492).
+/// Was dann noch liegt, räumt der nächste Start ([`LeftSandboxes`]). Unter
+/// macOS und ohne Kernel-Stufe tut es nichts.
+pub fn release_runtime_dirs() {
+    #[cfg(all(target_os = "linux", target_arch = "x86_64"))]
+    vm::release_instances();
+}
+
 /// Der Name der Stufe aus Backend und Laufzeit.
 pub(crate) fn stage(name: &'static str, runtime: Option<PodmanRuntime>) -> Cow<'static, str> {
     match runtime {
