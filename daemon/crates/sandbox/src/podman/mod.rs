@@ -1732,7 +1732,7 @@ impl SandboxBackend for PodmanBackend {
         let profile = root_profile.as_ref();
         let request = &PlanRequest::new(profile, session, options);
         BwrapBackend::check_work_dir(profile, session)?;
-        policy.check_work_dir(&session.work_src)?;
+        crate::agent::depot::guard::work_place(&policy, session, &session.work_src)?;
         // Geöffnet und am Ort des Deskriptors geprüft wie unter bwrap
         // (HUM-263); eingehängt wird dieser Ort (P13).
         let pinned = refuse_linked_moves(session, profile, PinnedMounts::open(&policy, request)?)?;

@@ -118,6 +118,7 @@ use crate::terminal::{HeldNotices, TerminalHub};
 use crate::v1;
 
 mod cleanup;
+mod maintenance;
 mod project;
 mod proposal;
 
@@ -710,6 +711,12 @@ struct Inner {
     /// Das Projekt des letzten Starts im Register (HUM-532); `Projects.list`
     /// nennt daran die laufende Sitzung und wartende Änderungen.
     project: Mutex<Option<humanitl_core::ProjectId>>,
+    /// Die Agenten, deren Rezept ein Wartungslauf nimmt (HUM-563,
+    /// [`SandboxPorts::depot_agents`]).
+    depot_agents: &'static [humanitl_sandbox::agent::depot::KnownAgent],
+    /// Der letzte Wartungslauf je Agent in diesem Daemon (HUM-563): läuft,
+    /// fertig oder gescheitert, mit seinen Befunden. `Agents` nennt ihn.
+    maintenance: Mutex<BTreeMap<String, v1::AgentMaintenance>>,
 }
 
 /// Woran der Dienst hängt, wenn eine Sitzung startet.
@@ -769,6 +776,11 @@ pub struct SandboxPorts {
     /// diesen Anschluss meldet das Backend nichts; so im Fake-Modus und in
     /// den meisten Tests.
     pub sandbox_notices: Option<SandboxNoticeSink>,
+    /// Die Agenten, deren Installationsrezept ein Wartungslauf nimmt
+    /// (HUM-563). Ohne Angabe [`humanitl_sandbox::agent::depot::KNOWN`]; die
+    /// Ende-zu-Ende-Tests setzen ein Rezept, das von einem Stellvertreter
+    /// lädt statt vom Anbieter.
+    pub depot_agents: Option<&'static [humanitl_sandbox::agent::depot::KnownAgent]>,
 }
 
 impl SandboxPorts {
@@ -846,6 +858,17 @@ impl SandboxPorts {
         self.sandbox_notices = Some(sink);
         self
     }
+
+    /// Dieselben Anschlüsse mit diesen Agenten für Wartungsläufe
+    /// ([`SandboxPorts::depot_agents`], HUM-563).
+    #[must_use]
+    pub fn with_depot_agents(
+        mut self,
+        agents: &'static [humanitl_sandbox::agent::depot::KnownAgent],
+    ) -> Self {
+        self.depot_agents = Some(agents);
+        self
+    }
 }
 
 impl SandboxService {
@@ -892,6 +915,10 @@ impl SandboxService {
                 terminal: ports.terminal,
                 image_pulls: crate::image_pulls::ImagePulls::default(),
                 project: Mutex::new(None),
+                depot_agents: ports
+                    .depot_agents
+                    .unwrap_or(humanitl_sandbox::agent::depot::KNOWN),
+                maintenance: Mutex::new(BTreeMap::new()),
             }),
         }
     }
@@ -919,13 +946,15 @@ impl SandboxService {
     }
 
     /// Der Agent, dessen Depot die laufende Sitzung eingehängt hat
-    /// (HUM-518); `None` ohne Sitzung oder ohne Depot.
+    /// (HUM-518), oder dessen Wartungslauf gerade geht, bis zur Übernahme
+    /// (HUM-563); `None` ohne beides. `agents remove` lehnt dann ab.
     #[must_use]
     pub fn depot_in_use(&self) -> Option<String> {
         lock(&self.inner.running)
             .as_ref()
             .filter(|running| running.handle.try_wait().is_none())
             .and_then(|running| running.depot_agent.clone())
+            .or_else(|| maintenance::running_agent(&lock(&self.inner.maintenance)))
     }
 
     /// Das Backend, das das Sandbox-Profil mit diesem Namen verlangt
@@ -2004,7 +2033,7 @@ impl Inner {
         let watch = run.watch;
         let sandbox = run.sandbox;
         let disposable = run.disposable;
-        self.attend(plan, project, output, llm, tx).await;
+        self.attend(plan, Some(project), output, llm, tx).await;
         match disposable {
             Some(waiting) => self.settle_disposable(waiting, tx).await,
             None => self.summarize(watch, sandbox, tx).await,
@@ -2078,7 +2107,7 @@ impl Inner {
     async fn attend(
         self: &Arc<Self>,
         plan: &v1::sandbox_request::Plan,
-        project: &project::StartProject,
+        project: Option<&project::StartProject>,
         output: std::sync::mpsc::Receiver<humanitl_sandbox::OutputChunk>,
         mut llm: Option<LlmWatch>,
         tx: &mpsc::Sender<v1::SandboxEvent>,
@@ -2094,8 +2123,11 @@ impl Inner {
             return;
         }
         // Der Ordner ist eingehängt: noch derselbe, und der Start steht im
-        // Register, sonst endet die Sandbox hier (HUM-532).
-        if !self.settle_project(plan, project, tx).await {
+        // Register, sonst endet die Sandbox hier (HUM-532). Ein Wartungslauf
+        // des Depots hat kein Projekt (HUM-563).
+        if let Some(project) = project
+            && !self.settle_project(plan, project, tx).await
+        {
             return;
         }
         let this = Arc::clone(self);

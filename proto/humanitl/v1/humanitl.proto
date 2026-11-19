@@ -2972,11 +2972,46 @@ message AgentsRequest {
   message Remove {
     string agent = 1;
   }
+  // Installation oder Update in einem Wartungslauf (HUM-563): eine Sandbox
+  // ohne Projekt, deren Netz nur die Hosts des Rezepts ohne Halt erreicht.
+  // Die Antwort kommt, sobald der Lauf steht; `AgentDepot.maintenance` nennt
+  // seine Sandbox, an deren Terminal sich ein Client haengt, und nach dem
+  // Ende sein Ergebnis.
+  message Maintain {
+    string agent = 1;
+    // Die verlangte Version; leer fuer die aktuelle des Anbieters.
+    string version = 2;
+  }
   oneof op {
     Status status = 1;
     SetSource set_source = 2;
     Remove remove = 3;
+    // Die erste Installation; ein Depot mit Version lehnt ab (`AGENT_011`).
+    Maintain install = 4;
+    // Eine neue Version, oder zurueck auf eine, die das Depot noch haelt.
+    Maintain update = 5;
   }
+}
+
+// Der letzte Wartungslauf eines Agenten in diesem Daemon (HUM-563).
+message AgentMaintenance {
+  // Die Sandbox des Laufs; leer, wenn kein Lauf noetig war (die Version
+  // lag schon im Depot).
+  string sandbox_id = 1;
+  // `install` oder `update`.
+  string task = 2;
+  // `running`, solange der Lauf geht; `done` nach der Uebernahme;
+  // `failed`, wenn nichts uebernommen wurde.
+  string state = 3;
+  // Die Version, die `current` nach dem Lauf nennt; leer davor und nach
+  // einem Fehlschlag.
+  string version = 4;
+  // Die Version, die `current` davor nannte; leer bei der ersten
+  // Installation.
+  string previous = 5;
+  // Was zu sagen ist: `AGENT_011` mit dem Schritt, der scheiterte, und die
+  // Befunde des Laufs.
+  repeated Diagnostic diagnostics = 6;
 }
 
 // Der Stand eines Agenten im Depot.
@@ -3009,6 +3044,9 @@ message AgentDepot {
   // Was zu sagen ist: Depot unbrauchbar (`AGENT_013`), nicht installiert
   // (`AGENT_008`), nicht angemeldet (`AGENT_009`), ohne Rezept (`AGENT_015`).
   repeated Diagnostic diagnostics = 13;
+  // Der letzte Wartungslauf dieses Agenten in diesem Daemon (HUM-563);
+  // fehlt, wenn es keinen gab.
+  AgentMaintenance maintenance = 14;
 }
 
 // Der Stand aller bekannten Agenten, in der Reihenfolge von

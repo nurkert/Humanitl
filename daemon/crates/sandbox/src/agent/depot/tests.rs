@@ -644,3 +644,74 @@ fn the_launcher_of_an_adapter_does_not_hide_or_block_the_agent_command() {
     let found = guard_of(&other, plan.session).unwrap_err();
     assert_eq!(found.code, AGENT_017);
 }
+
+// ---- the maintenance run (HUM-563) ----
+
+/// A maintenance session whose work place is `home`.
+fn maintenance_session(home: &Path) -> SessionContext {
+    let mut session = session(&["/bin/sh", "-c", "true"], DepotSession::default());
+    session.work_src = home.to_path_buf();
+    session.agent_depot.maintenance_home = Some(home.to_path_buf());
+    session
+}
+
+fn maintenance_profile() -> SandboxProfile {
+    let mut profile = profile();
+    profile.mounts.work.dst = PathBuf::from(maintenance::MAINTENANCE_HOME_DST);
+    profile
+}
+
+#[test]
+fn a_maintenance_run_may_work_in_its_own_directory_and_nowhere_else() {
+    let base = tempfile::tempdir().unwrap();
+    let paths = Paths::new(Env::from_pairs([
+        ("HOME", base.path().join("home").to_str().unwrap()),
+        ("XDG_DATA_HOME", base.path().join("data").to_str().unwrap()),
+        ("XDG_RUNTIME_DIR", base.path().join("run").to_str().unwrap()),
+    ]));
+    let policy = crate::profile::MountPolicy::from_paths(&paths);
+    let home = paths.data_dir().join("agents/.maintenance/claude-run");
+    let elsewhere = paths.data_dir().join("ca");
+    for dir in [&home, &elsewhere] {
+        std::fs::create_dir_all(dir).unwrap();
+    }
+    // Its own work directory, marked by the daemon: admitted.
+    guard::work_place(&policy, &maintenance_session(&home), &home).unwrap();
+    // The same directory without the mark is a project under the data
+    // directory: the policy refuses it.
+    let unmarked = session(&["/bin/sh"], DepotSession::default());
+    assert!(guard::work_place(&policy, &unmarked, &home).is_err());
+    // Marked, but another place of the data directory: refused.
+    let found =
+        guard::work_place(&policy, &maintenance_session(&elsewhere), &elsewhere).unwrap_err();
+    assert_eq!(found.code, humanitl_core::diagnostics::codes::SANDBOX_006);
+    // Marked, and the opened place is not the marked one: refused.
+    assert!(guard::work_place(&policy, &maintenance_session(&home), &elsewhere).is_err());
+}
+
+#[test]
+fn a_maintenance_run_carries_nothing_else_of_the_host() {
+    let home = Path::new("/nonexistent-hum563/agents/.maintenance/claude-run");
+    let options = LaunchOptions::default();
+    let check = |profile: &SandboxProfile, session: &SessionContext, options: &LaunchOptions| {
+        guard::check(&PlanRequest::new(profile, session, options))
+    };
+    let session = maintenance_session(home);
+    check(&maintenance_profile(), &session, &options).unwrap();
+    // At /work instead of its own place.
+    assert!(check(&profile(), &session, &options).is_err());
+    // An extension of the profile.
+    let mut extended = maintenance_profile();
+    extended.mounts.extra_ro.push(PathBuf::from("/srv"));
+    assert!(check(&extended, &session, &options).is_err());
+    // A session bind.
+    let mut bound = LaunchOptions::default();
+    bound
+        .session_ro
+        .push((PathBuf::from("/srv"), PathBuf::from("/tests")));
+    assert!(check(&maintenance_profile(), &session, &bound).is_err());
+    // Another work source than the marked home.
+    let mut moved = maintenance_session(home);
+    moved.work_src = PathBuf::from("/nonexistent-hum563/elsewhere");
+    assert!(check(&maintenance_profile(), &moved, &options).is_err());
+}

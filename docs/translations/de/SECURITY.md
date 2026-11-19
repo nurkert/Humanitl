@@ -167,6 +167,34 @@ erlaubt, denn in SBPL gewinnt die letzte passende Regel.
 die Sandbox bringt; gegen einen Nutzer, der ein Agentenprogramm absichtlich an einen ungelisteten Ort
 kopiert, schützt sie nicht, auf seinem eigenen Rechner bestimmt er das.
 
+**Wartungsläufe (HUM-519, HUM-563).** `humanitl agents install` und `update` laufen nie auf dem
+Host. Der Daemon startet eine eigene Sandbox mit den drei Garantien und dem Proxy, aber ohne Projekt:
+Schreibbar ist nur ihr eigener Arbeitsordner neben den Depots (`agents/.maintenance/`), eingehängt
+als ihr `HOME` unter `/run/humanitl/agent-home`; ein `/work` gibt es nicht, das Sandbox-Profil gilt
+ohne `mounts.extra_ro` und `mounts.extra_rw`, keine Einhängung der Sitzung, kein Depot und kein
+Programm des Hosts kommen mit, und die Host-Installationen des Agenten sind maskiert. Die
+Einhänge-Politik lehnt diesen Ordner als Projekt ab wie den ganzen Datenordner; der Wächter lässt
+genau den eigenen Ordner des Laufs zu, aufgelöst, und nur für eine Sitzung, die der Daemon als
+Wartungslauf gekennzeichnet hat (sonst `SANDBOX_006`). Was der Lauf ohne Halt erreichen darf: die
+Hosts aus dem Rezept des Agenten, jeder mit der Doku des Anbieters als Beleg (Claude Code:
+`downloads.claude.ai`, `GET` und `HEAD` über HTTPS auf Port 443), als Regeln dieser Sitzung, die mit
+dem Ende des Laufs gehen; die gespeicherten Regeln werden nie geschrieben. Für den Lauf ist die
+mitgelieferte Gruppe nur `rules/default.yaml`, ohne Durchreiche zum Sprachmodell und ohne Regeln
+eines Profils; jede andere Anfrage wird gehalten wie in jeder Sitzung, und die eigenen Regeln des
+Menschen gelten wie immer. Was der Lauf nicht darf: etwas anderes als den Programmbaum übergeben,
+etwas Heruntergeladenes ausführen (das Rezept lädt nur, der Installer des Anbieters läuft nicht)
+oder sein eigenes Urteil sprechen: Der Daemon prüft den Baum an seiner eigenen Kopie (reguläre
+Dateien, Ordner, relative Verweise innerhalb, keine Sockets, FIFOs, Geräte, harten Links oder
+Set-ID-Bits, höchstens 2 GiB und 50 000 Einträge), prüft das Manifest eines signierenden Anbieters mit
+dem `gpg` des Hosts gegen den im Adapter festen Fingerabdruck, vergleicht die SHA-256 des Programms
+damit und legt erst dann `program/<version>/` an und schaltet `current` mit einem Journal um. Ein
+Lauf, der mit einem Status ungleich 0 oder einer roten Garantie endet, ändert nichts. Die Version
+ist angeheftet: nur `update` ändert sie, und Sitzungen behalten die Version, mit der sie starteten. In
+einer Sitzung ist der Programmordner nur lesbar; ein Selbst-Update des Agenten scheitert dort mit
+Absicht. *Grenzen:* Die Version eines Rezepts ohne Signatur ist das Wort des Laufs, nur auf ihre
+Form geprüft; Kernel-Stufe und Seatbelt lehnen einen Wartungslauf vorerst ab (`AGENT_015`); ein Lauf
+zur Zeit, und nur, solange keine andere Sitzung läuft.
+
 ### Vertrauenswürdige Basis
 
 Die vertrauenswürdige Basis (Trusted Computing Base, TCB) ist die Menge der Bauteile, deren

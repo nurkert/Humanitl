@@ -155,6 +155,32 @@ the rule that allows reads outside the private trees, because in SBPL the last m
 defence against a user who deliberately copies an agent binary to a path no recipe lists: on their
 own machine the user controls that, and the company policy does not claim otherwise.
 
+**Maintenance runs (HUM-519, HUM-563).** `humanitl agents install` and `update` never run on the
+host. The daemon starts a sandbox of their own with the three guarantees and the proxy, but without
+a project: its one writable place is its own work directory beside the depots
+(`agents/.maintenance/`), bound as its `HOME` at `/run/humanitl/agent-home`; there is no `/work`,
+the sandbox profile counts without `mounts.extra_ro` and `mounts.extra_rw`, no session bind, no
+depot mount and no host program come along, and the host installs of the agent are masked. The
+mount policy refuses that directory as a project like the whole data directory; the guard admits
+exactly the run's own directory, resolved, and only for a session the daemon marked as a
+maintenance run (`SANDBOX_006` otherwise). What the run may reach without a hold: the hosts of the
+agent's recipe, each with the vendor's documentation as evidence (Claude Code:
+`downloads.claude.ai`, `GET` and `HEAD` over HTTPS on port 443), as rules of this session that go
+when the run ends; the stored rules are never written. For the run the bundled group is only
+`rules/default.yaml`, without the LLM passthrough or a profile's rules; every other request is held
+like in any session, and the person's own rules apply as always. What the run may not do: take over
+anything but the program tree, run anything it downloaded (the recipe only downloads, the vendor's
+installer is not executed), or name its own verdict: the daemon checks the tree on its own copy
+(regular files, directories, relative links inside, no sockets, FIFOs, devices, hard links or set-ID
+bits, at most 2 GiB and 50,000 entries), verifies a signing vendor's manifest with the host's `gpg`
+against the fingerprint fixed in the adapter, compares the program's SHA-256 with it, and only then
+places `program/<version>/` and switches `current` with a journal. A run that ends with a status
+other than 0 or with a red guarantee changes nothing. The version is pinned: only `update` changes
+it, and sessions keep the version they started with. In a session the program directory is
+read-only, so an agent's self-update fails there on purpose. *Limits:* an unsigned recipe's version
+is the run's word, checked only for its form; the kernel level and Seatbelt refuse a maintenance run
+for now (`AGENT_015`); one run at a time, and only while no other session runs.
+
 ### Trusted computing base
 
 The trusted computing base is the set of components whose failure voids the guarantees. It is

@@ -591,10 +591,15 @@ fn refuse_writable_extensions(profile: &SandboxProfile) -> Result<(), Diagnostic
 fn refuse_depot(session: &SessionContext) -> Result<(), Diagnostic> {
     let depot = &session.agent_depot;
     let masks = depot.masks();
-    if depot.mount.is_none() && masks.is_empty() {
+    if depot.mount.is_none() && masks.is_empty() && depot.maintenance_home.is_none() {
         return Ok(());
     }
-    let what = depot.mount.as_ref().map_or_else(
+    let what = if depot.maintenance_home.is_some() {
+        // A maintenance run's work directory lies under the daemon's data
+        // directory; the guest would need a share of it (HUM-563).
+        "the session is a maintenance run of the depot".to_owned()
+    } else {
+        depot.mount.as_ref().map_or_else(
         || {
             format!(
                 "the host install at {} of an agent whose source is the depot would need a mask",
@@ -604,8 +609,9 @@ fn refuse_depot(session: &SessionContext) -> Result<(), Diagnostic> {
                     .unwrap_or_default()
             )
         },
-        |mount| format!("the session takes {} from the depot", mount.agent),
-    );
+            |mount| format!("the session takes {} from the depot", mount.agent),
+        )
+    };
     Err(Diagnostic::builder(
         humanitl_core::diagnostics::codes::AGENT_015,
         Severity::Blocking,

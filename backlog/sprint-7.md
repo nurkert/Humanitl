@@ -6146,8 +6146,42 @@ Daemon startet den Lauf. HUM-520 (Anmeldung als Wartungslauf) und HUM-522
   und der Test ist rot.
 
 ### Akzeptanzkriterien
-1. `humanitl agents install claude-code` installiert über eine Sandbox mit
+1. `humanitl agents install claude` installiert über eine Sandbox mit
    Proxy ins Depot, ohne dass auf dem Host etwas Heruntergeladenes läuft.
+
+### Stand nach der Umsetzung (2026-11-19)
+
+Gebaut: die Sitzungsart im `SandboxService` (`ipc/src/sandbox/maintenance.rs`).
+Der Arbeitsordner des Laufs steht an der Stelle des Projekts unter
+`MAINTENANCE_HOME_DST` und ist `HOME`; ein `/work` gibt es nicht, das
+Sandbox-Profil gilt ohne `mounts.extra_ro` und `mounts.extra_rw`, die
+Host-Installationen des Agenten sind maskiert. Der Wächter des Depots lässt
+diesen Ordner unter dem Datenordner nur für eine vom Daemon gekennzeichnete
+Sitzung zu (`guard::work_place`, sonst `SANDBOX_006`). Die Regeln des Rezepts
+gehen als Sitzungsregeln in den Speicher und nach dem Ende wieder hinaus; die
+mitgelieferte Gruppe ist während des Laufs nur `rules/default.yaml` ohne
+Durchreiche. Übernommen wird nur nach Status 0 und grünen Garantien. RPC
+`Agents.install`/`update` (Protokoll 1.52) mit `AgentDepot.maintenance`; CLI
+`humanitl agents install|update <agent> [--version] [--yes]` hängt sich an das
+Terminal des Laufs und meldet das Ergebnis; `agents status` zeigt den letzten
+Lauf; `agents remove` wird abgelehnt, solange ein Lauf des Agenten geht
+(`AGENT_018`). Docs: `docs/cli.md`, SECURITY und K-36 (en, de).
+
+Abweichungen: Kernel-Stufe und Seatbelt lehnen einen Wartungslauf vorerst ab
+(`AGENT_015`). Ein Lauf braucht den Anspruch auf den Start wie jede Sitzung,
+also kein Update, solange eine Sitzung in diesem Daemon läuft (`CLI_005`); der
+Test „Update während einer laufenden Sitzung“ aus HUM-519 bleibt auf der Ebene
+des Kerns. Das Selbst-Update steht nicht in einem eigenen Befund, sondern in
+Ausgabe, Docs und im Beleg des Ende-zu-Ende-Tests.
+
+Nicht abgedeckt: der CLI-Weg Ende-zu-Ende mit laufendem Daemon (nur
+Unit-Tests), Podman nur übersetzt, kein echter Download mit Signatur.
+
+Ausnahme der Kopplungs-Grundlinie: `daemon/crates/ipc/tests/depot_maintenance.rs`
+baut den echten Proxy-Stapel (Regelspeicher, Pipelines, Warteschlange,
+Handler) mit einem Stellvertreter-Egress und steht deshalb mit 24 Namen von
+`humanitl_proxy` in `tools/coupling-baseline.toml`; nur Testcode, der
+Produktionscode der Wartungssitzung nennt den Crate nicht.
 
 ---
 

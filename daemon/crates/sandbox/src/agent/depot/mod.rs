@@ -129,13 +129,18 @@ pub struct DepotSession {
     pub agent_words: Vec<OsString>,
     /// The version directory and scratch of the session's depot agent.
     pub mount: Option<DepotMount>,
+    /// The work directory of a maintenance run (HUM-563): the run's `HOME`,
+    /// bound writable at [`maintenance::MAINTENANCE_HOME_DST`] in the place
+    /// of a project. Only the daemon sets it; `None` for every other
+    /// session. See [`guard::work_place`].
+    pub maintenance_home: Option<PathBuf>,
 }
 
 impl DepotSession {
     /// Whether the depot plays no part in this session.
     #[must_use]
     pub fn is_empty(&self) -> bool {
-        self.reserved.is_empty() && self.mount.is_none()
+        self.reserved.is_empty() && self.mount.is_none() && self.maintenance_home.is_none()
     }
 
     /// The host install locations to mask: those of every reserved agent that
