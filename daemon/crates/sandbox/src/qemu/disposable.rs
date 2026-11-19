@@ -37,7 +37,7 @@ use rustix::fs::{AtFlags, FileType};
 use crate::disposable::OverlayDirs;
 use crate::pinned::{PinnedSource, SourceKind};
 
-use super::lines::LAYER_SHARE;
+use super::lines::{LAYER_SHARE, WORK_MASK_MIB, WorkMask};
 
 /// Der Name der oberen Schicht im Verzeichnis der Schicht.
 pub(crate) const UPPER: &str = "upper";
@@ -213,11 +213,87 @@ fn find_module(dir: &Path, name: &str) -> bool {
     false
 }
 
+/// Die Masken des Profils über dem Overlay im Gast (HUM-481): die Einträge
+/// für `work_masks` im Gastplan und die Zeilen, die die Mounttabelle des
+/// Gasts dafür erwartet.
+///
+/// Unter bwrap liegen die Masken einer Wegwerf-Sitzung über dem Overlay,
+/// hier lägen sie sonst nur in der unteren Schicht (im Gefängnis des
+/// Dienstes für `/work`), und das Overlay kopierte eine maskierte Datei
+/// beim ersten Schreiben nach oben. Der Shim legt sie deshalb im Gast
+/// darüber (`guest_masks.rs` des Shims), in derselben Reihenfolge wie
+/// bwrap: ein tmpfs über jedem vorhandenen maskierten Ordner, beschreibbar
+/// und so groß wie das tmpfs auf dem Host ([`WORK_MASK_MIB`]), und eine
+/// leere, nur lesbare Datei über jeder vorhandenen maskierten Datei, ein
+/// Bind aus dem tmpfs, auf dem der Shim das Overlay vorbereitet, mit
+/// `nosuid` und `nodev` wie unter bwrap. Der Scan lehnt jede Änderung an einer Maske weiter ab
+/// (`scan_masked`); die Masken im Gast halten nur die Sicht des Agenten
+/// gleich.
+pub(crate) struct GuestMasks {
+    /// `tmpfs:<relativ>` und `empty:<relativ>`, in der Reihenfolge des
+    /// Profils.
+    pub(crate) plan: Vec<String>,
+    /// Je Maske eine Zeile der Mounttabelle.
+    pub(crate) mounts: Vec<serde_json::Value>,
+}
+
+/// [`GuestMasks`] für die Masken unter `work`.
+pub(crate) fn guest_masks(work: &str, masks: &[WorkMask]) -> GuestMasks {
+    let mut out = GuestMasks {
+        plan: Vec::with_capacity(masks.len()),
+        mounts: Vec::with_capacity(masks.len()),
+    };
+    for mask in masks {
+        let (kind, relative, mode, flags) = match mask {
+            WorkMask::Tmpfs(relative) => ("tmpfs", relative, "rw", "nosuid,nodev"),
+            WorkMask::Empty(relative) => ("empty", relative, "ro", "nosuid,nodev"),
+        };
+        let relative = relative.to_string_lossy();
+        out.plan.push(format!("{kind}:{relative}"));
+        out.mounts.push(serde_json::json!({
+            "point": format!("{}/{relative}", work.trim_end_matches('/')),
+            "type": "tmpfs", "source": "type",
+            "mode": mode, "flags": flags, "count": "1",
+        }));
+    }
+    out
+}
+
+/// Die Größe jeder tmpfs-Maske im Gast, für `mask_mib` im Gastplan.
+pub(crate) fn guest_mask_mib() -> String {
+    WORK_MASK_MIB.to_string()
+}
+
 #[cfg(test)]
 mod tests {
     #![allow(clippy::unwrap_used, clippy::expect_used, clippy::panic)]
 
     use super::*;
+
+    /// HUM-481: Jede Maske wird ein Eintrag des Gastplans und genau eine
+    /// Zeile der Mounttabelle, ein Ordner beschreibbar, eine Datei nur
+    /// lesbar, in der Reihenfolge des Profils.
+    #[test]
+    fn each_mask_becomes_a_plan_entry_and_one_expected_mount() {
+        let masks = [
+            WorkMask::Tmpfs(PathBuf::from(".git/hooks")),
+            WorkMask::Empty(PathBuf::from(".env")),
+        ];
+        let out = guest_masks("/work", &masks);
+        assert_eq!(out.plan, ["tmpfs:.git/hooks", "empty:.env"]);
+        assert_eq!(
+            out.mounts,
+            [
+                serde_json::json!({"point": "/work/.git/hooks", "type": "tmpfs",
+                    "source": "type", "mode": "rw", "flags": "nosuid,nodev", "count": "1"}),
+                serde_json::json!({"point": "/work/.env", "type": "tmpfs",
+                    "source": "type", "mode": "ro", "flags": "nosuid,nodev",
+                    "count": "1"}),
+            ]
+        );
+        assert!(guest_masks("/work", &[]).plan.is_empty());
+        assert_eq!(guest_mask_mib(), WORK_MASK_MIB.to_string());
+    }
 
     /// Das Modul wird als Datei in jeder Endung gefunden, oder als
     /// eingebaut; fehlt beides, ist es `SANDBOX_030` mit dem Rückweg.

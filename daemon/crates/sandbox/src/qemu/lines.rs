@@ -507,6 +507,23 @@ pub(crate) fn work_line(
     line
 }
 
+/// Die erweiterten Attribute, die der Dienst der Schicht annimmt
+/// (`--xattrmap`, HUM-481): nur `user.overlay.*`, in beide Richtungen
+/// unverändert; jedes andere Attribut scheitert mit `ENOTSUP`, und beim
+/// Auflisten sieht der Gast es nicht.
+///
+/// Das Overlay im Gast schreibt mit `userxattr` nur Attribute unter
+/// `user.overlay.` (opake Verzeichnisse, Herkunft, Weiterleitungen); die
+/// untere Schicht reicht keine Attribute durch (ihr Dienst läuft ohne
+/// `--xattr`), und Attribute, die es nicht kennt, übergeht das Overlay beim
+/// Kopieren nach oben, wenn die obere Schicht `ENOTSUP` antwortet. Ohne
+/// diese Regel nähme der Dienst jedes Attribut an, das der Gast schreibt,
+/// etwa `user.*` des Agenten auf seinen Dateien, und legte es auf dem Host
+/// in der Schicht ab. `ENOTSUP` statt `EPERM` (`bad`): So sieht der Gast ein
+/// Dateisystem ohne diese Attribute, und kein Kopieren nach oben scheitert
+/// an einem Attribut, das es nicht übernehmen kann.
+pub(crate) const LAYER_XATTRMAP: &str = ":ok:all:user.overlay.:user.overlay.::unsupported:all:::";
+
 /// Gefängnis 2b, nur in einer Wegwerf-Sitzung (HUM-446): virtiofsd für das
 /// Verzeichnis der Schicht der Sitzung, als Deskriptor [`LAYER_FD`]
 /// (`--bind-fd`) unter [`LAYER_SHARE`], beschreibbar, mit seinen beiden
@@ -514,7 +531,8 @@ pub(crate) fn work_line(
 /// demselben Einhängen braucht. Dieselben Optionen wie die anderen zwei,
 /// dazu `--xattr`: Das Overlay im Gast schreibt seine opaken Verzeichnisse
 /// als `user.overlay.opaque` (`userxattr`), wie unter bwrap, so dass der
-/// Scan des Daemons die Schicht in derselben Form liest. Alles darin ist vom
+/// Scan des Daemons die Schicht in derselben Form liest; `--xattrmap`
+/// beschränkt das auf `user.overlay.*` ([`LAYER_XATTRMAP`]). Alles darin ist vom
 /// Gast geschrieben und damit vom Angreifer (Root im Gast); der Daemon liest
 /// es erst nach dem Ende der Unit.
 pub(crate) fn layer_line(resolved: &Resolved, layout: &Layout) -> Vec<OsString> {
@@ -535,7 +553,7 @@ pub(crate) fn layer_line(resolved: &Resolved, layout: &Layout) -> Vec<OsString> 
     line.push(resolved.file_daemon.as_os_str().to_owned());
     push(&mut line, &["--shared-dir", LAYER_SHARE]);
     push_path(&mut line, "--socket-path", &layout.layer_socket());
-    push(&mut line, &["--xattr"]);
+    push(&mut line, &["--xattr", "--xattrmap", LAYER_XATTRMAP]);
     file_daemon_tail(&mut line, resolved);
     line
 }
@@ -1136,6 +1154,8 @@ mod tests {
         assert!(has(layer, &["--bind-fd", "6", LAYER_SHARE]));
         assert!(has(layer, &["--shared-dir", LAYER_SHARE, "--socket-path"]));
         assert!(has(layer, &["--xattr"]));
+        // HUM-481: nur `user.overlay.*`, alles andere `ENOTSUP`.
+        assert!(has(layer, &["--xattrmap", LAYER_XATTRMAP]));
         assert!(has(layer, &["--sandbox", "none"]));
         assert!(has(layer, &["--cache", "auto"]));
         assert!(!has(layer, &["--allow-mmap"]));

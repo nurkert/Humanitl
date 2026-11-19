@@ -24,6 +24,10 @@
 //!    the overlay, and neither the project nor the layer is reachable by a
 //!    path.
 //!
+//! 6. The profile's masks over the overlay on `/work`, as bwrap lays them
+//!    over its overlay (`guest_masks.rs`, HUM-481); their empty file comes
+//!    from the staging tmpfs and is taken before step 5 detaches it.
+//!
 //! The overlay module itself is loaded with the door's modules, before the
 //! lock (the plan's `modules`); the shim refuses a disposable plan that does
 //! not name it.
@@ -40,6 +44,7 @@ use std::os::unix::fs::MetadataExt as _;
 use std::path::Path;
 
 use crate::json::Parser;
+use crate::linux::guest_masks::{self, Mask};
 use crate::linux::guest_tmpfs;
 
 /// The module the overlay needs, loaded before the lock.
@@ -60,28 +65,47 @@ pub struct Disposable {
     pub layer_tag: String,
     /// The inode of the checked project folder, the overlay's lower layer.
     pub lower_ino: u64,
+    /// The size of each tmpfs mask in MiB (HUM-481), as on the host.
+    pub mask_mib: u64,
+    /// The profile's masks over the overlay, in their order (the plan's
+    /// `work_masks`, `guest_masks.rs`).
+    pub masks: Vec<Mask>,
 }
 
-/// Reads `"disposable":{"layer_tag":"layer","lower_ino":"131"}`; absent
-/// means a direct session. `modules` are the plan's extra modules; a
-/// disposable plan must name [`OVERLAY_MODULE`].
+/// Reads
+/// `"disposable":{"layer_tag":"layer","lower_ino":"131","mask_mib":"64"}`
+/// and the plan's `work_masks` (`masks`); absent means a direct session,
+/// which takes no masks (the host lays them under its file daemon).
+/// `modules` are the plan's extra modules; a disposable plan must name
+/// [`OVERLAY_MODULE`].
 ///
 /// # Errors
 ///
 /// A reason without spaces for anything but that shape.
-pub fn parse(raw: Option<&str>, modules: &[String]) -> Result<Option<Disposable>, String> {
+pub fn parse(
+    raw: Option<&str>,
+    masks: Option<&str>,
+    modules: &[String],
+) -> Result<Option<Disposable>, String> {
     let Some(text) = raw else {
+        if masks.is_some() {
+            return Err("work_masks:without-disposable".to_owned());
+        }
         return Ok(None);
     };
-    let fields = Parser::new(text)
+    let mut parser = Parser::new(text);
+    let fields = parser
         .string_object()
+        .and_then(|fields| parser.end().map(|()| fields))
         .map_err(|err| format!("disposable:{err}").replace(' ', "_"))?;
     let mut layer_tag = None;
     let mut lower_ino = None;
+    let mut mask_mib = None;
     for (key, value) in fields {
         let slot = match key.as_str() {
             "layer_tag" => &mut layer_tag,
             "lower_ino" => &mut lower_ino,
+            "mask_mib" => &mut mask_mib,
             other => return Err(format!("disposable:unknown-key:{other}")),
         };
         if slot.replace(value).is_some() {
@@ -95,6 +119,11 @@ pub fn parse(raw: Option<&str>, modules: &[String]) -> Result<Option<Disposable>
         .and_then(|text| text.parse::<u64>().ok())
         .filter(|ino| *ino != 0)
         .ok_or_else(|| "disposable:lower_ino:bad".to_owned())?;
+    let mask_mib = mask_mib
+        .and_then(|text| text.parse::<u64>().ok())
+        .filter(|mib| (1..=1 << 20).contains(mib))
+        .ok_or_else(|| "disposable:mask_mib:bad".to_owned())?;
+    let masks = guest_masks::parse(masks)?;
     if !modules
         .iter()
         .any(|name| name.replace('-', "_") == OVERLAY_MODULE)
@@ -104,6 +133,8 @@ pub fn parse(raw: Option<&str>, modules: &[String]) -> Result<Option<Disposable>
     Ok(Some(Disposable {
         layer_tag,
         lower_ino,
+        mask_mib,
+        masks,
     }))
 }
 
@@ -116,12 +147,19 @@ pub enum Failure {
     Mount(String),
 }
 
-/// Steps 1 to 5 of the module documentation, on `work`.
+/// Steps 1 to 6 of the module documentation, on `work`; the masks' tmpfs
+/// and files belong to `uid` and `gid`, the agent's.
 ///
 /// # Errors
 ///
 /// The step that failed, as evidence without spaces.
-pub fn mount(work: &str, work_tag: &str, plan: &Disposable) -> Result<(), Failure> {
+pub fn mount(
+    work: &str,
+    work_tag: &str,
+    plan: &Disposable,
+    uid: u32,
+    gid: u32,
+) -> Result<(), Failure> {
     let step = |what: &str, err: &dyn std::fmt::Display| {
         Failure::Mount(format!("disposable:{what}:{err}").replace(' ', "_"))
     };
@@ -186,8 +224,12 @@ pub fn mount(work: &str, work_tag: &str, plan: &Disposable) -> Result<(), Failur
     )
     .map_err(|err| step("overlay", &err))?;
     let tree = guest_tmpfs::clone_tree(&merged).map_err(|err| step("clone", &err))?;
+    let held =
+        guest_masks::hold(staging, &plan.masks, uid, gid).map_err(|err| step("hold", &err))?;
     detach(work).map_err(|err| step("detach", &err))?;
-    guest_tmpfs::move_tree(&tree, staging).map_err(|err| step("move", &err))
+    guest_tmpfs::move_tree(&tree, staging).map_err(|err| step("move", &err))?;
+    guest_masks::lay(staging, &plan.masks, held, plan.mask_mib, uid, gid)
+        .map_err(|why| Failure::Mount(format!("disposable:{why}")))
 }
 
 /// `umount2(2)` with `MNT_DETACH`.
@@ -206,6 +248,8 @@ fn detach(path: &str) -> io::Result<()> {
 mod tests {
     #![allow(clippy::unwrap_used, clippy::expect_used, clippy::panic)]
 
+    use std::path::PathBuf;
+
     use super::*;
 
     fn overlay() -> Vec<String> {
@@ -214,20 +258,47 @@ mod tests {
 
     #[test]
     fn absent_means_a_direct_session() {
-        assert_eq!(parse(None, &[]), Ok(None));
+        assert_eq!(parse(None, None, &[]), Ok(None));
+    }
+
+    /// HUM-481: masks belong to a disposable plan; a direct one gets its
+    /// masks from the host.
+    #[test]
+    fn masks_without_a_disposable_plan_are_refused() {
+        assert_eq!(
+            parse(None, Some(r#"["empty:.env"]"#), &overlay()),
+            Err("work_masks:without-disposable".to_owned())
+        );
     }
 
     #[test]
     fn the_documented_shape_reads() {
         assert_eq!(
             parse(
-                Some(r#"{"layer_tag":"layer","lower_ino":"131"}"#),
+                Some(r#"{"layer_tag":"layer","lower_ino":"131","mask_mib":"64"}"#),
+                Some(r#"["tmpfs:.git/hooks","empty:.env"]"#),
                 &overlay()
             ),
             Ok(Some(Disposable {
                 layer_tag: "layer".to_owned(),
                 lower_ino: 131,
+                mask_mib: 64,
+                masks: vec![
+                    Mask::Tmpfs(PathBuf::from(".git/hooks")),
+                    Mask::Empty(PathBuf::from(".env")),
+                ],
             }))
+        );
+        assert_eq!(
+            parse(
+                Some(r#"{"layer_tag":"layer","lower_ino":"131","mask_mib":"64"}"#),
+                None,
+                &overlay()
+            )
+            .unwrap()
+            .unwrap()
+            .masks,
+            Vec::new()
         );
     }
 
@@ -236,39 +307,74 @@ mod tests {
     #[test]
     fn every_deviation_is_refused() {
         for (text, why) in [
-            (r#"{"layer_tag":"layer"}"#, "disposable:lower_ino:bad"),
-            (r#"{"lower_ino":"5"}"#, "disposable:layer_tag:bad"),
             (
-                r#"{"layer_tag":"","lower_ino":"5"}"#,
-                "disposable:layer_tag:bad",
-            ),
-            (
-                r#"{"layer_tag":"a b","lower_ino":"5"}"#,
-                "disposable:layer_tag:bad",
-            ),
-            (
-                r#"{"layer_tag":"layer","lower_ino":"0"}"#,
+                r#"{"layer_tag":"layer","mask_mib":"64"}"#,
                 "disposable:lower_ino:bad",
             ),
             (
-                r#"{"layer_tag":"layer","lower_ino":"x"}"#,
+                r#"{"lower_ino":"5","mask_mib":"64"}"#,
+                "disposable:layer_tag:bad",
+            ),
+            (
+                r#"{"layer_tag":"","lower_ino":"5","mask_mib":"64"}"#,
+                "disposable:layer_tag:bad",
+            ),
+            (
+                r#"{"layer_tag":"a b","lower_ino":"5","mask_mib":"64"}"#,
+                "disposable:layer_tag:bad",
+            ),
+            (
+                r#"{"layer_tag":"layer","lower_ino":"0","mask_mib":"64"}"#,
                 "disposable:lower_ino:bad",
             ),
             (
-                r#"{"layer_tag":"layer","lower_ino":"5","extra":"1"}"#,
+                r#"{"layer_tag":"layer","lower_ino":"x","mask_mib":"64"}"#,
+                "disposable:lower_ino:bad",
+            ),
+            (
+                r#"{"layer_tag":"layer","lower_ino":"5"}"#,
+                "disposable:mask_mib:bad",
+            ),
+            (
+                r#"{"layer_tag":"layer","lower_ino":"5","mask_mib":"0"}"#,
+                "disposable:mask_mib:bad",
+            ),
+            (
+                r#"{"layer_tag":"layer","lower_ino":"5","mask_mib":"x"}"#,
+                "disposable:mask_mib:bad",
+            ),
+            (
+                r#"{"layer_tag":"layer","lower_ino":"5","mask_mib":"64","extra":"1"}"#,
                 "disposable:unknown-key:extra",
             ),
             (
-                r#"{"layer_tag":"layer","layer_tag":"x","lower_ino":"5"}"#,
+                r#"{"layer_tag":"layer","layer_tag":"x","lower_ino":"5","mask_mib":"64"}"#,
                 "disposable:given-twice:layer_tag",
             ),
         ] {
-            assert_eq!(parse(Some(text), &overlay()), Err(why.to_owned()), "{text}");
+            assert_eq!(
+                parse(Some(text), None, &overlay()),
+                Err(why.to_owned()),
+                "{text}"
+            );
         }
-        assert!(parse(Some("[]"), &overlay()).is_err());
+        assert!(parse(Some("[]"), None, &overlay()).is_err());
+        assert!(
+            parse(
+                Some(r#"{"layer_tag":"layer","lower_ino":"5","mask_mib":"64"} x"#),
+                None,
+                &overlay()
+            )
+            .is_err()
+        );
+        let good = r#"{"layer_tag":"layer","lower_ino":"5","mask_mib":"64"}"#;
         assert_eq!(
-            parse(Some(r#"{"layer_tag":"layer","lower_ino":"5"}"#), &[]),
+            parse(Some(good), None, &[]),
             Err("disposable:modules-without-overlay".to_owned())
+        );
+        assert_eq!(
+            parse(Some(good), Some(r#"["empty:../x"]"#), &overlay()),
+            Err("work_masks:not-a-relative-path".to_owned())
         );
     }
 }
