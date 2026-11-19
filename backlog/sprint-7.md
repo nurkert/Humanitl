@@ -144,6 +144,7 @@ Diagnose-Codes, hier nur geplant (registriert vom genannten Issue in `codes.rs` 
 | HUM-559 | Plan-Vorschau kennt die Untergrenze der Kommandozeile nicht | S | HUM-489 |
 | HUM-560 | App: im Reiter Isolation verliert eine Wahl des Backends per Tastatur den Fokus | S | HUM-510 |
 | HUM-561 | Regeln: ein einziger fehlerhafter Eintrag in `rules.yaml` verwirft beim Start alle Regeln des Nutzers | M | HUM-526 |
+| HUM-562 | `config set` nimmt Werte an, die erst der Start des Daemons ablehnt | S | HUM-507 |
 
 ## HUM-428 · Port neutral: `PlanRequest`, `LaunchOptions`, `IsolationLevel`, Enum `Backend` statt `PlatformBackend`
 
@@ -5700,3 +5701,36 @@ zur Nachfrage.
 
 ### Akzeptanzkriterien
 1. Ein Fehler in einer Regel kostet nie die anderen Regeln.
+
+---
+
+## HUM-562 · `config set` nimmt Werte an, die erst der Start des Daemons ablehnt
+
+### Kontext
+Aus HUM-507. Seit HUM-507 ist jeder Vorschlag „Einstellung ändern" ein Wert,
+den `humanitl config set` annimmt. Dabei fiel auf, dass `config set` selbst
+manches annimmt, was erst der Start des Daemons ablehnt:
+- `resolver.test_ca` nimmt jeden Text, auch einen relativen Pfad; erst der
+  Start meldet `CONFIG_012`.
+- Platzhalter wie `https://api.example.com/v1` für `llm.endpoint` gehen
+  durch, obwohl sie nie funktionieren.
+- Abhängigkeiten zwischen Schlüsseln prüft nur der Start, etwa
+  `limits.hold_body_cap_bytes` über einem kleineren `limits.hold_max_bytes`
+  in der echten Datei.
+
+### Spezifikation
+1. `config set` prüft jeden Wert gegen dieselben Regeln wie der Start,
+   einschließlich der Abhängigkeiten zur übrigen Datei (Auflösung der
+   echten Datei plus des neuen Werts), und lehnt mit derselben Diagnose ab.
+2. Pfade, die absolut sein müssen, werden schon beim Setzen als solche
+   geprüft.
+3. Entscheiden, ob bekannte Platzhalter-Hosts (`example.com`, `.test`,
+   `.invalid`) beim Setzen eine Warnung bekommen.
+
+### Tests
+- Ein relativer Pfad für `resolver.test_ca` und ein Cap über dem Höchstwert
+  der echten Datei werden von `config set` abgelehnt, mit dem Code des
+  Starts. Mutationsbeweis.
+
+### Akzeptanzkriterien
+1. Was `config set` annimmt, lehnt der Start nicht ab.
