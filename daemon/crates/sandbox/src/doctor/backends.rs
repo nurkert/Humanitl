@@ -121,6 +121,42 @@ impl std::fmt::Display for BackendCheckId {
     }
 }
 
+/// Was ein Adapter über eine Voraussetzung meldet, die sich ohne Start
+/// prüfen lässt (HUM-436).
+///
+/// `I` ist die Art, wie der Adapter seine Zeilen benennt; der Doctor nimmt
+/// sie als [`BackendCheckId`]. Eine Zeile, die eine andere braucht, um
+/// überhaupt prüfen zu können, wiederholt deren Befund nie, sondern ist
+/// [`StaticLine::Unchecked`] (HUM-495): Keine Zeile meldet einen Fehler, den
+/// sie nicht geprüft hat.
+#[derive(Debug, Clone, PartialEq)]
+pub(crate) enum StaticLine<I = BackendCheckId> {
+    /// Geprüft: der Beleg oder der Befund.
+    Checked(Result<String, Diagnostic>),
+    /// Nicht prüfbar, weil die Voraussetzung `after` fehlt, die diese Prüfung
+    /// braucht; deren Zeile nennt den Befund. `after` ist immer eine Zeile
+    /// derselben Gruppe, die selbst gescheitert ist
+    /// (`Checked(Err(_))`); sonst wäre der Verweis falsch. Bisher meldet nur
+    /// die Kernel-Stufe so eine Zeile, die es nur unter Linux auf x86-64 gibt.
+    #[cfg_attr(
+        not(all(target_os = "linux", target_arch = "x86_64")),
+        allow(dead_code)
+    )]
+    Unchecked {
+        /// Die Zeile, die gescheitert ist.
+        after: I,
+        /// Was diese Prüfung von ihr braucht, als Satzteil, etwa
+        /// `the kernel image`.
+        needs: &'static str,
+    },
+}
+
+impl<I> From<Result<String, Diagnostic>> for StaticLine<I> {
+    fn from(result: Result<String, Diagnostic>) -> Self {
+        Self::Checked(result)
+    }
+}
+
 /// Die Zeilen eines Backends.
 #[derive(Debug, Clone, PartialEq)]
 pub struct BackendGroup {
@@ -400,11 +436,32 @@ fn static_lines(
 ) -> Vec<CheckOutcome<BackendCheckId>> {
     static_checks(name, paths, sandbox)
         .into_iter()
-        .map(|(id, result)| match result {
-            Ok(evidence) => CheckOutcome::ok(id, evidence),
-            Err(missing) => CheckOutcome::fail(id, format!("missing: {}", missing.code), missing),
-        })
+        .map(|(id, line)| static_outcome(id, line))
         .collect()
+}
+
+/// Die Zeile des Doctors zu dem, was ein Adapter über `id` meldet. Eine
+/// Prüfung, die eine fehlende Voraussetzung brauchte, ist ohne Messung
+/// (`warn`, `DOCTOR_012`) und verweist auf deren Zeile (HUM-495); den Befund
+/// dort wiederholt sie nicht. Sie nennt, was ihr fehlt, und dass zuerst die
+/// Zeile `after` behoben sein muss; der Vorschlag ist, wie bei jeder Zeile
+/// ohne Messung, der Befehl, der sie dann misst. Das gilt nur, solange
+/// `after` eine gescheiterte Zeile ist ([`StaticLine::Unchecked`]).
+fn static_outcome(id: BackendCheckId, line: StaticLine) -> CheckOutcome<BackendCheckId> {
+    match line {
+        StaticLine::Checked(Ok(evidence)) => CheckOutcome::ok(id, evidence),
+        StaticLine::Checked(Err(missing)) => {
+            CheckOutcome::fail(id, format!("missing: {}", missing.code), missing)
+        }
+        StaticLine::Unchecked { after, needs } => CheckOutcome::unmeasured(
+            id,
+            format!(
+                "it needs {needs}, and the line {after} reports it missing; fix the line \
+                 {after} first, then run humanitl doctor again"
+            ),
+            &["humanitl", "doctor"],
+        ),
+    }
 }
 
 /// Die Zeilen einer zugelassenen Stufe, deren Suche bestand: die Suche samt
@@ -968,6 +1025,37 @@ mod tests {
         );
         let other = super::probe_failed("bwrap", "did not start", None);
         assert_eq!(other.code.as_str(), "DOCTOR_014");
+    }
+
+    /// HUM-495: Eine Zeile, die eine fehlende Voraussetzung brauchte, ist
+    /// ohne Messung (`warn`, `DOCTOR_012`) und nennt die Zeile, auf die sie
+    /// wartet; nie `fail`, nie der Befund der anderen Zeile. Mutationsbeweis:
+    /// `Unchecked` als `fail` mit `SANDBOX_045`, und der Test wird rot.
+    #[test]
+    fn an_unchecked_line_is_unmeasured_and_names_the_line_it_needs() {
+        let line = super::static_outcome(
+            BackendCheckId::VirtioFs,
+            super::StaticLine::Unchecked {
+                after: BackendCheckId::KernelImage,
+                needs: "the kernel image",
+            },
+        );
+        assert_eq!(line.status(), CheckStatus::Warn, "{line:?}");
+        assert!(line.is_unmeasured(), "{line:?}");
+        assert!(
+            line.evidence().contains(
+                "it needs the kernel image, and the line kernel reports it missing; \
+                 fix the line kernel first"
+            ),
+            "{line:?}"
+        );
+        let diagnostic = line.diagnostic().expect("a finding");
+        assert_eq!(diagnostic.code.as_str(), "DOCTOR_012");
+        assert!(diagnostic.why.contains("virtio_fs"), "{diagnostic:?}");
+        assert!(diagnostic.why.contains("the line kernel"), "{diagnostic:?}");
+        // Unter einem Backend, das `sandbox.backend` nicht wählt, bleibt sie
+        // dieselbe Zeile.
+        assert_eq!(line.clone().at_most_warn(), line);
     }
 
     #[test]

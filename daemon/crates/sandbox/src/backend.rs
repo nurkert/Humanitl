@@ -551,13 +551,13 @@ pub(crate) fn stage(name: &'static str, runtime: Option<PodmanRuntime>) -> Cow<'
 
 /// Die Voraussetzungen eines Backends, die sich ohne einen Start seines
 /// Programms prüfen lassen, als Zeilen des Doctors (HUM-436); leer für ein
-/// Backend, dessen Suche nichts davon kennt. Je Zeile die Kennung und bei
-/// Erfolg der Beleg, sonst der Befund.
+/// Backend, dessen Suche nichts davon kennt. Je Zeile die Kennung und was
+/// der Adapter darüber weiß ([`crate::doctor::StaticLine`]).
 pub(crate) fn static_checks(
     name: &str,
     paths: &Paths,
     sandbox: &SandboxRef,
-) -> Vec<(crate::doctor::BackendCheckId, Result<String, Diagnostic>)> {
+) -> Vec<(crate::doctor::BackendCheckId, crate::doctor::StaticLine)> {
     #[cfg(all(target_os = "linux", target_arch = "x86_64"))]
     if name == VM_BACKEND {
         return vm::static_lines(paths, sandbox);

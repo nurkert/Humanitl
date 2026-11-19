@@ -26,6 +26,7 @@ use humanitl_config::{Env, QemuConfig};
 
 use super::super::prerequisites::each_prerequisite;
 use super::unavailable;
+use crate::doctor::StaticLine;
 
 /// Der Anfang jeder Zeile, die der innere Test für den äußeren schreibt.
 const MARK: &str = "HUM529 ";
@@ -86,8 +87,11 @@ fn view() -> Vec<String> {
     let mut lines: Vec<String> = each_prerequisite(&Env::from_process(), &QemuConfig::default())
         .into_iter()
         .map(|(which, line)| match line {
-            Ok(evidence) => format!("{which:?} ok {evidence:?}"),
-            Err(missing) => format!("{which:?} missing {} {:?}", missing.code, missing.why),
+            StaticLine::Checked(Ok(evidence)) => format!("{which:?} ok {evidence:?}"),
+            StaticLine::Checked(Err(missing)) => {
+                format!("{which:?} missing {} {:?}", missing.code, missing.why)
+            }
+            StaticLine::Unchecked { after, .. } => format!("{which:?} unchecked after {after:?}"),
         })
         .collect();
     let mountinfo = std::fs::read_to_string("/proc/self/mountinfo").expect("mountinfo");

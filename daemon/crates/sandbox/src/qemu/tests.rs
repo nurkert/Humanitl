@@ -1185,3 +1185,49 @@ fn the_kernel_level_guards_the_depot_and_refuses_its_mount() {
         .unwrap_err();
     assert_eq!(found.code.as_str(), "AGENT_015", "{}", found.why);
 }
+
+/// HUM-495: Die Zeilen des Doctors tragen die Kennungen des Doctors, auch im
+/// Verweis einer Zeile ohne Messung: Fehlt das Kernel-Abbild (hier: ein
+/// gesetzter Pfad ohne Datei), wartet `virtio_fs` auf `kernel`
+/// ([`BackendCheckId::KernelImage`]). Mutationsbeweis: `check_id` bildet
+/// `Prerequisite::Kernel` auf eine andere Kennung ab, und der Test wird rot.
+#[test]
+fn without_a_kernel_image_the_doctor_line_virtio_fs_waits_for_the_line_kernel() {
+    let dir = tempfile::tempdir().unwrap();
+    let paths = Paths::new(humanitl_config::Env::from_pairs([
+        ("HOME", dir.path().to_string_lossy().into_owned()),
+        (
+            "PATH",
+            dir.path().join("bin").to_string_lossy().into_owned(),
+        ),
+    ]));
+    let sandbox = SandboxRef {
+        qemu: QemuConfig {
+            kernel: Some(dir.path().join("vmlinuz-none")),
+            ..QemuConfig::default()
+        },
+        ..SandboxRef::default()
+    };
+    let lines = static_lines(&paths, &sandbox);
+    let line = |id: BackendCheckId| {
+        lines
+            .iter()
+            .find(|(which, _)| *which == id)
+            .map(|(_, line)| line.clone())
+            .expect("a line")
+    };
+    assert!(
+        matches!(
+            line(BackendCheckId::KernelImage),
+            StaticLine::Checked(Err(_))
+        ),
+        "{lines:?}"
+    );
+    assert_eq!(
+        line(BackendCheckId::VirtioFs),
+        StaticLine::Unchecked {
+            after: BackendCheckId::KernelImage,
+            needs: "the kernel image",
+        }
+    );
+}

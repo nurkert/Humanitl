@@ -381,7 +381,11 @@ Kernel-Stufe gibt der Doctor eine Zeile je Voraussetzung: `kvm` (`/dev/kvm`),
 `--size`), `kernel` (das Abbild des Gastkerns), `virtio_fs` (virtiofs
 eingebaut) und `modules` (sein Modulverzeichnis). Jede fehlende trägt
 `SANDBOX_045` mit dem Fix, der ihr Paket oder ihre Einstellung nennt, sodass
-alles Fehlende auf einmal zu sehen ist. Rot werden ihre Zeilen nur, wenn
+alles Fehlende auf einmal zu sehen ist. Eine Zeile, die eine andere braucht,
+wiederholt deren Befund nie: Ohne Kernel-Abbild gibt es keine Konfiguration
+daneben, die sich lesen ließe, also ist `virtio_fs` dann `not measured`
+(`DOCTOR_012`), nennt das Kernel-Abbild, das ihr fehlt, und sagt, dass zuerst
+die Zeile `kernel` zu beheben ist. Rot werden ihre Zeilen nur, wenn
 `sandbox.backend` `qemu` wählt; sonst hält, was ihr fehlt, keinen Start auf und
 ist höchstens eine Warnung.
 

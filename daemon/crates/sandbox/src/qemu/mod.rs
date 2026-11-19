@@ -81,7 +81,7 @@ use humanitl_core::diagnostics::codes::{
 use humanitl_core::{Diagnostic, FixAction, Severity};
 
 use crate::bwrap::{BwrapBackend, PinnedMounts, isolation_from_report, launch_plan};
-use crate::doctor::BackendCheckId;
+use crate::doctor::{BackendCheckId, StaticLine};
 use crate::handle::SandboxHandle;
 use crate::launcher::{
     CheckResult, Detached, Door, EnvDelivery, IsolationCheck, IsolationLevel, LaunchOnce,
@@ -1784,23 +1784,34 @@ pub(crate) fn search_files(
 pub(crate) fn static_lines(
     paths: &Paths,
     sandbox: &SandboxRef,
-) -> Vec<(BackendCheckId, Result<String, Diagnostic>)> {
+) -> Vec<(BackendCheckId, StaticLine)> {
     prerequisites::each_prerequisite(paths.env(), &sandbox.qemu)
         .into_iter()
         .map(|(prerequisite, line)| {
-            let id = match prerequisite {
-                Prerequisite::Kvm => BackendCheckId::Kvm,
-                Prerequisite::Emulator => BackendCheckId::Emulator,
-                Prerequisite::FileDaemon => BackendCheckId::FileDaemon,
-                Prerequisite::VsockDevice => BackendCheckId::VsockDevice,
-                Prerequisite::Bubblewrap => BackendCheckId::Bubblewrap,
-                Prerequisite::Kernel => BackendCheckId::KernelImage,
-                Prerequisite::VirtioFs => BackendCheckId::VirtioFs,
-                Prerequisite::Modules => BackendCheckId::KernelModules,
+            let line = match line {
+                StaticLine::Checked(result) => StaticLine::Checked(result),
+                StaticLine::Unchecked { after, needs } => StaticLine::Unchecked {
+                    after: check_id(after),
+                    needs,
+                },
             };
-            (id, line)
+            (check_id(prerequisite), line)
         })
         .collect()
+}
+
+/// Die Zeile des Doctors zu einer Voraussetzung.
+const fn check_id(prerequisite: Prerequisite) -> BackendCheckId {
+    match prerequisite {
+        Prerequisite::Kvm => BackendCheckId::Kvm,
+        Prerequisite::Emulator => BackendCheckId::Emulator,
+        Prerequisite::FileDaemon => BackendCheckId::FileDaemon,
+        Prerequisite::VsockDevice => BackendCheckId::VsockDevice,
+        Prerequisite::Bubblewrap => BackendCheckId::Bubblewrap,
+        Prerequisite::Kernel => BackendCheckId::KernelImage,
+        Prerequisite::VirtioFs => BackendCheckId::VirtioFs,
+        Prerequisite::Modules => BackendCheckId::KernelModules,
+    }
 }
 
 /// Was frühere Sitzungen liegen ließen (HUM-444, HUM-492): die

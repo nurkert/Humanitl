@@ -405,7 +405,11 @@ and `--size`),
 `kernel` (the guest kernel's image), `virtio_fs` (virtiofs built in) and
 `modules` (its module directory). Each missing one carries `SANDBOX_045` with
 the fix that names its package or setting, so all that is missing shows at
-once. Its lines turn red only when `sandbox.backend` chooses `qemu`;
+once. A line that needs another one never repeats that line's finding:
+without a kernel image there is no configuration beside it to read, so
+`virtio_fs` is then `not measured` (`DOCTOR_012`), names the kernel image it
+needs and says to fix the line `kernel` first.
+Its lines turn red only when `sandbox.backend` chooses `qemu`;
 otherwise what it lacks stops no start and is at most a warning.
 
 ### An image as the root of the sandbox
