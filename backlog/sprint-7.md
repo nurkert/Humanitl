@@ -129,6 +129,7 @@ Diagnose-Codes, hier nur geplant (registriert vom genannten Issue in `codes.rs` 
 | HUM-516 | Cloud-Agenten: gemeinsamer Hinweis auf den Abfluss über die Inferenz | S | HUM-037 |
 | HUM-518 | Agent-Depot: Kern, `agents.source`, Sperre durch Firmenvorgabe, RPC und CLI `status`, `source`, `remove` | M | ADR-0023 |
 | HUM-519 | Agent-Depot: Installation und Update in einer Wartungs-Sandbox, Version angeheftet | M | HUM-518 |
+| HUM-563 | Agent-Depot: Wartungssitzung im Daemon, RPC und CLI `agents install`/`update` | M | HUM-519 |
 | HUM-520 | Agent-Depot: Anmeldung in der Sandbox und Wächter für das Zurückschreiben der Zugangsdatei | M | HUM-519 |
 | HUM-521 | App: Abschnitt „Agenten" für Quelle und Depot | M | HUM-520 |
 | HUM-514 | Agent-Adapter Claude Code | M | HUM-516, HUM-518, HUM-519, HUM-520 |
@@ -145,6 +146,8 @@ Diagnose-Codes, hier nur geplant (registriert vom genannten Issue in `codes.rs` 
 | HUM-560 | App: im Reiter Isolation verliert eine Wahl des Backends per Tastatur den Fokus | S | HUM-510 |
 | HUM-561 | Regeln: ein einziger fehlerhafter Eintrag in `rules.yaml` verwirft beim Start alle Regeln des Nutzers | M | HUM-526 |
 | HUM-562 | `config set` nimmt Werte an, die erst der Start des Daemons ablehnt | S | HUM-507 |
+| HUM-564 | Audit: ein Rückstand des Audit-Zweigs (`Lagged`) erscheint nicht im Audit-Log | S | HUM-556 |
+| HUM-565 | Audit: ein gescheiterter Flow hat keinen Eintrag im HMAC-Audit-Log | S | HUM-555 |
 
 ## HUM-428 · Port neutral: `PlanRequest`, `LaunchOptions`, `IsolationLevel`, Enum `Backend` statt `PlatformBackend`
 
@@ -6037,3 +6040,90 @@ manches annimmt, was erst der Start des Daemons ablehnt:
 
 ### Akzeptanzkriterien
 1. Was `config set` annimmt, lehnt der Start nicht ab.
+
+---
+
+## HUM-563 · Agent-Depot: Wartungssitzung im Daemon, RPC und CLI `agents install`/`update`
+
+### Kontext
+Aus HUM-519. Der Kern (Rezept, Vorbereitung des Laufs, Übernahme, Prüfung
+der Signatur, atomares Umschalten) steht im Sandbox-Crate, aber nichts im
+Daemon startet den Lauf. HUM-520 (Anmeldung als Wartungslauf) und HUM-522
+(Ende-zu-Ende-Lauf) brauchen diese Sitzungsart.
+
+### Spezifikation
+1. Sitzungsart `DepotMaintenance` im `SandboxService`: Start ohne `/work`,
+   Arbeitsordner als `HOME` unter `MAINTENANCE_HOME_DST`, die Sitzungsregeln
+   des Rezepts in den Regelspeicher (`Expiry::Session`), kein Briefing,
+   nach dem Ende `commit` der Übernahme aus HUM-519.
+2. RPC `Agents` mit `install` und `update` samt Sitzung (Protokoll-Minor),
+   Befunde als `Diagnostic` (`AGENT_011` und folgende).
+3. CLI `humanitl agents install|update <agent> [--version] [--yes]`, hängt
+   sich an das Terminal des Laufs; Parität, `docs/cli.md` (en, de).
+4. Ein Selbst-Update des Agenten im Lauf scheitert am nur lesbaren Ordner
+   des Programms; das ist gewollt und wird im Befund genannt.
+5. `docs/SECURITY.md` und `docs/THREAT-MODEL.md` K-36 (en, de): was der
+   Wartungslauf darf und was nicht.
+
+### Tests
+- Ende-zu-Ende im bwrap mit einem Stellvertreter-Server hinter dem Proxy:
+  Installation über die Regeln des Rezepts, ein fremder Host wird
+  gehalten, eine Folgesitzung sieht die neue Version.
+- Mutationsbeweis: ohne `commit` nach dem Ende bleibt `current` unverändert
+  und der Test ist rot.
+
+### Akzeptanzkriterien
+1. `humanitl agents install claude-code` installiert über eine Sandbox mit
+   Proxy ins Depot, ohne dass auf dem Host etwas Heruntergeladenes läuft.
+
+---
+
+## HUM-564 · Audit: ein Rückstand des Audit-Zweigs (`Lagged`) erscheint nicht im Audit-Log
+
+### Kontext
+Aus dem Review von HUM-556. Seit der Kanal zum Audit-Schreiber begrenzt ist,
+wartet der Audit-Zweig bei voller Warteschlange und kann hinter den
+Rundfunk der Flow-Ereignisse zurückfallen. Verlorene Ereignisse meldet
+`lagged()` nur über `tracing`; die Kette des Audit-Logs zeigt keine Lücke.
+Nach einem Rückstand schließt der Zweig alle offenen Flows ab, auch solche,
+die danach weiterlaufen; deren späterer Status oder Befunde fehlen dann.
+
+### Spezifikation
+1. Bei `Lagged(n)` schreibt der Zweig einen eigenen Audit-Eintrag
+   (etwa `audit.events_dropped` mit der Zahl), damit die Lücke in der Kette
+   sichtbar ist.
+2. Prüfen, ob sich offene Flows nach dem Rückstand gezielter abschließen
+   lassen (nur die, deren Ende verloren ist), ohne dass die Tabelle wieder
+   ohne Grenze wächst; sonst die Grenze in K-38 nennen.
+
+### Tests
+- Ein erzwungener Rückstand hinterlässt genau einen Eintrag mit der Zahl
+  der verlorenen Ereignisse. Mutationsbeweis.
+
+### Akzeptanzkriterien
+1. Jeder Verlust von Flow-Ereignissen im Audit-Zweig steht im Audit-Log.
+
+---
+
+## HUM-565 · Audit: ein gescheiterter Flow hat keinen Eintrag im HMAC-Audit-Log
+
+### Kontext
+Aus HUM-555. Ein Flow, der an der Gegenstelle scheitert (etwa
+`upstream_proxy_closed` im Nachfragemodus `upstream`), trägt seinen Grund
+in Historie und Aufzeichnung, aber das HMAC-Audit-Log kennt keinen Eintrag
+`flow.failed`; dort endet so ein Flow ohne Ergebnis. Die Anleitungen zu
+Burp und mitmproxy sagen das heute als Grenze.
+
+### Spezifikation
+1. Neuer Eintrag `flow.failed` mit Flow, Sitzung und Grund (`upstream_*`
+   bzw. der Code der Diagnose), ohne Inhalt der Anfrage.
+2. `docs/SECURITY.md`, die Anleitungen zu Burp und mitmproxy (en, de) und
+   `CONVENTIONS.md` (Liste der Audit-Einträge) nachziehen.
+
+### Tests
+- Ein Flow, den der Proxy dahinter schließt, hinterlässt `flow.failed`
+  mit `upstream_proxy_closed`. Mutationsbeweis.
+
+### Akzeptanzkriterien
+1. Jeder gescheiterte Flow hat im HMAC-Audit-Log einen Eintrag mit Grund.
+
