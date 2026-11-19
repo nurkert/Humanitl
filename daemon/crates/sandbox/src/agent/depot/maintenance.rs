@@ -62,7 +62,9 @@ pub const ENV_PLATFORM: &str = "HUMANITL_DEPOT_PLATFORM";
 pub const ENV_OUT: &str = "HUMANITL_DEPOT_OUT";
 
 /// What a maintenance run does (ADR-0023 point 5). HUM-520 adds the login
-/// and the configuration run.
+/// and the configuration run; a caller that maps a task to words of its own
+/// (`as_str`, the protocol's operations) matches every variant, so a new
+/// one shows up there at compile time.
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
 pub enum MaintenanceTask {
     /// The first install; refused when the depot holds a version.
@@ -176,6 +178,26 @@ pub fn prepare(request: &MaintenanceRequest<'_>) -> Result<Maintenance, Diagnost
     prepare_at(
         request,
         Depot::of(request.paths, request.agent),
+        host_platform(),
+    )
+}
+
+/// [`prepare`] for the agent `entry` names, its install recipe included;
+/// `request.agent` is ignored. The daemon takes its agents from
+/// [`super::KNOWN`]; its end-to-end tests give a stand-in recipe this way
+/// (HUM-563).
+///
+/// # Errors
+///
+/// As [`prepare`].
+pub fn prepare_known(
+    request: &MaintenanceRequest<'_>,
+    entry: &'static KnownAgent,
+) -> Result<Maintenance, Diagnostic> {
+    prepare_for(
+        request,
+        entry,
+        Depot::of(request.paths, entry.id),
         host_platform(),
     )
 }
@@ -365,6 +387,18 @@ impl MaintenanceRun {
     #[must_use]
     pub fn kind(&self) -> &DepotMaintenance {
         &self.kind
+    }
+
+    /// The agent this run installs or updates.
+    #[must_use]
+    pub fn agent(&self) -> &'static KnownAgent {
+        self.agent
+    }
+
+    /// The hosts the run may reach without a hold, from the recipe.
+    #[must_use]
+    pub fn hosts(&self) -> Vec<&'static str> {
+        self.install.hosts.iter().map(|host| host.host).collect()
     }
 
     /// The work directory on the host, bound writable at

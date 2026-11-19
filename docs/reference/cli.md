@@ -92,10 +92,12 @@ step, is described in [`docs/cli.md`](../cli.md); which RPC each subcommand serv
 - [`humanitl egress auth`](#humanitl-egress-auth) Store or remove the credentials of the decision proxy
 - [`humanitl egress auth set`](#humanitl-egress-auth-set) Store USER:PASSWORD in the system keyring and set `egress.proxy_auth_ref`. Read from stdin, never from the command line; at a terminal the input is hidden
 - [`humanitl egress auth remove`](#humanitl-egress-auth-remove) Remove the credentials and `egress.proxy_auth_ref`
-- [`humanitl agents`](#humanitl-agents) The agent depot: where each agent comes from (host or depot), its installed version and login; set the source, remove a depot
+- [`humanitl agents`](#humanitl-agents) The agent depot: where each agent comes from (host or depot), its installed version and login; set the source, install or update an agent in a maintenance sandbox, remove a depot
 - [`humanitl agents status`](#humanitl-agents-status) Show every agent, or one: its source with origin or company lock, the installed version and signature, whether it is logged in, its size. Nothing from the depot is started for this
 - [`humanitl agents source`](#humanitl-agents-source) Set where an agent comes from: `host` or `depot` (`agents.<id>.source`). Switching back to `host` keeps the depot
 - [`humanitl agents remove`](#humanitl-agents-remove) Remove the depot of an agent with its program, configuration and login; refused while a session uses it. The source stays as it is
+- [`humanitl agents install`](#humanitl-agents-install) Install an agent into the depot in a maintenance sandbox: no project, only the vendor's hosts without a hold, nothing downloaded runs on the host. Attaches to the run's terminal. The version is pinned; only `update` changes it
+- [`humanitl agents update`](#humanitl-agents-update) Update an agent in the depot in a maintenance sandbox, or switch back to a version the depot still holds (`--version`). Running sessions keep their version; the next one starts the new
 - [`humanitl projects`](#humanitl-projects) The project register: the projects the daemon knows with their last start, agent and runs, and what was chosen for one of them
 - [`humanitl projects ls`](#humanitl-projects-ls) List the known projects, the latest start first: name, folder, agent, last start, runs, and whether a session runs or changes wait
 - [`humanitl projects show`](#humanitl-projects-show) Show one project by its folder: its entry and every key of its project choice with the chosen value, the value that applies and its origin
@@ -224,7 +226,7 @@ Commands:
   llm        Find LLM servers in the local network
   intercept  Pause intercepting, resume it, or show whether it is paused
   egress     The decision proxy behind Humanitl (`egress.proxy`): show it, check the connection, store its credentials
-  agents     The agent depot: where each agent comes from (host or depot), its installed version and login; set the source, remove a depot
+  agents     The agent depot: where each agent comes from (host or depot), its installed version and login; set the source, install or update an agent in a maintenance sandbox, remove a depot
   projects   The project register: the projects the daemon knows with their last start, agent and runs, and what was chosen for one of them
   help       Print this message or the help of the given subcommand(s)
 
@@ -3055,15 +3057,17 @@ Options:
 ## humanitl agents
 
 ```text
-The agent depot: where each agent comes from (host or depot), its installed version and login; set the source, remove a depot
+The agent depot: where each agent comes from (host or depot), its installed version and login; set the source, install or update an agent in a maintenance sandbox, remove a depot
 
 Usage: humanitl agents [OPTIONS] <COMMAND>
 
 Commands:
-  status  Show every agent, or one: its source with origin or company lock, the installed version and signature, whether it is logged in, its size. Nothing from the depot is started for this
-  source  Set where an agent comes from: `host` or `depot` (`agents.<id>.source`). Switching back to `host` keeps the depot
-  remove  Remove the depot of an agent with its program, configuration and login; refused while a session uses it. The source stays as it is
-  help    Print this message or the help of the given subcommand(s)
+  status   Show every agent, or one: its source with origin or company lock, the installed version and signature, whether it is logged in, its size. Nothing from the depot is started for this
+  source   Set where an agent comes from: `host` or `depot` (`agents.<id>.source`). Switching back to `host` keeps the depot
+  remove   Remove the depot of an agent with its program, configuration and login; refused while a session uses it. The source stays as it is
+  install  Install an agent into the depot in a maintenance sandbox: no project, only the vendor's hosts without a hold, nothing downloaded runs on the host. Attaches to the run's terminal. The version is pinned; only `update` changes it
+  update   Update an agent in the depot in a maintenance sandbox, or switch back to a version the depot still holds (`--version`). Running sessions keep their version; the next one starts the new
+  help     Print this message or the help of the given subcommand(s)
 
 Options:
       --json
@@ -3172,6 +3176,80 @@ Options:
 
       --config <PATH>
           Read this config file instead of the one in the user's config directory
+
+  -v, --verbose...
+          Explain what is happening; repeat for more
+
+  -q, --quiet
+          Only the result, no notes
+
+      --profile <NAME>
+          Use this profile for the session; falls back to the sandbox profile of that name when no session profile exists
+
+  -h, --help
+          Print help
+```
+
+## humanitl agents install
+
+```text
+Install an agent into the depot in a maintenance sandbox: no project, only the vendor's hosts without a hold, nothing downloaded runs on the host. Attaches to the run's terminal. The version is pinned; only `update` changes it
+
+Usage: humanitl agents install [OPTIONS] <AGENT>
+
+Arguments:
+  <AGENT>
+          The agent, such as `claude`
+
+Options:
+      --json
+          Machine-readable output: one JSON value on stdout, diagnostics included
+
+      --version <VERSION>
+          The version; without it the vendor's current one
+
+      --config <PATH>
+          Read this config file instead of the one in the user's config directory
+
+      --yes
+          Do not ask
+
+  -v, --verbose...
+          Explain what is happening; repeat for more
+
+  -q, --quiet
+          Only the result, no notes
+
+      --profile <NAME>
+          Use this profile for the session; falls back to the sandbox profile of that name when no session profile exists
+
+  -h, --help
+          Print help
+```
+
+## humanitl agents update
+
+```text
+Update an agent in the depot in a maintenance sandbox, or switch back to a version the depot still holds (`--version`). Running sessions keep their version; the next one starts the new
+
+Usage: humanitl agents update [OPTIONS] <AGENT>
+
+Arguments:
+  <AGENT>
+          The agent, such as `claude`
+
+Options:
+      --json
+          Machine-readable output: one JSON value on stdout, diagnostics included
+
+      --version <VERSION>
+          The version; without it the vendor's current one
+
+      --config <PATH>
+          Read this config file instead of the one in the user's config directory
+
+      --yes
+          Do not ask
 
   -v, --verbose...
           Explain what is happening; repeat for more

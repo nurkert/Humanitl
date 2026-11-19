@@ -215,7 +215,8 @@ pub enum Cmd {
     },
 
     /// The agent depot: where each agent comes from (host or depot), its
-    /// installed version and login; set the source, remove a depot.
+    /// installed version and login; set the source, install or update an
+    /// agent in a maintenance sandbox, remove a depot.
     Agents {
         /// Was mit dem Depot geschehen soll.
         #[command(subcommand)]
@@ -314,6 +315,33 @@ pub enum AgentsCmd {
     Remove {
         /// The agent, such as `claude`.
         agent: String,
+        /// Do not ask.
+        #[arg(long)]
+        yes: bool,
+    },
+    /// Install an agent into the depot in a maintenance sandbox: no
+    /// project, only the vendor's hosts without a hold, nothing downloaded
+    /// runs on the host. Attaches to the run's terminal. The version is
+    /// pinned; only `update` changes it.
+    Install {
+        /// The agent, such as `claude`.
+        agent: String,
+        /// The version; without it the vendor's current one.
+        #[arg(long)]
+        version: Option<String>,
+        /// Do not ask.
+        #[arg(long)]
+        yes: bool,
+    },
+    /// Update an agent in the depot in a maintenance sandbox, or switch back
+    /// to a version the depot still holds (`--version`). Running sessions
+    /// keep their version; the next one starts the new.
+    Update {
+        /// The agent, such as `claude`.
+        agent: String,
+        /// The version; without it the vendor's current one.
+        #[arg(long)]
+        version: Option<String>,
         /// Do not ask.
         #[arg(long)]
         yes: bool,

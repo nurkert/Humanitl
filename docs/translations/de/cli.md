@@ -1743,6 +1743,42 @@ einer anderen `--config` oder einem Endpunkt ohne gespeicherten Server kommt
 Der Agent spräche sonst mit dem einen Server, während der Proxy den anderen
 durchlässt. `humanitl run` gibt der Session ihren eigenen Server.
 
+## `humanitl agents`
+
+Das Agent-Depot (ADR-0023): ein Agent, einmal unter dem Datenordner des Daemons installiert und von
+jeder Sandbox von dort genommen statt von diesem Rechner. `humanitl agents status [AGENT]` zeigt je
+Agent die Quelle (`host` oder `depot`, mit Herkunft oder Firmenvorgabe), die installierte Version
+und Signatur, die Anmeldung und die Größe; nichts aus dem Depot wird dafür gestartet.
+`humanitl agents source AGENT host|depot` setzt `agents.AGENT.source`, `humanitl agents remove
+AGENT` entfernt ein Depot (fragt vorher, mit `--yes` nicht).
+
+`humanitl agents install AGENT [--version V]` und `humanitl agents update AGENT [--version V]`
+führen Installation und Update als **Wartungslauf** aus (HUM-563): eine Sandbox wie die einer
+Session, mit den drei Garantien und dem Proxy, aber ohne Projekt. Schreibbar ist nur ihr eigener
+Arbeitsordner, ihr `HOME` unter `/run/humanitl/agent-home`; ein `/work` gibt es nicht, und das
+Sandbox-Profil gilt ohne seine Erweiterungen (`mounts.extra_ro`, `mounts.extra_rw`). Ohne Halt gehen
+nur die Hosts aus dem Rezept des Agenten hinaus (für Claude Code `downloads.claude.ai`), als Regeln
+dieses Laufs, die mit seinem Ende gehen; jede andere Anfrage wird gehalten wie in jeder Session, und
+die gespeicherten Regeln bleiben unberührt. Der Lauf lädt nur herunter: nichts Heruntergeladenes
+läuft, weder im Lauf noch auf diesem Rechner. Nach dem Lauf prüft der Daemon den Baum, prüft die
+Signatur des Anbieters, wo er signiert (Claude Code: das signierte `manifest.json`, geprüft mit dem
+`gpg` des Hosts), legt die Version ins Depot und schaltet `current` um; ein gescheiterter Lauf
+ändert nichts.
+
+Beide fragen vorher (mit `--yes` nicht) und hängen dann dieses Terminal an das des Laufs, wie
+`humanitl sandbox attach`: Präfix und `d` hängen ab, der Lauf geht weiter, und `humanitl agents
+status AGENT` zeigt später sein Ergebnis. Endet der Lauf, nennt der Befehl die Version, die jetzt
+gilt, oder den Befund (`AGENT_011` mit dem Schritt, der scheiterte) und endet mit Exit-Code 1.
+`--json` hängt sich nicht an und gibt das Ergebnis als ein Objekt aus.
+
+Die Version ist angeheftet. `install` lehnt ein Depot ab, das schon eine Version hält; nur `update`
+ändert sie, und `update --version ALT` schaltet ohne Lauf zurück auf eine Version, die das Depot noch
+hält. Laufende Sessions behalten ihre Version, die nächste startet die neue. In einer Session ist der
+Programmordner nur lesbar; ein Selbst-Update des Agenten scheitert dort mit Absicht, und sein eigener
+Schalter dafür ist ohnehin aus (`DISABLE_UPDATES=1` bei Claude Code). Ein Lauf zur Zeit und nur,
+solange keine Session in diesem Daemon läuft (`CLI_005`). Kernel-Stufe und Seatbelt (macOS) tragen
+noch keinen Wartungslauf (`AGENT_015`).
+
 ## Die globalen Schalter
 
 Fünf Schalter gelten für jedes Unterkommando, weil `clap` sie als `global` führt

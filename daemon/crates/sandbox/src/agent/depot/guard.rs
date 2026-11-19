@@ -33,15 +33,30 @@
 //! A shell can still name a path the guard never sees (`/bin/sh -c
 //! /usr/bin/claude`); the masks over the host install locations answer that
 //! ([`super::DepotSession::masks`]).
+//!
+//! 6. A maintenance run (HUM-563, [`super::DepotSession::maintenance_home`])
+//!    has no project: its work place is its own work directory beside the
+//!    depots, bound at [`MAINTENANCE_HOME_DST`] and nowhere else, without a
+//!    depot mount, a host program, a session bind or an extension of the
+//!    profile. That directory lies under the daemon's data directory, which
+//!    the mount policy refuses for a project; [`work_place`] admits exactly
+//!    it and nothing else.
 
 use std::ffi::OsStr;
 use std::path::{Path, PathBuf};
 
-use humanitl_core::Diagnostic;
+use humanitl_core::diagnostics::codes::SANDBOX_006;
+use humanitl_core::{Diagnostic, Severity};
 
+use super::maintenance::MAINTENANCE_HOME_DST;
 use super::{DepotSession, host_program};
 use crate::agent::AGENT_PROGRAM_DIR;
 use crate::launcher::PlanRequest;
+use crate::profile::{MountPolicy, SessionContext};
+
+/// The directory that holds the work directories of maintenance runs,
+/// below `agents/` of the data directory (`maintenance::work_dir`).
+const MAINTENANCE_PARENT: &str = ".maintenance";
 
 /// Checks the final plan request against the depot.
 ///
@@ -54,6 +69,9 @@ pub fn check(request: &PlanRequest<'_>) -> Result<(), Diagnostic> {
     let depot = &session.agent_depot;
     if depot.is_empty() {
         return Ok(());
+    }
+    if depot.maintenance_home.is_some() {
+        check_maintenance(request)?;
     }
     if let Some(program) = &session.agent_program {
         let refused_for = depot
@@ -113,6 +131,84 @@ pub fn check(request: &PlanRequest<'_>) -> Result<(), Diagnostic> {
         return Err(host_program(agent, first));
     }
     Ok(())
+}
+
+/// Rule 6: the shape of a maintenance run's request.
+fn check_maintenance(request: &PlanRequest<'_>) -> Result<(), Diagnostic> {
+    let PlanRequest {
+        profile,
+        session,
+        options,
+    } = *request;
+    let depot = &session.agent_depot;
+    let refused = |what: &str| {
+        Err(Diagnostic::builder(SANDBOX_006, Severity::Blocking)
+            .why(format!(
+                "a maintenance run of the agent depot {what}; it runs with its own work \
+                 directory and nothing else of the host"
+            ))
+            .build())
+    };
+    if depot.mount.is_some() || session.agent_program.is_some() {
+        return refused("carries an agent program");
+    }
+    if profile.mounts.work.dst != Path::new(MAINTENANCE_HOME_DST) {
+        return refused(&format!(
+            "puts its work directory at {} instead of {MAINTENANCE_HOME_DST}",
+            profile.mounts.work.dst.display()
+        ));
+    }
+    if !profile.mounts.extra_ro.is_empty()
+        || !profile.mounts.extra_rw.is_empty()
+        || !options.session_ro.is_empty()
+    {
+        return refused("binds further places of the host");
+    }
+    if depot.maintenance_home.as_deref() != Some(session.work_src.as_path()) {
+        return refused("names another directory than its own work directory");
+    }
+    Ok(())
+}
+
+/// The mount policy's check of the work place, `place` being the project
+/// directory of the session as written or as opened.
+///
+/// A maintenance run's work place is its own work directory under
+/// `agents/.maintenance/` of the daemon's data directory, which the policy
+/// refuses as a project (it protects the whole data directory). Admitted is
+/// exactly that directory, resolved, and only for a run the daemon marked
+/// ([`DepotSession::maintenance_home`]); every other session goes through
+/// [`MountPolicy::check_work_dir`] unchanged.
+///
+/// # Errors
+///
+/// `SANDBOX_006` from the policy, or for a maintenance run whose work place
+/// is not its own work directory.
+pub fn work_place(
+    policy: &MountPolicy,
+    session: &SessionContext,
+    place: &Path,
+) -> Result<(), Diagnostic> {
+    let Some(home) = session.agent_depot.maintenance_home.as_deref() else {
+        return policy.check_work_dir(place);
+    };
+    let resolved = std::fs::canonicalize(place).ok();
+    let own = std::fs::canonicalize(home).ok();
+    let beside_depots = own.as_deref().is_some_and(|own| {
+        let parent = own.parent();
+        parent.and_then(Path::file_name) == Some(OsStr::new(MAINTENANCE_PARENT))
+            && parent.and_then(Path::parent).and_then(Path::file_name) == Some(OsStr::new("agents"))
+    });
+    if resolved.is_some() && resolved == own && beside_depots {
+        return Ok(());
+    }
+    Err(Diagnostic::builder(SANDBOX_006, Severity::Blocking)
+        .why(format!(
+            "the work place {} of a maintenance run is not its own work directory under \
+             agents/{MAINTENANCE_PARENT}/ of the daemon's data directory",
+            place.display()
+        ))
+        .build())
 }
 
 /// Rule 5: every bind of the plan that moves a host place to another path.

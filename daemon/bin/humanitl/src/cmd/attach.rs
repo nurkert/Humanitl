@@ -193,6 +193,32 @@ pub(crate) async fn attach_to(
     keys: DetachKeys,
     shell: &str,
 ) -> Result<Ending, Failure> {
+    attach_at(ctx, read_only, keys, shell, "").await
+}
+
+/// Wie [`attach`], an das Terminal genau der Sandbox `sandbox` (HUM-563:
+/// der Wartungslauf, den `humanitl agents install` gestartet hat). Läuft
+/// inzwischen eine andere, lehnt der Daemon mit `IPC_006` ab.
+///
+/// # Errors
+///
+/// Wie [`attach`].
+pub(crate) async fn attach_sandbox(
+    ctx: &Context,
+    read_only: bool,
+    keys: DetachKeys,
+    sandbox: &str,
+) -> Result<Ending, Failure> {
+    attach_at(ctx, read_only, keys, "", sandbox).await
+}
+
+async fn attach_at(
+    ctx: &Context,
+    read_only: bool,
+    keys: DetachKeys,
+    shell: &str,
+    sandbox: &str,
+) -> Result<Ending, Failure> {
     let mut client = ctx.connect().await?;
     let (cols, rows) = window_size();
 
@@ -200,7 +226,7 @@ pub(crate) async fn attach_to(
     let open = v1::TerminalInput {
         input: Some(v1::terminal_input::Input::Open(v1::terminal_input::Open {
             // Leer heißt „die Sitzung, die läuft"; ein Daemon führt eine.
-            sandbox_id: String::new(),
+            sandbox_id: sandbox.to_owned(),
             cols,
             rows,
             read_only,

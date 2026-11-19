@@ -779,6 +779,21 @@ impl SeatbeltBackend {
             session,
             options,
         } = *request;
+        // Seatbelt has no mounts: a maintenance run's work directory under
+        // the daemon's data directory cannot stand in the place of a project
+        // here (HUM-563).
+        if session.agent_depot.maintenance_home.is_some() {
+            return Err(Diagnostic::builder(
+                humanitl_core::diagnostics::codes::AGENT_015,
+                Severity::Blocking,
+            )
+            .why(
+                "the session is a maintenance run of the agent depot, and Seatbelt cannot give \
+                 it a work directory of its own in the place of a project yet"
+                    .to_owned(),
+            )
+            .build());
+        }
         let policy = MountPolicy::from_paths(&self.paths);
         profile.validate_with(&policy)?;
         BwrapBackend::check_work_dir(profile, session)?;

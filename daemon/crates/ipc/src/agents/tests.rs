@@ -262,3 +262,52 @@ fn the_doctor_has_a_line_per_depot_agent() {
     assert_eq!(report.checks[0].status, v1::CheckStatus::Warn as i32);
     assert_eq!(report.checks[1].status, v1::CheckStatus::Fail as i32);
 }
+
+#[test]
+fn install_and_update_go_to_the_sandbox_service() {
+    let wish = v1::agents_request::Maintain {
+        agent: "claude".to_owned(),
+        version: " 2.1.89 ".to_owned(),
+    };
+    let (task, got) = maintenance_of(Some(&v1::agents_request::Op::Install(wish.clone()))).unwrap();
+    assert_eq!(task, MaintenanceTask::Install);
+    assert_eq!(wanted_version(&got.version).as_deref(), Some("2.1.89"));
+    let (task, _) = maintenance_of(Some(&v1::agents_request::Op::Update(wish.clone()))).unwrap();
+    assert_eq!(task, MaintenanceTask::Update);
+    assert_eq!(wanted_version("  "), None);
+    assert!(
+        maintenance_of(Some(&v1::agents_request::Op::Status(
+            v1::agents_request::Status {}
+        )))
+        .is_none()
+    );
+    // The answer of this module never runs one itself.
+    let dir = tempfile::tempdir().unwrap();
+    let found = answer(
+        &paths(dir.path()),
+        &SourceLock::none(),
+        None,
+        Some(v1::agents_request::Op::Install(wish)),
+    )
+    .unwrap_err();
+    assert_eq!(found.code, CONFIG_003);
+}
+
+#[test]
+fn every_answer_names_the_last_run_of_its_agent() {
+    let dir = tempfile::tempdir().unwrap();
+    let paths = paths(dir.path());
+    let mut status = status(&paths, &Config::default(), &SourceLock::none(), None);
+    let run = v1::AgentMaintenance {
+        sandbox_id: "s1".to_owned(),
+        task: "install".to_owned(),
+        state: "running".to_owned(),
+        ..v1::AgentMaintenance::default()
+    };
+    let runs = std::collections::BTreeMap::from([("claude".to_owned(), run.clone())]);
+    with_maintenance(&mut status, &runs);
+    for entry in &status.agents {
+        let expected = (entry.agent == "claude").then(|| run.clone());
+        assert_eq!(entry.maintenance, expected, "{}", entry.agent);
+    }
+}

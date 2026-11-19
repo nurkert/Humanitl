@@ -2496,15 +2496,40 @@ impl v1::humanitl_server::Humanitl for IpcServer {
             &self.policy_locks(),
         )
         .map_err(|diagnostic| diagnostic_to_status(&diagnostic))?;
+        // Install and update are a maintenance session of the sandbox
+        // service (HUM-563); the answer is the state once the run stands.
+        let op = match crate::agents::maintenance_of(op.as_ref()) {
+            Some((task, wish)) => {
+                let sandbox = self
+                    .sandbox
+                    .as_ref()
+                    .ok_or_else(|| diagnostic_to_status(&crate::agents::no_sandbox_service()))?;
+                sandbox
+                    .maintain(
+                        &wish.agent,
+                        task,
+                        crate::agents::wanted_version(&wish.version),
+                    )
+                    .await
+                    .map_err(|diagnostic| diagnostic_to_status(&diagnostic))?;
+                Some(v1::agents_request::Op::Status(
+                    v1::agents_request::Status {},
+                ))
+            }
+            None => op,
+        };
         let paths = self.doctor.paths.clone();
         let lock = self.source_lock();
         let in_use = self.sandbox.as_ref().and_then(SandboxService::depot_in_use);
-        let status = tokio::task::spawn_blocking(move || {
+        let mut status = tokio::task::spawn_blocking(move || {
             crate::agents::answer(&paths, &lock, in_use.as_deref(), op)
         })
         .await
         .map_err(|error| diagnostic_to_status(&unfinished("Agents", &error)))?
         .map_err(|diagnostic| diagnostic_to_status(&diagnostic))?;
+        if let Some(sandbox) = self.sandbox.as_ref() {
+            crate::agents::with_maintenance(&mut status, &sandbox.maintenance_runs());
+        }
         if let Some(key) = written {
             self.config_events.publish([key], "");
         }

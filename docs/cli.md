@@ -1814,6 +1814,41 @@ held but forwarded, a `block` rule still stops it first, and a `redact` rule sti
 configuration refuses the mode without `egress.proxy` (`CONFIG_003`), and a start refuses it while
 the running daemon still goes direct; restart the daemon after setting `egress.proxy`.
 
+## `humanitl agents`
+
+The agent depot (ADR-0023): an agent installed once under the daemon's data directory and taken by
+every sandbox from there, instead of from this machine. `humanitl agents status [AGENT]` shows each
+agent's source (`host` or `depot`, with its origin or the company lock), the installed version and
+signature, the login and the size; nothing from the depot is started for that.
+`humanitl agents source AGENT host|depot` sets `agents.AGENT.source`, `humanitl agents remove AGENT`
+removes a depot (it asks first, `--yes` does not).
+
+`humanitl agents install AGENT [--version V]` and `humanitl agents update AGENT [--version V]` run
+the install or update as a **maintenance run** (HUM-563): a sandbox like a session's, with the three
+guarantees and the proxy, but without a project. Its only writable place is its own work directory,
+its `HOME` at `/run/humanitl/agent-home`; there is no `/work`, and the sandbox profile counts
+without its extensions (`mounts.extra_ro`, `mounts.extra_rw`). Only the hosts of the agent's recipe
+pass without a hold (for Claude Code `downloads.claude.ai`), as rules of this run that go when it
+ends; every other request is held as in any session, and the stored rules are never touched. The
+run only downloads: nothing downloaded executes, neither in the run nor on this machine. After the
+run the daemon checks the tree, verifies the vendor's signature where the vendor signs (Claude Code:
+the signed `manifest.json`, checked with the host's `gpg`), moves the version into the depot and
+switches `current`; a run that fails changes nothing.
+
+Both ask first (`--yes` does not) and then attach this terminal to the run's, like `humanitl
+sandbox attach`: the prefix and `d` detach, and the run keeps going; `humanitl agents status
+AGENT` shows its result later. When the run ends, the command prints the version that is current
+now, or the finding (`AGENT_011` with the step that failed) and ends with exit code 1. `--json`
+does not attach and prints the result as one object.
+
+The version is pinned. `install` refuses a depot that holds a version already; only `update`
+changes it, and `update --version OLD` switches back to a version the depot still holds without a
+run. Running sessions keep their version; the next session starts the new one. In a session the
+program directory is read-only, so an agent's self-update fails there on purpose; the agent's own
+update switch is off as well (`DISABLE_UPDATES=1` for Claude Code). One run at a time, and only while
+no session runs in this daemon (`CLI_005`). The kernel level and Seatbelt (macOS) do not carry a
+maintenance run yet (`AGENT_015`).
+
 ## `humanitl sessions`
 
 `humanitl sessions` without a subcommand prints the running session, or the one a start here would

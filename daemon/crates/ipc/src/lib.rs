@@ -51,6 +51,13 @@ pub const PROTO_MAJOR: u32 = 1;
 /// Minor-Version des Vertrags. Steigt bei jeder additiven Änderung
 /// (`Info.proto_minor`).
 ///
+/// `52` seit dem Wartungslauf des Agent-Depots (HUM-563): `AgentsRequest`
+/// trägt `install` und `update` (je `Maintain` mit Agent und Version), und
+/// `AgentDepot.maintenance` nennt den letzten Lauf eines Agenten in diesem
+/// Daemon (`AgentMaintenance`: Sandbox, Aufgabe, Zustand, Version, Befunde).
+/// Ein Daemon davor kennt die Operationen nicht und antwortet `CONFIG_003`
+/// („keine Operation"), `humanitl agents install` sagt dann, dass der Daemon
+/// zu alt ist.
 /// `51` seit dem Schließen hinter dem Entscheidungs-Proxy (HUM-555):
 /// `UPSTREAM_ERROR_PROXY_CLOSED` heißt, die Anfrage ging über den Proxy
 /// hinaus, und die Verbindung endete ohne Antwort, geschlossen vom Proxy
@@ -279,7 +286,7 @@ pub const PROTO_MAJOR: u32 = 1;
 /// Spiegelung in `app/lib/core/ipc/proto_version.dart` darf nachziehen: eine
 /// abweichende Minor ist verabredetermaßen kein Grund, die Verbindung
 /// abzulehnen (`docs/PROTOCOL.md`).
-pub const PROTO_MINOR: u32 = 51;
+pub const PROTO_MINOR: u32 = 52;
 
 /// Metadata-Schlüssel für das Session-Token aus
 /// `$XDG_RUNTIME_DIR/humanitl/token` (CONVENTIONS.md 3.6).

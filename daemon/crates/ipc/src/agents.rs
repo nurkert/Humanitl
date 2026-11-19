@@ -1,6 +1,6 @@
 //! `Agents`: the agent depot (HUM-518, ADR-0023).
 //!
-//! Three operations, every one answered with the state afterwards:
+//! The operations, every one answered with the state afterwards:
 //!
 //! - `status`: per registered agent the effective source with origin and
 //!   lock, the installed version and signature from `manifest.json`, whether
@@ -11,6 +11,10 @@
 //!   `SetConfig`, with the same refusal under a company lock (`AGENT_010`).
 //! - `remove`: removes the depot of one agent, refused while the running
 //!   session has it bound (`AGENT_018`); the source stays as it is.
+//! - `install` and `update` (HUM-563) are a maintenance session of the
+//!   sandbox service (`crate::sandbox`); the server hands them there and
+//!   answers with the state once the run stands. Every answer carries the
+//!   last run of each agent ([`with_maintenance`]).
 //!
 //! The doctor's lines per agent with the source `depot` come from
 //! [`insert_doctor_lines`]. Every function iterates over the registered
@@ -18,9 +22,9 @@
 
 use humanitl_config::agents::{AgentSource, SourceLock, effective_source};
 use humanitl_config::{Config, Paths};
-use humanitl_core::diagnostics::codes::{AGENT_009, AGENT_015, AGENT_018, CONFIG_003};
+use humanitl_core::diagnostics::codes::{AGENT_009, AGENT_015, AGENT_018, CONFIG_003, IPC_006};
 use humanitl_core::{Diagnostic, FixAction, Severity};
-use humanitl_sandbox::agent::depot::{Depot, KNOWN, KnownAgent};
+use humanitl_sandbox::agent::depot::{Depot, KNOWN, KnownAgent, MaintenanceTask};
 
 use crate::{convert, v1};
 
@@ -72,6 +76,14 @@ pub fn answer(
                     .build());
             }
             Depot::of(paths, agent.id).remove()?;
+        }
+        // The sandbox service runs them (HUM-563); the server hands them
+        // there before it asks this function for the state afterwards.
+        Some(v1::agents_request::Op::Install(_) | v1::agents_request::Op::Update(_)) => {
+            return Err(refused(
+                "install and update run as a maintenance session of the daemon's sandbox \
+                 service, not here",
+            ));
         }
         None => return Err(refused("the request names no operation")),
     }
@@ -220,6 +232,49 @@ fn known(agent: &str) -> Result<&'static KnownAgent, Diagnostic> {
                 .join(", ")
         ))
     })
+}
+
+/// The maintenance task an operation asks for, with its wish (HUM-563);
+/// `None` for every other operation.
+#[must_use]
+pub fn maintenance_of(
+    op: Option<&v1::agents_request::Op>,
+) -> Option<(MaintenanceTask, v1::agents_request::Maintain)> {
+    match op {
+        Some(v1::agents_request::Op::Install(wish)) => {
+            Some((MaintenanceTask::Install, wish.clone()))
+        }
+        Some(v1::agents_request::Op::Update(wish)) => Some((MaintenanceTask::Update, wish.clone())),
+        _ => None,
+    }
+}
+
+/// The version a wish names; `None` for the vendor's current one.
+#[must_use]
+pub fn wanted_version(version: &str) -> Option<String> {
+    let version = version.trim();
+    (!version.is_empty()).then(|| version.to_owned())
+}
+
+/// `IPC_006`: a daemon without a sandbox service runs no maintenance.
+#[must_use]
+pub fn no_sandbox_service() -> Diagnostic {
+    Diagnostic::builder(IPC_006, Severity::Error)
+        .why(
+            "this daemon runs no sandboxes, so it cannot install or update an agent in the depot"
+                .to_owned(),
+        )
+        .build()
+}
+
+/// Puts the last maintenance run of each agent into its entry (HUM-563).
+pub fn with_maintenance(
+    status: &mut v1::AgentsStatus,
+    runs: &std::collections::BTreeMap<String, v1::AgentMaintenance>,
+) {
+    for entry in &mut status.agents {
+        entry.maintenance = runs.get(&entry.agent).cloned();
+    }
 }
 
 fn refused(why: &str) -> Diagnostic {

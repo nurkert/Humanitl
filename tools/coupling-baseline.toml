@@ -102,6 +102,7 @@
 "daemon/crates/ipc/src/server.rs" = 21
 "daemon/crates/ipc/src/terminal.rs" = 6
 "daemon/crates/ipc/src/validate.rs" = 1
+"daemon/crates/ipc/tests/depot_maintenance.rs" = 24
 "daemon/crates/ipc/tests/fake_parity.rs" = 3
 "daemon/crates/ipc/tests/ipc_server.rs" = 4
 "daemon/crates/ipc/tests/probe_models.rs" = 2

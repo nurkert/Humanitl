@@ -943,7 +943,7 @@ impl SandboxBackend for BwrapBackend {
         self.check_profile_version(profile)?;
         self.check_overlay(request)?;
         Self::check_work_dir(profile, session)?;
-        policy.check_work_dir(&session.work_src)?;
+        crate::agent::depot::guard::work_place(&policy, session, &session.work_src)?;
         // Ab hier zählt der Deskriptor, nicht mehr der Pfad (HUM-263): Die
         // Politik prüft den Ort, an dem das Geöffnete liegt, und `bwrap`
         // bindet genau diesen Deskriptor. Ein Tausch des Pfades zwischen hier
@@ -1649,7 +1649,7 @@ impl PinnedMounts {
             SourceKind::Directory,
             "the project directory",
         )?;
-        policy.check_work_dir(work.resolved())?;
+        crate::agent::depot::guard::work_place(policy, session, work.resolved())?;
         if let Some(approved) = &options.approved_work_dir
             && work.resolved() != approved.as_path()
         {
