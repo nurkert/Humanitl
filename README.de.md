@@ -176,6 +176,21 @@ Siehe [`docs/SECURITY.md`](docs/SECURITY.md#what-is-different-and-what-follows):
 Alle Dateien liegen auf der [Release-Seite](https://github.com/nurkert/Humanitl/releases) und auf
 [humanitl.de](https://humanitl.de/download/).
 
+**Ein Skript für Linux und macOS:**
+
+```sh
+curl -fsSL https://humanitl.de/install | sh
+```
+
+Es nimmt unter Debian und Ubuntu das APT-Repository, unter Fedora und Verwandten das `.rpm`, unter
+Arch das AUR-Paket, sobald es veröffentlicht ist, sonst das Archiv unter `~/.local`, unter macOS
+das Disk-Image. Es zeigt jeden Schritt und fragt vorher, ruft `sudo` nur für den Paketschritt,
+prüft jeden Download gegen `SHA256SUMS` und entfernt die macOS-Quarantäne nie. Vorher lesen auf
+[humanitl.de/installationsskript](https://humanitl.de/installationsskript/) oder als
+[`install.sh`](install.sh); `sh -s -- --dry-run` zeigt, was es täte, ohne etwas zu ändern.
+Einzelheiten:
+[`docs/translations/de/guides/install.md`](docs/translations/de/guides/install.md#das-installationsskript).
+
 **Linux** (Debian 13 oder Ubuntu 24.04 und neuer, x86_64, Kernel 5.4+, unprivilegierte User
 Namespaces, bubblewrap 0.8+, systemd-Benutzersitzung), am besten über das APT-Repository:
 
@@ -193,10 +208,8 @@ Das Archiv `humanitl-<version>-linux-x86_64.tar.gz` ist für Server und Skripte 
 
 **macOS** (Apple Silicon und Intel, macOS 12 oder neuer): `Humanitl-<version>-macos.dmg` öffnen und
 Humanitl nach „Programme" ziehen. Die App ist nur ad hoc signiert; den ersten Start einmal unter
-Systemeinstellungen › Datenschutz & Sicherheit › „Dennoch öffnen" erlauben. Alternativ
-`xattr -dr com.apple.quarantine /Applications/Humanitl.app`; das hebt die Gatekeeper-Prüfung für
-diese App vollständig auf, also nur für eine geprüfte Kopie von der Release-Seite. Der
-Einrichtungsbildschirm installiert den Daemon als launchd-Agent.
+Systemeinstellungen › Datenschutz & Sicherheit › „Dennoch öffnen" erlauben; so bleibt die
+Gatekeeper-Prüfung der App erhalten. Der Einrichtungsbildschirm installiert den Daemon als launchd-Agent.
 
 **Prüfsummen:** `sha256sum -c SHA256SUMS --ignore-missing` (macOS:
 `shasum -a 256 -c SHA256SUMS --ignore-missing`). Releases vor 1.0.0 sind **nicht signiert**;

@@ -23,8 +23,12 @@
 #                     Aenderung am Code, auf Zweigen nur fuer die macOS-nahen.
 #
 # Bereiche, je geaenderter Datei der erste Treffer:
-#   none   website/**: Kein Job von ci.yml liest sie; die Seite baut
-#          .github/workflows/website.yml.
+#   website website/**: nur install-script, das die Seite baut und prueft, dass
+#          /install und die Leseseite install.sh zeigen (HUM-528). Ausgeliefert
+#          wird die Seite von .github/workflows/website.yml.
+#   install install.sh im Wurzelverzeichnis: die drei Jobs des
+#          Installationsskripts (install-script, install-linux, install-macos),
+#          sonst nichts; kein Programm liest das Skript (HUM-528).
 #   backlog backlog/**, BACKLOG.md: nur rust-test, denn
 #          daemon/crates/config/tests/config_readers.rs liest die Sprint-Dateien
 #          und BACKLOG.md.
@@ -103,7 +107,7 @@ case "$mode" in
     ;;
 esac
 
-declare -A area=([rust]=0 [app]=0 [docs]=0 [backlog]=0 [macos]=0)
+declare -A area=([rust]=0 [app]=0 [docs]=0 [backlog]=0 [macos]=0 [install]=0 [website]=0)
 changed=0
 mac_why=""
 
@@ -166,7 +170,8 @@ if ((!full)); then
     [[ -n "$f" ]] || continue
     changed=$((changed + 1))
     case "$f" in
-      website/*) ;;
+      website/*) area[website]=1 ;;
+      install.sh) area[install]=1 ;;
       backlog/* | BACKLOG.md) area[backlog]=1 ;;
       docs/* | images/* | LICENSE) area[docs]=1 ;;
       app/*) area[app]=1; mac_check "$f" ;;
@@ -186,9 +191,10 @@ if ((!full)); then
 fi
 
 if ((full)); then
-  area[rust]=1 area[app]=1 area[docs]=1 area[backlog]=1 area[macos]=1
+  area[rust]=1 area[app]=1 area[docs]=1 area[backlog]=1 area[macos]=1 area[install]=1 area[website]=1
 fi
 rust=${area[rust]} app=${area[app]} docs=${area[docs]} backlog=${area[backlog]} mac=${area[macos]}
+install=${area[install]} website=${area[website]}
 code=$((rust || app))
 
 b() { (($1)) && echo true || echo false; }
@@ -219,6 +225,9 @@ jobs=(
   "e2e-m4=$(b "$code")"
   "e2e-m4-package=$(b "$code")"
   "parity-check=$(b "$((code || docs))")"
+  "install-script=$(b "$((install || website))")"
+  "install-linux=$(b "$install")"
+  "install-macos=$(b "$install")"
 )
 
 echo "full=$(b "$full")"
@@ -227,6 +236,8 @@ echo "area-app=$(b "$app")"
 echo "area-docs=$(b "$docs")"
 echo "area-backlog=$(b "$backlog")"
 echo "area-macos=$(b "$mac")"
+echo "area-install=$(b "$install")"
+echo "area-website=$(b "$website")"
 printf '%s\n' "${jobs[@]}"
 
 {
@@ -234,7 +245,7 @@ printf '%s\n' "${jobs[@]}"
     echo "ci-changes: everything runs: $why"
   else
     echo "ci-changes: $changed file(s) changed since ${base:0:12}"
-    echo "ci-changes: rust=$(b "$rust") app=$(b "$app") docs=$(b "$docs") backlog=$(b "$backlog") macos=$(b "$mac")${mac_why:+ (first macOS-relevant: $mac_why)}"
+    echo "ci-changes: rust=$(b "$rust") app=$(b "$app") docs=$(b "$docs") backlog=$(b "$backlog") macos=$(b "$mac") install=$(b "$install") website=$(b "$website")${mac_why:+ (first macOS-relevant: $mac_why)}"
   fi
   for j in "${jobs[@]}"; do
     [[ "${j#*=}" == true ]] || echo "ci-changes: skip ${j%=*}"

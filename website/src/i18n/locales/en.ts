@@ -332,21 +332,23 @@ const en: Copy = {
           'The app is signed ad hoc only, so macOS refuses the first start. Allow it once in System Settings › Privacy & Security › “Open Anyway”.',
           'Start Humanitl. Under “Set up Humanitl”, “Install and start” sets up the background service as a launchd agent.',
         ],
-        command:
-          'xattr -dr com.apple.quarantine /Applications/Humanitl.app\n/Applications/Humanitl.app/Contents/MacOS/bin/humanitl daemon install\n/Applications/Humanitl.app/Contents/MacOS/bin/humanitl sandbox check',
-        commandNote: 'Or all of it in a terminal: allow the first start, set up the service, check the sandbox.',
+        command: 'curl -fsSL https://humanitl.de/install | sh',
+        commandNote:
+          'Or in a terminal: the script downloads the disk image, checks it against SHA256SUMS, copies the app to Applications and marks it as downloaded. macOS then checks it as after a download in a browser; allow the first start once under “Open Anyway”.',
+        script: 'Read the script first',
       },
       linux: {
         name: 'Linux',
         req: 'x86_64 with glibc 2.39 or newer: Debian 13, Ubuntu 24.04, Fedora 40, openSUSE Tumbleweed, Arch Linux.',
         steps: [
-          'Set up the APT repository apt.nurkert.de and install Humanitl. Later versions then arrive with apt upgrade.',
-          'Set up the background service.',
+          'Install Humanitl. The script detects the system: Debian and Ubuntu get the APT repository apt.nurkert.de, so later versions arrive with apt upgrade; Fedora gets the RPM; other systems the archive under ~/.local.',
+          'Set up the background service; the script asks about it.',
           'Check the sandbox: all three guarantees must hold.',
         ],
-        command: 'curl -fsSL https://apt.nurkert.de/install/humanitl | sudo sh\nhumanitl daemon install\nhumanitl sandbox check',
-        commandNote: 'In a terminal. The script places the repository’s signing key, adds the source and installs the package.',
-        script: 'If you do not trust a pipe into a root shell, read the script first or download the Debian package from this page.',
+        command: 'curl -fsSL https://humanitl.de/install | sh',
+        commandNote:
+          'In a terminal, as your normal user. The script shows every step and asks first; it calls sudo only for the package step and names the command. Afterwards: humanitl daemon install and humanitl sandbox check.',
+        script: 'Read the script first, or download the package from this page.',
         rpm: 'Fedora 40 and newer or openSUSE Tumbleweed: download the RPM package from this page and install it with dnf. On openSUSE: sudo zypper install --allow-unsigned-rpm with the same file.',
         rpmCommand: 'sudo dnf install ./humanitl-@VERSION@-1.x86_64.rpm\nhumanitl daemon install\nhumanitl sandbox check',
         aur: 'Arch Linux: the AUR package humanitl-bin, currently version @AUR@.',
@@ -926,6 +928,21 @@ const en: Copy = {
       home: 'Back to home',
       stand: 'As of 2026-10. Sources: README.md, docs/SECURITY.md, docs/THREAT-MODEL.md, docs/ARCHITECTURE.md, ADR-0019, tests/escape.',
     },
+  },
+  install: {
+    command: 'curl -fsSL https://humanitl.de/install | sh',
+    label: 'Or in a terminal, on Linux and macOS:',
+    copy: 'Copy command',
+    read: 'Read the script first',
+    title: 'The install script',
+    metaDescription: 'The source behind curl -fsSL https://humanitl.de/install | sh, exactly as it is served.',
+    lede: 'This is the script that `curl -fsSL https://humanitl.de/install | sh` runs, byte for byte: the website build copies `install.sh` from the repository to `/install` and renders this page from the same file.',
+    dryRun: 'What it would do on your machine, without changing anything:',
+    dryRunCommand: 'curl -fsSL https://humanitl.de/install | sh -s -- --dry-run',
+    unsigned:
+      'Releases before 1.0.0 are not signed. The script checks every download against the release’s `SHA256SUMS`. That protects against a damaged download, not against a tampered release. On macOS it never removes the quarantine: Gatekeeper checks the app as after a download in a browser.',
+    source: 'install.sh on GitHub',
+    raw: 'The file itself',
   },
 };
 

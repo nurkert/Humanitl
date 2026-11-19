@@ -228,6 +228,21 @@ account; network attacks on the host itself
 Every release is on the [releases page](https://github.com/nurkert/Humanitl/releases) and on
 [humanitl.de](https://humanitl.de/en/download/), for Linux x86_64 and for macOS.
 
+### Install script (Linux and macOS)
+
+```sh
+curl -fsSL https://humanitl.de/install | sh
+```
+
+One script for every system: it takes the APT repository on Debian and Ubuntu, the `.rpm` on
+Fedora and its relatives, the AUR package on Arch once it is published, the archive under
+`~/.local` elsewhere, and the disk image on macOS. It shows every step and asks first, calls `sudo`
+only for the package step, checks every download against `SHA256SUMS`, and never removes the
+macOS quarantine. Read it first on [humanitl.de/en/install-script](https://humanitl.de/en/install-script/)
+or as [`install.sh`](install.sh); `sh -s -- --dry-run` shows what it would do without changing
+anything. Details:
+[`docs/guides/install.md`](docs/guides/install.md#the-install-script).
+
 ### Linux
 
 Debian 13 or Ubuntu 24.04 and newer on x86_64 (glibc 2.39; Debian 12 and Ubuntu 22.04 are too
@@ -270,10 +285,8 @@ into a root shell takes the `.deb` from the release page instead
 or newer. Open the disk image and drag Humanitl into Applications.
 
 The app is signed ad hoc, not with an Apple Developer ID, so macOS refuses the first start. Allow
-it once under System Settings › Privacy & Security › Open Anyway. The alternative in a terminal is
-`xattr -dr com.apple.quarantine /Applications/Humanitl.app`; be aware that this removes the
-Gatekeeper check for this app entirely, so run it only on a copy you downloaded from the release
-page and verified. Start the app from Applications; the setup screen installs the daemon as a
+it once under System Settings › Privacy & Security › Open Anyway; that keeps Gatekeeper's check of
+this app. Start the app from Applications; the setup screen installs the daemon as a
 launchd agent. The command line lies inside the app:
 
 ```sh

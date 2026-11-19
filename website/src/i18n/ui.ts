@@ -21,6 +21,9 @@ export const pages = {
   security: { de: 'sicherheit', en: 'security' },
   privacy: { de: 'datenschutz', en: 'privacy' },
   imprint: { de: 'impressum', en: 'imprint' },
+  // Die Leseseite von install.sh (HUM-528). Nicht unter /install/: Dort liegt das Skript selbst
+  // als Datei ohne Endung, ein gleichnamiges Verzeichnis daneben kann es nicht geben.
+  installer: { de: 'installationsskript', en: 'install-script' },
 } satisfies Record<string, Record<Lang, string>>;
 
 export type Page = keyof typeof pages;

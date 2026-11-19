@@ -6,7 +6,7 @@ import { Picture } from 'astro:assets';
 
 import Icon from '../Icon.astro';
 import Base from '../../layouts/Base.astro';
-import { languages, releasesUrl, ui, type Lang } from '../../i18n/ui';
+import { languages, path, releasesUrl, ui, type Lang } from '../../i18n/ui';
 import { loadReleases, type Platform } from '../../lib/releases';
 import { loadAur } from '../../lib/aur';
 import intercept from '../../assets/screens/intercept.png';
@@ -174,11 +174,9 @@ const older = releases.filter((release) => release !== current).slice(0, 6);
                         <Icon name="copy" />
                       </button>
                     </div>
-                    {'script' in info && (
-                      <p class="panel__note">
-                        <a href="https://apt.nurkert.de/install/humanitl">{info.script}</a>
-                      </p>
-                    )}
+                    <p class="panel__note">
+                      <a href={path('installer', lang)}>{info.script}</a>
+                    </p>
                     {'rpm' in info && files.some((file) => file.kind === 'rpm') && (
                       <>
                         <p class="panel__note panel__note--more">{info.rpm}</p>

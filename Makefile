@@ -7,7 +7,7 @@ SHELL := /bin/bash
 .PHONY: help check rust-fmt rust-clippy rust-build rust-test rust-doc rust-deny typed-errors-lint \
         flutter-get flutter-analyze flutter-test flutter-test-dbus flutter-test-daemon \
         flutter-test-integration flutter-build runner-test proto escape e2e goldens goldens-update \
-        deps-lint docs-lint parity-check l10n-lint catalog-assets catalog-lint tools-test clean package
+        deps-lint docs-lint parity-check l10n-lint catalog-assets catalog-lint tools-test install-script-test clean package
 
 help: ## List targets
 	@grep -hE '^[a-z-]+:.*?## ' $(MAKEFILE_LIST) | sort | awk -F':.*?## ' '{printf "  %-18s %s\n", $$1, $$2}'
@@ -79,6 +79,12 @@ tools-test: ## Tests of tools/ci-gate.sh, tools/commit-issue.sh --ci (HUM-237), 
 	./tools/tests/release_test.sh
 	python3 tools/tests/release_guard_test.py
 	./tools/tests/classify_runner_loss_test.sh
+
+# install.sh gegen nachgestellte Werkzeuge (HUM-528), ohne Container und ohne root. Die
+# Container-Matrix und den macOS-Lauf fahren tools/tests/install_sh_containers.sh und
+# tools/tests/install_sh_macos.sh, in CI die Jobs install-linux und install-macos.
+install-script-test: ## install.sh against stubs: shellcheck, sh -n, unsupported systems, --dry-run, checksums (HUM-528)
+	./tools/tests/install_sh_test.sh
 
 deps-lint: ## Enforce the dependency direction (HUM-074) and the coupling ratchet (HUM-145)
 	./tools/check-deps.sh

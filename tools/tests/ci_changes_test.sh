@@ -38,6 +38,7 @@ put website/index.md '# Site'
 put tools/x.sh 'echo'
 put proto/humanitl.proto 'syntax = "proto3";'
 put README.md '# Humanitl'
+put install.sh '#!/bin/sh'
 g add -A
 g commit -q -m base
 base="$(g rev-parse HEAD)"
@@ -90,14 +91,29 @@ expect() {
 
 heavy=(rust-check rust-test macos deps-lint proto-lint-and-gen flutter-analyze-test goldens
   escape-tests escape-tests-podman kvm-tests escape-tests-qemu e2e e2e-xvfb e2e-agent e2e-m4 e2e-m4-package
-  parity-check)
-all_false=("${heavy[@]/%/=false}")
+  parity-check install-script install-linux install-macos)
 all_true=("${heavy[@]/%/=true}")
+# Alles ausser den Jobs des Installationsskripts (HUM-528).
+not_install=()
+for j in "${heavy[@]}"; do
+  [[ "$j" == install-* ]] || not_install+=("$j=false")
+done
 
-# Nur website/: kein schwerer Job, auch auf main nicht.
+# Nur website/: nur install-script, das die Seite baut und /install prueft
+# (HUM-528), auch auf main; kein Container, kein macOS.
 change website website/index.md '# New site'
-expect website_branch --base "$base" website -- full=false "${all_false[@]}"
-expect website_main --main --base "$base" website -- full=false "${all_false[@]}"
+expect website_branch --base "$base" website -- full=false area-website=true install-script=true \
+  install-linux=false install-macos=false "${not_install[@]}"
+expect website_main --main --base "$base" website -- full=false install-script=true \
+  install-linux=false install-macos=false "${not_install[@]}"
+# install.sh: die drei Jobs des Skripts, sonst nichts; der Inhalt nennt macOS,
+# startet aber nicht den Job macos.
+change install install.sh '#!/bin/sh
+# macOS: xattr -r -w com.apple.quarantine; uname -s = Darwin'
+expect install_branch --base "$base" install -- full=false area-install=true area-macos=false \
+  install-script=true install-linux=true install-macos=true "${not_install[@]}"
+expect install_main --main --base "$base" install -- full=false install-script=true install-linux=true \
+  install-macos=true "${not_install[@]}"
 # backlog/ und BACKLOG.md: nur rust-test, das config_readers.rs sie liest.
 change backlog backlog/sprint-1.md '# Sprint 1, done' website/index.md '# x'
 expect backlog_main --main --base "$base" backlog -- full=false area-backlog=true rust-test=true \
@@ -210,7 +226,7 @@ g checkout -q -B main "$base"
 put daemon/crates/proxy/src/lib.rs 'pub fn moved_on() {}'
 g add -A
 g commit -q -m "main moves"
-expect branch_merge_base --merge-base-with main website -- full=false "${all_false[@]}"
+expect branch_merge_base --merge-base-with main website -- full=false install-script=true "${not_install[@]}"
 expect no_merge_base --merge-base-with no-such-ref website -- full=true
 
 # Falscher Aufruf.

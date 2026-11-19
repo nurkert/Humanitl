@@ -490,7 +490,13 @@ const workflowPoster = await getImage({ src: intercept, width: 1280, format: 'we
     <Open c={h.open} href={`${security}#grenzen`} macHref={`${security}#macos`} />
     <Daily c={h.daily} href={`${docsHome(lang)}reference/rules/`} altHeld={screenAlt('intercept')} altRules={screenAlt('rules')} />
     <Support c={h.support} href={`${docsHome(lang)}guides/agent-profiles/`} />
-    <Maturity c={h.maturity} cta={t.closing} download={path('download', lang)} macHref={macHref} />
+    <Maturity
+      c={h.maturity}
+      cta={t.closing}
+      download={path('download', lang)}
+      macHref={macHref}
+      install={{ ...t.install, href: path('installer', lang) }}
+    />
   </main>
 </Base>
 
@@ -499,6 +505,7 @@ const workflowPoster = await getImage({ src: intercept, width: 1280, format: 'we
   import '../../scripts/stage';
   import '../../scripts/smart-download';
   import '../../scripts/home';
+  import '../../scripts/copy';
 </script>
 
 <style>

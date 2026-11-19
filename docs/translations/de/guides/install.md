@@ -26,6 +26,60 @@ und den statischen Shim `humanitl-shim`, der in der Sandbox läuft.
 Flatpak, Snap und arm64 gehören nicht zu 0.1, ein dnf-Repository ebenso wenig:
 Das RPM wird aus der Datei installiert, wie das `.deb` ohne das APT-Repository.
 
+## Das Installationsskript
+
+Ein Befehl für Linux und macOS wählt die Form für dich:
+
+```sh
+curl -fsSL https://humanitl.de/install | sh
+```
+
+Es erkennt das System und nimmt das APT-Repository `apt.nurkert.de` unter
+Debian und Ubuntu (die erste Installation ist das `.deb` des Releases, geprüft
+gegen `SHA256SUMS`; der Schlüssel des Repositorys wird gegen eine Festlegung
+im Skript geprüft), das `.rpm` mit dnf unter Fedora, RHEL, Rocky und Alma, das
+AUR-Paket über `paru` oder `yay` unter Arch, sobald es veröffentlicht ist, und
+sonst das Archiv unter `~/.local`, auch unter openSUSE, bis das `.rpm` dort
+geprüft ist. Unter macOS kopiert es die App aus dem Disk-Image nach Programme.
+Auf anderen Systemen und unter Linux auf anderer Architektur als x86_64 sagt es
+das und ändert nichts.
+
+Es läuft als dein Nutzer und ruft `sudo` nur für den Paketschritt, den Befehl
+zeigt es vorher. Bevor es etwas ändert, zeigt es jeden Schritt und fragt; ohne
+Terminal bricht es ab, außer mit `--yes`. Jeder Download kommt vom
+GitHub-Release und wird gegen dessen `SHA256SUMS` geprüft; Releases vor 1.0.0
+sind unsigniert, die Prüfsumme schützt also vor einem beschädigten Download,
+nicht vor einem manipulierten Release. Unter macOS markiert es die kopierte App
+als heruntergeladen (`com.apple.quarantine`) und entfernt diese Markierung nie:
+Gatekeeper prüft die App wie nach einem Download im Browser, den ersten Start
+erlaubst du deshalb einmal unter Systemeinstellungen › Datenschutz & Sicherheit
+› „Dennoch öffnen“. Im Terminal wartet das Skript darauf und bietet dann
+`humanitl daemon install` und `humanitl sandbox check` an, wie unter Linux
+sofort; mit `--yes` nennt es beides als ausstehend.
+
+Lies es, bevor du es ausführst: [humanitl.de/installationsskript](https://humanitl.de/installationsskript/)
+zeigt dieselbe Datei, die der Befehl lädt, also
+[`install.sh`](https://github.com/nurkert/Humanitl/blob/main/install.sh) im
+Repository. Optionen stehen nach `sh -s --`:
+
+```sh
+curl -fsSL https://humanitl.de/install | sh -s -- --dry-run
+```
+
+| Option | Wirkung |
+|---|---|
+| `--dry-run` | jeden Schritt zeigen, nichts ändern |
+| `--yes` | jede Frage mit Ja beantworten; ohne Terminal nötig |
+| `--version X.Y.Z` | dieses Release statt des neuesten installieren |
+| `--method apt\|rpm\|aur\|tarball\|dmg` | die erkannte Form übergehen |
+| `--prefix DIR` | Ziel der Archiv-Form, Vorgabe `~/.local` |
+| `--no-setup` | `daemon install` und `sandbox check` nicht anbieten |
+
+Die Archiv-Form entpackt nach `~/.local/lib/humanitl`, verlinkt `humanitl`,
+`humanitld` und `humanitl-app` nach `~/.local/bin` und listet diese Pfade in
+`~/.local/lib/humanitl/INSTALLED-FILES`. Abhängigkeiten installiert sie nicht:
+Die Sandbox braucht `bubblewrap` aus deiner Distribution, die App GTK 3.
+
 Der Daemon läuft immer als **systemd-Benutzerdienst** des Menschen, der ihn
 nutzt, nie als Systemdienst und nie mit `sudo`. Er liest das
 Laufzeitverzeichnis, die Konfiguration und die Aufzeichnung eines einzigen
@@ -282,12 +336,8 @@ hält. Das Release enthält `Humanitl-<version>-macos.dmg` und dieselbe App als
 1. Öffne das Disk-Image und zieh Humanitl in den Ordner „Programme".
 2. Die App ist ad hoc signiert, nicht mit einer Apple Developer ID, deshalb
    verweigert macOS den ersten Start. Erlaube ihn einmal unter
-   Systemeinstellungen › Datenschutz & Sicherheit › Dennoch öffnen oder in einem
-   Terminal:
-
-   ```sh
-   xattr -dr com.apple.quarantine /Applications/Humanitl.app
-   ```
+   Systemeinstellungen › Datenschutz & Sicherheit › Dennoch öffnen. So bleibt die
+   Prüfung durch Gatekeeper erhalten; die Quarantäne-Markierung zu entfernen, übersprünge sie.
 
    Starte die App aus „Programme", nicht aus dem Disk-Image oder aus
    „Downloads": macOS führt eine App unter Quarantäne aus einer temporären Kopie
@@ -450,6 +500,9 @@ Jeder Code ist in [DIAGNOSTICS.md](../DIAGNOSTICS.md) erklärt.
 - **AppImage:** Starte das neuere Image. Es frischt den Dienst von selbst auf.
 - **Archiv:** Entpacke die neue Version und führe ihr
   `bin/humanitl daemon install` aus.
+- **Installationsskript:** Führe es noch einmal aus. Es ersetzt, was es vorher
+  installiert hat; seine APT-Form aktualisiert sich mit `apt upgrade` wie das
+  Paket oben.
 
 ## Deinstallieren
 

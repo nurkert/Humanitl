@@ -21,6 +21,57 @@ and the static shim `humanitl-shim` that runs inside the sandbox.
 Flatpak, Snap and arm64 are not part of 0.1, and neither is a dnf repository:
 the RPM is installed from the file, like the `.deb` without the APT repository.
 
+## The install script
+
+One command for Linux and macOS picks the form for you:
+
+```sh
+curl -fsSL https://humanitl.de/install | sh
+```
+
+It detects the system and takes the APT repository `apt.nurkert.de` on Debian
+and Ubuntu (the first installation is the release's `.deb`, checked against
+`SHA256SUMS`; the repository key is checked against a pin in the script), the `.rpm` with dnf on Fedora, RHEL, Rocky and Alma, the AUR
+package through `paru` or `yay` on Arch once it is published, and the archive
+under `~/.local` everywhere else, openSUSE included until the `.rpm` is checked
+there. On macOS it copies the app from the disk image to Applications. On other
+systems and on Linux other than x86_64 it says so and changes nothing.
+
+It runs as your user and calls `sudo` only for the package step, printing the
+command first. Before it changes anything it shows every step and asks; without
+a terminal it stops unless `--yes` is given. Every download comes from the
+GitHub release and is checked against its `SHA256SUMS`; releases before 1.0.0
+are not signed, so the checksum protects against a damaged download, not
+against a tampered release. On macOS it marks the copied app as downloaded
+(`com.apple.quarantine`) and never removes that mark: Gatekeeper checks the app
+as after a download in a browser, so allow the first start once under System
+Settings › Privacy & Security › Open Anyway. In a terminal the script waits for
+that, then offers `humanitl daemon install` and `humanitl sandbox check`, as it
+does on Linux right away; with `--yes` it names them as pending.
+
+Read it before you run it: [humanitl.de/en/install-script](https://humanitl.de/en/install-script/)
+shows the same file the command fetches, which is
+[`install.sh`](https://github.com/nurkert/Humanitl/blob/main/install.sh) in the
+repository. Options go after `sh -s --`:
+
+```sh
+curl -fsSL https://humanitl.de/install | sh -s -- --dry-run
+```
+
+| Option | Effect |
+|---|---|
+| `--dry-run` | show every step, change nothing |
+| `--yes` | answer every question with yes; needed without a terminal |
+| `--version X.Y.Z` | install this release instead of the newest |
+| `--method apt\|rpm\|aur\|tarball\|dmg` | override the detected form |
+| `--prefix DIR` | target of the archive form, default `~/.local` |
+| `--no-setup` | do not offer `daemon install` and `sandbox check` |
+
+The archive form unpacks to `~/.local/lib/humanitl`, links `humanitl`,
+`humanitld` and `humanitl-app` into `~/.local/bin` and lists these paths in
+`~/.local/lib/humanitl/INSTALLED-FILES`. It installs no dependencies: the
+sandbox needs `bubblewrap` from your distribution, and the app GTK 3.
+
 The daemon always runs as a **systemd user service** of the person who uses it,
 never as a system service and never with `sudo`. It reads one person's runtime
 directory, configuration and recording, and nobody else's. That is also why no
@@ -263,11 +314,8 @@ what tells you the sandbox holds. The release carries
 
 1. Open the disk image and drag Humanitl into Applications.
 2. The app is signed ad hoc, not with an Apple Developer ID, so macOS refuses the first start.
-   Allow it once under System Settings › Privacy & Security › Open Anyway, or in a terminal:
-
-   ```sh
-   xattr -dr com.apple.quarantine /Applications/Humanitl.app
-   ```
+   Allow it once under System Settings › Privacy & Security › Open Anyway. That keeps
+   Gatekeeper's check of this app; removing the quarantine mark instead would skip it.
 
    Start the app from Applications, not from the disk image or Downloads: macOS runs a
    quarantined app from a temporary copy, and the service would point at that copy.
@@ -420,6 +468,8 @@ Every code is explained in [DIAGNOSTICS.md](../DIAGNOSTICS.md).
   the `.deb` does.
 - **AppImage:** start the newer image. It refreshes the service by itself.
 - **Archive:** unpack the new version and run its `bin/humanitl daemon install`.
+- **Install script:** run it again. It replaces what it installed before; its
+  APT form updates with `apt upgrade` like the package above.
 
 ## Uninstall
 

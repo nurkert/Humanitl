@@ -328,24 +328,26 @@ const de = {
         req: 'Apple Silicon und Intel, macOS 12 oder neuer. Die Ausbruchstests für macOS laufen auf den macOS-15-Runnern von GitHub und liefen während der Entwicklung auf macOS 27; andere Versionen sind nicht getestet.',
         steps: [
           'Humanitl.app in den Ordner Programme ziehen.',
-          'Die App ist nur ad hoc signiert, macOS verweigert deshalb den ersten Start. Einmal erlauben unter Systemeinstellungen › Datenschutz & Sicherheit › „Trotzdem öffnen“.',
+          'Die App ist nur ad hoc signiert, macOS verweigert deshalb den ersten Start. Einmal erlauben unter Systemeinstellungen › Datenschutz & Sicherheit › „Dennoch öffnen“.',
           'Humanitl starten. Unter „Humanitl einrichten“ richtet „Installieren und starten“ den Hintergrunddienst als launchd-Agent ein.',
         ],
-        command:
-          'xattr -dr com.apple.quarantine /Applications/Humanitl.app\n/Applications/Humanitl.app/Contents/MacOS/bin/humanitl daemon install\n/Applications/Humanitl.app/Contents/MacOS/bin/humanitl sandbox check',
-        commandNote: 'Oder alles im Terminal: den ersten Start erlauben, Dienst einrichten, Sandbox prüfen.',
+        command: 'curl -fsSL https://humanitl.de/install | sh',
+        commandNote:
+          'Oder im Terminal: Das Skript lädt das Disk-Image, prüft es gegen SHA256SUMS, kopiert die App nach Programme und markiert sie als heruntergeladen. macOS prüft sie dann wie nach einem Download im Browser; den ersten Start erlaubst du einmal unter „Dennoch öffnen“.',
+        script: 'Das Skript vorher lesen',
       },
       linux: {
         name: 'Linux',
         req: 'x86_64 mit glibc 2.39 oder neuer: Debian 13, Ubuntu 24.04, Fedora 40, openSUSE Tumbleweed, Arch Linux.',
         steps: [
-          'Das APT-Repository apt.nurkert.de einrichten und Humanitl installieren. Spätere Versionen kommen dann mit apt upgrade.',
-          'Den Hintergrunddienst einrichten.',
+          'Humanitl installieren. Das Skript erkennt das System: Debian und Ubuntu bekommen das APT-Repository apt.nurkert.de, spätere Versionen kommen dann mit apt upgrade; Fedora das RPM; andere Systeme das Archiv unter ~/.local.',
+          'Den Hintergrunddienst einrichten, das Skript fragt danach.',
           'Die Sandbox prüfen: Alle drei Garantien müssen halten.',
         ],
-        command: 'curl -fsSL https://apt.nurkert.de/install/humanitl | sudo sh\nhumanitl daemon install\nhumanitl sandbox check',
-        commandNote: 'Im Terminal. Das Skript legt den Signaturschlüssel des Repositorys ab, trägt die Quelle ein und installiert das Paket.',
-        script: 'Wer einer Pipe in eine Root-Shell nicht traut, liest das Skript vorher oder lädt das Debian-Paket von dieser Seite.',
+        command: 'curl -fsSL https://humanitl.de/install | sh',
+        commandNote:
+          'Im Terminal, als normaler Nutzer. Das Skript zeigt jeden Schritt und fragt vorher; sudo ruft es nur für den Paketschritt und nennt den Befehl. Danach: humanitl daemon install und humanitl sandbox check.',
+        script: 'Das Skript vorher lesen, oder das Paket von dieser Seite laden.',
         rpm: 'Fedora 40 und neuer oder openSUSE Tumbleweed: das RPM-Paket von dieser Seite laden und mit dnf installieren. Unter openSUSE: sudo zypper install --allow-unsigned-rpm mit derselben Datei.',
         rpmCommand: 'sudo dnf install ./humanitl-@VERSION@-1.x86_64.rpm\nhumanitl daemon install\nhumanitl sandbox check',
         aur: 'Arch Linux: das AUR-Paket humanitl-bin, derzeit in Version @AUR@.',
@@ -929,6 +931,23 @@ const de = {
       home: 'Zur Startseite',
       stand: 'Stand: 2026-10. Quellen: README.md, docs/SECURITY.md, docs/THREAT-MODEL.md, docs/ARCHITECTURE.md, ADR-0019, tests/escape.',
     },
+  },
+  // Das Installationsskript (HUM-528): der Einzeiler auf Startseite und Download-Seite und die
+  // Leseseite, die den Quelltext von install.sh zeigt.
+  install: {
+    command: 'curl -fsSL https://humanitl.de/install | sh',
+    label: 'Oder im Terminal, unter Linux und macOS:',
+    copy: 'Befehl kopieren',
+    read: 'Das Skript vorher lesen',
+    title: 'Das Installationsskript',
+    metaDescription: 'Der Quelltext hinter curl -fsSL https://humanitl.de/install | sh, genau so, wie er ausgeliefert wird.',
+    lede: 'Das ist das Skript, das `curl -fsSL https://humanitl.de/install | sh` ausführt, Byte für Byte: Der Bau der Website kopiert `install.sh` aus dem Repository nach `/install` und erzeugt diese Seite aus derselben Datei.',
+    dryRun: 'Was es auf deinem Rechner täte, ohne etwas zu ändern:',
+    dryRunCommand: 'curl -fsSL https://humanitl.de/install | sh -s -- --dry-run',
+    unsigned:
+      'Releases vor 1.0.0 sind unsigniert. Das Skript prüft jeden Download gegen die `SHA256SUMS` des Releases. Das schützt vor einem beschädigten Download, nicht vor einem manipulierten Release. Unter macOS entfernt es die Quarantäne nie: Gatekeeper prüft die App wie nach einem Download im Browser.',
+    source: 'install.sh auf GitHub',
+    raw: 'Die Datei selbst',
   },
 };
 
