@@ -103,6 +103,10 @@
 #[cfg(test)]
 pub(crate) mod test_support;
 
+/// Der Weg einer Stufe, die noch nicht zugelassen ist (HUM-493).
+#[cfg(test)]
+mod admission_tests;
+
 pub mod agent;
 pub mod agent_exit;
 pub mod backend;

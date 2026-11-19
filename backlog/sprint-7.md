@@ -2916,6 +2916,60 @@ ohne Stufe da.
 ### Akzeptanzkriterien
 1. Kein ungetesteter toter Pfad.
 
+### Stand nach der Umsetzung (2026-11-19)
+
+**Entscheidung: behalten.** Die Zulassung ist das Tor, das ADR-0020 und
+ADR-0021 für jede neue Stufe festschreiben, und `BACKLOG.md` Abschnitt 9 nennt
+die nächsten Backends schon (Docker, microsandbox, Incus). Das nächste fände
+sonst kein Tor vor; es wieder aufzubauen hieße, Feature, `escape-launch`,
+`tests/escape/run.sh`, ESC-5, die Terminal-Tests und die Prüfung in
+`tools/check-deps.sh` noch einmal zu schreiben und zu prüfen. Die Umgehung ist
+auch heute kein toter Code: `escape-tests-podman` und `escape-tests-qemu`
+starten ihre Stufe über `escape-launch` und damit über
+`Backend::detect_unadmitted`, also genau den Weg, den die Suite vor der
+nächsten Zulassung braucht. Die CI-Jobs bleiben deshalb beim Feature, auch wenn
+beide Stufen inzwischen zugelassen sind. Kein Code, kein Feature und kein
+Diagnose-Code fallen weg; `daemon/Cargo.toml`, App, Protokoll und Dokumente
+bleiben unberührt.
+
+**Was ungeprüft war und jetzt geprüft ist.** Jede Stelle, die die Zulassung
+fragt, hatte seit HUM-449 nur noch ihren Erfolgsfall unter Test. Die
+Unit-Tests der Sandbox-Crate nehmen dafür je Faden eine Stufe von der Liste
+(`test_support::with_admitted`; `backend::admitted_backends` liest die
+eingesetzte Liste nur unter `cfg(test)`, der ausgelieferte Bau prüft
+unverändert gegen `ADMITTED_BACKENDS`). Neu in
+`daemon/crates/sandbox/src/admission_tests.rs`, für jede Stufe dieses Builds
+der Reihe nach, die Stufen aus der Liste selbst und nicht aus Adapternamen im
+Test (HUM-145, die Kopplungszahlen bleiben gleich): Wahl, Suche und Rückfall
+der Vorschau lehnen die herausgenommene Stufe mit `SANDBOX_048` ab (Stufe im
+`why`, Knopf zurück auf `auto`), jede andere Stufe besteht die Wahl weiter;
+`detect_unadmitted` kommt an der Zulassung vorbei und scheitert erst an der
+Suche, während `detect` mit derselben Liste an ihr scheitert; `SANDBOX_036`
+für ein Profil, das eine nicht zugelassene Stufe verlangt, hat keinen Knopf
+(mit voller Liste schon); die Liste der Backends nennt `SANDBOX_048`, und für
+die Stufe der Container-Engine fragt sie eine Attrappe des Programms, die
+jeden Aufruf mitschreibt, gar nicht erst. Im Doctor geht
+`before_admission_the_probe_is_refused_and_starts_nothing` jetzt den Weg jeder
+Gruppe (mit Suche) statt `unadmitted_lines` direkt zu rufen, und
+`a_pending_search_still_names_the_admission` prüft die Zeile `admitted`, wenn
+die Suche bei Ablauf der Frist noch läuft. Der Sonderfall in `given_backend`
+(IPC) ist als `given_against_choice` abgetrennt, damit ein Test die Ablehnung
+`SANDBOX_048` einsetzen kann: Sie gilt als erfüllt nur, wenn die Konfiguration
+genau das gesetzte Backend nennt.
+
+**Mutationsbeweise.** `admitted` liefert immer `Ok(())`: alle vier Tests in
+`admission_tests.rs` und beide Doctor-Tests rot. Die Umgehung fragt
+doch die Zulassung: `the_bypass_of_the_escape_suite_skips_admission_and_nothing_else`
+rot. `search` im Doctor ohne Zweig der Zulassung: der Doctor-Test vor der
+Zulassung rot. `pending_lines` immer mit `Ok(())`:
+`a_pending_search_still_names_the_admission` rot. Knopf in `SANDBOX_036`
+immer: `a_profile_requiring_an_unadmitted_backend_offers_no_button_to_it` rot.
+Die Liste sucht die Engine trotz Ablehnung:
+`the_list_names_an_unadmitted_stage_and_does_not_search_its_engine` rot. In
+`given_against_choice` ohne den Zweig für `SANDBOX_048` oder ohne den Vergleich
+mit dem Namen aus der Konfiguration:
+`an_unadmitted_given_backend_starts_only_when_the_configuration_names_it` rot.
+
 ---
 
 ## HUM-494 · App: the settings row of the backends is too narrow with four levels

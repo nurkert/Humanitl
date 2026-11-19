@@ -103,3 +103,35 @@ pub(crate) fn never_answering_engine(leader: &std::path::Path, child: &std::path
         leader = leader.display()
     )
 }
+
+thread_local! {
+    /// Die Liste, die [`with_admitted`] in diesem Faden einsetzt.
+    static ADMITTED: std::cell::Cell<Option<&'static [&'static str]>> =
+        const { std::cell::Cell::new(None) };
+}
+
+/// Die Liste der zugelassenen Stufen, die `crate::backend::admitted` in
+/// diesem Faden statt `crate::ADMITTED_BACKENDS` prüft, falls
+/// [`with_admitted`] eine eingesetzt hat.
+pub(crate) fn admitted_override() -> Option<&'static [&'static str]> {
+    ADMITTED.with(std::cell::Cell::get)
+}
+
+/// Führt `run` aus, während in diesem Faden nur die Stufen in `admitted`
+/// zugelassen sind (HUM-493).
+///
+/// Seit HUM-449 ist jede Stufe dieses Builds zugelassen; ohne diesen Eingriff
+/// bliebe der Weg der Ablehnung (`SANDBOX_048`) bis zum nächsten Backend
+/// ungeprüft. Die Liste gilt je Faden, damit parallel laufende Tests sie nicht
+/// sehen, und wird auch nach einem Panik in `run` zurückgesetzt.
+pub(crate) fn with_admitted<R>(admitted: &'static [&'static str], run: impl FnOnce() -> R) -> R {
+    /// Setzt beim Verlassen die Liste von vorher wieder ein.
+    struct Restore(Option<&'static [&'static str]>);
+    impl Drop for Restore {
+        fn drop(&mut self) {
+            ADMITTED.with(|list| list.set(self.0));
+        }
+    }
+    let _restore = Restore(ADMITTED.with(|list| list.replace(Some(admitted))));
+    run()
+}
