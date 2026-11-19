@@ -1,4 +1,4 @@
-//! Nur für die KVM-Tests (HUM-471, HUM-468, HUM-485): vier Eingriffe in die Zeile der Maschine
+//! Nur für die KVM-Tests (HUM-471, HUM-468, HUM-485, HUM-480): fünf Eingriffe in die Zeile der Maschine
 //! einer Sitzung des Adapters, je Faden gesetzt, damit parallele Tests
 //! einander nichts unterschieben. Die Endform kennt keinen davon.
 //!
@@ -20,6 +20,11 @@
 //!   Host-Prüfung muss ihn finden.
 //! - **Weitere Eigenschaften der Unit** (HUM-485), etwa eine Grenze, die die
 //!   geplante überschreibt; die Host-Prüfung muss die Abweichung finden.
+//! - **Ein Befehl im Gefängnis der Maschine** (HUM-480): Dort startet eine
+//!   Shell den Befehl und ersetzt sich dann durch den Emulator, so wie ein
+//!   übernommener Helfer ein Programm starten könnte. Was er findet, schreibt
+//!   er in einen Ordner des Tests, den die Unit beschreiben darf und den das
+//!   Gefängnis beschreibbar bindet.
 
 use std::cell::RefCell;
 use std::ffi::OsString;
@@ -42,7 +47,22 @@ pub(crate) struct TestMachine {
     /// Eigenschaften, die die Unit nach ihren eigenen bekommt (HUM-485); bei
     /// systemd gilt die letzte, so lässt sich eine Grenze überschreiben.
     pub(crate) unit_properties: Vec<String>,
+    /// Ein Befehl der Shell im Gefängnis der Maschine vor dem Emulator
+    /// (HUM-480). In ihm und in [`Self::extra_process`] steht
+    /// [`RUNTIME_PLACEHOLDER`] für das Laufzeitverzeichnis der Sitzung.
+    pub(crate) jailed_command: Option<String>,
+    /// Ein Ordner des Tests, beschreibbar in der Unit und im Gefängnis der
+    /// Maschine (HUM-480).
+    pub(crate) writable: Option<PathBuf>,
+    /// So viele Shells hält der Befehl im Gefängnis über den Start hinaus,
+    /// etwa eine, die auf ein Zeichen des Tests wartet (HUM-480); die
+    /// Host-Prüfung zählt sie zu den Shells des Skripts.
+    pub(crate) extra_shells: usize,
 }
+
+/// Steht in einem Befehl des Tests für das Laufzeitverzeichnis der Sitzung,
+/// das erst der Plan kennt (HUM-480).
+pub(crate) const RUNTIME_PLACEHOLDER: &str = "{runtime}";
 
 thread_local! {
     static TEST_MACHINE: RefCell<TestMachine> = RefCell::new(TestMachine::default());
@@ -56,6 +76,11 @@ pub(crate) fn set(machine: TestMachine) {
 /// Die Eingriffe dieses Fadens.
 fn current() -> TestMachine {
     TEST_MACHINE.with_borrow(Clone::clone)
+}
+
+/// Die Shells, die der Befehl im Gefängnis dieses Fadens hält.
+pub(crate) fn extra_shells() -> usize {
+    current().extra_shells
 }
 
 /// Die Datei der Konsole einer Sitzung.
@@ -87,6 +112,9 @@ pub(crate) fn apply(line: &mut Vec<OsString>, layout: &Layout) {
         }
         binds.extend(["--bind".into(), dir.clone().into(), dir.clone().into()]);
     }
+    if let Some(dir) = &machine.writable {
+        binds.extend(["--bind".into(), dir.clone().into(), dir.clone().into()]);
+    }
     if let Some(relay) = &machine.vsock_relay {
         let device = format!("path={}", layout.device_socket().display());
         for word in line.iter_mut() {
@@ -101,10 +129,27 @@ pub(crate) fn apply(line: &mut Vec<OsString>, layout: &Layout) {
             binds.extend(["--ro-bind".into(), dir.into(), dir.into()]);
         }
     }
-    // Vor das Programm des Emulators, also noch in die Optionen von bwrap.
+    // Vor das Programm des Emulators, also noch in die Optionen von bwrap;
+    // der Befehl im Gefängnis danach, als dessen Programm.
     if let Some(at) = line.iter().position(|word| word == "-M") {
         let program = at.saturating_sub(1);
-        for (offset, word) in binds.into_iter().enumerate() {
+        let jailed: Vec<OsString> = machine
+            .jailed_command
+            .iter()
+            .flat_map(|command| {
+                [
+                    super::lines::SCRIPT_SHELL.into(),
+                    "-c".into(),
+                    format!(
+                        "{}; exec \"$@\"",
+                        command.replace(RUNTIME_PLACEHOLDER, &layout.dir.to_string_lossy())
+                    )
+                    .into(),
+                    "humanitl-test".into(),
+                ]
+            })
+            .collect();
+        for (offset, word) in binds.into_iter().chain(jailed).enumerate() {
             line.insert(program + offset, word);
         }
     }
@@ -112,21 +157,33 @@ pub(crate) fn apply(line: &mut Vec<OsString>, layout: &Layout) {
         let shell: [OsString; 4] = [
             super::lines::SCRIPT_SHELL.into(),
             "-c".into(),
-            format!("{command} & exec \"$@\"").into(),
+            format!(
+                "{} & exec \"$@\"",
+                command.replace(RUNTIME_PLACEHOLDER, &layout.dir.to_string_lossy())
+            )
+            .into(),
             "humanitl-test".into(),
         ];
         line.splice(0..0, shell);
     }
 }
 
-/// Die Eigenschaft, mit der die Unit in das Verzeichnis der Konsole
-/// schreiben darf, und die Eigenschaften, die ein Test dazugibt.
+/// Die Eigenschaften, mit denen die Unit in das Verzeichnis der Konsole und
+/// in den Ordner des Tests schreiben darf, ohne dort etwas auszuführen, wie
+/// bei jedem beschreibbaren Pfad der Endform (HUM-480), und die, die ein
+/// Test dazugibt.
 pub(crate) fn unit_properties() -> Vec<String> {
     let machine = current();
     machine
         .console
-        .map(|dir| format!("ReadWritePaths={}", dir.display()))
-        .into_iter()
+        .iter()
+        .chain(&machine.writable)
+        .flat_map(|dir| {
+            [
+                format!("ReadWritePaths={}", dir.display()),
+                format!("NoExecPaths={}", dir.display()),
+            ]
+        })
         .chain(machine.unit_properties)
         .collect()
 }

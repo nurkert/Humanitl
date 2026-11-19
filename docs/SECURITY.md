@@ -2355,7 +2355,7 @@ defense in depth; what carries each guarantee lies on the host.
 | # | Guarantee | How it holds on the host | Checked by |
 |---|---|---|---|
 | 1 | No network interface | the machine has no network device (`-nic none`, no `-netdev`); the session's unit runs with `PrivateNetwork=yes`, so every helper process sees only `lo`; no process of the unit holds `/dev/net/tun`, `/dev/vhost-net` or `/dev/vhost-vsock` | the shim's `no_interfaces` in the guest, and the host check: the network namespace of every process of the unit, the descriptors of every process, the running emulator's own command line |
-| 2 | Exactly one door | one vsock device process per session (never shared, HUM-442 Q9) with one device, `--uds-path` in the session's runtime directory and never `--forward-cid`; on the host exactly one listener `<uds>_5000`, which the daemon forwards to the session's proxy socket; every other port of the host finds no listener; the guest root is a read-only share in which no runtime directory and no host socket stands | the shim's `single_socket`, `bridge_listening`, `mounts_match` and `mounts_pinned` in the guest, and the host check: only the declared sockets in the runtime directory, exactly one vsock device process with exactly one device, the emulator's descriptors limited to those of the plan without a console, every process of the unit one of its programs (the script's shell, bubblewrap, a file system daemon, the vsock device, the emulator; HUM-468) |
+| 2 | Exactly one door | one vsock device process per session (never shared, HUM-442 Q9) with one device, `--uds-path` in the session's runtime directory and never `--forward-cid`; on the host exactly one listener `<uds>_5000`, which the daemon forwards to the session's proxy socket; every other port of the host finds no listener; the guest root is a read-only share in which no runtime directory and no host socket stands | the shim's `single_socket`, `bridge_listening`, `mounts_match` and `mounts_pinned` in the guest, and the host check: only the declared sockets in the runtime directory, exactly one vsock device process with exactly one device, the emulator's descriptors limited to those of the plan without a console, every process of the unit one of its programs (the script's shell, bubblewrap, a file system daemon, the vsock device, the emulator; HUM-468), each as often as the script starts it (HUM-480) |
 | 3 | No new doors | the guest kernel loads only the plan's modules and then locks module loading (`kernel.modules_disabled = 1`, automatic loading off before that); no device can be added to a running machine (no monitor, no QMP); the emulator runs under its full `-sandbox` and in a jail without capabilities | the shim's `seccomp_applied` and `families` in the guest; the agent's filter refuses `AF_VSOCK` and `AF_UNIX` |
 
 **The agent starts only when the host admits it.** In the guest, PID 1 writes every `CHECK` line
@@ -2399,6 +2399,29 @@ listen).
   `ProtectHome=read-only` with only the runtime directory of the session and the project folder
   writable, `RestrictAddressFamilies=AF_UNIX AF_NETLINK`, `LockPersonality`, `RestrictRealtime`,
   native system calls only.
+- **Only the unit's programs run** (HUM-480). The unit carries `NoExecPaths=/` and `ExecPaths=`
+  with exactly the files its processes start or map as code: `env`, which clears the
+  environment, the shim, the script's shell, `sleep` (the script's wait for the sockets),
+  bubblewrap, the file system daemon, the vsock device and the emulator, each by its resolved
+  path, and for each dynamically linked one its loader and every library the loader lists for it
+  (`<loader> --list <program>`, when the session is planned). The list holds single files, not
+  the library directory, which holds many other programs (193 on the Debian host it was
+  measured on). Every writable path of the unit (the runtime directory, the project folder or
+  the layer) is named in `NoExecPaths=` as well: `ReadWritePaths=` mounts it anew, and
+  `NoExecPaths=/` alone does not reach that mount (measured: a copy of `id` in the project
+  folder ran). Every other file reachable through the unit's mounts, a copy the unit wrote
+  itself included, fails at `execve` (`EACCES`) and at a mapping as code (`EPERM`), so the
+  loader is no detour (`ld.so /usr/bin/id`); measured with `/usr/bin/id` and with copies of it
+  in the project folder and in the runtime directory, from the unit and from a jail. The
+  exception is a mount that bubblewrap creates inside a jail, named below. The bubblewrap jails inherit this: they live in a user namespace
+  below the unit's, where the kernel locks the inherited `noexec`, and `--ro-bind /usr /usr`
+  takes the file mounts along. It holds after admission, where the one-time host check sees
+  nothing: in the KVM test a process in the emulator's jail waits until the agent runs, then
+  `/usr/bin/id` fails there while the emulator itself starts. A program that is no ELF file (a
+  wrapper script) refuses the plan (`SANDBOX_011`), since the list would not know what it starts.
+  The list binds files of the host, not code a taken-over process brings along: a copy in a
+  `memfd`, or a file in a mount that bubblewrap creates inside a jail (its root, the masks over
+  the project), still runs (measured; `THREAT-MODEL.md` K-33).
 - **Four processes, four jails.** The file system daemon of the guest root, the file system daemon
   of `/work`, the vsock device and the emulator each run in their own bubblewrap jail with every
   namespace unshared and every capability dropped. No jail binds the session's runtime directory

@@ -469,8 +469,15 @@ const SESSION_FLAGS: &[&str] = &[
 ];
 
 /// Führt `command` mit leerer Eingabe aus und wartet höchstens `timeout`
-/// auf sein Ende; danach wird es beendet, und der Fehler heißt `TimedOut`.
-/// Für die kurzen Fragen an `systemctl`, deren Ausgabe klein ist.
+/// auf sein Ende und auf das Ende seiner Ausgabe; danach wird es beendet,
+/// und der Fehler heißt `TimedOut`. Für die kurzen Fragen an `systemctl`,
+/// deren Ausgabe klein ist.
+///
+/// Das Programm startet als Anführer einer eigenen Prozessgruppe, und beide
+/// Kanäle liest je ein Faden. Hält ein Kind, das es hinterlassen hat, die
+/// Ausgabe offen, wartet der Aufruf nicht darüber hinaus (HUM-480): Nach der
+/// Frist bekommt die ganze Gruppe `SIGKILL`, und der Aufruf kehrt zurück,
+/// auch wenn ein Faden noch liest.
 ///
 /// # Errors
 ///
@@ -479,27 +486,65 @@ pub(crate) fn run_bounded(
     mut command: Command,
     timeout: Duration,
 ) -> std::io::Result<std::process::Output> {
+    use std::os::unix::process::CommandExt as _;
     use std::process::Stdio;
     let mut child = command
+        .process_group(0)
         .stdin(Stdio::null())
         .stdout(Stdio::piped())
         .stderr(Stdio::piped())
         .spawn()?;
     let deadline = std::time::Instant::now() + timeout;
-    loop {
-        if child.try_wait()?.is_some() {
-            return child.wait_with_output();
+    let stdout = read_in_background(child.stdout.take());
+    let stderr = read_in_background(child.stderr.take());
+    let group = i32::try_from(child.id())
+        .ok()
+        .and_then(rustix::process::Pid::from_raw);
+    let timed_out = |child: &mut std::process::Child| {
+        if let Some(group) = group {
+            let _ = rustix::process::kill_process_group(group, rustix::process::Signal::KILL);
+        }
+        let _ = child.kill();
+        let _ = child.wait();
+        std::io::Error::new(
+            std::io::ErrorKind::TimedOut,
+            format!("no answer within {timeout:?}"),
+        )
+    };
+    let status = loop {
+        if let Some(status) = child.try_wait()? {
+            break status;
         }
         if std::time::Instant::now() >= deadline {
-            let _ = child.kill();
-            let _ = child.wait();
-            return Err(std::io::Error::new(
-                std::io::ErrorKind::TimedOut,
-                format!("no answer within {timeout:?}"),
-            ));
+            return Err(timed_out(&mut child));
         }
         std::thread::sleep(Duration::from_millis(20));
-    }
+    };
+    let left = || deadline.saturating_duration_since(std::time::Instant::now());
+    let (Ok(stdout), Ok(stderr)) = (stdout.recv_timeout(left()), stderr.recv_timeout(left()))
+    else {
+        return Err(timed_out(&mut child));
+    };
+    Ok(std::process::Output {
+        status,
+        stdout,
+        stderr,
+    })
+}
+
+/// Liest einen Kanal in einem eigenen Faden bis zu seinem Ende.
+fn read_in_background<R: std::io::Read + Send + 'static>(
+    pipe: Option<R>,
+) -> std::sync::mpsc::Receiver<Vec<u8>> {
+    let (sender, receiver) = std::sync::mpsc::channel();
+    std::thread::spawn(move || {
+        let mut bytes = Vec::new();
+        if let Some(mut pipe) = pipe {
+            let _ = pipe.read_to_end(&mut bytes);
+        }
+        let _ = sender.send(bytes);
+    });
+    receiver
 }
 
 /// Ob dieser Prozess den Client einer Engine über den Dienstverwalter
@@ -605,6 +650,44 @@ mod tests {
         argv.iter()
             .map(|arg| arg.to_string_lossy().into_owned())
             .collect()
+    }
+
+    /// HUM-480: Die Frist gilt auch für die Ausgabe. Ein Lader, der endet,
+    /// aber ein Kind hinterlässt, das seine Ausgabe offen hält, hält den
+    /// Aufruf nicht über die Frist hinaus fest, und das Kind wird mit der
+    /// Gruppe beendet. Ein Programm, das endet und seine Kanäle schließt,
+    /// liefert Status und beide Ausgaben wie bisher.
+    #[test]
+    fn the_deadline_also_bounds_output_held_open_by_a_child() {
+        let dir = tempfile::tempdir().unwrap();
+        let pid_file = dir.path().join("sleeper");
+        let mut loader = Command::new("/bin/sh");
+        loader.arg("-c").arg(format!(
+            "sleep 30 & echo $! > {}; echo listed",
+            pid_file.display()
+        ));
+        let started = std::time::Instant::now();
+        let err = run_bounded(loader, Duration::from_secs(1)).unwrap_err();
+        assert_eq!(err.kind(), std::io::ErrorKind::TimedOut);
+        assert!(
+            started.elapsed() < Duration::from_secs(5),
+            "{:?}",
+            started.elapsed()
+        );
+        let sleeper = std::fs::read_to_string(&pid_file).unwrap();
+        let gone = (0..50).any(|_| {
+            std::thread::sleep(Duration::from_millis(20));
+            std::fs::read_to_string(format!("/proc/{}/stat", sleeper.trim()))
+                .map_or(true, |stat| stat.contains(") Z "))
+        });
+        assert!(gone, "the sleeper {sleeper} still runs");
+
+        let mut plain = Command::new("/bin/sh");
+        plain.arg("-c").arg("echo out; echo err >&2; exit 3");
+        let output = run_bounded(plain, Duration::from_secs(5)).unwrap();
+        assert_eq!(output.status.code(), Some(3));
+        assert_eq!(output.stdout, b"out\n");
+        assert_eq!(output.stderr, b"err\n");
     }
 
     /// Mutationsbeweis für das Präfix: Jeder Name außerhalb von

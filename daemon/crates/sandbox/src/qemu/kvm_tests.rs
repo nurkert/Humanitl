@@ -577,6 +577,7 @@ impl Harness {
                 vsock_relay: None,
                 extra_process: None,
                 unit_properties: Vec::new(),
+                ..super::test_machine::TestMachine::default()
             });
         }
         Some(Self {
@@ -1028,6 +1029,7 @@ fn a_connect_while_the_vsock_device_starts_never_silences_it() {
         vsock_relay: Some(relay),
         extra_process: None,
         unit_properties: Vec::new(),
+        ..super::test_machine::TestMachine::default()
     });
     let (plan, output) = harness.plan_with("echo hum471-agent-ran", Vec::new(), None);
     let device = plan
@@ -1298,6 +1300,7 @@ fn an_extra_sleep_in_the_unit_turns_the_host_check_red() {
         vsock_relay: None,
         extra_process: Some("sleep 600".to_owned()),
         unit_properties: Vec::new(),
+        ..super::test_machine::TestMachine::default()
     });
     let (handle, _output) = harness.launch("touch /work/started; sleep 120");
     let results = harness.backend.isolation_check(&handle);
@@ -1328,6 +1331,176 @@ fn an_extra_sleep_in_the_unit_turns_the_host_check_red() {
     );
 }
 
+/// HUM-480: Die Unit führt nur ihre Programme aus (`NoExecPaths=/`,
+/// `ExecPaths=`). Ein Befehl im Gefängnis der Maschine, wie ein übernommener
+/// Helfer, und einer in der Unit neben ihr starten `/usr/bin/id` und eine
+/// Kopie davon an jedem Ort, den die Unit beschreiben darf: der
+/// Projektordner und das Laufzeitverzeichnis der Sitzung (dessen `root/`
+/// bindet das Gefängnis), dazu der Ordner des Tests, in der Unit und im
+/// Gefängnis beschreibbar; jeder Versuch scheitert am `exec` mit „Permission denied" (126), und die Maschine, die
+/// danach im selben Gefängnis startet, läuft, die Prüfung ist grün, der Agent
+/// wird zugelassen. Nach der Zulassung versucht es ein Prozess im
+/// Gefängnis des Emulators noch einmal: Der Befehl dort hat vor dem Emulator
+/// eine Unterschale abgezweigt, die an einer FIFO des Tests wartet (die
+/// Host-Prüfung zählt sie als eine Shell mehr, `TestMachine::extra_shells`);
+/// erst wenn der Agent läuft, schreibt der Test hinein. Dann scheitert `id`
+/// wieder, der Emulator selbst (`--version`) startet, die Liste gilt also
+/// weiter und trennt nach Programm. Ohne `nsenter`: Den Wiedereintritt in den
+/// Mount-Namensraum des Gefängnisses verweigert der Runner der CI (`EPERM`).
+///
+/// Mutationsbeweis: ohne `NoExecPaths=/` und `ExecPaths=` in der Unit läuft
+/// `id` an allen Stellen, und der Test wird rot; nennt `NoExecPaths=` nur
+/// `/` und nicht die beschreibbaren Pfade, laufen die Kopien im
+/// Projektordner und im Laufzeitverzeichnis (gemessen, systemd 262).
+#[test]
+fn a_helper_that_starts_a_foreign_program_fails_at_exec() {
+    use crate::SandboxBackend as _;
+    use std::path::Path;
+    let test = "a_helper_that_starts_a_foreign_program_fails_at_exec";
+    let Some(harness) = Harness::new(test) else {
+        return;
+    };
+    let evidence = harness.dir.path().join("evidence");
+    std::fs::create_dir_all(&evidence).unwrap();
+    // Kopien von `id`, die die Unit beschreiben könnte: im Ordner des Tests
+    // und im Projektordner.
+    let copy = evidence.join("id-copy");
+    let project_copy = harness.project.join("id-copy");
+    for target in [&copy, &project_copy] {
+        std::fs::copy("/usr/bin/id", target).unwrap();
+    }
+    let attempts = |places: &[(&str, &Path)]| exec_attempts(&evidence, places);
+    let id = Path::new("/usr/bin/id");
+    // Die Kopie im Laufzeitverzeichnis legt der Test nach dem Plan ab.
+    let runtime_copy = format!("{}/root/id-copy", super::test_machine::RUNTIME_PLACEHOLDER);
+    let runtime_copy = Path::new(&runtime_copy);
+    let in_unit = [
+        ("unit", id),
+        ("unit-copy", copy.as_path()),
+        ("unit-project", project_copy.as_path()),
+        ("unit-runtime", runtime_copy),
+    ];
+    let in_jail = [
+        ("jail", id),
+        ("jail-copy", copy.as_path()),
+        ("jail-runtime", runtime_copy),
+    ];
+    // Nach der Zulassung, im Gefängnis: `id` und der Emulator selbst
+    // (`$1` des Befehls im Gefängnis).
+    let after = [("after", id), ("after-own", Path::new("\"$1\" --version"))];
+    let signal = evidence.join("admitted");
+    make_fifo(&signal);
+    let waiting = format!(
+        "( read -r _ <{}; {} ) &",
+        signal.display(),
+        attempts(&after)
+    );
+    super::test_machine::set(super::test_machine::TestMachine {
+        console: console_wanted().then(|| harness.dir.path().join("console")),
+        extra_process: Some(format!("{{ {}; }}", attempts(&in_unit))),
+        jailed_command: Some(format!("{waiting} {}", attempts(&in_jail))),
+        writable: Some(evidence.clone()),
+        extra_shells: 1,
+        ..super::test_machine::TestMachine::default()
+    });
+    let (handle, _output) = harness.launch_planned("touch /work/started; sleep 120", |plan| {
+        let runtime = plan.session_dir.as_ref().expect("the runtime directory");
+        std::fs::copy("/usr/bin/id", runtime.join("root/id-copy")).unwrap();
+    });
+    let results = harness.backend.isolation_check(&handle);
+    let read = |place: &str| {
+        ["status", "out", "err"].map(|kind| {
+            std::fs::read_to_string(evidence.join(format!("{place}.{kind}")))
+                .unwrap_or_default()
+                .trim()
+                .to_owned()
+        })
+    };
+    for (place, _) in in_jail.iter().chain(&in_unit) {
+        let [status, out, err] = read(place);
+        assert!(
+            status == "126" && err.contains("Permission denied") && out.is_empty(),
+            "{place}: status {status:?}, out {out:?}, err {err:?}"
+        );
+    }
+    assert!(results.iter().all(|r| r.passed), "{results:?}");
+    let deadline = Instant::now() + Duration::from_secs(30);
+    while !harness.project.join("started").exists() && Instant::now() < deadline {
+        std::thread::sleep(Duration::from_millis(100));
+    }
+    assert!(
+        harness.project.join("started").exists(),
+        "the agent was not admitted"
+    );
+
+    // Nach der Zulassung: das Zeichen an die wartende Unterschale.
+    signal_and_wait(&signal, &evidence.join("after-own.status"));
+    let _ = handle.kill();
+    let _ = handle.wait_timeout(Duration::from_secs(15));
+    let [status, out, err] = read("after-own");
+    assert!(
+        status == "0" && out.contains("QEMU"),
+        "the emulator itself runs in its jail after admission: status {status:?}, out {out:?}, \
+         err {err:?}"
+    );
+    let [status, out, err] = read("after");
+    assert!(
+        status == "126" && err.contains("Permission denied") && out.is_empty(),
+        "a foreign program after admission: status {status:?}, out {out:?}, err {err:?}"
+    );
+}
+
+/// Legt die FIFO `path` an, an der ein Prozess im Gefängnis wartet (HUM-480).
+fn make_fifo(path: &std::path::Path) {
+    let made = std::process::Command::new("mkfifo").arg(path).status();
+    assert!(
+        made.as_ref().is_ok_and(std::process::ExitStatus::success),
+        "mkfifo {made:?}"
+    );
+}
+
+/// Schreibt das Zeichen in die FIFO `signal` und wartet höchstens 20 s, bis
+/// es `done` gibt, dann kurz auf den Rest der Ausgabe (HUM-480). Wartet dort
+/// niemand mehr, scheitert das Öffnen sofort (`O_NONBLOCK`, `ENXIO`), statt
+/// den Test anzuhalten.
+fn signal_and_wait(signal: &std::path::Path, done: &std::path::Path) {
+    use std::os::unix::fs::OpenOptionsExt as _;
+    let mut fifo = std::fs::OpenOptions::new()
+        .write(true)
+        .custom_flags(rustix::fs::OFlags::NONBLOCK.bits().cast_signed())
+        .open(signal)
+        .unwrap_or_else(|err| {
+            panic!(
+                "no process waits in the jail at {}: {err}",
+                signal.display()
+            )
+        });
+    std::io::Write::write_all(&mut fifo, b"admitted\n").unwrap();
+    drop(fifo);
+    let deadline = Instant::now() + Duration::from_secs(20);
+    while !done.exists() && Instant::now() < deadline {
+        std::thread::sleep(Duration::from_millis(100));
+    }
+    std::thread::sleep(Duration::from_millis(200));
+}
+
+/// Ein Befehl der Shell, der je Ort `program` startet und Status, Ausgabe
+/// und Fehler als `<Ort>.status`, `.out` und `.err` nach `evidence` schreibt
+/// (HUM-480).
+fn exec_attempts(evidence: &std::path::Path, places: &[(&str, &std::path::Path)]) -> String {
+    places
+        .iter()
+        .map(|(place, program)| {
+            format!(
+                "{program} >{dir}/{place}.out 2>{dir}/{place}.err; echo $? >{dir}/{place}.status",
+                program = program.display(),
+                dir = evidence.display()
+            )
+        })
+        .collect::<Vec<_>>()
+        .join("; ")
+}
+
 /// HUM-485: Die cgroup der Unit trägt ihre Grenzen (`memory.max`,
 /// `memory.swap.max`, `pids.max`), und ein Prozess in der Unit, der `sleep`
 /// im Hintergrund startet, bis `fork` scheitert (höchstens 1000 Mal), kommt
@@ -1356,6 +1529,7 @@ fn a_process_in_the_unit_cannot_start_more_tasks_than_tasks_max() {
             forks.display()
         )),
         unit_properties: Vec::new(),
+        ..super::test_machine::TestMachine::default()
     });
     let project = std::fs::File::open(&harness.project).unwrap();
     let expected = super::limits::UnitLimits::of(
@@ -1447,6 +1621,7 @@ fn a_unit_without_its_limits_is_refused_with_sandbox_052() {
         vsock_relay: None,
         extra_process: None,
         unit_properties: vec!["TasksMax=infinity".to_owned()],
+        ..super::test_machine::TestMachine::default()
     });
     let (handle, _output) = harness.launch("touch /work/started; sleep 120");
     let results = harness.backend.isolation_check(&handle);

@@ -212,11 +212,19 @@ fn a_disposable_guest_plan_mounts_an_overlay_over_the_checked_folder() {
             },
             0,
         ),
+        &["/usr/bin/dash".to_owned()],
     );
     assert!(
         properties
             .iter()
             .any(|p| p == "ReadWritePaths=/run/user/1000/humanitl-vm-x/s /run/user/1000/l"),
+        "{properties:?}"
+    );
+    // Was die Unit beschreiben darf, führt sie nicht aus (HUM-480).
+    assert!(
+        properties
+            .iter()
+            .any(|p| p == "NoExecPaths=/ /run/user/1000/humanitl-vm-x/s /run/user/1000/l"),
         "{properties:?}"
     );
 }
@@ -334,8 +342,8 @@ fn the_session_binds_reach_the_guest_root() {
 
 /// Die Eigenschaften der Unit sind die aus HUM-442 Q7, dazu die
 /// beschreibbaren Pfade, die Grenze der Deskriptoren (HUM-469) und die
-/// Grenzen an Speicher und Tasks (HUM-485); ein Pfad mit Leerraum wird
-/// abgelehnt.
+/// Grenzen an Speicher und Tasks (HUM-485), nur die Programme der Unit
+/// ausführbar (HUM-480); ein Pfad mit Leerraum wird abgelehnt.
 #[test]
 fn the_unit_carries_the_hardening_of_the_spike() {
     let machine = Machine {
@@ -346,6 +354,7 @@ fn the_unit_carries_the_hardening_of_the_spike() {
         "/run/user/1000/humanitl-vm-x/s",
         &["/home/u/p"],
         UnitLimits::of(machine, 300),
+        &["/usr/bin/dash".to_owned(), "/usr/lib/libc.so.6".to_owned()],
     );
     for wanted in [
         "PrivateNetwork=yes",
@@ -363,6 +372,8 @@ fn the_unit_carries_the_hardening_of_the_spike() {
         "MemoryMax=1836M",
         "MemorySwapMax=1836M",
         "TasksMax=130",
+        "NoExecPaths=/ /run/user/1000/humanitl-vm-x/s /home/u/p",
+        "ExecPaths=/usr/bin/dash /usr/lib/libc.so.6",
     ] {
         assert!(
             properties.iter().any(|p| p == wanted),
