@@ -4444,5 +4444,9 @@
   "diagAGENT011Title": "Agent install or update failed",
   "@diagAGENT011Title": {"description": "Title of the diagnostic AGENT_011 (docs/DIAGNOSTICS.md, HUM-519): an install or update of a depot agent in its maintenance sandbox failed at one step (run, result, pin, signature, checksum, tree, commit); nothing was taken over."},
   "diagAGENT011Why": "The install or update did not pass every check, so nothing was taken over and the depot is as it was. The message names the step that failed.",
-  "@diagAGENT011Why": {"description": "Generic cause of AGENT_011. Stands in the cause slot only when the diagnostic carries no sentence of the daemon's own (HUM-052)."}
+  "@diagAGENT011Why": {"description": "Generic cause of AGENT_011. Stands in the cause slot only when the diagnostic carries no sentence of the daemon's own (HUM-052)."},
+  "diagCONFIG025Title": "Data location not printable",
+  "@diagCONFIG025Title": {"description": "Title of the diagnostic CONFIG_025 (docs/DIAGNOSTICS.md, HUM-550): humanitl config paths refuses a data location with a line break or another control character, because uninstall.sh --purge reads that list line by line."},
+  "diagCONFIG025Why": "A data location holds a line break or another control character, so it cannot be printed one per line without naming other directories. Nothing was printed.",
+  "@diagCONFIG025Why": {"description": "Generic cause of CONFIG_025. Stands in the cause slot only when the diagnostic carries no sentence of the daemon's own (HUM-052)."}
 }

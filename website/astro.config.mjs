@@ -7,17 +7,20 @@ import { defineConfig } from 'astro/config';
 import { repoRoot } from './src/lib/docs-catalog.mjs';
 import rehypeDocs from './src/lib/rehype-docs.mjs';
 import remarkDocs from './src/lib/remark-docs.mjs';
-import { installScriptBytes } from './src/lib/install-script.mjs';
+import { installScriptBytes, uninstallScriptBytes } from './src/lib/install-script.mjs';
 
 // install.sh unverändert unter https://humanitl.de/install (HUM-528), für
 // `curl -fsSL https://humanitl.de/install | sh`. Eine Datei ohne Endung, die GitHub Pages als
 // application/octet-stream ausliefert; Lesen im Browser geht über die Seite /installationsskript/.
 // Kopiert werden die Bytes, nicht Text: nichts darf Zeilenenden oder Kodierung ändern.
+// Ebenso uninstall.sh unter https://humanitl.de/uninstall (HUM-550), Leseseite
+// /deinstallationsskript/.
 const installScript = {
   name: 'humanitl-install-script',
   hooks: {
     'astro:build:done': ({ dir }) => {
       writeFileSync(fileURLToPath(new URL('install', dir)), installScriptBytes());
+      writeFileSync(fileURLToPath(new URL('uninstall', dir)), uninstallScriptBytes());
     },
   },
 };

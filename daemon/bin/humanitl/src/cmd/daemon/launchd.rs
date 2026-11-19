@@ -516,6 +516,19 @@ mod tests {
         );
     }
 
+    /// Die Logs liegen dort, wo `config paths` sie nennt und
+    /// `uninstall.sh --purge` sie findet (HUM-550).
+    #[test]
+    fn the_log_lies_in_the_logs_location_of_the_data_list() {
+        let paths = humanitl_config::Paths::new(
+            humanitl_config::Env::from_pairs([("HOME", "/Users/me")]).with_uid(501),
+        );
+        assert_eq!(
+            log_path(&paths.home()).parent(),
+            Some(paths.mac_logs_dir().as_path())
+        );
+    }
+
     #[test]
     fn refresh_does_nothing_and_a_plain_install_runs() {
         let args = |refresh| InstallArgs {

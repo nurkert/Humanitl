@@ -1364,6 +1364,16 @@ pub enum ConfigCmd {
         #[arg(long, value_name = "LANG")]
         language: Option<String>,
     },
+
+    /// Print where Humanitl keeps your data: configuration, recordings, the
+    /// project register, the agent depot and the audit chain.
+    ///
+    /// One line per directory, NAME and PATH: `config` and `data`, on macOS
+    /// also `support` (Application Support) and `logs`. --json gives the same
+    /// as a list. A project folder is never among them. This is the list
+    /// `uninstall.sh --purge` deletes from; the command itself opens and
+    /// creates no file.
+    Paths,
 }
 
 /// Die Unterkommandos von `humanitl daemon`.

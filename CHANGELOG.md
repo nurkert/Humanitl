@@ -17,6 +17,17 @@ section here and list their commits instead.
 
 ## [Unreleased]
 
+### Added
+
+- `curl -fsSL https://humanitl.de/uninstall | sh` removes Humanitl the way
+  it came: it finds the package, the archive of the install script or the
+  macOS app, stops while an agent session runs, removes the background
+  service with `humanitl daemon uninstall`, then the program and, on its own
+  question, the APT source. Your data stays unless `--purge` is given, which
+  lists every location with its size and asks first.
+- `humanitl config paths` prints the directories that hold your data, the
+  list `--purge` deletes from.
+
 ## [0.4.1] - 2026-11-17
 
 Sessions start again under the packaged user unit. A patch release: no

@@ -94,6 +94,7 @@ fn every_subcommand_has_a_help_of_its_own() {
         vec!["config", "set", "--help"],
         vec!["config", "schema", "--help"],
         vec!["config", "edit", "--help"],
+        vec!["config", "paths", "--help"],
         vec!["audit", "--help"],
         vec!["audit", "verify", "--help"],
         vec!["audit", "export", "--help"],
@@ -1078,6 +1079,78 @@ fn the_profile_list_names_the_bundled_profiles_with_their_description() {
         .filter_map(|entry| entry["name"].as_str())
         .collect();
     assert_eq!(names, vec!["default", "llm-only"]);
+}
+
+/// `config paths` (HUM-550) nennt die Orte, die `uninstall.sh --purge`
+/// löscht: aus der Umgebung des Aufrufs, ohne Daemon und ohne etwas
+/// anzulegen; mit `--json` dieselben als Liste.
+#[test]
+fn config_paths_names_the_data_locations_without_a_daemon() {
+    let harness = Harness::new();
+    let config = harness.path("config").join("humanitl");
+    let data = harness.path("data").join("humanitl");
+
+    let output = harness.run(["config", "paths"]);
+    assert_eq!(code(&output), 0, "{}", stderr(&output));
+    let text = stdout(&output);
+    let lines: Vec<&str> = text.lines().collect();
+    assert_eq!(
+        lines
+            .first()
+            .map(|l| l.split_whitespace().collect::<Vec<_>>()),
+        Some(vec!["NAME", "PATH"]),
+        "{text}"
+    );
+    assert!(
+        lines
+            .iter()
+            .any(|l| l.starts_with("config ") && l.ends_with(&*config.display().to_string())),
+        "{text}"
+    );
+    assert!(
+        lines
+            .iter()
+            .any(|l| l.starts_with("data ") && l.ends_with(&*data.display().to_string())),
+        "{text}"
+    );
+    assert!(!data.exists(), "config paths creates nothing");
+
+    let json = harness.run(["--json", "config", "paths"]);
+    assert_eq!(code(&json), 0, "{}", stderr(&json));
+    let value: serde_json::Value = serde_json::from_str(&stdout(&json)).expect("JSON");
+    let rows = value["locations"].as_array().expect("a list");
+    assert_eq!(rows[0]["name"], "config");
+    assert_eq!(rows[0]["path"], config.display().to_string());
+    assert_eq!(rows[1]["name"], "data");
+    assert_eq!(rows[1]["path"], data.display().to_string());
+    let want = if cfg!(target_os = "macos") { 4 } else { 2 };
+    assert_eq!(rows.len(), want, "{value}");
+}
+
+/// Ein Zeilenumbruch in einem Datenort machte aus einer Zeile zwei, und
+/// `uninstall.sh --purge` löschte die zweite (HUM-550): `CONFIG_025`, nichts
+/// auf stdout.
+#[test]
+fn config_paths_refuses_a_location_with_a_line_break() {
+    let harness = Harness::new();
+    let data = format!("{}\n/home/victim/projects", harness.path("data").display());
+    let output = harness
+        .command()
+        .args(["config", "paths"])
+        .env("XDG_DATA_HOME", &data)
+        .output()
+        .expect("the binary runs");
+    assert_eq!(code(&output), 1, "{}", stderr(&output));
+    assert!(
+        stderr(&output).contains("CONFIG_025"),
+        "{}",
+        stderr(&output)
+    );
+    assert!(
+        stdout(&output).is_empty(),
+        "nothing printed: {}",
+        stdout(&output)
+    );
 }
 
 #[test]

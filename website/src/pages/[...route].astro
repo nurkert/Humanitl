@@ -18,8 +18,18 @@ export function getStaticPaths() {
 }
 
 const { lang, page } = Astro.props as { lang: Lang; page: Page };
-const views = { home: Home, download: Download, privacy: Privacy, imprint: Imprint, security: Security, installer: Installer };
+// Installations- und Deinstallationsskript teilen sich die Leseseite (HUM-550).
+const views = {
+  home: Home,
+  download: Download,
+  privacy: Privacy,
+  imprint: Imprint,
+  security: Security,
+  installer: Installer,
+  uninstaller: Installer,
+};
 const View = views[page];
+const kind = page === 'uninstaller' ? 'uninstall' : 'install';
 ---
 
-<View lang={lang} />
+<View lang={lang} kind={kind} />

@@ -86,7 +86,8 @@ pub static AREAS: &[AreaInfo] = &[
                Bereich dafür bis 029 erweitert), 021 die gespeicherten \
                Modellserver (HUM-289), 022 der Server des Projekts (HUM-405), \
                023 ein entfallener Wert einer Einstellung (HUM-464), 024 die \
-               Projektwahl (HUM-532)",
+               Projektwahl (HUM-532), 025 die Datenorte für `uninstall.sh` \
+               (HUM-550)",
     },
     AreaInfo {
         area: "sandbox",
@@ -2028,6 +2029,15 @@ registry! {
     AGENT_011 => "agent", "Agent install or update failed", "#agent_011",
         "Install and update of a depot agent run in a sandbox, and the daemon takes the result over only when every check passes: the version is the one asked for and only an update changes an installed one; where the vendor signs, the daemon itself verified its own copy of the vendor's manifest with the host's `gpg` and the key the adapter fixes, and the program's SHA-256 matches that manifest (the run only downloads, and no verdict of it counts); the program tree holds only regular files, directories and relative links inside it, no socket, FIFO, device, hard link, set-ID bit or name that is not UTF-8, within its caps. A missing `gpg` is a failure, never an unsigned install. The sentence names the step that failed; the depot is as it was before.",
         "`CopyCommand` with `humanitl agents install <id>` to run again after a failed download; `humanitl agents update <id>` when a version is installed already; install `gnupg` on the host when `gpg` is missing. A failed signature, checksum or tree check has no fix to go around it.";
+
+    // HUM-550: the data locations for `uninstall.sh --purge`.
+    /// `humanitl config paths` refuses to print a data location that holds a
+    /// line break or another control character: printed one per line, such a
+    /// path would read as two locations, and `uninstall.sh --purge` deletes
+    /// what this list names (HUM-550).
+    CONFIG_025 => "config", "Data location not printable", "#config_025",
+        "A data location comes from `XDG_CONFIG_HOME`, `XDG_DATA_HOME` or `HOME`, and one of them holds a line break or another control character. `humanitl config paths` prints one location per line, and `uninstall.sh --purge` deletes exactly the locations it reads there; such a path would split into rows that name other directories. Nothing was printed.",
+        "Set the variable the sentence names to a path without control characters, then run the command again. No fix action: the right path is known only to the person.";
 }
 
 /// Sucht einen Code im Register.

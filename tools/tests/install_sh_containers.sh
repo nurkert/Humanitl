@@ -1,5 +1,6 @@
 #!/usr/bin/env bash
-# install.sh in frischen Containern der unterstuetzten Linux-Systeme (HUM-528).
+# install.sh und uninstall.sh in frischen Containern der unterstuetzten
+# Linux-Systeme (HUM-528, HUM-550).
 #
 # Aufruf: tools/tests/install_sh_containers.sh [<system>...]
 #   Systeme: debian ubuntu fedora opensuse arch generic (ohne Angabe alle)
@@ -19,6 +20,21 @@
 #      rpm; tarball).
 #   3. derselbe Aufruf noch einmal: ersetzt die Installation.
 #   4. `humanitl --version` nennt die Version des Releases.
+#   5. uninstall.sh (HUM-550): --dry-run aendert nichts; --yes entfernt
+#      Programm, Paket, Paketquelle und die Unit, die `humanitl daemon install
+#      --no-start` schrieb, und laesst Nutzerdaten, einen Projektordner und
+#      einen fremden Ordner daneben stehen. Danach ist kein humanitl mehr in
+#      PATH, kein Paket registriert, keine Unit da.
+#   6. Neu installiert, dann uninstall.sh --purge --yes: Kennt das Programm
+#      `humanitl config paths`, sind dessen Orte weg und Projekt- und
+#      Nachbarordner da. Ein aelteres Release kennt den Befehl nicht; dann
+#      bricht --purge ab, ohne etwas zu aendern, und ein Lauf ohne --purge
+#      raeumt ab.
+#
+# systemd laeuft im Container nicht als Nutzerdienst; `systemctl` wird
+# deshalb beiseitegelegt, damit `daemon install --no-start` und `daemon
+# uninstall` den Weg ohne systemctl nehmen, den es fuer genau diesen Fall
+# gibt.
 #
 # generic ist ein Debian-Abbild mit einer os-release, die keine bekannte
 # Distribution nennt: der Archiv-Weg fuer "sonstiges Linux". Arch nimmt
@@ -208,15 +224,97 @@ case $METHOD in
   rpm) rpm -q "humanitl-$VERSION" > /dev/null || fail "rpm -q" ;;
   tarball) [ -f /home/tester/.local/lib/humanitl/INSTALLED-FILES ] || fail "INSTALLED-FILES" ;;
 esac
-echo "ok   $SYSTEM ($METHOD)"
+echo "ok   $SYSTEM ($METHOD) install"
+
+# ---- uninstall.sh (HUM-550) --------------------------------------------------
+
+un_tester() { su -s /bin/sh tester -c "cd ~ && sh /src/uninstall.sh $*"; }
+home=/home/tester
+units=$home/.config/systemd/user
+# Nutzerdaten, ein Projektordner mit eigenem .humanitl und ein fremder
+# Ordner neben den Daten.
+seed_data() {
+  su -s /bin/sh tester -c "mkdir -p $home/.config/humanitl $home/.local/share/humanitl/audit $home/project/.humanitl $home/.local/share/other-app &&
+    echo 'ui.language = \"de\"' > $home/.config/humanitl/config.toml &&
+    echo '{}' > $home/.local/share/humanitl/audit/audit.jsonl &&
+    echo x > $home/project/.humanitl/profile.toml && echo keep > $home/project/README && echo keep > $home/.local/share/other-app/data"
+}
+neighbours_there() {
+  [ -f $home/project/README ] && [ -f $home/project/.humanitl/profile.toml ] && [ -f $home/.local/share/other-app/data ]
+}
+data_there() { [ -f $home/.config/humanitl/config.toml ] && [ -f $home/.local/share/humanitl/audit/audit.jsonl ]; }
+home_state() { find $home -path $home/.cache -prune -o -print | LC_ALL=C sort; }
+
+# Ohne Nutzer-Manager im Container: systemctl beiseite (siehe Kopf). Erst
+# jetzt, weil ein Paket es als Abhaengigkeit mitbringen kann.
+for prog in systemctl; do
+  while hash -r && bin=$(command -v "$prog"); do mv "$bin" "$bin.hidden-for-install-test"; done
+done
+step "a unit from humanitl daemon install --no-start, user data, a project folder"
+su -s /bin/sh tester -c "$cli daemon install --no-start" || echo "note: daemon install --no-start failed here; the unit check below covers whatever it left"
+ls -la "$units" 2> /dev/null || :
+seed_data
+
+step "uninstall.sh --dry-run changes nothing"
+before=$(installed_state)
+before_home=$(home_state)
+un_tester --dry-run > /tmp/un-dry.out 2>&1 || {
+  cat /tmp/un-dry.out
+  fail "uninstall --dry-run failed"
+}
+cat /tmp/un-dry.out
+grep -q 'Dry run: nothing was changed' /tmp/un-dry.out || fail "uninstall --dry-run did not say so"
+[ "$before" = "$(installed_state)" ] || fail "uninstall --dry-run changed: $(installed_state)"
+[ "$before_home" = "$(home_state)" ] || fail "uninstall --dry-run changed the home"
+
+step "uninstall.sh --yes"
+un_tester --yes || fail "uninstall --yes failed"
+left=$(installed_state)
+[ -z "$left" ] || fail "left after uninstall: $left"
+[ -z "$(su -s /bin/sh tester -c 'command -v humanitl' || :)" ] || fail "humanitl is still in the PATH of tester"
+[ -z "$(find "$units" -name 'humanitld*' 2> /dev/null)" ] || fail "a unit is left: $(find "$units" -name 'humanitld*')"
+data_there || fail "the user data is gone without --purge"
+neighbours_there || fail "a project or neighbour folder is gone"
+
+step "install again, then uninstall.sh --purge --yes"
+as_tester --yes --no-setup --version "$VERSION" > /dev/null || fail "reinstall failed"
+seed_data
+if su -s /bin/sh tester -c "$cli config paths" > /tmp/paths.out 2>&1; then
+  cat /tmp/paths.out
+  un_tester --purge --yes || fail "uninstall --purge --yes failed"
+  [ -z "$(installed_state)" ] || fail "left after uninstall --purge: $(installed_state)"
+  while read -r name path; do
+    [ "$name" != NAME ] || continue
+    [ ! -e "$path" ] || fail "--purge left $path"
+  done < /tmp/paths.out
+  neighbours_there || fail "--purge touched a project or neighbour folder"
+  echo "ok   $SYSTEM --purge removed every location humanitl config paths named"
+else
+  echo "release $VERSION does not know humanitl config paths: --purge must stop and change nothing"
+  before=$(installed_state)
+  before_home=$(home_state)
+  if un_tester --purge --yes > /tmp/un-purge.out 2>&1; then
+    cat /tmp/un-purge.out
+    fail "--purge went ahead without data locations"
+  fi
+  cat /tmp/un-purge.out
+  grep -q 'purge needs the program to name your data locations' /tmp/un-purge.out || fail "--purge did not say why"
+  [ "$before" = "$(installed_state)" ] || fail "--purge changed: $(installed_state)"
+  [ "$before_home" = "$(home_state)" ] || fail "--purge changed the home"
+  un_tester --yes > /dev/null || fail "uninstall --yes after the refused --purge failed"
+  [ -z "$(installed_state)" ] || fail "left after uninstall: $(installed_state)"
+  data_there || fail "the user data is gone without --purge"
+fi
+echo "ok   $SYSTEM ($METHOD) uninstall"
 INNER
 
 fails=()
 for s in "${systems[@]}"; do
-  echo "::group::install.sh on $s" 2> /dev/null || :
+  echo "::group::install.sh and uninstall.sh on $s" 2> /dev/null || :
   if "$engine" run --rm --pull=missing \
     -e SYSTEM="$s" -e METHOD="${method[$s]}" -e VERSION="$version" \
     -v "$repo/install.sh:/src/install.sh:ro" \
+    -v "$repo/uninstall.sh:/src/uninstall.sh:ro" \
     -v "$work/releases:/releases:ro" \
     -v "$work/inner.sh:/inner.sh:ro" \
     "${image[$s]}" sh /inner.sh; then

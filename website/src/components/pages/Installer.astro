@@ -1,8 +1,9 @@
 ---
-// Die Leseseite des Installationsskripts (HUM-528). Unter /install liefert die Website die Datei
-// install.sh selbst, für `curl`; ein Browser lüde diese Datei ohne Endung nur herunter. Diese Seite
-// entsteht beim Bau aus derselben Datei und zeigt den Quelltext mit Hervorhebung.
-// scripts/install-check.mjs prüft nach dem Bau, dass /install und diese Seite denselben Text tragen.
+// Die Leseseite des Installationsskripts (HUM-528) und des Deinstallationsskripts (HUM-550). Unter
+// /install und /uninstall liefert die Website die Dateien install.sh und uninstall.sh selbst, für
+// `curl`; ein Browser lüde eine Datei ohne Endung nur herunter. Diese Seite entsteht beim Bau aus
+// derselben Datei und zeigt den Quelltext mit Hervorhebung. scripts/install-check.mjs prüft nach
+// dem Bau, dass die Datei und ihre Seite denselben Text tragen.
 import { Code } from 'astro:components';
 
 import InstallCommand from '../InstallCommand.astro';
@@ -11,18 +12,23 @@ import Base from '../../layouts/Base.astro';
 import { repoUrl, ui, type Lang } from '../../i18n/ui';
 // Vite liest die Datei beim Bau, unverändert; ein Pfad über import.meta.url zeigte nach dem
 // Bündeln in dist/ statt ins Repository.
-import source from '../../../../install.sh?raw';
+import installSource from '../../../../install.sh?raw';
+import uninstallSource from '../../../../uninstall.sh?raw';
 import '../../styles/docs.css';
 
 interface Props {
   lang: Lang;
+  /** Welches der beiden Skripte die Seite zeigt. */
+  kind?: 'install' | 'uninstall';
 }
-const { lang } = Astro.props;
+const { lang, kind = 'install' } = Astro.props;
 const t = ui[lang];
-const c = t.install;
+const c = t[kind];
+const source = kind === 'install' ? installSource : uninstallSource;
+const file = `${kind}.sh`;
 ---
 
-<Base lang={lang} page="installer" title={`${c.title} · Humanitl`} description={c.metaDescription}>
+<Base lang={lang} page={kind === 'install' ? 'installer' : 'uninstaller'} title={`${c.title} · Humanitl`} description={c.metaDescription}>
   <main id="main" class="script-page">
     <div class="container doc">
       <h1 class="chrome">{c.title}</h1>
@@ -32,8 +38,8 @@ const c = t.install;
       <InstallCommand command={c.dryRunCommand} copy={c.copy} />
       <Rich tag="p" text={c.unsigned} />
       <p class="script-page__links">
-        <a href="/install">{c.raw} (/install)</a>
-        <a href={`${repoUrl}/blob/main/install.sh`}>{c.source}</a>
+        <a href={`/${kind}`}>{c.raw} (/{kind})</a>
+        <a href={`${repoUrl}/blob/main/${file}`}>{c.source}</a>
       </p>
       <div class="code" data-install-source>
         <div class="code__bar"><span class="code__lang">sh</span></div>

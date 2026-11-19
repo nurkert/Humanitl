@@ -3,7 +3,7 @@
 import assert from 'node:assert/strict';
 import { test } from 'node:test';
 
-import { htmlText, problems, shownSource } from './install-check.mjs';
+import { htmlText, problems, scripts, shownSource } from './install-check.mjs';
 
 const script = Buffer.from('#!/bin/sh\n# a < b && c > "d" \'e\'\nmain "$@"\n');
 // So gibt Shiki den Block aus: Zeilen als Spans, Sonderzeichen als Entitäten.
@@ -41,4 +41,19 @@ test('a page with different text, without a block or missing is found', () => {
   assert.match(problems(script, script, [{ name: 'de', html: changed }])[0], /different text, first at line 3/);
   assert.match(problems(script, script, [{ name: 'de', html: '<p>nothing</p>' }])[0], /no source block/);
   assert.match(problems(script, script, [{ name: 'en', html: null }])[0], /missing/);
+});
+
+test('uninstall.sh is checked like install.sh, under its own names (HUM-550)', () => {
+  assert.deepEqual(
+    scripts.map((entry) => [entry.file, entry.served]),
+    [
+      ['install.sh', 'install'],
+      ['uninstall.sh', 'uninstall'],
+    ],
+  );
+  assert.deepEqual(scripts[1].pages, ['deinstallationsskript/index.html', 'en/uninstall-script/index.html']);
+  const served = Buffer.from(script);
+  served[0] ^= 1;
+  assert.match(problems(script, served, [], scripts[1])[0], /dist\/uninstall differs from uninstall\.sh/);
+  assert.match(problems(script, null, [], scripts[1])[0], /dist\/uninstall is missing/);
 });

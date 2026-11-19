@@ -54,6 +54,7 @@ step, is described in [`docs/cli.md`](../cli.md); which RPC each subcommand serv
 - [`humanitl config schema`](#humanitl-config-schema) Print the JSON schema of the configuration, or the list of profiles
 - [`humanitl config edit`](#humanitl-config-edit) Open config.toml in $VISUAL or $EDITOR and check it afterwards
 - [`humanitl config catalog`](#humanitl-config-catalog) Print the settings catalog of the running daemon: categories, titles, controls, origin and lock of every setting, the source the app and the settings TUI draw from
+- [`humanitl config paths`](#humanitl-config-paths) Print where Humanitl keeps your data: configuration, recordings, the project register, the agent depot and the audit chain
 - [`humanitl daemon`](#humanitl-daemon) The background service
 - [`humanitl daemon status`](#humanitl-daemon-status) Ask the daemon who it is
 - [`humanitl daemon install`](#humanitl-daemon-install) Write the systemd user unit that starts the daemon at login
@@ -1643,6 +1644,7 @@ Commands:
   schema   Print the JSON schema of the configuration, or the list of profiles
   edit     Open config.toml in $VISUAL or $EDITOR and check it afterwards
   catalog  Print the settings catalog of the running daemon: categories, titles, controls, origin and lock of every setting, the source the app and the settings TUI draw from
+  paths    Print where Humanitl keeps your data: configuration, recordings, the project register, the agent depot and the audit chain
   help     Print this message or the help of the given subcommand(s)
 
 Options:
@@ -1824,6 +1826,35 @@ Options:
 
   -h, --help
           Print help
+```
+
+## humanitl config paths
+
+```text
+Print where Humanitl keeps your data: configuration, recordings, the project register, the agent depot and the audit chain.
+
+One line per directory, NAME and PATH: `config` and `data`, on macOS also `support` (Application Support) and `logs`. --json gives the same as a list. A project folder is never among them. This is the list `uninstall.sh --purge` deletes from; the command itself opens and creates no file.
+
+Usage: humanitl config paths [OPTIONS]
+
+Options:
+      --json
+          Machine-readable output: one JSON value on stdout, diagnostics included
+
+      --config <PATH>
+          Read this config file instead of the one in the user's config directory
+
+  -v, --verbose...
+          Explain what is happening; repeat for more
+
+  -q, --quiet
+          Only the result, no notes
+
+      --profile <NAME>
+          Use this profile for the session; falls back to the sandbox profile of that name when no session profile exists
+
+  -h, --help
+          Print help (see a summary with '-h')
 ```
 
 ## humanitl daemon

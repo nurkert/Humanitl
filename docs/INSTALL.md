@@ -44,6 +44,21 @@ checks that pin and fixture match), and publish the website. Today's key is
 "Nurkert APT <apt@nurkert.de>", fingerprint
 `0FE4 E9CF DD78 E971 5BBF 01F6 454A D85D A868 B52A`.
 
+Its counterpart is `uninstall.sh`, behind
+`curl -fsSL https://humanitl.de/uninstall | sh` (HUM-550), copied the same way
+to `/uninstall` with a read page of its own. The helpers both need (output,
+questions, `--yes`, `--dry-run`, the platform) sit between the two
+`# ---- Shared by install.sh and uninstall.sh` markers and are the same bytes
+in both files; `tools/tests/uninstall_sh_test.sh` compares them, so a change
+goes into both. The uninstall script finds every installation instead of
+guessing (dpkg, rpm, pacman, `INSTALLED-FILES` under the prefix, the app),
+stops while an agent session runs, runs `humanitl daemon uninstall` while the
+program is still there, removes the program the way it came and, on a question
+of its own, the APT source and key. User data stays unless `--purge` is given;
+the locations come from `humanitl config paths`, so the script carries no list
+of its own. Versions up to 0.4.1 do not know that command; there `--purge`
+stops before changing anything.
+
 ## APT repository
 
 Every release also lands in the APT repository `apt.nurkert.de`, so later

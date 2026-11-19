@@ -44,6 +44,18 @@ neue Datei ersetzen (der Test prüft, dass Festlegung und Datei zusammenpassen) 
 veröffentlichen. Heute ist es „Nurkert APT <apt@nurkert.de>", Fingerabdruck
 `0FE4 E9CF DD78 E971 5BBF 01F6 454A D85D A868 B52A`.
 
+Das Gegenstück ist `uninstall.sh` hinter `curl -fsSL https://humanitl.de/uninstall | sh`
+(HUM-550), ebenso nach `/uninstall` kopiert, mit eigener Leseseite. Die Hilfen, die beide brauchen
+(Ausgabe, Rückfragen, `--yes`, `--dry-run`, das System), stehen zwischen den beiden Markierungen
+`# ---- Shared by install.sh and uninstall.sh` und sind in beiden Dateien dieselben Bytes;
+`tools/tests/uninstall_sh_test.sh` vergleicht sie, eine Änderung geht also in beide. Das
+Deinstallationsskript findet jede Installation, statt zu raten (dpkg, rpm, pacman,
+`INSTALLED-FILES` unter dem Präfix, die App), bricht ab, solange eine Agenten-Sitzung läuft, ruft
+`humanitl daemon uninstall` auf, solange das Programm noch da ist, entfernt das Programm auf dem
+Weg, auf dem es kam, und auf eigene Frage Quelle und Schlüssel von APT. Nutzerdaten bleiben ohne
+`--purge`; die Orte nennt `humanitl config paths`, das Skript führt keine eigene Liste. Versionen
+bis 0.4.1 kennen den Befehl nicht; dort bricht `--purge` ab, bevor sich etwas ändert.
+
 ## APT-Repository
 
 Jedes Release landet auch im APT-Repository `apt.nurkert.de`, sodass spätere Versionen mit

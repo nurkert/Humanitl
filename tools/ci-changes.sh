@@ -24,11 +24,12 @@
 #
 # Bereiche, je geaenderter Datei der erste Treffer:
 #   website website/**: nur install-script, das die Seite baut und prueft, dass
-#          /install und die Leseseite install.sh zeigen (HUM-528). Ausgeliefert
-#          wird die Seite von .github/workflows/website.yml.
-#   install install.sh im Wurzelverzeichnis: die drei Jobs des
-#          Installationsskripts (install-script, install-linux, install-macos),
-#          sonst nichts; kein Programm liest das Skript (HUM-528).
+#          /install und /uninstall und ihre Leseseiten install.sh und
+#          uninstall.sh zeigen (HUM-528, HUM-550). Ausgeliefert wird die Seite
+#          von .github/workflows/website.yml.
+#   install install.sh und uninstall.sh im Wurzelverzeichnis: die drei Jobs
+#          der Skripte (install-script, install-linux, install-macos), sonst
+#          nichts; kein Programm liest die Skripte (HUM-528, HUM-550).
 #   backlog backlog/**, BACKLOG.md: nur rust-test, denn
 #          daemon/crates/config/tests/config_readers.rs liest die Sprint-Dateien
 #          und BACKLOG.md.
@@ -171,7 +172,7 @@ if ((!full)); then
     changed=$((changed + 1))
     case "$f" in
       website/*) area[website]=1 ;;
-      install.sh) area[install]=1 ;;
+      install.sh | uninstall.sh) area[install]=1 ;;
       backlog/* | BACKLOG.md) area[backlog]=1 ;;
       docs/* | images/* | LICENSE) area[docs]=1 ;;
       app/*) area[app]=1; mac_check "$f" ;;

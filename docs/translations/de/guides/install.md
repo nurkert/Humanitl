@@ -506,8 +506,36 @@ Jeder Code ist in [DIAGNOSTICS.md](../DIAGNOSTICS.md) erklärt.
 
 ## Deinstallieren
 
-Entferne zuerst den Zugangsschlüssel des Modellservers aus dem Schlüsselbund,
-falls du einen gespeichert hast, solange die Kommandozeile noch da ist:
+Ein Befehl für Linux und macOS macht rückgängig, was das Installationsskript
+oder ein Paket angelegt hat:
+
+```sh
+curl -fsSL https://humanitl.de/uninstall | sh
+```
+
+Es findet heraus, wie Humanitl installiert ist (das Paket in dpkg, rpm oder
+pacman, das Archiv unter `~/.local` oder `--prefix`, die App unter Programme),
+und nennt jeden Fund; findet es nichts, sagt es das und ändert nichts. Dann,
+jeden Schritt vorher gezeigt und erfragt: Es bricht ab, solange eine
+Agenten-Sitzung läuft (beende sie selbst, dann das Skript noch einmal), ruft
+`humanitl daemon uninstall` auf, solange das Programm noch da ist, entfernt das
+Programm auf dem Weg, auf dem es kam (`apt-get remove --purge`, `dnf remove`,
+der AUR-Helfer oder `pacman -R`, die Pfade in `INSTALLED-FILES`, die App), ruft
+`sudo` nur für den Paketschritt und entfernt auf eigene Frage, vor diesem
+Schritt gestellt, Quelle und Schlüssel von `apt.nurkert.de` im selben
+`sudo`-Aufruf. Läuft die installierte Kommandozeile nicht, bricht es ab,
+bevor sich etwas ändert, und sagt, wie sie wieder läuft, denn nur dieses
+Programm kann seinen Dienst entfernen. Deine Daten bleiben; `--purge` löscht sie,
+siehe [Deine Daten](#your-data). Vorher lesen unter
+[humanitl.de/deinstallationsskript](https://humanitl.de/deinstallationsskript/),
+dieselbe Datei wie
+[`uninstall.sh`](https://github.com/nurkert/Humanitl/blob/main/uninstall.sh).
+Es kennt `--dry-run`, `--yes` (ohne Terminal nötig), `--method
+apt|rpm|aur|tarball|dmg`, `--prefix DIR` und `--purge` nach `sh -s --`.
+
+Von Hand entfernst du zuerst den Zugangsschlüssel des Modellservers aus dem
+Schlüsselbund, falls du einen gespeichert hast, solange die Kommandozeile noch
+da ist:
 
 ```sh
 humanitl llm key remove
@@ -584,7 +612,12 @@ dir, nicht dem Paket, und bleiben, wo sie sind:
 | `$XDG_RUNTIME_DIR/humanitl/` | Socket und Token des Daemons; nach der Abmeldung weg |
 
 Die Tabelle geht von den Vorgaben `XDG_CONFIG_HOME=~/.config` und
-`XDG_DATA_HOME=~/.local/share` aus. Aufzeichnung und Audit-Log können Bodies von
+`XDG_DATA_HOME=~/.local/share` aus; `humanitl config paths` nennt die
+Verzeichnisse, wie sie auf deinem Rechner liegen, unter macOS zusammen mit
+`~/Library/Application Support/Humanitl` und `~/Library/Logs/Humanitl`. Das
+Deinstallationsskript löscht mit `--purge` genau diese Verzeichnisse, nachdem
+es jedes mit seiner Größe aufgelistet und gefragt hat; Projektordner gehören
+nie dazu. Aufzeichnung und Audit-Log können Bodies von
 Anfragen enthalten, also lösch sie mit Absicht, nicht aus Versehen. Um alles zu
 entfernen:
 
