@@ -152,8 +152,8 @@ pub use crate::agent_exit::{FirstOutput, did_not_start};
 pub use crate::backend::with_test_guest_kernel;
 pub use crate::backend::{
     ADMITTED_BACKENDS, BWRAP_BACKEND, Backend, BackendChoice, LeftSandboxes, PODMAN_BACKEND,
-    SEATBELT_BACKEND, VM_BACKEND, backend_name, choose_backend, runtime_fits_backend,
-    with_image_root,
+    SEATBELT_BACKEND, VM_BACKEND, backend_name, choose_backend, release_runtime_dirs,
+    runtime_fits_backend, with_image_root,
 };
 pub use crate::backend_list::{
     BackendEntry, LISTED_BACKENDS, RuntimeEntry, list_backends, list_backends_with,

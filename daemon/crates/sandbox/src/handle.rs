@@ -429,7 +429,8 @@ fn remove_session_dir_later(dir: PathBuf) {
     std::thread::spawn(move || {
         std::thread::sleep(SESSION_DIR_GRACE);
         if std::fs::metadata(&dir).is_ok_and(|meta| meta.ino() == before) {
-            let _ = std::fs::remove_dir_all(dir);
+            let _ = std::fs::remove_dir_all(&dir);
+            crate::backend::session_dir_removed(&dir);
         }
     });
 }
@@ -464,7 +465,8 @@ impl Shared {
         if self.shells.get().is_some_and(|door| door.live() > 0) {
             remove_session_dir_later(dir);
         } else {
-            let _ = std::fs::remove_dir_all(dir);
+            let _ = std::fs::remove_dir_all(&dir);
+            crate::backend::session_dir_removed(&dir);
         }
     }
 

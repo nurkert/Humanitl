@@ -525,6 +525,10 @@ fn signal_that_ends_the_sandbox(
 /// bekäme genau diese Sandbox keinen geordneten Abschied, sondern nur das
 /// `SIGKILL`, das `--die-with-parent` an das Ende des Daemons hängt. Läuft
 /// nichts mehr, kostet er nichts.
+///
+/// Zuletzt gibt es frei, was der Daemon für Sandboxen unter dem
+/// Laufzeitverzeichnis des Nutzers belegt (HUM-492,
+/// [`humanitl_sandbox::release_runtime_dirs`]).
 async fn join_farewell(
     farewell: tokio::sync::oneshot::Receiver<tokio::task::JoinHandle<()>>,
     sandbox: SandboxService,
@@ -533,6 +537,9 @@ async fn join_farewell(
         let _ = task.await;
     }
     farewell_sandbox(sandbox).await;
+    // Die Sandboxen sind beendet: Was der Daemon für sie unter dem
+    // Laufzeitverzeichnis des Nutzers belegt, geht jetzt mit (HUM-492).
+    humanitl_sandbox::release_runtime_dirs();
 }
 
 /// Wie lange der Abschied auf das Ende der Sandbox wartet, bevor der Daemon

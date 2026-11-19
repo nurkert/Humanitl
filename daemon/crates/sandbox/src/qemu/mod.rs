@@ -50,6 +50,7 @@
 
 mod disposable;
 mod host_check;
+mod instance;
 #[cfg(test)]
 mod kvm_tests;
 mod limits;
@@ -115,8 +116,8 @@ const OVERLAY_MODULE: &str = "overlay";
 /// Die Beschreibung der Unit.
 const UNIT_DESCRIPTION: &str = "Humanitl kernel level session";
 /// Der Anfang des Verzeichnisses je Daemon unter dem Laufzeitverzeichnis des
-/// Nutzers; danach die Instanz.
-const INSTANCE_DIR_PREFIX: &str = "humanitl-vm-";
+/// Nutzers; danach die Instanz ([`instance`]).
+const INSTANCE_DIR_PREFIX: &str = instance::PREFIX;
 /// Der Suchpfad in der Unit.
 const UNIT_PATH: &str = "/usr/bin:/bin";
 /// Das Zeichen der Übergabe in der Vorschau.
@@ -682,32 +683,66 @@ fn session_layout(paths: &Paths, session: &SessionContext) -> Result<Layout, Dia
     Ok(Layout { dir })
 }
 
-/// Legt das Laufzeitverzeichnis an: `0700`, auf tmpfs, neu.
+/// Legt das Laufzeitverzeichnis an: `0700`, auf tmpfs, neu. Davor belegt
+/// der Prozess das Verzeichnis seiner Instanz ([`instance::enter`]), damit
+/// kein anderer Daemon es als verwaist wegräumt (HUM-492).
 fn create_layout(layout: &Layout) -> Result<(), Diagnostic> {
+    let (Some(parent), Some(session)) = (layout.dir.parent(), layout.dir.file_name()) else {
+        return Err(setup_failed(format!(
+            "{} has no parent directory",
+            layout.dir.display()
+        )));
+    };
+    instance::enter(
+        parent,
+        session,
+        || create_session_dirs(layout),
+        setup_failed,
+    )?;
+    // Der Gastplan trägt die Umgebung des Agenten, die Dateien des Adapters
+    // womöglich ein Geheimnis: Nichts davon landet auf einer Platte.
+    crate::disposable::require_tmpfs(&layout.dir).inspect_err(|_| remove_session_dir(&layout.dir))
+}
+
+/// Die Verzeichnisse einer Sitzung unter ihrer belegten Instanz.
+fn create_session_dirs(layout: &Layout) -> Result<(), Diagnostic> {
     let mut builder = std::fs::DirBuilder::new();
     builder.mode(0o700);
-    if let Some(parent) = layout.dir.parent() {
-        builder
-            .recursive(true)
-            .create(parent)
-            .map_err(|err| setup_failed(format!("{}: {err}", parent.display())))?;
-        std::fs::set_permissions(parent, std::fs::Permissions::from_mode(0o700))
-            .map_err(|err| setup_failed(format!("{}: {err}", parent.display())))?;
-    }
     builder
-        .recursive(false)
         .create(&layout.dir)
         .map_err(|err| setup_failed(format!("{}: {err}", layout.dir.display())))?;
     for dir in std::iter::once(layout.files())
         .chain(Layout::SOCKET_DIRS.iter().map(|name| layout.dir.join(name)))
     {
-        builder
-            .create(&dir)
-            .map_err(|err| setup_failed(format!("{}: {err}", dir.display())))?;
+        if let Err(err) = builder.create(&dir) {
+            let _ = std::fs::remove_dir_all(&layout.dir);
+            return Err(setup_failed(format!("{}: {err}", dir.display())));
+        }
     }
-    // Der Gastplan trägt die Umgebung des Agenten, die Dateien des Adapters
-    // womöglich ein Geheimnis: Nichts davon landet auf einer Platte.
-    crate::disposable::require_tmpfs(&layout.dir)
+    Ok(())
+}
+
+/// Entfernt das Laufzeitverzeichnis einer Sitzung, die nie lief, und gibt
+/// mit der letzten Sitzung die Instanz frei.
+fn remove_session_dir(dir: &Path) {
+    let _ = std::fs::remove_dir_all(dir);
+    session_dir_removed(dir);
+}
+
+/// Nach dem Entfernen des Laufzeitverzeichnisses einer Sitzung, wo immer es
+/// geschah ([`crate::handle`]): Mit der letzten Sitzung dieses Prozesses geht
+/// das Verzeichnis seiner Instanz (HUM-492). Ein anderes Verzeichnis ändert
+/// nichts.
+pub(crate) fn session_dir_removed(dir: &Path) {
+    if std::fs::symlink_metadata(dir).is_err() {
+        instance::session_dir_removed(dir);
+    }
+}
+
+/// Gibt am Ende des Daemons jede Instanz frei, die er noch belegt, und
+/// entfernt ihr Verzeichnis, wenn nichts mehr darin liegt (HUM-492).
+pub(crate) fn release_instances() {
+    instance::release_all();
 }
 
 /// Ein Pfad, der als Wert einer Eigenschaft der Unit, als Wort ihrer Zeile
@@ -1179,7 +1214,7 @@ impl SandboxBackend for VmBackend {
         create_layout(&layout)?;
         let planned = self.plan_in(&layout, request, &units, &unit, project);
         if planned.is_err() {
-            let _ = std::fs::remove_dir_all(&layout.dir);
+            remove_session_dir(&layout.dir);
         }
         planned
     }
@@ -1190,7 +1225,7 @@ impl SandboxBackend for VmBackend {
         let dir = plan.session_dir.clone();
         let remove = || {
             if let Some(dir) = &dir {
-                let _ = std::fs::remove_dir_all(dir);
+                remove_session_dir(dir);
             }
         };
         let Some(pending) = plan
@@ -1768,79 +1803,109 @@ pub(crate) fn static_lines(
         .collect()
 }
 
-/// Was frühere Sitzungen dieses Daemons liegen ließen: Laufzeitverzeichnisse
-/// unter `humanitl-vm-<Instanz>` und ihre Units.
+/// Was frühere Sitzungen liegen ließen (HUM-444, HUM-492): die
+/// Verzeichnisse `humanitl-vm-<Instanz>` beendeter Daemons samt den
+/// Laufzeitverzeichnissen ihrer Sitzungen und deren Units
+/// ([`instance::find_orphans`]).
 #[derive(Debug, Default)]
 pub(crate) struct Leftovers {
-    found: Vec<(PathBuf, Option<UnitName>)>,
+    orphans: instance::Orphans,
     units: Option<UserUnits>,
 }
 
 /// Die Bestandsaufnahme, beim Start des Daemons, bevor er einen Start annimmt.
+/// Die Instanz dieses Daemons zählt dazu, auch ohne Sperrdatei: Der Start
+/// hat schon bewiesen, dass kein zweiter Daemon derselben Instanz läuft.
 pub(crate) fn find_leftovers(paths: &Paths) -> Leftovers {
-    let Some(instance) = instance_dir(paths) else {
+    let Some(runtime) = user_runtime_dir() else {
         return Leftovers::default();
     };
-    let Ok(entries) = std::fs::read_dir(&instance) else {
+    let own = instance_dir(paths);
+    let orphans = instance::find_orphans(&runtime, own.as_deref().and_then(Path::file_name));
+    if orphans.is_empty() {
         return Leftovers::default();
+    }
+    let units = if orphans.has_sessions() {
+        user_units(paths).ok()
+    } else {
+        None
     };
-    let found: Vec<(PathBuf, Option<UnitName>)> = entries
-        .filter_map(Result::ok)
-        .filter(|entry| entry.file_type().is_ok_and(|kind| kind.is_dir()))
-        .map(|entry| {
-            let dir = entry.path();
-            let unit = std::fs::read_to_string(Layout { dir: dir.clone() }.unit_file())
-                .ok()
-                .and_then(|text| UnitName::new(text.trim().trim_end_matches(".service")).ok());
-            (dir, unit)
-        })
-        .collect();
-    if found.is_empty() {
-        return Leftovers::default();
-    }
-    Leftovers {
-        found,
-        units: user_units(paths).ok(),
-    }
+    Leftovers { orphans, units }
 }
 
 impl Leftovers {
     /// Stoppt die Unit jedes Rests und entfernt sein Verzeichnis; je Rest
-    /// ein `SANDBOX_041` als Warnung.
+    /// ein `SANDBOX_041` als Warnung. Eine leere verwaiste Instanz
+    /// verschwindet ohne Warnung.
     pub(crate) fn remove(self) -> Vec<Diagnostic> {
-        self.found
+        let units = self.units;
+        let unit_for = |session: &std::ffi::OsStr| {
+            let units = units.as_ref()?;
+            instance::session_unit(|id| units.named(id), session)
+        };
+        let stop = |unit: &UnitName| {
+            if let Some(units) = &units {
+                let _ = crate::user_unit::run_bounded(
+                    units.stop_command(unit, true),
+                    Duration::from_secs(15),
+                );
+            }
+        };
+        self.orphans
+            .remove(unit_for, stop)
             .into_iter()
-            .map(|(dir, unit)| {
-                if let (Some(units), Some(unit)) = (&self.units, &unit) {
-                    let _ = crate::user_unit::run_bounded(
-                        units.stop_command(unit, true),
-                        Duration::from_secs(15),
-                    );
-                }
-                let removed = std::fs::remove_dir_all(&dir);
-                let unit_text = unit
-                    .as_ref()
-                    .map_or_else(|| "no unit".to_owned(), UnitName::service);
-                Diagnostic::builder(SANDBOX_041, Severity::Warning)
-                    .why(match removed {
-                        Ok(()) => format!(
-                            "a session of the kernel level from an earlier run was left behind \
-                             ({}, {unit_text}); it was stopped and removed",
-                            dir.display()
-                        ),
-                        Err(err) => format!(
-                            "a session of the kernel level from an earlier run was left behind \
-                             ({}, {unit_text}), and its directory could not be removed: {err}",
-                            dir.display()
-                        ),
-                    })
-                    .fix(FixAction::CopyCommand(format!(
-                        "systemctl --user stop {unit_text}"
-                    )))
-                    .build()
-            })
+            .map(leftover_warning)
             .collect()
     }
+}
+
+/// Das `SANDBOX_041` zu einer Sitzung einer verwaisten Instanz: entfernt,
+/// oder liegen geblieben mit dem Grund und einem Befehl, der weiterhilft.
+fn leftover_warning(removed: instance::Removed) -> Diagnostic {
+    let dir = removed.dir;
+    let shown = dir.display();
+    let quoted = shlex::try_quote(&dir.to_string_lossy()).map_or_else(
+        |_| dir.to_string_lossy().into_owned(),
+        std::borrow::Cow::into_owned,
+    );
+    let unit_text = removed
+        .unit
+        .as_ref()
+        .map_or_else(|| "no unit".to_owned(), UnitName::service);
+    let stop = format!("systemctl --user stop {unit_text}");
+    let start = "a session of the kernel level from an earlier run was left behind";
+    let (why, fix) = match removed.result {
+        Ok(()) => (
+            format!("{start} ({shown}, {unit_text}); it was stopped and removed"),
+            stop,
+        ),
+        Err(instance::Kept::Mount) => (
+            format!(
+                "{start} ({shown}, {unit_text}), and another file system or a bind mount \
+                 hangs inside it; nothing in that mount was touched, and the directory stays"
+            ),
+            format!("findmnt -R {quoted}"),
+        ),
+        Err(instance::Kept::TooDeep) => (
+            format!(
+                "{start} ({shown}, {unit_text}), and it is nested deeper than {} levels, \
+                 which no session creates; it stays and is reported at every start until \
+                 it is removed by hand",
+                instance::MAX_DEPTH
+            ),
+            format!("rm -r --one-file-system {quoted}"),
+        ),
+        Err(instance::Kept::Io(err)) => (
+            format!(
+                "{start} ({shown}, {unit_text}), and its directory could not be removed: {err}"
+            ),
+            stop,
+        ),
+    };
+    Diagnostic::builder(SANDBOX_041, Severity::Warning)
+        .why(why)
+        .fix(FixAction::CopyCommand(fix))
+        .build()
 }
 
 #[cfg(test)]

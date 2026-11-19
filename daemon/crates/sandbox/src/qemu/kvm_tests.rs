@@ -1869,13 +1869,24 @@ fn a_killed_daemon_ends_the_unit_within_five_seconds() {
     // Der nächste Start räumt den Rest weg.
     assert!(std::path::Path::new(dir).exists());
     let paths = humanitl_config::Paths::new(Env::from_pairs([("XDG_RUNTIME_DIR", xdg)]));
-    let removed = super::find_leftovers(&paths).remove();
+    // Die Bestandsaufnahme sieht jede verwaiste Instanz unter dem
+    // Laufzeitverzeichnis des Nutzers; hier zählt nur die des Kindes.
+    let removed: Vec<_> = super::find_leftovers(&paths)
+        .remove()
+        .into_iter()
+        .filter(|diagnostic| diagnostic.why.contains(dir))
+        .collect();
     assert_eq!(removed.len(), 1, "{removed:?}");
     assert_eq!(removed[0].code.as_str(), "SANDBOX_041");
     assert!(!std::path::Path::new(dir).exists());
-    if let Some(instance) = std::path::Path::new(dir).parent() {
-        let _ = std::fs::remove_dir(instance);
-    }
+    // Mit der letzten Sitzung geht das Verzeichnis der Instanz samt
+    // Sperrdatei (HUM-492).
+    let instance = std::path::Path::new(dir).parent().unwrap();
+    assert!(
+        std::fs::symlink_metadata(instance).is_err(),
+        "{} stays behind",
+        instance.display()
+    );
     let _ = std::fs::remove_dir_all(std::path::Path::new(xdg).parent().unwrap());
 }
 
