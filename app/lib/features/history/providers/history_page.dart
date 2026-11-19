@@ -9,6 +9,7 @@
 library;
 
 import 'dart:async';
+import 'dart:math' as math;
 
 import 'package:flutter/foundation.dart';
 import 'package:flutter_riverpod/flutter_riverpod.dart';
@@ -214,6 +215,30 @@ class HistoryPageNotifier extends Notifier<HistoryPageState> {
   /// whatever arrives in that instant anyway.
   bool _ready = false;
 
+  /// Events that arrived while a page of the current query was on its way,
+  /// in the order they came; null when no page is on its way.
+  ///
+  /// `ListFlows` answers about the moment the daemon read its recording, and
+  /// the stream keeps running while the call is in flight. An event folded
+  /// into the rows in that window is lost one way or the other: the first
+  /// page is written over it, and a later page brings rows the event found
+  /// nowhere. The arrival of a flow that the agent sent right after the
+  /// screen came up was gone for good that way, and with it every later
+  /// change of that row -- the decision, the chip "Edited" (HUM-490); a
+  /// decision for a row of the next page lost the chip the same way.
+  ///
+  /// The events are therefore held back and folded into the rows once the
+  /// page is there, in their order ([_fetchHoldingBack]). The page may already
+  /// be newer than some of them, and folding them must not undo it: a row
+  /// never moves back in its life cycle ([_update]), a cumulative counter
+  /// never shrinks, and an arrival the page already lists is recognised by
+  /// its id ([_arrived]).
+  List<FlowEvent>? _heldBack;
+
+  /// True while held-back events are folded into the page that came after
+  /// them; only then can an event be older than the row it reaches.
+  bool _replaying = false;
+
   @override
   HistoryPageState build() {
     ref.listen(historyQueryProvider, (HistoryQuery? previous, HistoryQuery _) {
@@ -231,6 +256,8 @@ class HistoryPageNotifier extends Notifier<HistoryPageState> {
     ) {
       next.whenData(_apply);
     }, fireImmediately: true);
+    // A rebuilt notifier starts without a window; its own load opens one.
+    _heldBack = null;
     // Scheduled, not called: `reload` writes `state`, and a notifier that is
     // still building has none.
     unawaited(Future<void>.microtask(reload));
@@ -258,7 +285,7 @@ class HistoryPageNotifier extends Notifier<HistoryPageState> {
       loadingMore: false,
       clearFailure: true,
     );
-    await _fetch(generation: generation, cursor: null);
+    await _fetchHoldingBack(generation: generation, cursor: null);
   }
 
   /// Asks for the next page. Does nothing while one is on its way, when the
@@ -270,7 +297,43 @@ class HistoryPageNotifier extends Notifier<HistoryPageState> {
     }
     final int generation = _generation;
     state = current.copyWith(loadingMore: true);
-    await _fetch(generation: generation, cursor: current.cursor);
+    await _fetchHoldingBack(generation: generation, cursor: current.cursor);
+  }
+
+  /// [_fetch], with the events of its window held back and folded in after.
+  ///
+  /// A first page starts a new window: whatever arrived before the call went
+  /// out is in the page it asks for, because the daemon records an event
+  /// before it broadcasts it and `ListFlows` flushes the recording first.
+  /// Only what comes from now on can be newer than the answer.
+  ///
+  /// The window closes however the call ends, an exception included; a
+  /// window left open would swallow every event until the next load. Only
+  /// the load that is still current closes it: an older one that answers
+  /// late leaves the events to the newer one.
+  Future<void> _fetchHoldingBack({
+    required int generation,
+    required String? cursor,
+  }) async {
+    if (cursor == null) {
+      _heldBack = <FlowEvent>[];
+    } else {
+      _heldBack ??= <FlowEvent>[];
+    }
+    try {
+      await _fetch(generation: generation, cursor: cursor);
+    } finally {
+      if (ref.mounted && generation == _generation) {
+        final List<FlowEvent> heldBack = _heldBack ?? const <FlowEvent>[];
+        _heldBack = null;
+        _replaying = true;
+        try {
+          heldBack.forEach(_fold);
+        } finally {
+          _replaying = false;
+        }
+      }
+    }
   }
 
   /// Tells the provider whether the list stands at its head.
@@ -461,6 +524,17 @@ class HistoryPageNotifier extends Notifier<HistoryPageState> {
     if (!_ready) {
       return;
     }
+    // A gap reloads anyway, and the reload starts its own window.
+    if (_heldBack case final List<FlowEvent> heldBack
+        when event is! FlowEventLagged) {
+      heldBack.add(event);
+      return;
+    }
+    _fold(event);
+  }
+
+  /// Folds one event into the loaded rows, now.
+  void _fold(FlowEvent event) {
     switch (event) {
       case FlowEventReceived(:final Flow flow):
         _arrived(flow);
@@ -537,8 +611,14 @@ class HistoryPageNotifier extends Notifier<HistoryPageState> {
         );
       case FlowEventResponseChunk(:final FlowId flowId, :final int bytesSoFar):
         // The counter is cumulative, so the row shows what has arrived so
-        // far instead of adding a chunk to itself twice after a resync.
-        _update(flowId, (Flow flow) => flow.copyWith(responseSize: bytesSoFar));
+        // far instead of adding a chunk to itself twice after a resync; and
+        // a chunk held back behind a newer page never makes it smaller.
+        _update(
+          flowId,
+          (Flow flow) => flow.copyWith(
+            responseSize: math.max(flow.responseSize, bytesSoFar),
+          ),
+        );
       case FlowEventRecorded(:final FlowId flowId):
         _update(
           flowId,
@@ -586,19 +666,21 @@ class HistoryPageNotifier extends Notifier<HistoryPageState> {
     if (flow.passthrough && !query.includePassthrough) {
       return;
     }
-    if (!query.takesArrivals) {
-      // Only the recorder knows whether this one matches the filter and
-      // where it would sit. It is counted rather than dropped, and the pill
-      // offers the reload that answers the question
-      // (`backlog/sprint-2.md`: Pille „12 new · refresh").
-      state = state.copyWith(missed: state.missed + 1);
-      return;
-    }
+    // A row this page already holds is no arrival, under any query: an
+    // arrival held back behind the page that lists it is the usual case.
     final HistoryPageState current = state;
     final bool known =
         current.rows.any((Flow row) => row.id == flow.id) ||
         current.pending.any((Flow row) => row.id == flow.id);
     if (known) {
+      return;
+    }
+    if (!query.takesArrivals) {
+      // Only the recorder knows whether this one matches the filter and
+      // where it would sit. It is counted rather than dropped, and the pill
+      // offers the reload that answers the question
+      // (`backlog/sprint-2.md`: Pille „12 new · refresh").
+      state = current.copyWith(missed: current.missed + 1);
       return;
     }
     if (!_atHead) {
@@ -618,22 +700,66 @@ class HistoryPageNotifier extends Notifier<HistoryPageState> {
     );
   }
 
+  /// Applies [update] to the row of [id], wherever it waits.
+  ///
+  /// While held-back events are folded in ([_replaying]), an update that
+  /// would move the row back in its life cycle is dropped whole: it is an
+  /// event the page is already past, because the daemon read the page after
+  /// it ([_heldBack]). A `Held` folded over a decided row would otherwise put
+  /// a request that already left back on the screen as waiting, with a
+  /// countdown, until the next event. A live event is never older than the
+  /// row and goes through as it comes.
   void _update(FlowId id, Flow Function(Flow flow) update) {
     final HistoryPageState current = state;
     final int index = current.rows.indexWhere((Flow row) => row.id == id);
     if (index >= 0) {
-      final List<Flow> rows = List<Flow>.of(current.rows);
-      rows[index] = update(rows[index]);
-      state = current.copyWith(rows: rows);
+      final Flow? next = _forward(current.rows[index], update, _replaying);
+      if (next != null) {
+        final List<Flow> rows = List<Flow>.of(current.rows);
+        rows[index] = next;
+        state = current.copyWith(rows: rows);
+      }
       return;
     }
     final int waiting = current.pending.indexWhere((Flow row) => row.id == id);
     if (waiting >= 0) {
-      final List<Flow> pending = List<Flow>.of(current.pending);
-      pending[waiting] = update(pending[waiting]);
-      state = current.copyWith(pending: pending);
+      final Flow? next = _forward(current.pending[waiting], update, _replaying);
+      if (next != null) {
+        final List<Flow> pending = List<Flow>.of(current.pending);
+        pending[waiting] = next;
+        state = current.copyWith(pending: pending);
+      }
     }
   }
+
+  /// [update] applied to [row], or null when it would move the row back
+  /// and [replaying] says it may not.
+  static Flow? _forward(
+    Flow row,
+    Flow Function(Flow flow) update,
+    bool replaying,
+  ) {
+    final Flow next = update(row);
+    return replaying && _lifeCycleRank(next.state) < _lifeCycleRank(row.state)
+        ? null
+        : next;
+  }
+
+  /// Where [state] stands in the life of a flow.
+  ///
+  /// The order of [FlowState] with one exception: `recorded` is the end of
+  /// every flow, the failed one included (the daemon sends `Recorded` for a
+  /// failed flow too), so it ranks after `failed`.
+  static int _lifeCycleRank(FlowState state) => switch (state) {
+    FlowState.received => 0,
+    FlowState.analyzed => 1,
+    FlowState.held => 2,
+    FlowState.decided => 3,
+    FlowState.forwarded => 4,
+    FlowState.responded => 5,
+    FlowState.failed => 6,
+    FlowState.recorded => 7,
+  };
 }
 
 /// What an empty answer turned out to mean.

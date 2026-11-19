@@ -2733,6 +2733,49 @@ nächsten Lauf grün.
 ### Akzeptanzkriterien
 1. Ursache benannt und behoben.
 
+### Stand nach der Umsetzung (2026-11-19)
+
+Die Ursache lag im Produkt, nicht in der Frist. Die History lädt ihre erste
+Seite, wenn der Bildschirm aufkommt, und das ist im M4-Lauf derselbe
+Augenblick, in dem das Skript den Agenten startet: Lokal lagen zwischen dem
+Start des ersten `ListFlows` und dem `Received` der Anfrage 0,4 s. Kam das
+Ereignis an, während die Antwort noch unterwegs war, faltete
+`HistoryPageNotifier` die Ankunft in die Zeilen, und die Antwort schrieb gleich
+danach ihre ältere Seite darüber: Der Daemon hatte seine Aufzeichnung gelesen,
+bevor die Anfrage eintraf. Die Zeile war damit für immer weg; `Held`,
+`Decided` mit `allow_edited` und alles danach fanden keine Zeile mehr, und auf
+dem CI-Läufer stand der Test 30 s vor einer History ohne die Anfrage. Der
+Daemon hatte richtig aufgezeichnet (`edited` in Schritt 7 war grün), nur die
+Seite der Anwendung nicht. Dieselbe Lücke gilt für jedes Neuladen, auch nach
+`Lagged`; die Warteschlange hatte sie in `Flows._resync` schon geschlossen.
+
+Behoben in `app/lib/features/history/providers/history_page.dart`: Solange
+eine Seite unterwegs ist, die erste wie jede weitere (`_fetchHoldingBack`),
+hält der Notifier die Ereignisse zurück und faltet sie in ihrer Reihenfolge
+ein, sobald die Seite da ist. Bei der weiteren Seite war es dieselbe Lücke:
+Ein `Decided` für eine Zeile der kommenden Seite fand keine Zeile, und sie kam
+ohne „Edited" an. Die Seite kann neuer sein als ein zurückgehaltenes Ereignis;
+beim Nachfalten fällt deshalb eine Zeile nie in ihrem Lebenslauf zurück, ein
+kumulativer Zähler schrumpft nicht, und eine Ankunft, die die Seite schon
+führt, erkennt `_arrived` an der Id, auch unter einem Filter, wo sie sonst als
+verpasst gezählt würde. Das Fenster schließt sich auch, wenn der Abruf mit
+einer Ausnahme endet. `Lagged` wird nicht zurückgehalten, es lädt neu und
+öffnet sein eigenes Fenster. Kein Warten auf ein anderes Ereignis im Test und
+keine längere Frist: Die 30 s bleiben, weil der Zustand nach dem Fix binnen
+eines Rahmens nach `Decided` steht.
+
+Beleg in `app/test/features/history/history_page_test.dart` über einen Fake,
+dessen `ListFlows` sofort liest und erst auf Freigabe antwortet:
+`an edit decided while the first page is on its way stays in the row`,
+`a decision for a row of the page on its way keeps the chip`,
+`an event the page is already past does not move the row back`,
+`an arrival the filtered page already lists is not counted`,
+`a gap during the first page reloads and keeps the arrival` und
+`a load that throws closes its window`. Jede der Mutationen (kein Fenster beim
+ersten Laden, keins beim Nachladen, kein Nachfalten, kein Schutz gegen
+Rückschritt, Zählung vor der Id-Prüfung, Fenster nur bei Erfolg geschlossen)
+macht mindestens einen davon rot.
+
 ---
 
 ## HUM-491 · macOS: clone masks fold by Unicode like APFS

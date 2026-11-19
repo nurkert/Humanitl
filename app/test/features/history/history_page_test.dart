@@ -2,6 +2,8 @@
 // Trefferzahl, der abgelehnte Filter und die Aktualisierung aus dem
 // Ereignisstrom.
 
+import 'dart:async';
+
 import 'package:flutter_riverpod/flutter_riverpod.dart';
 import 'package:flutter_test/flutter_test.dart';
 import 'package:humanitl/core/domain/domain.dart';
@@ -554,6 +556,247 @@ void main() {
       reason: 'no duplicate after an insert at the top',
     );
   });
+  test(
+    'an edit decided while the first page is on its way stays in the row',
+    () async {
+      // HUM-490: The M4 screen comes up, the agent sends at once, and the
+      // first `ListFlows` of the history is still on its way. The daemon
+      // read its recording before the request arrived, and the answer comes
+      // after the arrival, the hold and the edited release went by in the
+      // stream. The page must not write that older answer over them.
+      final StallingListClient client = StallingListClient()
+        ..gate = Completer<void>();
+      final ProviderContainer container = _container(client);
+      final HistoryPageNotifier notifier = container.read(
+        historyPageProvider.notifier,
+      );
+      await client.asked.future;
+      expect(container.read(historyPageProvider).loading, isTrue);
+
+      final Flow arrival = _arrival();
+      final DateTime at = arrival.receivedAt;
+      notifier
+        ..applyEventForTest(FlowEvent.received(at: at, flow: arrival))
+        ..applyEventForTest(
+          FlowEvent.held(
+            at: at,
+            flowId: arrival.id,
+            deadline: at.add(const Duration(minutes: 2)),
+          ),
+        )
+        ..applyEventForTest(
+          FlowEvent.decided(
+            at: at.add(const Duration(seconds: 1)),
+            flowId: arrival.id,
+            kind: DecisionKind.allowEdited,
+            source: DecisionSource.user,
+          ),
+        );
+      client.gate!.complete();
+      await settle(container);
+      await pumpEventQueue();
+
+      final List<Flow> rows = container.read(historyPageProvider).rows;
+      final Flow? row = rows
+          .where((Flow flow) => flow.id == arrival.id)
+          .firstOrNull;
+      expect(row, isNotNull, reason: 'the arrival survives the older page');
+      expect(row!.edited, isTrue, reason: 'and carries the chip "Edited"');
+      expect(row.decision, DecisionKind.allowEdited);
+      expect(
+        rows.where((Flow flow) => flow.id == arrival.id),
+        hasLength(1),
+        reason: 'folded once, not twice',
+      );
+    },
+  );
+
+  test('a decision for a row of the page on its way keeps the chip', () async {
+    // The second page is read while one of its requests is still held; the
+    // edited release goes by in the stream before the page arrives. The
+    // event found no row then, and the row came in without "Edited".
+    final StallingListClient client = StallingListClient();
+    final List<Flow> seeded = _seed(client, 250);
+    final Flow held = seeded[10].copyWith(
+      state: FlowState.held,
+      deadline: DateTime.utc(2027),
+    );
+    client.state.flows[held.id] = held;
+    final ProviderContainer container = _container(client);
+    final HistoryPageNotifier notifier = container.read(
+      historyPageProvider.notifier,
+    );
+    await settle(container);
+    expect(
+      container
+          .read(historyPageProvider)
+          .rows
+          .any((Flow flow) => flow.id == held.id),
+      isFalse,
+      reason: 'the held row stands on the second page',
+    );
+
+    client
+      ..gate = Completer<void>()
+      ..asked = Completer<void>();
+    final Future<void> more = notifier.loadMore();
+    await client.asked.future;
+    notifier.applyEventForTest(
+      FlowEvent.decided(
+        at: DateTime.utc(2026, 6),
+        flowId: held.id,
+        kind: DecisionKind.allowEdited,
+        source: DecisionSource.user,
+      ),
+    );
+    client.gate!.complete();
+    await more;
+    await pumpEventQueue();
+
+    final Flow row = container
+        .read(historyPageProvider)
+        .rows
+        .firstWhere((Flow flow) => flow.id == held.id);
+    expect(row.edited, isTrue, reason: 'the row carries the chip "Edited"');
+    expect(row.decision, DecisionKind.allowEdited);
+    expect(row.isHeld, isFalse);
+  });
+
+  test(
+    'an event the page is already past does not move the row back',
+    () async {
+      // The daemon read the page after the decision; the `Held` that came
+      // before it in the stream is folded in afterwards and must not put the
+      // request back on screen as waiting.
+      final StallingListClient client = StallingListClient()
+        ..gate = Completer<void>();
+      final Flow arrival = _arrival();
+      client.state.flows[arrival.id] = arrival.copyWith(
+        state: FlowState.forwarded,
+        decision: DecisionKind.allowEdited,
+        decisionSource: DecisionSource.user,
+        edited: true,
+      );
+      final ProviderContainer container = _container(client);
+      final HistoryPageNotifier notifier = container.read(
+        historyPageProvider.notifier,
+      );
+      await client.asked.future;
+      notifier
+        ..applyEventForTest(
+          FlowEvent.held(
+            at: arrival.receivedAt,
+            flowId: arrival.id,
+            deadline: DateTime.utc(2027, 1, 1, 0, 2),
+          ),
+        )
+        ..applyEventForTest(
+          FlowEvent.decided(
+            at: arrival.receivedAt,
+            flowId: arrival.id,
+            kind: DecisionKind.allowEdited,
+            source: DecisionSource.user,
+          ),
+        );
+      client.gate!.complete();
+      await settle(container);
+      await pumpEventQueue();
+
+      final Flow row = container
+          .read(historyPageProvider)
+          .rows
+          .firstWhere((Flow flow) => flow.id == arrival.id);
+      expect(row.state, FlowState.forwarded);
+      expect(row.isHeld, isFalse);
+      expect(row.deadline, isNull);
+      expect(row.edited, isTrue);
+    },
+  );
+
+  test('an arrival the filtered page already lists is not counted', () async {
+    final StallingListClient client = StallingListClient();
+    final ProviderContainer container = _container(client);
+    await settle(container);
+
+    final Flow arrival = _arrival();
+    client
+      ..state.flows[arrival.id] = arrival
+      ..gate = Completer<void>()
+      ..asked = Completer<void>();
+    container.read(historyQueryProvider.notifier).submit('host:fresh.example');
+    await client.asked.future;
+    container
+        .read(historyPageProvider.notifier)
+        .applyEventForTest(
+          FlowEvent.received(at: arrival.receivedAt, flow: arrival),
+        );
+    client.gate!.complete();
+    await settle(container);
+    await pumpEventQueue();
+
+    final HistoryPageState page = container.read(historyPageProvider);
+    expect(page.rows.map((Flow flow) => flow.id), <FlowId>[arrival.id]);
+    expect(page.missed, 0, reason: 'the page holds it, nothing is missing');
+  });
+
+  test('a gap during the first page reloads and keeps the arrival', () async {
+    final StallingListClient client = StallingListClient()
+      ..gate = Completer<void>();
+    final ProviderContainer container = _container(client);
+    final HistoryPageNotifier notifier = container.read(
+      historyPageProvider.notifier,
+    );
+    await client.asked.future;
+    final Flow arrival = _arrival();
+    client.state.flows[arrival.id] = arrival;
+    notifier
+      ..applyEventForTest(
+        FlowEvent.received(at: arrival.receivedAt, flow: arrival),
+      )
+      ..applyEventForTest(FlowEvent.lagged(at: DateTime.utc(2027), dropped: 3));
+    client.gate!.complete();
+    await settle(container);
+    await pumpEventQueue();
+
+    final List<Flow> rows = container.read(historyPageProvider).rows;
+    expect(rows.where((Flow flow) => flow.id == arrival.id), hasLength(1));
+  });
+
+  test('a load that throws closes its window', () async {
+    final StallingListClient client = StallingListClient()
+      ..gate = Completer<void>()
+      ..failWith = StateError('the channel broke');
+    // The load runs unawaited from `build`, so its exception lands in the
+    // zone; caught here, and named below.
+    final List<Object> uncaught = <Object>[];
+    late final ProviderContainer container;
+    runZonedGuarded(
+      () => container = _container(client),
+      (Object error, StackTrace _) => uncaught.add(error),
+    );
+    final HistoryPageNotifier notifier = container.read(
+      historyPageProvider.notifier,
+    );
+    await client.asked.future;
+    client.gate!.complete();
+    await pumpEventQueue();
+    // The stream opens with `Lagged`, which loads once more; both fail.
+    expect(uncaught, isNotEmpty);
+    expect(uncaught, everyElement(isA<StateError>()));
+
+    final Flow arrival = _arrival();
+    notifier.applyEventForTest(
+      FlowEvent.received(at: arrival.receivedAt, flow: arrival),
+    );
+    expect(
+      container
+          .read(historyPageProvider)
+          .rows
+          .any((Flow flow) => flow.id == arrival.id),
+      isTrue,
+      reason: 'events after the failed load reach the rows at once',
+    );
+  });
 }
 
 /// A flow that arrives now, newer than anything the scenario seeded.
@@ -567,3 +810,59 @@ Flow _arrival() => Flow(
   path: '/just-arrived',
   state: FlowState.received,
 );
+
+/// A fake whose `ListFlows` reads its state at once and answers only when
+/// the test lets it, the way a daemon answers a page it read a moment ago.
+class StallingListClient extends FakeDaemonClient {
+  /// An empty recording and no scripted stream.
+  StallingListClient() : super(script: const <ScriptedEvent>[]);
+
+  /// Completed once a `ListFlows` has read its state.
+  Completer<void> asked = Completer<void>();
+
+  /// While set and open, every answer waits for it.
+  Completer<void>? gate;
+
+  /// Thrown instead of an answer once the gate opens, when set.
+  Object? failWith;
+
+  @override
+  Future<FlowPage> listFlows(
+    FlowFilter filter, {
+    int limit = 200,
+    String? cursor,
+  }) async {
+    final FlowPage page = await super.listFlows(
+      filter,
+      limit: limit,
+      cursor: cursor,
+    );
+    if (!asked.isCompleted) {
+      asked.complete();
+    }
+    await gate?.future;
+    final Object? failure = failWith;
+    if (failure != null) {
+      throw failure;
+    }
+    return page;
+  }
+}
+
+/// [count] recorded flows, oldest first, one minute apart.
+List<Flow> _seed(FakeDaemonClient client, int count) => <Flow>[
+  for (int i = 0; i < count; i++)
+    client.state.flows[FlowId(
+      '018f000a-0000-7000-8000-${i.toString().padLeft(12, '0')}',
+    )] = Flow(
+      id: FlowId('018f000a-0000-7000-8000-${i.toString().padLeft(12, '0')}'),
+      sessionId: historySession,
+      receivedAt: DateTime.utc(2026).add(Duration(minutes: i)),
+      method: Method.get,
+      scheme: Scheme.https,
+      authority: const Authority(host: 'seeded.example', port: 443),
+      path: '/$i',
+      state: FlowState.recorded,
+      decision: DecisionKind.allow,
+    ),
+];
