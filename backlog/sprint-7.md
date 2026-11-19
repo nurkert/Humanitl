@@ -143,6 +143,7 @@ Diagnose-Codes, hier nur geplant (registriert vom genannten Issue in `codes.rs` 
 | HUM-558 | Test `fd_handover::nobody_coming_ends_the_wait_and_the_socket` wackelt unter paralleler Last | S | — |
 | HUM-559 | Plan-Vorschau kennt die Untergrenze der Kommandozeile nicht | S | HUM-489 |
 | HUM-560 | App: im Reiter Isolation verliert eine Wahl des Backends per Tastatur den Fokus | S | HUM-510 |
+| HUM-561 | Regeln: ein einziger fehlerhafter Eintrag in `rules.yaml` verwirft beim Start alle Regeln des Nutzers | M | HUM-526 |
 
 ## HUM-428 · Port neutral: `PlanRequest`, `LaunchOptions`, `IsolationLevel`, Enum `Backend` statt `PlatformBackend`
 
@@ -5663,3 +5664,39 @@ Mitglied ohne Wert, Segmente gesperrt), dort kommt der Fokus nicht zurück.
 ### Akzeptanzkriterien
 1. Eine Wahl per Tastatur lässt den Fokus in der Wahl, in Zeile und
    Abschnitt.
+
+---
+
+## HUM-561 · Regeln: ein einziger fehlerhafter Eintrag in `rules.yaml` verwirft beim Start alle Regeln des Nutzers
+
+### Kontext
+Gefunden bei HUM-526. Scheitert eine einzige Regel beim Lesen (etwa ein
+von Hand geschriebenes `expires`, das sich nicht lesen lässt), liefert
+`parse_expiry` `RULES_001` mit Schwere Error; `parse_rules_for_session`
+(`daemon/crates/rules/src/parse.rs`, etwa Zeile 130) gibt bei jedem Error
+`Err` zurück, und `rules_store.rs` (etwa Zeile 820) macht daraus eine
+leere Regelliste. Alle Regeln des Nutzers sind dann weg, bis die Datei
+repariert ist; jede Anfrage landet wieder beim Menschen. Das ist nicht
+unsicher (nichts wird ungewollt erlaubt), aber still und lästig, und eine
+gespeicherte Sperre (`block`) wirkt in der Zeit nicht mehr, sondern wird
+zur Nachfrage.
+
+### Spezifikation
+1. Eine Regel, die sich nicht lesen lässt, fällt allein heraus; die übrigen
+   gelten weiter. Der Befund nennt Zeile und Grund und erscheint beim
+   Start (Diagnose, `doctor`, App).
+2. Prüfen, ob eine nicht lesbare `block`-Regel stattdessen als Sperre
+   bestehen bleiben sollte (fail closed), und das begründet entscheiden.
+3. Die Datei wird beim nächsten Schreiben nicht stillschweigend ohne die
+   kaputte Regel überschrieben; die kaputte Zeile bleibt erhalten oder wird
+   gesichert.
+
+### Tests
+- `rules.yaml` mit einer kaputten und zwei gültigen Regeln: beide gültigen
+  gelten, der Befund nennt die kaputte. Mutationsbeweis: altes Verhalten
+  färbt rot.
+- Schreiben nach dem Start erhält die kaputte Zeile (oder legt die
+  Sicherung an).
+
+### Akzeptanzkriterien
+1. Ein Fehler in einer Regel kostet nie die anderen Regeln.
