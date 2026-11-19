@@ -35,6 +35,7 @@ use sha2::{Digest as _, Sha256};
 use crate::summary::{ChangeKind, display_path, path_hash};
 use crate::worktree::{Entry, Kind, TreeSnapshot, dir_names, open_beneath};
 
+use super::spelling::{CloneMasks, MaskStep, ProjectLookup, ProjectMasks, entry_id, look_up_entry};
 use super::{MAX_DEPTH, chmod_nofollow, open_dir_forcing};
 
 /// So viele Einträge liest der Diff höchstens aus der oberen Schicht.
@@ -176,6 +177,8 @@ pub fn scan_masked(
         read_xattr: fgetxattr,
         clone_masks: None,
         overlay_masks: masks.to_vec(),
+        clone_names: CloneMasks::default(),
+        project_masks: None,
     };
     scanner.walk(upper, Path::new(""), &Walk::default());
     scanner.out.changes.sort_by(|a, b| a.rel.cmp(&b.rel));
@@ -194,7 +197,9 @@ pub fn scan_masked(
 ///
 /// `masks` sind die Pfade, die vor dem Start aus dem Klon entfernt wurden;
 /// ihr Fehlen ist keine Löschung, und etwas, das dort liegt, wird nie
-/// geschrieben.
+/// geschrieben. Ob ein Eintrag eine Maske ist, entscheidet neben dem
+/// Vergleich in ASCII das Nachschlagen ihres Namens im Volume selbst
+/// (HUM-491, Modul `spelling`): APFS faltet nach Unicode.
 #[must_use]
 pub fn scan_clone(
     clone: BorrowedFd<'_>,
@@ -213,6 +218,19 @@ pub(crate) fn scan_clone_with_budget(
     masks: &[PathBuf],
     budget: usize,
 ) -> ChangeSet {
+    scan_clone_probed(clone, lower, baseline, masks, budget, look_up_entry)
+}
+
+/// Wie [`scan_clone_with_budget`], mit eigenem Nachschlagen eines Eintrags
+/// im Projekt (HUM-491); für Tests, die einen Fehler brauchen.
+pub(super) fn scan_clone_probed(
+    clone: BorrowedFd<'_>,
+    lower: BorrowedFd<'_>,
+    baseline: &TreeSnapshot,
+    masks: &[PathBuf],
+    budget: usize,
+    lookup: ProjectLookup,
+) -> ChangeSet {
     let mut scanner = Scanner {
         lower,
         baseline,
@@ -222,9 +240,21 @@ pub(crate) fn scan_clone_with_budget(
         read_xattr: fgetxattr,
         clone_masks: Some(masks.iter().map(|mask| folded(mask)).collect()),
         overlay_masks: Vec::new(),
+        clone_names: CloneMasks::new(masks),
+        project_masks: None,
+    };
+    scanner.project_masks = Some(
+        ProjectMasks::find(lower, masks, lookup).unwrap_or_else(|why| {
+            scanner.incomplete(why);
+            ProjectMasks::Unknown
+        }),
+    );
+    let root = Walk {
+        mask_steps: scanner.clone_names.first_steps(),
+        ..Walk::default()
     };
     scanner.opaque_removals(clone, Path::new(""));
-    scanner.walk(clone, Path::new(""), &Walk::default());
+    scanner.walk(clone, Path::new(""), &root);
     scanner.out.changes.sort_by(|a, b| a.rel.cmp(&b.rel));
     scanner.out
 }
@@ -257,6 +287,8 @@ pub(crate) fn scan_with(
         read_xattr,
         clone_masks: None,
         overlay_masks: Vec::new(),
+        clone_names: CloneMasks::default(),
+        project_masks: None,
     };
     scanner.walk(upper, Path::new(""), &Walk::default());
     scanner.out.changes.sort_by(|a, b| a.rel.cmp(&b.rel));
@@ -310,6 +342,9 @@ struct Walk {
     /// Ein Symlink im Projekt, den der Agent durch ein Verzeichnis ersetzt
     /// hat; alles darunter läge im Projekt hinter diesem Symlink.
     replaced_link: Option<PathBuf>,
+    /// Die Namen von Masken eines Klons, die in diesem Verzeichnis
+    /// nachzuschlagen sind (HUM-491).
+    mask_steps: Vec<MaskStep>,
 }
 
 impl Walk {
@@ -318,6 +353,16 @@ impl Walk {
             depth: self.depth + 1,
             under_opaque: self.under_opaque || opaque,
             replaced_link: replaced_link.or_else(|| self.replaced_link.clone()),
+            mask_steps: self.mask_steps.clone(),
+        }
+    }
+
+    /// Derselbe Stand für ein Unterverzeichnis, das auf dem Weg zu den
+    /// Masken `steps` liegt.
+    fn toward(&self, steps: Vec<MaskStep>) -> Self {
+        Self {
+            mask_steps: steps,
+            ..self.clone()
         }
     }
 
@@ -506,6 +551,12 @@ struct Scanner<'a> {
     clone_masks: Option<Vec<PathBuf>>,
     /// Die Masken über einem Overlay ([`scan_masked`], HUM-446), ungefaltet.
     overlay_masks: Vec<PathBuf>,
+    /// Die Masken eines Klons als Namen, für das Nachschlagen im Volume
+    /// (HUM-491); leer außer bei einem Klon.
+    clone_names: CloneMasks,
+    /// Die Masken, die es im Projekt gibt, nach Gerät und Inode (HUM-491);
+    /// `Some` nur bei einem Klon.
+    project_masks: Option<ProjectMasks>,
 }
 
 /// Wie [`rustix::fs::fgetxattr`]: Länge des Werts in `buf` oder der Fehler.
@@ -618,6 +669,14 @@ impl Scanner<'_> {
             self.incomplete(format!("the list stops at {} entries", self.budget));
         }
         self.seen += names.len();
+        let hits = self.clone_names.look_up(up, &at.mask_steps);
+        if let Some((mask, err)) = self.clone_names.failed(&hits) {
+            self.incomplete(format!(
+                "the mask name {} cannot be looked up in {} of the layer ({err})",
+                display_path(Path::new(mask)),
+                shown(rel)
+            ));
+        }
         for name in &names {
             let child = rel.join(name);
             let stat = match rustix::fs::statat(up, name.as_os_str(), AtFlags::SYMLINK_NOFOLLOW) {
@@ -630,7 +689,8 @@ impl Scanner<'_> {
                     continue;
                 }
             };
-            if self.is_mask(&child) {
+            let standing = self.clone_names.standing(&hits, entry_id(&stat));
+            if self.is_mask(&child) || standing.on_mask {
                 self.push_masked(&child, &stat);
                 continue;
             }
@@ -640,10 +700,12 @@ impl Scanner<'_> {
             if untouched && kind != FileType::Directory {
                 continue;
             }
-            if kind != FileType::Directory && self.above_mask(&child) {
+            let toward = !standing.toward.is_empty();
+            if kind != FileType::Directory && (toward || self.above_mask(&child)) {
                 self.push_masked(&child, &stat);
                 continue;
             }
+            let at = &at.toward(standing.toward);
             match kind {
                 FileType::CharacterDevice if stat.st_rdev == 0 && self.clone_masks.is_none() => {
                     self.whiteout(&child, &lower);
@@ -848,6 +910,28 @@ impl Scanner<'_> {
             let child = rel.join(&name);
             if self.is_mask(&child) {
                 continue;
+            }
+            // Eine Maske, die der Mensch anders geschrieben hat, fehlt im
+            // Klon, weil `strip_masks` sie gefaltet fand (HUM-491); ihr
+            // Fehlen ist keine Löschung. Lässt sich das nicht klären, auch
+            // nicht, und die Liste ist unvollständig.
+            if matches!(above, Err(Errno::NOENT)) {
+                let holds = self
+                    .project_masks
+                    .as_ref()
+                    .map_or(Ok(false), |masks| masks.holds(lower_dir.as_fd(), &name));
+                match holds {
+                    Ok(false) => {}
+                    Ok(true) => continue,
+                    Err(err) => {
+                        self.incomplete(format!(
+                            "whether {} in the project is a masked path cannot be checked, so \
+                             its absence from the layer is not listed as a removal ({err})",
+                            shown(&child)
+                        ));
+                        continue;
+                    }
+                }
             }
             match above {
                 // Bei einem Klon heißt „fehlt" nur dann gelöscht, wenn es

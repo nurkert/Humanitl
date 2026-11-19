@@ -531,19 +531,24 @@ reviewed. A run without changes discards its layer at once (`no_changes`), but o
 scan; a directory that cannot be read marks the list incomplete, and the layer waits.
 
 *macOS (HUM-374).* In direct runs a mask behind a symbolic link is denied on its resolved target
-too, with the folders above it locked. The daemon clones the opened project to a sibling of the session directories,
-removes every present mask from the clone before the start and denies every configured mask in
-the profile, present or not; the root of the clone is locked and opened only by descriptor against
-the device and inode taken after cloning; the real project is denied for reading and writing, also outside the private trees, and
-`mounts.extra_rw` is read-only. `auto` resolves to disposable there too, and a clone that fails runs
-direct with `SANDBOX_033`, without the protections of this section; an explicit `disposable`
-refuses with `SANDBOX_030`. Before anything reads the clone the daemon
-renames it, which ends path access for a process that outlived the sandbox (K-20). *Residual
-risk:* a descriptor such a process opened for writing before the end stays usable, so it can
-change the bytes of that one file after the human reviewed it; there is no size cap, so the agent
-can fill the volume as in direct mode; the clone lies on disk until apply, discard or the next
-daemon start; a file whose kind, size, `mtime` and mode the agent restored is not listed, and is
-then not applied either. Measured with a real `sandbox-exec` run, see
+too, with the folders above it locked. The daemon clones the opened project to a sibling of the
+session directories, removes every present mask from the clone before the start and denies every
+configured mask in the profile, present or not; the scan finds a mask by looking its name up in
+the clone and comparing device and inode, so a spelling that APFS folds to a mask (Unicode case
+folding, normalization) is refused on apply like the mask itself (HUM-491); the root of the clone
+is locked and opened only by descriptor against the device and inode taken after cloning; the real
+project is denied for reading and writing, also outside the private trees, and `mounts.extra_rw`
+is read-only. `auto` resolves to disposable there too, and a clone that fails runs direct with
+`SANDBOX_033`, without the protections of this section; an explicit `disposable` refuses with
+`SANDBOX_030`. Before anything reads the clone the daemon renames it, which ends path access for a
+process that outlived the sandbox (K-20). *Residual risk:* a descriptor such a process opened for
+writing before the end stays usable, so it can change the bytes of that one file after the human
+reviewed it; there is no size cap, so the agent can fill the volume as in direct mode; the clone
+lies on disk until apply, discard or the next daemon start; a file whose kind, size, `mtime` and
+mode the agent restored is not listed, and is then not applied either; a volume that folds
+differently and is mounted inside the project is not seen by the clone, so for a mask present
+there only the ASCII comparison applies, and for a missing one nothing (HUM-491). Measured with a
+real `sandbox-exec` run, see
 [`SECURITY.md` section 12](SECURITY.md#the-disposable-sandbox-on-macos-hum-374).
 
 With a disposable start (HUM-350) the project folder is the read-only lower layer of an
@@ -1167,6 +1172,7 @@ These attackers are not defended against, and Humanitl does not claim to:
 | 2026-11-18 | K-31: no shared cap on door connections; the per-session cap suffices while the daemon runs one session (`CLI_005`), and several sessions (HUM-549) must decide a shared budget first | HUM-479 |
 | 2026-11-19 | K-33: the unit of a kernel-level session runs only its programs, their loaders and libraries (`NoExecPaths=/`, `ExecPaths=` with single files), in every bubblewrap jail and also after admission; the host check counts shells, bubblewraps and file system daemons; residual: code in a `memfd` or in a mount bubblewrap creates inside a jail still runs | HUM-480 |
 | 2026-11-19 | K-34: in a disposable session of the kernel level the shim lays the profile's masks over the overlay in the guest as bubblewrap does, each in the expected mount table; the layer's file system daemon takes only `user.overlay.*` attributes (`--xattrmap`), any other fails with `ENOTSUP` | HUM-481 |
+| 2026-11-19 | K-24: on macOS the scan of the clone finds a mask by looking its name up in the clone itself and comparing device and inode, so no spelling that APFS folds to a mask (Kelvin sign, long s, another normalization) is applied; a mask the human spelled otherwise in the project is no deletion; not covered: a differently folding volume mounted inside the project (ASCII comparison only for a mask present there, nothing for a missing one) | HUM-491 |
 
 Every security-relevant change to the shim, the mount allowlist, the filter or the passthrough gets
 a line here. Vulnerabilities are reported as described in

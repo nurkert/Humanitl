@@ -231,6 +231,124 @@ fn a_cut_short_list_is_never_empty_handed() {
     assert!(select(&set, &[]).is_err());
 }
 
+/// Ein Eintrag, den das Nachschlagen eines Maskennamens im Volume findet, ist
+/// die Maske, wie immer er heißt (HUM-491). Ein harter Verweis spielt hier
+/// das faltende APFS nach: `.env` nennt denselben Inode wie `alias`, so wie
+/// `.git/hooks` auf APFS denselben Eintrag nennt wie `.git/hoo\u{212a}s`.
+///
+/// Mutationsbeweis: `standing.on_mask` im Lauf weggelassen, und `alias`
+/// stünde als neue Datei da und käme ins Projekt.
+#[test]
+fn an_entry_the_mask_name_resolves_to_is_masked() {
+    let tree = tree();
+    let (lower, baseline, masks) = tree.start();
+    fs::write(tree.clone.join("alias"), "evil\n").unwrap();
+    fs::hard_link(tree.clone.join("alias"), tree.clone.join(".env")).unwrap();
+    fs::write(tree.clone.join("plain.txt"), "fine\n").unwrap();
+
+    let clone = open_root(&tree.clone).unwrap();
+    let set = scan_clone(clone.as_fd(), lower.as_fd(), &baseline, &masks);
+    let alias = set
+        .changes
+        .iter()
+        .find(|change| change.rel == std::path::Path::new("alias"))
+        .expect("alias is listed");
+    assert!(alias.refused.is_some(), "{alias:?}");
+    let plain = set
+        .changes
+        .iter()
+        .find(|change| change.rel == std::path::Path::new("plain.txt"))
+        .expect("plain.txt is listed");
+    assert!(plain.refused.is_none(), "{plain:?}");
+    assert!(!set.truncated, "{:?}", set.incomplete);
+}
+
+/// Dasselbe auf dem Weg zu einer Maske: Was dort statt eines Ordners liegt
+/// und denselben Inode hat wie das, was der Name auf dem Weg nennt, wird
+/// nie geschrieben.
+///
+/// Mutationsbeweis: `toward` im Lauf weggelassen, und `notes` käme als Datei
+/// ins Projekt.
+#[test]
+fn an_entry_the_way_to_a_mask_resolves_to_is_masked() {
+    let tree = tree();
+    let (lower, baseline, _) = tree.start();
+    let masks = vec![PathBuf::from("conf/.env")];
+    fs::write(tree.clone.join("notes"), "evil\n").unwrap();
+    fs::hard_link(tree.clone.join("notes"), tree.clone.join("conf")).unwrap();
+
+    let clone = open_root(&tree.clone).unwrap();
+    let set = scan_clone(clone.as_fd(), lower.as_fd(), &baseline, &masks);
+    let notes = set
+        .changes
+        .iter()
+        .find(|change| change.rel == std::path::Path::new("notes"))
+        .expect("notes is listed");
+    assert!(notes.refused.is_some(), "{notes:?}");
+}
+
+/// Eine Maske, die der Mensch im Projekt anders geschrieben hat, entfernt
+/// `strip_masks` gefaltet aus dem Klon; ihr Fehlen dort ist keine Löschung
+/// (HUM-491). Ein harter Verweis spielt das Falten nach: `.env` und
+/// `env-copy` sind im Projekt ein Inode, und beide fehlen im Klon.
+///
+/// Mutationsbeweis: die Prüfung `holds` in `opaque_removals` weggelassen,
+/// und `env-copy` stünde als Löschung da; die Übernahme löschte das
+/// Geheimnis im Projekt.
+#[test]
+fn a_mask_spelled_otherwise_in_the_project_is_no_removal() {
+    let tree = tree();
+    fs::hard_link(tree.project.join(".env"), tree.project.join("env-copy")).unwrap();
+    let (lower, baseline, masks) = tree.start();
+    fs::remove_file(tree.clone.join("env-copy")).unwrap();
+
+    let clone = open_root(&tree.clone).unwrap();
+    let set = scan_clone(clone.as_fd(), lower.as_fd(), &baseline, &masks);
+    assert!(set.changes.is_empty(), "{:?}", set.changes);
+    assert!(!set.truncated, "{:?}", set.incomplete);
+}
+
+/// Lässt sich ein Eintrag des Projekts, der im Klon fehlt, nicht
+/// nachschlagen, ist sein Fehlen keine Löschung, und die Liste ist
+/// unvollständig (HUM-491, Review). Sonst listete ein vorübergehender Fehler
+/// eine anders geschriebene Maske zum Löschen.
+///
+/// Mutationsbeweis: ein Fehler von `holds` als „keine Maske" gelesen, und
+/// `env-copy` stünde als Löschung da.
+#[test]
+fn a_failed_lookup_in_the_project_lists_no_removal() {
+    fn failing(
+        _dir: std::os::fd::BorrowedFd<'_>,
+        _name: &std::ffi::OsStr,
+    ) -> Result<(u64, u64), rustix::io::Errno> {
+        Err(rustix::io::Errno::IO)
+    }
+
+    let tree = tree();
+    fs::hard_link(tree.project.join(".env"), tree.project.join("env-copy")).unwrap();
+    let (lower, baseline, masks) = tree.start();
+    fs::remove_file(tree.clone.join("env-copy")).unwrap();
+
+    let clone = open_root(&tree.clone).unwrap();
+    let set = super::scan::scan_clone_probed(
+        clone.as_fd(),
+        lower.as_fd(),
+        &baseline,
+        &masks,
+        super::scan::MAX_CLONE_SCAN_ENTRIES,
+        failing,
+    );
+    assert!(set.changes.is_empty(), "{:?}", set.changes);
+    assert!(set.truncated);
+    assert!(
+        set.incomplete
+            .iter()
+            .any(|why| why.contains("env-copy") && why.contains("masked path")),
+        "{:?}",
+        set.incomplete
+    );
+}
+
 /// Mutationsbeweis: die alte Zeile, `auto` unter macOS still `direct`, rot.
 #[test]
 fn auto_is_disposable_when_the_system_can_on_every_platform() {
@@ -282,6 +400,67 @@ mod real_clone {
             "fn main() {}\n",
             "the clone shares blocks, never writes"
         );
+    }
+
+    /// Auf einem APFS-Volume ohne Unterschied der Schreibweise (die Vorgabe)
+    /// nennt das Kelvin-Zeichen dieselbe Maske wie `k` (HUM-491). Was der
+    /// Agent unter einer anderen Schreibweise anlegt, ist abgelehnt, genau
+    /// dann, wenn das Volume es zur Maske auflöst; ein Volume, das die
+    /// Schreibweise unterscheidet, überspringt den Test.
+    ///
+    /// Mutationsbeweis: `standing.on_mask` im Lauf weggelassen, und
+    /// `.git/hoo\u{212a}s` stünde ohne Ablehnung da.
+    #[test]
+    fn apfs_folding_never_bypasses_a_mask() {
+        let tree = tree();
+        let runtime = runtime(&tree);
+        fs::write(tree.project.join("case-probe"), "x\n").unwrap();
+        if !tree.project.join("CASE-PROBE").exists() {
+            eprintln!("skipped: the temporary directory lies on a case-sensitive volume");
+            return;
+        }
+        let lower = open_root(&tree.project).unwrap();
+        let baseline = baseline_at(lower.as_fd());
+        let masks = vec![
+            PathBuf::from(".env"),
+            PathBuf::from(".git/hooks"),
+            PathBuf::from(".ssh"),
+            PathBuf::from("caf\u{e9}"),
+        ];
+        let mut layer =
+            Layer::clone_project(&runtime, lower.as_fd(), &tree.project, masks.clone()).unwrap();
+        let upper = layer.upper();
+        let spellings = [
+            (".git/hoo\u{212a}s", ".git/hooks"),
+            (".\u{17f}sh", ".ssh"),
+            ("cafe\u{301}", "caf\u{e9}"),
+        ];
+        for (spelled, _) in spellings {
+            fs::create_dir(upper.join(spelled)).unwrap();
+            fs::write(upper.join(spelled).join("x"), "evil\n").unwrap();
+        }
+        assert!(
+            upper.join(".git/hooks/x").is_file(),
+            "APFS folds the Kelvin sign"
+        );
+        layer.seal().unwrap();
+        let clone = layer.open_upper().unwrap();
+        let set = scan_clone(clone.as_fd(), lower.as_fd(), &baseline, layer.masks());
+        let sealed = layer.upper();
+        for (spelled, mask) in spellings {
+            let resolves = sealed.join(mask).join("x").is_file();
+            let listed: Vec<_> = set
+                .changes
+                .iter()
+                .filter(|change| change.rel.starts_with(spelled))
+                .collect();
+            assert!(!listed.is_empty(), "{spelled}: {:?}", set.changes);
+            assert_eq!(
+                listed.iter().all(|change| change.refused.is_some()),
+                resolves,
+                "{spelled}: {listed:?}"
+            );
+        }
     }
 
     #[test]

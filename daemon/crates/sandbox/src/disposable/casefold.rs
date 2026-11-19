@@ -17,8 +17,11 @@
 //!
 //! Falten statt verweigern taugt nicht: ext4 und tmpfs falten nach Unicode
 //! und normalisieren dazu (das Kelvin-Zeichen U+212A steht für `k`, das
-//! lange s U+017F für `s`), ein Vergleich in ASCII wie bei den Klon-Masken
-//! unter macOS ließe solche Namen durch. Deshalb startet eine
+//! lange s U+017F für `s`), ein Vergleich in ASCII ließe solche Namen
+//! durch. Unter macOS schlägt der Scan des Klons deshalb die Namen der
+//! Masken im Volume selbst nach (HUM-491, `super::spelling`); hier geht das
+//! nicht, weil der Gast das Falten des Hosts nicht sieht und die obere
+//! Schicht auf einem tmpfs ohne Faltung liegt. Deshalb startet eine
 //! Wegwerf-Sandbox nicht, wenn einer der Ordner, in denen ein Name einer
 //! Maske nachgeschlagen wird, Schreibweisen gleichsetzt: die Wurzel des
 //! Projekts und jeder vorhandene Ordner auf dem Weg zu einer Maske. Was darin
