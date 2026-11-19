@@ -647,13 +647,7 @@ pub(crate) fn probe_inputs(name: &'static str, sandbox: &SandboxRef, paths: &Pat
         std::env::temp_dir().display(),
         fingerprint(&search_files(name, sandbox, paths))
     );
-    humanitl_core::http::sha256(text.as_bytes()).iter().fold(
-        String::with_capacity(64),
-        |mut hex, byte| {
-            let _ = write!(hex, "{byte:02x}");
-            hex
-        },
-    )
+    super::probe_cache::sha256_hex(text.as_bytes())
 }
 
 #[cfg(test)]
@@ -1012,6 +1006,86 @@ mod tests {
         std::fs::write(&replacement, b"#!/bin/sh\n# rebuilt\n").unwrap();
         std::fs::rename(&replacement, &program).unwrap();
         assert_ne!(present, inputs(&sandbox), "the program was replaced");
+    }
+
+    /// HUM-508: In `doctor-probe.json` steht nach einem gelungenen
+    /// Probestart kein Pfad aus der Umgebung des Daemons: nicht das
+    /// Programm, nicht sein Ordner, kein Eintrag des `PATH`, nicht `HOME`.
+    /// Schlüssel und Beleg entstehen wie im Doctor (`probe_key`,
+    /// `passed_label` und das Urteil über einen bestandenen Start), gelesen
+    /// wird die geschriebene Datei.
+    ///
+    /// Mutationsbeweise: `key: key.id()` statt des Hashes in
+    /// `ProbeCache::store` oder der Pfad des Programms zurück in
+    /// `passed_label`, und dieser Test wird rot.
+    #[test]
+    fn the_stored_probe_names_no_path_of_the_daemon() {
+        use std::os::unix::process::ExitStatusExt as _;
+
+        use crate::doctor::probe_start::{Ending, ProbeOutcome, passed_label, verdict};
+        use crate::launcher::{CheckResult, IsolationCheck};
+
+        let dir = tempfile::tempdir().unwrap();
+        let home = dir.path().join("home-of-someone");
+        let bin = home.join("private-tools-hum508").join("bin");
+        let other = dir.path().join("another-path-entry");
+        std::fs::create_dir_all(&bin).unwrap();
+        std::fs::create_dir_all(&other).unwrap();
+        let program = bin.join(crate::backend::BWRAP_BACKEND);
+        crate::test_support::write_program(&program, "#!/bin/sh\nexit 0\n");
+        let path_var = format!("{}:{}", other.display(), bin.display());
+        let paths = Paths::new(Env::from_pairs([
+            ("HOME", home.to_string_lossy().into_owned()),
+            ("PATH", path_var.clone()),
+        ]));
+        let sandbox = SandboxRef::default();
+        let backend = crate::Backend::from(crate::bwrap::BwrapBackend::unchecked(
+            &program,
+            crate::bwrap::MIN_BWRAP_VERSION,
+            paths,
+        ));
+        let name = crate::backend::BWRAP_BACKEND;
+        let key = super::probe_key(name, name, &sandbox, &backend);
+        let results: Vec<CheckResult> = IsolationCheck::ALL
+            .iter()
+            .map(|&check| CheckResult {
+                check,
+                passed: true,
+                evidence: "ok".to_owned(),
+                diagnostic: None,
+            })
+            .collect();
+        let ended = Ending::Ended(Ok(std::process::ExitStatus::from_raw(0)));
+        let ProbeOutcome::Passed(evidence) =
+            verdict(&results, &ended, None, passed_label(&backend))
+        else {
+            panic!("a passed probe");
+        };
+        let file = dir.path().join("data").join("doctor-probe.json");
+        let cache = ProbeCache::at(&file);
+        cache.store(&key, &evidence).unwrap();
+
+        let written = std::fs::read_to_string(&file).unwrap();
+        let mut forbidden = vec![
+            program.display().to_string(),
+            bin.display().to_string(),
+            home.display().to_string(),
+            dir.path().display().to_string(),
+            "private-tools-hum508".to_owned(),
+            path_var,
+        ];
+        forbidden.extend(
+            std::env::split_paths(&std::env::var_os("PATH").unwrap_or_default())
+                .map(|entry| entry.display().to_string())
+                .filter(|entry| entry.len() > 1),
+        );
+        for path in &forbidden {
+            assert!(!written.contains(path.as_str()), "{path} in {written}");
+        }
+        // Der Eintrag gilt weiter: Der Hash des Schlüssels findet ihn.
+        if !key.machine.is_empty() {
+            assert_eq!(cache.lookup(&key).as_deref(), Some(evidence.as_str()));
+        }
     }
 
     /// HUM-444: Ein gescheiterter Probestart der Kernel-Stufe ist

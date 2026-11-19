@@ -3521,6 +3521,41 @@ HUM-506. Ein Pfad ist kein Geheimnis, kann aber einen privaten Ordner aus dem
 ### Akzeptanzkriterien
 1. `doctor-probe.json` enthält keinen Pfad aus der Umgebung des Daemons.
 
+### Stand nach der Umsetzung (2026-11-19)
+
+**Schlüssel.** In der Datei steht vom Schlüssel nur noch der SHA-256 seiner
+Zeile (`ProbeKey::id`, darin Stufe, Programm, Fassung, Abdruck der Eingaben
+aus HUM-506, Fassung von Humanitl und Kennung des Rechners), in Hex
+(`probe_cache::key_hash`). Der Vergleich bleibt genau derselbe: Ändert sich
+einer der sechs Teile, ändert sich der Hash, und der gespeicherte Probestart
+gilt nicht mehr. Die Erkennung eines ersetzten Programms, eines anderen
+Gastkernels oder anderer Einstellungen läuft unverändert über den Abdruck aus
+HUM-506. Der Helfer `probe_cache::sha256_hex` ersetzt die Hex-Schleife in
+`probe_inputs`.
+
+**Beleg.** Ein bestandener Probestart nennt das Backend mit seinem Namen
+(`probe_start::passed_label`), nicht mehr mit dem Pfad seines Programms:
+„true ran under bwrap; ... hold". Den Pfad zeigt weiter die Zeile
+`available`, die nie gespeichert wird.
+
+**Altes Format.** Die Datei trägt ein Feld `format` (jetzt 2). Eine Datei
+ohne dieses Feld, also jede von vor HUM-508, zählt als leer: Ihre Einträge
+gelten nicht, auch nicht für denselben Schlüssel, und der nächste gelungene
+Probestart, auch einer anderen Stufe, schreibt die Datei ohne sie neu. So
+bleibt kein alter Eintrag mit Pfad neben einem neuen stehen.
+
+**Tests.** probe_cache: die geschriebene Datei enthält den Ordner des
+Programms nicht, wohl aber den Hash, und der Eintrag wird gefunden; eine Datei
+im alten Format gilt nicht und ist nach dem nächsten Schreiben ohne ihren
+Pfad. backends: Schlüssel und Beleg entstehen wie im Doctor (`probe_key`,
+`passed_label`, Urteil über einen bestandenen Start) mit einem Programm in
+einem eigenen Ordner unter einem eigenen `HOME`; die gelesene Datei enthält
+weder Programm, Ordner, `HOME`, den temporären Ordner noch einen Eintrag des
+`PATH` von Test und Rechner. Mutationsbeweise: `key: key.id()` statt des
+Hashes in `store` macht sechs Tests rot, darunter beide neuen Prüfungen der
+Datei; ohne die Prüfung des Formats in `read` fällt der Test des alten
+Formats; der Pfad zurück in `passed_label` macht den Test in backends rot.
+
 ---
 
 ## HUM-509 · Proxy-Test `the_byte_budget_counts_bodies_while_they_are_buffered` wackelt
