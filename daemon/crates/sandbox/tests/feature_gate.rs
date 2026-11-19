@@ -68,7 +68,9 @@ fn offending(relative: &str, text: &str) -> Vec<String> {
     let mut gated = false;
     for (number, line) in text.lines().enumerate() {
         let trimmed = line.trim_start();
-        if trimmed.starts_with("#[cfg(test)]") {
+        // `#![cfg(test)]` sperrt eine ganze Testdatei weg (etwa
+        // `admission_tests.rs`, HUM-493); alles danach ist Test.
+        if trimmed.starts_with("#[cfg(test)]") || trimmed.starts_with("#![cfg(test)]") {
             in_tests = true;
         }
         // Die Definition: der Name einer Funktion direkt unter ihrem `cfg`.
@@ -143,6 +145,9 @@ fn the_check_names_a_daemon_that_switches_the_bypass_on() {
         offending("bin/humanitld/Cargo.toml", manifest),
         ["bin/humanitld/Cargo.toml:2"]
     );
+    let test_file =
+        "//! Tests.\n\n#![cfg(test)]\n\nfn t() { Backend::detect_unadmitted(\"x\", p); }\n";
+    assert!(offending("crates/sandbox/src/admission_tests.rs", test_file).is_empty());
     let code = "fn start() {\n    let b = Backend::detect_unadmitted(\"podman\", paths);\n}\n";
     assert_eq!(
         offending("crates/ipc/src/sandbox.rs", code),

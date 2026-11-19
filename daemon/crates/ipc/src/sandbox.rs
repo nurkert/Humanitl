@@ -4619,27 +4619,39 @@ fn given_backend(
     sandbox: &humanitl_config::SandboxRef,
     profile_backend: &str,
 ) -> Result<(), Diagnostic> {
-    let chosen = match humanitl_sandbox::choose_backend(sandbox, profile_backend) {
-        Ok(choice) => choice.name,
+    let choice = humanitl_sandbox::choose_backend(sandbox, profile_backend);
+    given_against_choice(choice.map(|choice| choice.name), given.name(), sandbox)
+}
+
+/// [`given_backend`] nach der Wahl: `choice` ist ihr Ergebnis, `given` der
+/// Name des gesetzten Backends. Getrennt, damit die Tests die Ablehnung
+/// einer nicht zugelassenen Stufe (`SANDBOX_048`) einsetzen können, die seit
+/// HUM-449 keine Stufe dieses Builds mehr auslöst (HUM-493).
+fn given_against_choice(
+    choice: Result<&'static str, Diagnostic>,
+    given: &'static str,
+    sandbox: &humanitl_config::SandboxRef,
+) -> Result<(), Diagnostic> {
+    let chosen = match choice {
+        Ok(chosen) => chosen,
         Err(refused)
             if refused.code == codes::SANDBOX_048
-                && humanitl_sandbox::backend_name(sandbox.backend) == given.name() =>
+                && humanitl_sandbox::backend_name(sandbox.backend) == given =>
         {
-            given.name()
+            given
         }
         Err(refused) => return Err(refused),
     };
-    if chosen == given.name() {
+    if chosen == given {
         return Ok(());
     }
     Err(Diagnostic::builder(codes::SANDBOX_034, Severity::Blocking)
         .why(format!(
-            "this service starts with the backend {:?}, and sandbox.backend chose {chosen:?}",
-            given.name()
+            "this service starts with the backend {given:?}, and sandbox.backend chose {chosen:?}"
         ))
         .fix(FixAction::ChangeSetting {
             key: "sandbox.backend".to_owned(),
-            value: given.name().to_owned(),
+            value: given.to_owned(),
         })
         .build())
 }
@@ -8975,7 +8987,7 @@ mod given_backend_tests {
     use humanitl_config::{Env, Paths, SandboxBackendName, SandboxRef};
     use humanitl_sandbox::{AUTO_BACKEND, Backend, SEATBELT_BACKEND};
 
-    use super::{codes, given_backend};
+    use super::{Diagnostic, Severity, codes, given_against_choice, given_backend};
 
     /// Das Backend des Systems, ohne es auf dem System zu prüfen.
     fn system_backend() -> Backend {
@@ -9032,6 +9044,47 @@ mod given_backend_tests {
         )
         .unwrap_err();
         assert_eq!(refused.code, codes::SANDBOX_036);
+    }
+
+    /// Die Ablehnung einer Stufe, die nicht zugelassen ist.
+    fn not_admitted() -> Diagnostic {
+        Diagnostic::builder(codes::SANDBOX_048, Severity::Blocking)
+            .why("not admitted yet")
+            .build()
+    }
+
+    /// Die Escape-Suite setzt eine Stufe vor ihrer Zulassung als Backend des
+    /// Dienstes (HUM-435): `SANDBOX_048` gilt als erfüllt, wenn die
+    /// Konfiguration genau dieses Backend nennt, für jedes andere bleibt die
+    /// Ablehnung stehen. Seit HUM-449 löst keine Stufe dieses Builds
+    /// `SANDBOX_048` mehr aus; der Test setzt die Ablehnung deshalb selbst ein
+    /// (HUM-493). Mutationsbeweis: Ohne den Zweig für `SANDBOX_048` scheitert
+    /// der erste Fall, ohne den Vergleich mit dem Namen aus der Konfiguration
+    /// startet der zweite.
+    #[test]
+    fn an_unadmitted_given_backend_starts_only_when_the_configuration_names_it() {
+        given_against_choice(
+            Err(not_admitted()),
+            SEATBELT_BACKEND,
+            &sandbox(SandboxBackendName::Seatbelt),
+        )
+        .unwrap();
+
+        let refused = given_against_choice(
+            Err(not_admitted()),
+            SEATBELT_BACKEND,
+            &sandbox(SandboxBackendName::Bubblewrap),
+        )
+        .unwrap_err();
+        assert_eq!(refused.code, codes::SANDBOX_048);
+
+        let refused = given_against_choice(
+            Err(not_admitted()),
+            SEATBELT_BACKEND,
+            &sandbox(SandboxBackendName::Auto),
+        )
+        .unwrap_err();
+        assert_eq!(refused.code, codes::SANDBOX_048);
     }
 }
 

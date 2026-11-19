@@ -601,7 +601,8 @@ pub(crate) fn admitted(
     runtime: Option<PodmanRuntime>,
 ) -> Result<(), Diagnostic> {
     let stage = stage(name, runtime);
-    if ADMITTED_BACKENDS.contains(&stage.as_ref()) {
+    let admitted = admitted_backends();
+    if admitted.contains(&stage.as_ref()) {
         return Ok(());
     }
     // Die Stufe nur, wo sie mehr sagt als der Name, etwa mit Laufzeit.
@@ -615,13 +616,27 @@ pub(crate) fn admitted(
             "sandbox.backend = {named} is not admitted yet: a backend becomes selectable only \
              after its mount check and the escape suite against it are green in CI. Admitted \
              are: {}",
-            ADMITTED_BACKENDS.join(", ")
+            admitted.join(", ")
         ))
         .fix(FixAction::ChangeSetting {
             key: "sandbox.backend".to_owned(),
             value: crate::AUTO_BACKEND.to_owned(),
         })
         .build())
+}
+
+/// [`ADMITTED_BACKENDS`]. Die Unit-Tests dieser Crate setzen je Faden eine
+/// kürzere Liste ein (`test_support::with_admitted`, HUM-493): Seit HUM-449 ist
+/// jede Stufe dieses Builds zugelassen, und der Weg der Ablehnung bliebe sonst
+/// bis zum nächsten Backend ungeprüft.
+fn admitted_backends() -> &'static [&'static str] {
+    #[cfg(test)]
+    {
+        if let Some(admitted) = crate::test_support::admitted_override() {
+            return admitted;
+        }
+    }
+    ADMITTED_BACKENDS
 }
 
 /// `SANDBOX_034`: ein Name des Schemas, den dieser Build oder dieses System

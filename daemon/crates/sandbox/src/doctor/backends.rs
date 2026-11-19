@@ -605,7 +605,7 @@ mod tests {
 
     use humanitl_config::{Env, Paths, SandboxBackendName, SandboxRef};
 
-    use super::{BackendCheckId, ProbeMode, group, unadmitted_lines};
+    use super::{BackendCheckId, ProbeMode, group};
     use crate::doctor::{CheckStatus, ProbeCache};
 
     /// Ein Ordner mit `bwrap` und `humanitl-shim` im `PATH`, die jeden
@@ -704,34 +704,33 @@ mod tests {
         assert!(!cache.path().exists(), "nothing was probed, nothing cached");
     }
 
+    /// Eine Liste der Zulassung ohne das VM-Backend der Kernel-Stufe
+    /// ([`crate::test_support::with_admitted`]).
+    const WITHOUT_KERNEL_LEVEL: &[&str] = &[crate::BWRAP_BACKEND, crate::SEATBELT_BACKEND];
+
     /// Für eine Stufe vor ihrer Zulassung liefert `doctor --probe`
     /// `SANDBOX_048` und startet keinen Prozess. Seit HUM-449 ist jede Stufe
-    /// dieses Builds zugelassen; die Zeilen einer künftigen, noch nicht
-    /// zugelassenen Stufe prüft dieser Test deshalb direkt, am Beispiel der
-    /// Voraussetzungen der Kernel-Stufe: Jedes Programm im `PATH` zählt seinen
-    /// Aufruf in eine Datei, und gestartet wird nichts.
+    /// dieses Builds zugelassen; der Test nimmt deshalb die Kernel-Stufe aus
+    /// der Liste (HUM-493) und geht den Weg jeder Gruppe, mit der Suche:
+    /// Jedes Programm im `PATH` zählt seinen Aufruf in eine Datei, und
+    /// gestartet wird nichts. Mutationsbeweis: Ohne den Zweig der
+    /// Zulassung in `search` sucht die Gruppe das Backend, `available` steht
+    /// da und `admitted` ist `ok`.
     #[test]
     fn before_admission_the_probe_is_refused_and_starts_nothing() {
         let dir = tempfile::tempdir().unwrap();
         let (paths, calls) = counting_programs(dir.path());
         let sandbox = kernel_level();
+        let cache = ProbeCache::at(dir.path().join("doctor-probe.json"));
         let mode = ProbeMode::Start {
             shim: dir.path().join("bin").join("humanitl-shim"),
         };
-        let refused = humanitl_core::Diagnostic::builder(
-            humanitl_core::diagnostics::codes::SANDBOX_048,
-            humanitl_core::Severity::Blocking,
-        )
-        .why("not admitted yet")
-        .build();
 
-        let checks = unadmitted_lines(
-            crate::VM_BACKEND,
-            refused,
-            super::static_lines(crate::VM_BACKEND, &paths, &sandbox),
-            &mode,
-        );
+        let search = || group(crate::VM_BACKEND, &sandbox, &paths, &mode, &cache);
+        let group = crate::test_support::with_admitted(WITHOUT_KERNEL_LEVEL, search);
+        let checks = group.checks;
 
+        assert!(!cache.path().exists(), "nothing was probed, nothing cached");
         let get = |id| checks.iter().find(|check| check.id() == id);
         for id in [BackendCheckId::Admitted, BackendCheckId::Probe] {
             let line = get(id).expect("the line is there");
@@ -766,6 +765,39 @@ mod tests {
         } else {
             assert!(!calls.exists(), "a process was started");
         }
+    }
+
+    /// Läuft die Suche bei Ablauf der Frist noch, sagt die Gruppe trotzdem,
+    /// ob die Stufe zugelassen ist: vor der Zulassung `warn` mit
+    /// `SANDBOX_048`, danach `ok` (HUM-493). Mutationsbeweis: Ohne den Zweig
+    /// der Ablehnung in `pending_lines` stünde vor der Zulassung `ok` da.
+    #[test]
+    fn a_pending_search_still_names_the_admission() {
+        let dir = tempfile::tempdir().unwrap();
+        let sandbox = kernel_level();
+        let cache = ProbeCache::at(dir.path().join("doctor-probe.json"));
+        let pending = || {
+            super::finish_group(
+                crate::VM_BACKEND,
+                &sandbox,
+                &ProbeMode::Cached,
+                &cache,
+                crate::backend_search::Waited::Pending(std::time::Duration::from_secs(1)),
+            )
+        };
+
+        let before = crate::test_support::with_admitted(WITHOUT_KERNEL_LEVEL, pending);
+        let admitted = before.get(BackendCheckId::Admitted).expect("admitted");
+        assert_eq!(admitted.status(), CheckStatus::Warn, "{admitted:?}");
+        assert_eq!(
+            admitted.diagnostic().map(|d| d.code.as_str()),
+            Some("SANDBOX_048")
+        );
+        assert!(before.get(BackendCheckId::Available).is_some());
+
+        let after = pending();
+        let admitted = after.get(BackendCheckId::Admitted).expect("admitted");
+        assert_eq!(admitted.status(), CheckStatus::Ok, "{admitted:?}");
     }
 
     /// HUM-502: Der Doctor merkt sich die Suche, aber ein Probestart auf
