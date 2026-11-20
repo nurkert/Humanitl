@@ -10,8 +10,11 @@ humanitl: embedded-library libjpeg [usr/lib/humanitl/lib/libflutter_linux_gtk.so
 
 # Kein eingebettetes libyaml, sondern die Rust-Crate unsafe-libyaml (eine
 # Uebersetzung von libyaml nach Rust, gezogen von serde_yaml). lintian erkennt
-# sie an den Zeichenketten der Fehlermeldungen.
+# sie an den Zeichenketten der Fehlermeldungen. Seit HUM-561 liest auch die
+# Kommandozeile `rules.yaml` (die Zeile `rules` von `humanitl doctor` ohne
+# Daemon) und traegt dieselbe Crate.
 humanitl: embedded-library libyaml [usr/lib/humanitl/bin/humanitld]
+humanitl: embedded-library libyaml [usr/lib/humanitl/bin/humanitl]
 
 # Der Shim ist mit Absicht statisch (HUM-012): Er ist das einzige Programm,
 # das in die Sandbox eingehaengt wird, und dort gibt es keine Bibliotheken des

@@ -31,11 +31,40 @@ The daemon reads `rules.yaml` when it starts. After editing the file by hand,
 run `humanitl rules reload`; the daemon does not watch the file.
 
 Parsing is strict. An unknown key, an unknown method, a pattern that does not
-compile or a duplicate id is an error, and **one error rejects the whole
-file**. The daemon then keeps running with the last valid rule set and reports
-the diagnostics. A half-loaded rule set would be worse, because nobody could
-tell which half is missing. Warnings do not reject the file; they are
-reported next to the loaded rules.
+compile or a duplicate id is an error, and **an error costs the rule it is
+in, never the others**. The daemon reports the rule with its line and reason
+when it starts, in `humanitl rules list`, on the Rules screen and in the
+`rules` line of `humanitl doctor`; the other rules apply. Until you fix it,
+what stood in its place depends on what could still be read:
+
+- An `allow` rule is simply left out; what it let through is asked.
+- A `block`, `ask` or `redact` rule whose action and match could be read keeps
+  working on exactly that match, without an end, so a block stays a block.
+- Any other rule (unreadable match or action) is replaced in its place by
+  `ask` for its host, for ordinary requests and WebSocket upgrades alike. If
+  the host itself cannot be read either, the replacement asks for every host
+  and address, so every `allow` below it, your own and the bundled ones, asks
+  until the entry is repaired. A rule below it can therefore never let
+  through what the broken rule may have stopped.
+- A replacement keeps the rank of a session rule when `expires: session` can
+  be read; otherwise it applies without an end until the entry is repaired.
+
+The replacement is not shown in the rule list. Positions (`humanitl rules reorder`, a position sent with a new rule,
+reordering in the app) count only the rules you can see; a rule
+added directly after the rule above a broken entry lands behind its
+replacement. A change that would put a rule above a replacement (a new rule
+placed before it, or a rule moved from below it to above it, including the
+rule just above it moved further down) is refused with `RULES_009` until the
+entry is repaired; adding at the end and removing rules always work.
+
+The entry stays in `rules.yaml` as you wrote it: when the daemon writes the
+file, it puts the entry back in its place. Only an error that concerns the
+whole file rejects it: invalid YAML, an unknown top-level key, a missing or
+unknown `version`, or an entry in `disabled_bundled` that is not a rule id.
+Then none of your persistent rules apply, the daemon keeps running with the
+last valid rule set on a reload, and it does not write the file until it can
+be read again (`RULES_009`). Warnings never reject anything; they are reported
+next to the loaded rules.
 
 ## How the examples on this page are checked
 
@@ -1070,6 +1099,7 @@ Rules screen can explain the request. Any rule of yours for
 | `RULES_008` | warning | A rule allows every host without any condition, or a passthrough is not bounded. |
 | `RULES_010` | warning | `bundled` in a file, or `disabled_bundled` names one of your own rules. |
 
-Every error rejects the whole file; the message names the rule index, the
-field and, where known, the line, for example
+An error leaves out the rule it is in, or rejects the whole file when it
+concerns the file (see [Where rules live](#where-rules-live)). The message
+names the rule index, the field and, where known, the line, for example
 `rules[3].match.host (line 12): host pattern "*foo.com" is invalid: a wildcard must be a whole label`.

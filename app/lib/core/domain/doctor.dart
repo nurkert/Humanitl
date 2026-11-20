@@ -279,6 +279,10 @@ abstract final class DoctorCheckId {
   /// configuration; nothing is contacted.
   static const String inference = 'inference';
 
+  /// Can `rules.yaml` be read, and which rule in it is left out (HUM-561)?
+  /// Read from the file; nothing is contacted.
+  static const String rules = 'rules';
+
   /// Has the desktop a place for the tray icon?
   static const String tray = 'tray';
 

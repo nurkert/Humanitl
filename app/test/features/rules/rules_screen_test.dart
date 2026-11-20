@@ -1156,6 +1156,53 @@ void main() {
 
     expect(find.text(DiagnosticCodes.rulesFileInvalid), findsOneWidget);
   });
+
+  testWidgets('every unreadable rule of the file has its own card', (
+    WidgetTester tester,
+  ) async {
+    // HUM-561: Zwei kaputte Regeln sind zwei Gründe; der zweite soll nicht
+    // erst nach der Reparatur des ersten auffallen. Ab dem dritten Befund
+    // klappt der Rest hinter einen Knopf, der sagt, wie viele es sind.
+    Diagnostic unreadable(int n) => Diagnostic(
+      code: 'RULES_00$n',
+      severity: Severity.warning,
+      title: 'Rule $n',
+      why: 'rules[$n] (line ${n * 4}): reason $n. rules[$n] is left out',
+    );
+    final RulesTestClient client = seeded();
+    client.answerDiagnostics = <Diagnostic>[unreadable(1), unreadable(3)];
+    await pumpRules(tester, client: client);
+    final ProviderContainer container = ProviderScope.containerOf(
+      tester.element(find.byType(RuleRow).first),
+    );
+    await container.read(rulesProvider.notifier).refresh();
+    await tester.pumpAndSettle();
+
+    expect(find.textContaining('reason 1'), findsOneWidget);
+    expect(find.textContaining('reason 3'), findsOneWidget);
+    expect(find.byKey(const Key('rules-banner-more')), findsNothing);
+
+    client.answerDiagnostics = <Diagnostic>[
+      unreadable(1),
+      unreadable(3),
+      unreadable(5),
+    ];
+    await container.read(rulesProvider.notifier).refresh();
+    await tester.pumpAndSettle();
+    expect(find.textContaining('reason 5'), findsNothing);
+    expect(find.text(l10n.rulesBannerMore(1)), findsOneWidget);
+
+    await tester.tap(find.byKey(const Key('rules-banner-more')));
+    await tester.pumpAndSettle();
+    expect(find.textContaining('reason 5'), findsOneWidget);
+    expect(find.text(l10n.rulesBannerFewer), findsOneWidget);
+
+    // Eine Liste ohne Befund heißt: Die Datei ist wieder lesbar.
+    client.answerDiagnostics = const <Diagnostic>[];
+    await container.read(rulesProvider.notifier).refresh();
+    await tester.pumpAndSettle();
+    expect(find.textContaining('reason 1'), findsNothing);
+  });
 }
 
 /// Ein Client, dessen erstes `Rules(set_disabled)` mit etwas abbricht, das

@@ -2217,9 +2217,13 @@ fn build_scanner(config: &Config, masks: SecretMasks) -> Result<Arc<dyn Scanner>
 /// kommen die Profile aus der Auflösung des Daemon-Starts; dort aus der der
 /// Sitzung.
 ///
-/// Fehlt `rules.yaml`, ist das kein Fehler; lehnt die Engine sie ab, startet
-/// der Speicher ohne die Regeln des Nutzers und meldet die Befunde. Ohne Regel
-/// wird gefragt, nie erlaubt.
+/// Fehlt `rules.yaml`, ist das kein Fehler. Eine Regel, die sich nicht lesen
+/// lässt, kostet nur sich selbst: Die übrigen gelten, an ihrem Platz steht ein
+/// Ersatz, der nie mehr erlaubt als sie, und ihr Befund (Zeile und Grund) steht
+/// hier im Log, in jeder Regel-Liste und in der Doctor-Zeile `rules`
+/// (HUM-561). Ist die Datei als Ganzes nicht lesbar, startet der Speicher ohne
+/// die Regeln des Nutzers, meldet die Befunde und schreibt die Datei nicht,
+/// bis sie wieder lesbar ist. Ohne Regel wird gefragt, nie erlaubt.
 fn load_rules(
     xdg: &XdgPaths,
     resolved: &humanitl_config::Resolved,

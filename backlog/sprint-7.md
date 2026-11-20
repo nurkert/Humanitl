@@ -6747,6 +6747,78 @@ zur Nachfrage.
 ### Akzeptanzkriterien
 1. Ein Fehler in einer Regel kostet nie die anderen Regeln.
 
+### Stand nach der Umsetzung (2026-11-20)
+
+Gebaut: `humanitl_rules::read_user_rules` liest die `rules.yaml` des Nutzers
+Regel für Regel (jeder Eintrag erst als YAML-Wert, dann einzeln als Regel).
+Eine Regel mit Fehler fällt allein heraus und wird zur `UnreadableRule`
+(`daemon/crates/rules/src/unreadable.rs`) mit ihrem Eintrag, ihrem Platz (der
+lesbaren Regel davor), ihrem Ersatz und genau einem Befund: Code des ersten
+Fehlers, Schwere Warnung, Text mit Feld, Zeile, Grund und dem, was bis zur
+Reparatur an ihrem Platz gilt. Abgelehnt wird die Datei als Ganzes nur noch
+bei kaputtem YAML, unbekanntem Schlüssel der obersten Ebene, fehlender oder
+unbekannter `version` und einem Eintrag in `disabled_bundled`, der keine
+Regel-Id ist (ihn zu überspringen, schaltete eine mitgelieferte Regel still
+wieder an). `parse_rules` und `parse_rules_for_session` bleiben streng; sie
+lesen Profile, `rules/default.yaml` und die Prüfung einer Regel von der
+Leitung. Der Regelspeicher lädt und lädt neu über `read_rules_file`; der
+Befund erscheint im Log des Starts, in jeder Antwort auf `Rules(list)`
+(`RulesStore::findings`, damit im Banner des Regel-Bildschirms und als Hinweis
+von `humanitl rules list`) und in der neuen Doctor-Zeile `rules`
+(`humanitl_ipc::rules_doctor`, Daemon, lokaler Doctor und Fake; App-Titel
+`doctorCheckRules`).
+
+Entscheidung fail closed (Spezifikation 2): Weil die erste passende Regel
+gewinnt, deckt jede Regel die unter ihr ab, die mitgelieferten eingeschlossen.
+Eine `block`-, `ask`- oder `redact`-Regel einfach wegzulassen, ließe eine
+breitere Freigabe darunter entscheiden (Beispiel: kaputte Sperre für
+`uploads.example.com` über `allow **.example.com`). Deshalb steht an ihrem
+Platz ein Ersatz, der nie mehr erlaubt als sie: Sind Aktion und Bedingung
+lesbar (der Fehler steckt in `expires`, `id`, `created_from`, einem unbekannten
+Schlüssel), gilt die Regel selbst mit genau ihrer Bedingung und ohne Ende, eine
+Sperre bleibt also eine Sperre. Sonst gilt `ask` für ihren Host ohne die
+übrigen Bedingungen, oder für jeden Host und jede Adresse (`**`,
+`cidr:0.0.0.0/0`, `cidr:::/0`), wenn schon der Host nicht lesbar ist. Eine
+breitere Sperre wurde verworfen: Sie hielte Verkehr auf, den niemand gesperrt
+hat, und `ask` gibt dem Menschen die Entscheidung, die er ohne Regel ohnehin
+hat. Nur `allow` fällt ersatzlos weg. Der Ersatz steht nur im Schnappschuss,
+nicht in `RulesStore::list`, und wird nie geschrieben. `docs/SECURITY.md` 7
+und das Änderungsprotokoll (en, de) nennen das.
+
+Entscheidung zur Datei (Spezifikation 3): Der Eintrag bleibt erhalten statt
+gesichert. `serialize_user_rules` schreibt ihn bei jedem Schreiben unverändert
+hinter die Regel, hinter der er stand; verschwindet diese, rückt er hinter die
+Regel davor (`unreadable::reanchor`). Eine Sicherungskopie hätte der Mensch
+erst finden müssen. War die Datei als Ganzes nicht lesbar, schreibt der
+Speicher sie gar nicht, bis ein `reload` sie liest (`RULES_009` mit Grund);
+das gilt auch nach einem abgelehnten `reload`, der vorher die von Hand
+geschriebene Fassung still mit der alten überschrieben hätte. Sitzungsregeln
+gehen weiter. `docs/reference/rules.md` (en, de) beschreibt das Verhalten.
+
+Tests: `daemon/crates/proxy/tests/rules_unreadable.rs` (zehn Fälle am echten
+Ladeweg: eine kaputte und zwei gültige Regeln, Schreiben erhält den Eintrag an
+seinem Platz, Sperre bleibt über einer breiteren Nutzer- und einer
+mitgelieferten Freigabe, unlesbare Bedingung hält den Host, unlesbarer Host
+hält jeden Namen und jede Adresse, unbekannte Aktion hält den Host, `allow`
+fällt weg, Reload, nie überschriebene Datei bei Ablehnung im Start und im
+Reload), Einheitstests in `unreadable.rs` und `rules_doctor.rs`.
+
+Nach dem Review (Codex, Ersatz-Reviewer): Der `ask`-Ersatz gilt je Host auch
+für WebSocket-Upgrades (eine Regel ohne `upgrade` trifft nie ein Upgrade;
+Methode, Schema und Port fehlen im Ersatz und treffen jeden Wert). Ein
+lesbares `expires: session` behält den Rang der Sitzung. Weil der Ersatz nicht
+in der Liste steht, lehnt der Speicher jede Änderung mit `RULES_009` ab, die
+eine Regel über ihn höbe (`unreadable::lifted_above`: eine neue Regel davor,
+eine Regel von darunter nach darüber, auch über das Verschieben des Ankers);
+Anlegen am Ende und Löschen gehen. Die Doctor-Zeile nennt jeden Grund, der
+Regel-Bildschirm zeigt jeden Befund als eigene Karte, ab dem dritten
+zusammengeklappt (`rulesBannerFewer`), und eine Liste ohne Befund leert den
+Streifen. Drei weitere Fälle in `rules_unreadable.rs`, ein Widget-Test.
+Nach jedem Schreiben zeigen die Befunde auf Platz und Zeile in der neu
+geschriebenen Datei. Nicht übernommen: Eine Sitzungsfreigabe geht dem Ersatz
+einer dauerhaften Regel vor; das ist der Rang, den sie auch vor der lesbaren
+Regel hätte, und der Ersatz behält genau den Rang des Originals.
+
 ---
 
 ## HUM-562 · `config set` nimmt Werte an, die erst der Start des Daemons ablehnt

@@ -625,13 +625,13 @@ async fn doctor_reports_every_check_and_measures_no_network() {
         .iter()
         .map(|check| check.id.as_str())
         .collect();
-    // Hinter `llm` die Zeile des Wegs hinaus (HUM-511) und die der
-    // Inferenz (HUM-516).
+    // Hinter `llm` die Zeile des Wegs hinaus (HUM-511), die der Inferenz
+    // (HUM-516) und die der Regel-Datei (HUM-561).
     let expected: Vec<&str> = humanitl_sandbox::doctor::CheckId::ALL
         .iter()
         .flat_map(|id| {
             let after: &[&str] = if id.as_str() == "llm" {
-                &["egress", "inference"]
+                &["egress", "inference", "rules"]
             } else {
                 &[]
             };
