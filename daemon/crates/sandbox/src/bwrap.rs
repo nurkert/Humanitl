@@ -766,7 +766,8 @@ impl BwrapBackend {
             scratch: pinned
                 .depot
                 .as_ref()
-                .map(|(_, scratch)| self.source_fd(scratch)),
+                .and_then(|(_, scratch)| scratch.as_ref())
+                .map(|scratch| self.source_fd(scratch)),
             masks: Some(masks),
             mask_fds: fds.iter().map(AsRawFd::as_raw_fd).collect(),
         };
@@ -1619,8 +1620,9 @@ pub(crate) struct PinnedMounts {
     /// The agent program, opened and checked once (HUM-278).
     pub(crate) agent: Option<PinnedSource>,
     /// The depot's version directory and the session's scratch (HUM-518),
-    /// opened once; the version directory checked entry by entry.
-    pub(crate) depot: Option<(PinnedSource, PinnedSource)>,
+    /// opened once; the version directory checked entry by entry. No
+    /// scratch for an agent without a configuration copy (HUM-517).
+    pub(crate) depot: Option<(PinnedSource, Option<PinnedSource>)>,
     /// Die Einträge aus `mounts.ro`, geöffnet und am Ort ihres Deskriptors
     /// geprüft (HUM-437). Eingehängt werden sie weiter über den Pfad; Gerät
     /// und Inode der Mounttabelle kommen aus diesen Deskriptoren, so dass ein
@@ -1749,7 +1751,7 @@ impl PinnedMounts {
     /// lie in: both are the daemon's own, like the agent program.
     fn open_depot(
         mount: &crate::agent::depot::DepotMount,
-    ) -> Result<(PinnedSource, PinnedSource), Diagnostic> {
+    ) -> Result<(PinnedSource, Option<PinnedSource>), Diagnostic> {
         let program = Self::pin_depot(&mount.agent, &mount.program_dir)?;
         crate::agent::depot::tree::check_version_dir(
             &mount.agent,
@@ -1757,7 +1759,11 @@ impl PinnedMounts {
             &mount.program_dir,
             &crate::agent::locate::Trust::of_this_process(),
         )?;
-        let scratch = Self::pin_depot(&mount.agent, &mount.scratch)?;
+        let scratch = mount
+            .scratch
+            .as_deref()
+            .map(|scratch| Self::pin_depot(&mount.agent, scratch))
+            .transpose()?;
         Ok((program, scratch))
     }
 
@@ -1850,7 +1856,7 @@ impl PinnedMounts {
             .chain(
                 self.depot
                     .into_iter()
-                    .flat_map(|(program, scratch)| [program, scratch]),
+                    .flat_map(|(program, scratch)| std::iter::once(program).chain(scratch)),
             )
             .map(PinnedSource::into_fd)
     }

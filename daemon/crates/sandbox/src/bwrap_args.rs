@@ -803,12 +803,16 @@ fn render_depot(args: &mut Args, ctx: &SessionContext, inputs: &LaunchInputs) {
             inputs.depot.program,
             Path::new(crate::agent::AGENT_PROGRAM_DIR),
         );
-        args.bind_source(
-            true,
-            &mount.scratch,
-            inputs.depot.scratch,
-            Path::new(crate::agent::depot::DEPOT_CONFIG_DST),
-        );
+        // No copy, no mount, for an agent whose configuration no variable
+        // moves (HUM-517).
+        if let Some(scratch) = &mount.scratch {
+            args.bind_source(
+                true,
+                scratch,
+                inputs.depot.scratch,
+                Path::new(crate::agent::depot::DEPOT_CONFIG_DST),
+            );
+        }
     }
     let masks = inputs
         .depot

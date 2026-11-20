@@ -1,13 +1,18 @@
-// The agent switch with five agents at the smallest window (HUM-515).
+// The agent switch with six agents at the smallest window (HUM-515,
+// HUM-517).
 //
-// With Codex the segmented choice of `agent.adapter` holds five options. In
+// With Codex and the Antigravity CLI the segmented choice of
+// `agent.adapter` holds six options. In
 // the sheet of a window at its minimum size (`appMinimumLayoutSize`) every
 // option must stay whole inside its row, in English and German, with Roboto
 // (`harness/layout_fonts.dart`): with the square glyphs of the test font the
 // choice would be twice as wide as on screen. An overflow of the row is a
 // Flutter error and fails the test by itself. Mutation proof: the Codex
 // label in `AgentRow` three times as long turns all four cases red
-// ("A RenderFlex overflowed by 223 pixels").
+// ("A RenderFlex overflowed by 223 pixels"). With six options (HUM-517)
+// the Antigravity label ten times as long turns all four cases red
+// ("overflowed by 113 pixels"); eight times as long still fits, so about
+// 450 pixels stay free at the minimum size.
 
 import 'package:flutter/rendering.dart';
 import 'package:flutter/widgets.dart';

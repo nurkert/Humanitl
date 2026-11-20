@@ -252,7 +252,13 @@ fn actions_of(
         install: installs && !installed && !unusable,
         update: installs && installed,
         login: installed && account::login_declared(agent),
-        config: installed && agent.recipe.is_some(),
+        // A configuration run only where a variable points the agent at
+        // the depot's copy (`agy` keeps its configuration in the session,
+        // HUM-517).
+        config: installed
+            && agent
+                .recipe
+                .is_some_and(|recipe| recipe.config_env.is_some()),
         config_show: installed,
         remove: exists && !entry.in_use,
         source_host: entry.locked_by.is_empty(),

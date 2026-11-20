@@ -206,12 +206,16 @@ aus seiner Umgebung liest, liest eine Shell in der Sandbox diese Datei und expor
 `ANTHROPIC_API_KEY` (gegenüber einem Gateway `ANTHROPIC_AUTH_TOKEN`), bevor sie den Agenten
 startet; der Schlüssel steht nie in der Umgebung des Plans oder in einem `argv` (HUM-514). Codex
 bekommt dieselbe Shell, die `OPENAI_API_KEY` für den Anbieter exportiert, den der Adapter in seiner
-`config.toml` erklärt (HUM-515). In der
+`config.toml` erklärt (HUM-515), ebenso die Antigravity CLI, für die sie `GEMINI_API_KEY`
+exportiert (HUM-517); der Schlüsselbund des Hosts, in dem `agy` eine Google-Anmeldung hält, und
+der Session-Bus kommen nie in eine Sandbox. In der
 Aufzeichnung und in einem Fund ist er überall verdeckt, außer in `Authorization`, für Claude Code
 in `X-Api-Key`, gegenüber dem Inferenz-Endpunkt des Agenten (`llm.endpoint`, für Claude Code ohne
 ihn `api.anthropic.com:443`, dessen Durchleitung nur `/v1/messages` und
 `/v1/messages/count_tokens` umfasst, für Codex mit Schlüssel und ohne ihn `api.openai.com:443`,
-dessen Durchleitung nur `/v1/responses` und `/v1/models` umfasst). Bei mehreren gespeicherten Modellservern (HUM-289) hat jeder einen
+dessen Durchleitung nur `/v1/responses` und `/v1/models` umfasst, für die Antigravity CLI mit
+Schlüssel und ohne ihn `x-goog-api-key` gegenüber `generativelanguage.googleapis.com:443`, dessen
+Durchleitung nur `/v1beta/models` und `/v1/models` und was darunter liegt umfasst). Bei mehreren gespeicherten Modellservern (HUM-289) hat jeder einen
 eigenen Eintrag im Schlüsselbund, und nur der Ursprung des aktiven Servers bekommt einen Schlüssel
 und ist die Durchleitung der nächsten Session; eine Probe schickt den Schlüssel eines
 gespeicherten Servers nur an dessen eigenen Ursprung, nie an den eines anderen; ein Endpunkt aus
@@ -1266,6 +1270,7 @@ Gegen diese Angreifer gibt es keine Abwehr, und Humanitl behauptet das auch nich
 | 2026-11-20 | K-02: Claude Code (HUM-514) bekommt den Schlüssel des Anbieters aus seiner Datei in der Sandbox über eine Shell in der Sandbox, die `ANTHROPIC_API_KEY` oder `ANTHROPIC_AUTH_TOKEN` exportiert, nie über die Umgebung des Plans oder `argv`; in `X-Api-Key` gegenüber dem Inferenz-Endpunkt des Agenten ist der Schlüssel kein Fund, für Claude Code ohne `llm.endpoint` `api.anthropic.com:443`, dessen Durchleitung nur die Messages-Endpunkte umfasst | HUM-514 |
 | 2026-11-20 | K-02: Codex (HUM-515) bekommt den Schlüssel des Anbieters aus seiner Datei in der Sandbox über dieselbe Shell in der Sandbox, die `OPENAI_API_KEY` für den Anbieter exportiert, den der Adapter erklärt; der Schlüssel ist kein Fund in `Authorization` gegenüber `api.openai.com:443` mit Schlüssel und ohne `llm.endpoint`, dessen Durchleitung nur `POST`/`GET` auf `/v1/responses` und `/v1/models` umfasst. Die eigene Sandbox von Codex (`sandbox_mode`) ist `danger-full-access`, weil sein bubblewrap einen Nutzer-Namensraum braucht, den die äußere Sandbox verweigert (`--disable-userns`); die äußere Grenze bleibt Humanitl. |
 | 2026-11-20 | K-36: Der Wächter der Rückschrift hält zwei Dateien ohne benanntes Konto nie für dasselbe Konto; wo das Objekt mit dem Konto steht (Codex: `tokens`), muss das Konto ein nicht leerer Text sein, sonst wird die Datei schon bei der Anmeldung abgelehnt; ein Format kann verlangen, dass einer von mehreren Schlüsseln einen Wert trägt (`one_of`), einen Schlüssel auf eine Aufzählung beschränken (`OneOf`), zu einem Wert Material verlangen (`requires`) und einen Schlüssel wie gespeichert halten (`fixed`; Codex: `auth_mode` nur `apikey` oder `chatgpt`, nie von einer Sitzung geändert) | HUM-515 |
+| 2026-11-20 | K-02: Die Antigravity CLI (HUM-517) bekommt einen Gemini-API-Schlüssel aus ihrer Datei in der Sandbox über dieselbe Shell in der Sandbox, die `GEMINI_API_KEY` exportiert und `modelProvider = "gemini"` in ihre Einstellungen im eigenen Home der Sandbox schreibt; der Schlüssel ist kein Fund in `x-goog-api-key` gegenüber `generativelanguage.googleapis.com:443` mit Schlüssel und ohne `llm.endpoint`, dessen Durchleitung nur `POST`/`GET` auf `/v1beta/models` und `/v1/models` und darunter umfasst. Ihre Google-Anmeldung liegt im Schlüsselbund des Hosts über D-Bus, der nie in eine Sandbox kommt; das Depot unterstützt `agy` nur mit API-Schlüssel. Ihre eigene Terminal-Sandbox kann in unserer nicht starten (`--disable-userns`); die äußere Grenze bleibt Humanitl. | HUM-517 |
 
 Jede sicherheitsrelevante Änderung am Shim, an der Mount-Erlaubnisliste, am Filter oder an der
 Durchleitung bekommt hier eine Zeile. Schwachstellen werden gemeldet, wie in

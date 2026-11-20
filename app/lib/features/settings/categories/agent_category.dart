@@ -74,6 +74,10 @@ class AgentRow extends ConsumerWidget {
             value: 'codex',
             label: l10n.settingsAgentCodex,
           ),
+          HSegmentOption<String>(
+            value: 'agy',
+            label: l10n.settingsAgentAntigravity,
+          ),
         ],
         selected: config.agentAdapter,
         onSelect: (String adapter) =>

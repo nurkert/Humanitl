@@ -40,7 +40,21 @@ pub struct Scratch {
 }
 
 impl Scratch {
-    /// The directory.
+    /// No copy, only the depot's reservation for this session, for an agent
+    /// whose configuration no variable moves (HUM-517): the sandbox holds the
+    /// reservation until its end, and nothing is created on disk.
+    #[must_use]
+    pub fn reservation_only(reservation: Reservation) -> Self {
+        Self {
+            dir: PathBuf::new(),
+            owner: PathBuf::new(),
+            armed: false,
+            reservation: Some(reservation),
+            bases: Vec::new(),
+        }
+    }
+
+    /// The directory; empty for [`Scratch::reservation_only`].
     #[must_use]
     pub fn path(&self) -> &Path {
         &self.dir
@@ -66,7 +80,7 @@ impl Scratch {
         handle: &crate::SandboxHandle,
         writeback: Option<super::writeback::Writeback>,
     ) {
-        if let Some(writeback) = writeback {
+        if let Some(writeback) = writeback.filter(|_| !self.dir.as_os_str().is_empty()) {
             let base = writeback
                 .file()
                 .and_then(|file| self.base(file))
@@ -78,8 +92,10 @@ impl Scratch {
 
     /// The sandbox now owns the scratch: it goes with the sandbox's end.
     pub fn hand_to(mut self, handle: &crate::SandboxHandle) {
-        handle.remove_at_exit(self.dir.clone());
-        handle.remove_at_exit(self.owner.clone());
+        if !self.dir.as_os_str().is_empty() {
+            handle.remove_at_exit(self.dir.clone());
+            handle.remove_at_exit(self.owner.clone());
+        }
         if let Some(fd) = self
             .reservation
             .take()

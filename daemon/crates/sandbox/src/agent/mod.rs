@@ -23,9 +23,11 @@
 //!
 //! The MVP shipped two adapters, [`opencode::OpenCodeAdapter`] and
 //! [`pi::PiAdapter`] (HUM-274); [`claude::ClaudeCodeAdapter`] (HUM-514) is
-//! the third, [`codex::CodexAdapter`] (HUM-515) the fourth. Further ones
-//! (Antigravity) do not touch this core.
+//! the third, [`codex::CodexAdapter`] (HUM-515) the fourth,
+//! [`agy::AntigravityAdapter`] (HUM-517) the fifth. Further ones do not
+//! touch this core.
 
+pub mod agy;
 pub mod briefing;
 pub mod claude;
 pub mod cloud;
@@ -46,6 +48,7 @@ use humanitl_config::{AgentBriefing, HoldConfig, Language, LlmConfig, PiWebAcces
 use humanitl_core::rule::Rule;
 use humanitl_core::{Diagnostic, SessionId};
 
+pub use crate::agent::agy::AntigravityAdapter;
 pub use crate::agent::claude::ClaudeCodeAdapter;
 pub use crate::agent::codex::CodexAdapter;
 pub use crate::agent::locate::{
@@ -910,13 +913,14 @@ pub fn command_is_the_agent(config: &humanitl_config::Config, command: &[OsStrin
 
 /// The scripts of an adapter's shell in front of the agent: `OpenCode`'s
 /// start on a shared loopback (HUM-365) and the key launchers of Claude Code
-/// (HUM-514) and Codex (HUM-515). [`shown_program`] sees through exactly
-/// these.
+/// (HUM-514), Codex (HUM-515) and the Antigravity CLI (HUM-517).
+/// [`shown_program`] sees through exactly these.
 const LAUNCH_SCRIPTS: &[&str] = &[
     opencode::SHARED_LOOPBACK_START,
     claude::KEY_START_API_KEY,
     claude::KEY_START_AUTH_TOKEN,
     codex::KEY_START,
+    agy::KEY_START,
 ];
 
 /// The program of a command, also when an adapter's shell stands in front
@@ -950,6 +954,7 @@ impl AdapterRegistry {
                 Box::new(PiAdapter::new()),
                 Box::new(ClaudeCodeAdapter::new()),
                 Box::new(CodexAdapter::new()),
+                Box::new(AntigravityAdapter::new()),
             ],
         }
     }

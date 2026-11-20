@@ -459,10 +459,12 @@ pub(crate) fn pins_of(
     }
     if let Some((program, scratch)) = &pinned.depot {
         pins.push(opened(program, Path::new(crate::agent::AGENT_PROGRAM_DIR))?);
-        pins.push(opened(
-            scratch,
-            Path::new(crate::agent::depot::DEPOT_CONFIG_DST),
-        )?);
+        if let Some(scratch) = scratch {
+            pins.push(opened(
+                scratch,
+                Path::new(crate::agent::depot::DEPOT_CONFIG_DST),
+            )?);
+        }
     }
     Ok(pins)
 }

@@ -150,7 +150,8 @@ pub struct ConfigProposal {
 ///
 /// # Errors
 ///
-/// `AGENT_015` for an agent without a depot recipe, `AGENT_014` for a login
+/// `AGENT_015` for an agent without a depot recipe or a configuration run
+/// of an agent whose configuration no variable moves, `AGENT_014` for a login
 /// the adapter cannot do yet (no login run, no credential format, an API key
 /// only), `AGENT_008` without an installed version, `AGENT_013` for a depot
 /// that fails its checks, `AGENT_011` while another run of the agent is
@@ -186,6 +187,22 @@ pub(crate) fn prepare_in(
     }
     if task == MaintenanceTask::Login {
         login_possible(agent, &recipe)?;
+    }
+    if task == MaintenanceTask::Config && recipe.config_env.is_none() {
+        // Nothing points the agent at the copy (`agy`, HUM-517): what the
+        // run wrote would never be read by a session.
+        return Err(Diagnostic::builder(AGENT_015, Severity::Error)
+            .why(format!(
+                "{} keeps its configuration in the session's own home; no variable points it \
+                 at a copy from the depot, so a configuration run would change nothing a \
+                 session reads",
+                agent.display_name
+            ))
+            .fix(FixAction::CopyCommand(format!(
+                "humanitl agents status {}",
+                agent.id
+            )))
+            .build());
     }
     let installed = depot.installed().map_err(|found| {
         if found.code == AGENT_008 {
@@ -275,14 +292,18 @@ fn login_possible(agent: &KnownAgent, recipe: &DepotRecipe) -> Result<(), Diagno
     } else {
         None
     };
+    // An agent that only takes a key gets the command that stores one;
+    // every other refusal points at the status.
+    let fix = if recipe.login == LoginFlow::ApiKeyOnly {
+        "humanitl llm key set".to_owned()
+    } else {
+        format!("humanitl agents status {}", agent.id)
+    };
     match why {
         None => Ok(()),
         Some(why) => Err(Diagnostic::builder(AGENT_014, Severity::Error)
             .why(why)
-            .fix(FixAction::CopyCommand(format!(
-                "humanitl agents status {}",
-                agent.id
-            )))
+            .fix(FixAction::CopyCommand(fix))
             .build()),
     }
 }
@@ -319,10 +340,12 @@ impl AgentRun {
     /// The mount of the depot program and the configuration copy.
     #[must_use]
     pub fn mount(&self) -> DepotMount {
-        let mut env = vec![(
-            self.recipe.config_env.to_owned(),
-            DEPOT_CONFIG_DST.to_owned(),
-        )];
+        let mut env: Vec<(String, String)> = self
+            .recipe
+            .config_env
+            .map(|key| (key.to_owned(), DEPOT_CONFIG_DST.to_owned()))
+            .into_iter()
+            .collect();
         env.extend(
             self.recipe
                 .update_off
@@ -334,7 +357,7 @@ impl AgentRun {
             version: self.installed.version.clone(),
             program_dir: self.installed.dir.clone(),
             program: self.recipe.program.to_owned(),
-            scratch: self.copy.path().to_path_buf(),
+            scratch: Some(self.copy.path().to_path_buf()),
             env,
         }
     }

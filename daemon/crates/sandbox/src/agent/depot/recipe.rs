@@ -53,7 +53,13 @@ pub struct DepotRecipe {
     pub program: &'static str,
     /// The variable that points the agent at its configuration directory:
     /// `CLAUDE_CONFIG_DIR`. The launcher sets it to the session's copy.
-    pub config_env: &'static str,
+    ///
+    /// `None` for an agent whose configuration directory no variable moves
+    /// (`agy` keeps it under `~/.gemini`, HUM-517): it keeps its
+    /// configuration in the session's own home as with the source `host`,
+    /// the depot carries only its program, and a configuration run is
+    /// refused (`AGENT_015`), because nothing it wrote would ever be read.
+    pub config_env: Option<&'static str>,
     /// Variables that turn off self-update in the session; the read-only
     /// program directory makes an update fail even without them.
     pub update_off: &'static [(&'static str, &'static str)],
@@ -271,7 +277,7 @@ pub const KNOWN: &[KnownAgent] = &[
         ],
         recipe: Some(DepotRecipe {
             program: "claude",
-            config_env: "CLAUDE_CONFIG_DIR",
+            config_env: Some("CLAUDE_CONFIG_DIR"),
             update_off: &[("DISABLE_UPDATES", "1")],
             credential_file: Some(".credentials.json"),
             install: Some(CLAUDE_INSTALL),
@@ -340,11 +346,13 @@ pub const KNOWN: &[KnownAgent] = &[
         ],
         recipe: Some(CODEX_RECIPE),
     },
-    // antigravity.google/docs/getting-started (2026-11-17): `curl -fsSL
+    // antigravity.google/docs/getting-started (2026-11-17, re-read
+    // 2026-11-20 for HUM-517): `curl -fsSL
     // https://antigravity.google/cli/install.sh | bash` puts `agy` at
-    // `~/.local/bin/agy`, the host's home, never mounted; the places below
-    // cover a copy into the system's bin directories. HUM-517 sources the
-    // recipe.
+    // `~/.local/bin/agy`, the host's home, never mounted, or with `--dir` in
+    // any directory (antigravity.google/cli/install.sh); the vendor names no
+    // npm package and no system package. The places below cover a copy or
+    // `--dir` into the system's bin directories.
     KnownAgent {
         id: "agy",
         display_name: "Antigravity CLI",
@@ -354,9 +362,46 @@ pub const KNOWN: &[KnownAgent] = &[
             "/usr/local/bin/agy",
             "/opt/homebrew/bin/agy",
         ],
-        recipe: None,
+        recipe: Some(AGY_RECIPE),
     },
 ];
+
+/// The Antigravity CLI from the depot (HUM-517). Sources, read 2026-11-20:
+/// antigravity.google/docs (install, tab CLI; cli/troubleshooting; settings)
+/// and the install script antigravity.google/cli/install.sh.
+///
+/// - **API key only** ([`LoginFlow::ApiKeyOnly`], ADR-0023 point 5): `agy`
+///   keeps its login "in the OS-native keyring … Linux Secret Service/dbus"
+///   (install page, tab CLI), and the page names no file fallback; the
+///   host's session bus never enters a sandbox. A depot session takes the
+///   key from Humanitl's keyring through the adapter's launcher
+///   (`super::super::agy`), and `agents login agy` answers `AGENT_014`
+///   with the command that stores a key.
+/// - **No configuration variable** ([`DepotRecipe::config_env`] `None`):
+///   settings, rules and skills lie under `~/.gemini`, and the documentation
+///   names no variable that moves it. The session keeps them in its own
+///   tmpfs home, where the adapter writes `modelProvider = "gemini"` before
+///   every start; a configuration run is refused.
+/// - `AGY_CLI_DISABLE_AUTO_UPDATE=true` turns the background self-updater
+///   off (cli/troubleshooting).
+/// - **No install recipe.** The script downloads a manifest from
+///   `antigravity-cli-auto-updater-974169037036.us-central1.run.app`, the
+///   program from the host the manifest's `url` names, and checks a SHA-512
+///   from the same manifest: no signature, and the program's host is known
+///   only at run time. Until the owner walkthrough (HUM-553 point 5) names
+///   that host, `agents install agy` answers `AGENT_015`.
+pub const AGY_RECIPE: DepotRecipe = DepotRecipe {
+    program: "agy",
+    config_env: None,
+    update_off: &[("AGY_CLI_DISABLE_AUTO_UPDATE", "true")],
+    credential_file: None,
+    install: None,
+    login: LoginFlow::ApiKeyOnly,
+    credential_format: None,
+    login_run: None,
+    // No configuration run, so nothing to highlight.
+    command_keys: &[],
+};
 
 /// Codex from the depot (HUM-515). Sources, read 2026-11-20: the vendor's
 /// documentation at learn.chatgpt.com and the repository
@@ -385,7 +430,7 @@ pub const KNOWN: &[KnownAgent] = &[
 ///   codex` answers `AGENT_015`.
 pub const CODEX_RECIPE: DepotRecipe = DepotRecipe {
     program: "codex",
-    config_env: "CODEX_HOME",
+    config_env: Some("CODEX_HOME"),
     update_off: &[],
     credential_file: Some("auth.json"),
     install: None,
@@ -805,19 +850,22 @@ mod tests {
                 continue;
             };
             assert!(plain_name(recipe.program), "{}: recipe program", agent.id);
-            assert!(
-                recipe
-                    .config_env
-                    .chars()
-                    .all(|c| c.is_ascii_uppercase() || c == '_'),
-                "{}: config_env",
-                agent.id
-            );
-            assert!(
-                !crate::bridge_env::RESERVED_ENV.contains(&recipe.config_env),
-                "{}: config_env is reserved",
-                agent.id
-            );
+            if let Some(config_env) = recipe.config_env {
+                assert!(
+                    config_env
+                        .chars()
+                        .all(|c| c.is_ascii_uppercase() || c == '_'),
+                    "{}: config_env",
+                    agent.id
+                );
+                assert!(
+                    !crate::bridge_env::RESERVED_ENV.contains(&config_env),
+                    "{}: config_env is reserved",
+                    agent.id
+                );
+                // The launcher and a maintenance run set `HOME` themselves.
+                assert_ne!(config_env, "HOME", "{}", agent.id);
+            }
             if let Some(file) = recipe.credential_file {
                 // Inside the configuration copy and never the program.
                 assert!(plain_name(file), "{}: credential file {file}", agent.id);

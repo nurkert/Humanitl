@@ -213,7 +213,7 @@ pub(crate) struct Sources {
     /// Das Programm des Agenten (HUM-278).
     pub(crate) agent_program: Option<PathBuf>,
     /// Versionsordner und Arbeitsordner des Agent-Depots (HUM-518).
-    pub(crate) depot: Option<(PathBuf, PathBuf)>,
+    pub(crate) depot: Option<(PathBuf, Option<PathBuf>)>,
     /// Die Masken über Host-Installationen eines Depot-Agenten (HUM-518);
     /// leer unter einem Abbild, das das `/usr` des Rechners nicht trägt.
     pub(crate) host_masks: Vec<crate::agent::depot::HostMask>,
@@ -395,6 +395,28 @@ impl Collector<'_> {
     }
 }
 
+/// Das Agent-Depot wie unter bwrap (HUM-518): der Versionsordner nur
+/// lesbar, die Kopie der Konfiguration beschreibbar, wenn es eine gibt
+/// (HUM-517).
+fn depot_mounts(out: &mut Collector<'_>, sources: &Sources) {
+    if let Some((program_dir, scratch)) = &sources.depot {
+        out.bind(
+            program_dir,
+            Path::new(crate::agent::AGENT_PROGRAM_DIR),
+            false,
+            true,
+        );
+        if let Some(scratch) = scratch {
+            out.bind(
+                scratch,
+                Path::new(crate::agent::depot::DEPOT_CONFIG_DST),
+                true,
+                true,
+            );
+        }
+    }
+}
+
 /// Die Einhängungen einer Sitzung und ihre Tabelle, in der Reihenfolge, in
 /// der bwrap sie schriebe (Podman ordnet beim Start selbst nach der Tiefe des
 /// Ziels).
@@ -492,21 +514,7 @@ pub(crate) fn mounts(
     if let (Some(program), Some(source)) = (&session.agent_program, &sources.agent_program) {
         out.bind(source, &program.dst, false, false);
     }
-    // Das Agent-Depot wie unter bwrap (HUM-518).
-    if let Some((program_dir, scratch)) = &sources.depot {
-        out.bind(
-            program_dir,
-            Path::new(crate::agent::AGENT_PROGRAM_DIR),
-            false,
-            true,
-        );
-        out.bind(
-            scratch,
-            Path::new(crate::agent::depot::DEPOT_CONFIG_DST),
-            true,
-            true,
-        );
-    }
+    depot_mounts(&mut out, sources);
     for mask in &sources.host_masks {
         if mask.dir {
             out.hide(&mask.target);

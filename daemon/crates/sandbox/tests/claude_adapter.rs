@@ -446,7 +446,7 @@ fn the_depot_recipe_lists_the_command_keys_and_declares_no_format() {
     ] {
         assert!(recipe.command_keys.contains(&key), "{key} is missing");
     }
-    assert_eq!(recipe.config_env, ENV_CONFIG_DIR);
+    assert_eq!(recipe.config_env, Some(ENV_CONFIG_DIR));
     assert_eq!(recipe.update_off, &[(ENV_DISABLE_UPDATES, "1")]);
     assert_eq!(recipe.credential_file, Some(".credentials.json"));
     assert_eq!(

@@ -224,7 +224,14 @@ fn the_depot_program_runs_read_only_and_nothing_stays_in_the_depot() {
     let Some(backend) = fx.real() else { return };
     let depot = fx.fill_depot();
     let plan = fx.depot_plan(&["claude", "--model", "x"], false);
-    let scratch_dir = plan.session.mount.as_ref().unwrap().scratch.clone();
+    let scratch_dir = plan
+        .session
+        .mount
+        .as_ref()
+        .unwrap()
+        .scratch
+        .clone()
+        .unwrap();
     let mut command = plan.command.clone();
     let probe = concat!(
         "\"$0\" \"$@\"; ",

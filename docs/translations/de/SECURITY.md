@@ -1053,7 +1053,9 @@ er kein Fund: in der Kopfzeile, die sein Adapter nennt, `Authorization` oder `X-
 Claude Code seinen Schlüssel an die Anthropic-API schickt (HUM-514), einer Anfrage an Host und
 Port des Inferenz-Endpunkts des Agenten, also von `llm.endpoint`, für Claude Code ohne Gateway
 `api.anthropic.com:443`, für Codex mit Schlüssel und ohne `llm.endpoint` `api.openai.com:443`
-(HUM-515). Kopfzeile und Ziel reisen mit der Maske des Schlüssels; der Schlüssel
+(HUM-515), für die Antigravity CLI mit Schlüssel und ohne `llm.endpoint` `x-goog-api-key`
+gegenüber `generativelanguage.googleapis.com:443` (HUM-517; ein Schlüssel in der Query bliebe ein
+Fund). Kopfzeile und Ziel reisen mit der Maske des Schlüssels; der Schlüssel
 eines anderen Agenten in `X-Api-Key` bleibt ein Fund. Ein
 Fund hält eine Anfrage nicht von selbst an; sie wird ohnehin angehalten, wenn keine Regel ihren
 Host erlaubt, und mit eingeschaltetem `hold.hard_block_checksum_secrets` hält der Fund sie wegen

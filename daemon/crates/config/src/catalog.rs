@@ -171,7 +171,7 @@ impl Def {
 
 /// Die Adapter, die `agent.adapter` anbietet. Der Test der IPC-Crate hält sie
 /// gegen das Register der Sandbox-Crate.
-pub const AGENT_ADAPTERS: &[&str] = &["opencode", "pi", "claude", "codex"];
+pub const AGENT_ADAPTERS: &[&str] = &["opencode", "pi", "claude", "codex", "agy"];
 
 /// Jeder Eintrag, je Kategorie in der Reihenfolge seiner Seite.
 pub const DEFS: &[Def] = &[

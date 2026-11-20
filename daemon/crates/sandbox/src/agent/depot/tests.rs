@@ -66,6 +66,7 @@ fn depot_for(agent: &str) -> Config {
         "claude" => config.agents.claude.source = Some(AgentSource::Depot),
         "opencode" => config.agents.opencode.source = Some(AgentSource::Depot),
         "codex" => config.agents.codex.source = Some(AgentSource::Depot),
+        "agy" => config.agents.agy.source = Some(AgentSource::Depot),
         other => panic!("{other}"),
     }
     config
@@ -267,8 +268,9 @@ fn every_named_host_program_is_agent_017() {
         for command in [
             vec!["/usr/local/bin/claude"],
             vec![link.as_str()],
-            // An agent without a depot recipe (`codex` has one since HUM-515).
-            vec!["agy"],
+            // An agent without a depot recipe (`codex` has one since HUM-515,
+            // `agy` since HUM-517).
+            vec!["pi"],
             vec!["/home/u/.local/bin/claude", "-p"],
         ] {
             let (command, depot) = depot_session(&fx, &config, &lock, &command, true);
@@ -432,7 +434,7 @@ fn the_plan_binds_the_resolved_version_read_only_and_the_scratch_writable() {
         .map(|arg| arg.to_string_lossy().into_owned())
         .collect();
     let program = mount.program_dir.display().to_string();
-    let scratch = mount.scratch.display().to_string();
+    let scratch = mount.scratch.as_ref().unwrap().display().to_string();
     assert!(
         line.windows(3)
             .any(|w| w == ["--ro-bind", program.as_str(), "/run/humanitl/agent"]),
@@ -451,6 +453,61 @@ fn the_plan_binds_the_resolved_version_read_only_and_the_scratch_writable() {
     let env = profile().effective_env(&session(&refs, depot), None);
     let path = env.iter().find(|(key, _)| key == "PATH").unwrap();
     assert!(path.1.starts_with("/run/humanitl/agent:"), "{path:?}");
+}
+
+/// An agent whose configuration no variable moves (`agy`, HUM-517) gets its
+/// program from the depot and nothing else: no copy is made, nothing is
+/// mounted at the configuration's place, and the start still holds the
+/// depot's reservation until the sandbox ends.
+///
+/// Mutation proof: creating the scratch regardless of `config_env` turns the
+/// first two asserts red.
+#[test]
+fn a_depot_agent_without_a_configuration_variable_gets_no_copy() {
+    let fx = Fixture::new();
+    filled(&fx.paths.data_dir(), "agy", "agy");
+    let command = vec![OsString::from("agy")];
+    let plan = plan_session(&DepotInput {
+        config: &depot_for("agy"),
+        lock: &SourceLock::none(),
+        paths: &fx.paths,
+        session: SessionId::nil(),
+        adapter: "agy",
+        command: &command,
+        from_caller: false,
+        purpose: Purpose::Start,
+    })
+    .unwrap();
+    let mount = plan.session.mount.clone().expect("mounted");
+    assert_eq!(mount.scratch, None, "no copy for agy");
+    assert!(
+        !scratch::scratch_path(&fx.paths, SessionId::nil()).exists(),
+        "nothing created on disk"
+    );
+    let reservation = plan.scratch.as_ref().expect("the reservation goes along");
+    assert!(reservation.path().as_os_str().is_empty());
+    assert_eq!(
+        mount.env,
+        [("AGY_CLI_DISABLE_AUTO_UPDATE".to_owned(), "true".to_owned())]
+    );
+    let words = strings(&plan.command);
+    let refs: Vec<&str> = words.iter().map(String::as_str).collect();
+    let line: Vec<String> = profile()
+        .to_bwrap_args(
+            &session(&refs, plan.session.clone()),
+            &crate::LaunchInputs::preview(),
+        )
+        .iter()
+        .map(|arg| arg.to_string_lossy().into_owned())
+        .collect();
+    assert!(
+        !line.iter().any(|arg| arg == DEPOT_CONFIG_DST),
+        "a mount at the configuration's place: {line:?}"
+    );
+    assert!(
+        line.iter().any(|arg| arg == "/run/humanitl/agent"),
+        "{line:?}"
+    );
 }
 
 /// Nothing from the depot runs on the host: status, the doctor's reading and
@@ -763,7 +820,7 @@ fn a_login_run_carries_only_its_own_depot_program() {
         version: "1.0.0".to_owned(),
         program_dir: PathBuf::from("/nonexistent-hum520/agents/claude/program/1.0.0"),
         program: "claude".to_owned(),
-        scratch: PathBuf::from("/nonexistent-hum520/scratch"),
+        scratch: Some(PathBuf::from("/nonexistent-hum520/scratch")),
         env: Vec::new(),
     };
     let run = |agent: Option<&str>, mount: Option<DepotMount>, command: &[&str]| {

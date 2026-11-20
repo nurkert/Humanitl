@@ -16,7 +16,8 @@
 //! - [`agent`] der Port [`AgentAdapter`] mit [`AgentContext`],
 //!   [`SandboxFile`] und [`AdapterRegistry`]; the adapters are
 //!   [`OpenCodeAdapter`] (HUM-037), [`PiAdapter`] (HUM-274),
-//!   [`ClaudeCodeAdapter`] (HUM-514) and [`CodexAdapter`] (HUM-515)
+//!   [`ClaudeCodeAdapter`] (HUM-514), [`CodexAdapter`] (HUM-515) and
+//!   [`AntigravityAdapter`] (HUM-517)
 //! - [`agent_exit`] woran sich ein Agent erkennen lässt, der nie gelaufen ist:
 //!   die Zeile `EXEC fail` im Bericht des Shims, sonst Exit-Code `126`/`127`
 //!   ohne ein Byte Ausgabe; Befund `AGENT_005`
@@ -147,9 +148,9 @@ pub mod work_dir;
 pub mod worktree;
 
 pub use crate::agent::{
-    AdapterRegistry, AgentAdapter, AgentContext, AgentKey, ClaudeCodeAdapter, CodexAdapter, Mount,
-    OpenCodeAdapter, PiAdapter, Reach, SandboxFile, SandboxLookup, SandboxView, files_inside_work,
-    find_in_path,
+    AdapterRegistry, AgentAdapter, AgentContext, AgentKey, AntigravityAdapter, ClaudeCodeAdapter,
+    CodexAdapter, Mount, OpenCodeAdapter, PiAdapter, Reach, SandboxFile, SandboxLookup,
+    SandboxView, files_inside_work, find_in_path,
 };
 pub use crate::agent_exit::{FirstOutput, did_not_start};
 /// Kernel und Module der Tests für die Kernel-Stufe (HUM-445).

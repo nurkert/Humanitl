@@ -41,7 +41,7 @@ static SIGNED: KnownAgent = KnownAgent {
     host_installs: &["/usr/bin/standin"],
     recipe: Some(DepotRecipe {
         program: "standin",
-        config_env: "STANDIN_CONFIG_DIR",
+        config_env: Some("STANDIN_CONFIG_DIR"),
         update_off: &[],
         credential_file: None,
         install: Some(InstallRecipe {
@@ -74,7 +74,7 @@ static UNSIGNED: KnownAgent = KnownAgent {
     host_installs: &["/usr/bin/standin"],
     recipe: Some(DepotRecipe {
         program: "standin",
-        config_env: "STANDIN_CONFIG_DIR",
+        config_env: Some("STANDIN_CONFIG_DIR"),
         update_off: &[],
         credential_file: None,
         install: Some(InstallRecipe {

@@ -1181,7 +1181,7 @@ fn the_kernel_level_guards_the_depot_and_refuses_its_mount() {
             version: "1.0.0".to_owned(),
             program_dir: PathBuf::from("/nonexistent-hum518/program/1.0.0"),
             program: "claude".to_owned(),
-            scratch: PathBuf::from("/nonexistent-hum518/scratch"),
+            scratch: Some(PathBuf::from("/nonexistent-hum518/scratch")),
             env: Vec::new(),
         }),
         ..DepotSession::default()

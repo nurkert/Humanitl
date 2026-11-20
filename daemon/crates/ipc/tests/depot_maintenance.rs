@@ -111,7 +111,7 @@ static STAND_IN: [KnownAgent; 1] = [KnownAgent {
     host_installs: &["/usr/bin/claude", "/usr/local/bin/claude"],
     recipe: Some(DepotRecipe {
         program: "claude",
-        config_env: "CLAUDE_CONFIG_DIR",
+        config_env: Some("CLAUDE_CONFIG_DIR"),
         update_off: &[("DISABLE_UPDATES", "1")],
         credential_file: None,
         install: Some(InstallRecipe {
@@ -663,7 +663,7 @@ static STAND_IN_LOGIN: [KnownAgent; 1] = [KnownAgent {
     host_installs: &["/usr/bin/claude", "/usr/local/bin/claude"],
     recipe: Some(DepotRecipe {
         program: "claude",
-        config_env: "CLAUDE_CONFIG_DIR",
+        config_env: Some("CLAUDE_CONFIG_DIR"),
         update_off: &[("DISABLE_UPDATES", "1")],
         credential_file: Some(".credentials.json"),
         install: None,
