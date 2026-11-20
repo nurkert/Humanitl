@@ -68,6 +68,7 @@ const RECIPE: DepotRecipe = DepotRecipe {
     update_off: &[],
     credential_file: Some(".credentials.json"),
     install: None,
+    install_refused: None,
     login: LoginFlow::DeviceCode,
     credential_format: Some(FORMAT),
     login_run: Some(LOGIN),

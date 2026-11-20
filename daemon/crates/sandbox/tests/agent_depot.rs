@@ -338,3 +338,73 @@ fn a_depot_session_starts_at_the_shared_level() {
     let stdout = run(&backend, &session, &capture(), plan.scratch);
     assert!(stdout.contains("depot-program"), "{stdout}");
 }
+
+/// HUM-566: a package of several files, as the Codex recipe takes it over:
+/// `bin/codex` beside its helper `codex-path/rg`, and the daemon's link
+/// `codex -> bin/codex` at the top. The bare name starts the program through
+/// the link, the program finds its helper beside its real place, and the
+/// version directory passes the check before the bind.
+///
+/// Mutation proof: without the link the session finds no `codex` and this
+/// turns red.
+#[test]
+fn a_package_of_several_files_starts_through_the_daemons_link() {
+    let fx = fixture();
+    let Some(backend) = fx.real() else { return };
+    let depot = fx.paths.agents_dir().join("codex");
+    let version = depot.join("program/0.171.0");
+    for dir in [
+        fx.paths.agents_dir(),
+        depot.clone(),
+        depot.join("program"),
+        version.clone(),
+        version.join("bin"),
+        version.join("codex-path"),
+        depot.join("config"),
+        depot.join("credentials"),
+    ] {
+        private(&dir);
+    }
+    for (rel, text, mode) in [
+        (
+            "bin/codex",
+            "#!/bin/sh\nhere=$(dirname \"$(readlink -f \"$0\")\")\n\
+             echo \"codex-from-depot $* via $0 helper=$(\"$here/../codex-path/rg\")\"\n",
+            0o700,
+        ),
+        ("codex-path/rg", "#!/bin/sh\necho rg-beside\n", 0o700),
+        (
+            "manifest.json",
+            r#"{"version":"0.171.0","signature":"unsigned"}"#,
+            0o600,
+        ),
+    ] {
+        std::fs::write(version.join(rel), text).unwrap();
+        std::fs::set_permissions(version.join(rel), std::fs::Permissions::from_mode(mode)).unwrap();
+    }
+    std::os::unix::fs::symlink("bin/codex", version.join("codex")).unwrap();
+    std::os::unix::fs::symlink("program/0.171.0", depot.join("current")).unwrap();
+
+    let mut config = Config::default();
+    config.agents.codex.source = Some(AgentSource::Depot);
+    let command = vec![OsString::from("codex"), OsString::from("hello")];
+    let plan = plan_session(&DepotInput {
+        config: &config,
+        lock: &SourceLock::none(),
+        paths: &fx.paths,
+        session: SessionId::nil(),
+        adapter: "codex",
+        command: &command,
+        from_caller: false,
+        purpose: Purpose::Start,
+        keys: None,
+    })
+    .unwrap();
+    assert_eq!(plan.command[0], OsString::from("/run/humanitl/agent/codex"));
+    let session = fx.context(&plan.command, plan.session.clone());
+    let stdout = run(&backend, &session, &capture(), plan.scratch);
+    assert!(
+        stdout.contains("codex-from-depot hello via /run/humanitl/agent/codex helper=rg-beside"),
+        "{stdout}"
+    );
+}

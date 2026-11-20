@@ -7653,6 +7653,122 @@ Beide antworten deshalb auf `agents install` mit `AGENT_015`.
 1. `humanitl agents install codex` installiert ins Depot, oder die
    Ablehnung nennt den belegten Grund.
 
+### Stand nach der Umsetzung (2026-11-20)
+
+Gebaut im Sandbox-Crate (`agent/depot/`), ohne Protokolländerung:
+
+- **Rezept für einen Baum aus mehreren Dateien.** `InstallRecipe::program`
+  darf ein Pfad im Baum sein (`bin/codex`), `InstallRecipe::expected` nennt
+  weitere Dateien, die als reguläre Dateien da sein müssen (sonst
+  `AGENT_011`, Schritt `tree`). Liegt das Programm nicht oben, legt der
+  Daemon nach der Prüfung des Baums den relativen Verweis
+  `<program> -> <pfad>` oben in den Versionsordner (`codex -> bin/codex`, wie
+  der Installer des Herstellers); ein Eintrag dieses Namens im Baum des
+  Laufs wird abgelehnt, nur der Daemon benennt das Programm. Sitzung,
+  Wächter, `PATH` und Prüfung vor dem Einbinden bleiben unverändert: Sie
+  starten `/run/humanitl/agent/<program>`, und Verweise innerhalb waren schon
+  erlaubt. Der Baum wird geprüft wie in HUM-519 (`take_tree`, Obergrenzen
+  2 GiB und 50 000 Einträge; das Codex-Paket hat 63 Einträge und rund
+  520 MiB ausgepackt).
+- **Liste von Prüfsummen statt Signatur** (`ChecksumList`,
+  `depot/checksums.rs`). Der Lauf legt Release-Metadaten, Liste und Archiv
+  unter `out/checked/` ab und packt das Archiv aus, nachdem er es selbst
+  gegen die Liste verglichen hat (so sieht `tar` nur das gelistete Archiv);
+  das ist kein Urteil. Das Skript nimmt nur eine Version aus
+  `[0-9A-Za-z.+-]` und genau eine Zeile der Liste (auch mit `*` vor dem
+  Namen), wie der Daemon. Der Daemon liest danach seine eigene Kopie: Name des
+  Releases in den Metadaten gleich Präfix und Version (sonst Schritt `pin`),
+  SHA-256 der Liste gleich `assets[].digest` (genau ein Asset dieses Namens),
+  genau eine Zeile für das Archiv der Plattform, SHA-256 des Archivs (beim
+  Lesen gestreamt, `adopt::sha256_at`) gleich dieser Zeile (sonst Schritt
+  `checksum`). `sha2` rechnet, keine eigene Kryptographie. Das Manifest des
+  Depots sagt `unsigned`.
+- **Codex** (`recipe::CODEX_INSTALL`): Host nur `releases.openai.com`, belegt
+  am Installer des Herstellers
+  (`scripts/install/install.sh` bei Commit
+  `a0a30c40e8dbcc44af52e2df64dcce64368d4422`: `channels/latest` mit
+  `tag_name` `rust-v<version>`, `releases/<version>/release.json`,
+  `codex-package_SHA256SUMS`, `codex-package-<target>.tar.gz`; GitHub als
+  Rückfall des Installers weggelassen) und am Release `0.171.0`, gemessen am
+  2026-11-20 (Metadaten, Liste und Archiv `x86_64-unknown-linux-musl`, dessen
+  SHA-256 zur Liste passt; Inhalt `bin/codex`, `bin/codex-code-mode-host`,
+  `bin/codex-exec-server`, `codex-path/rg`, `codex-resources/bwrap`,
+  `codex-resources/voice/…`, `codex-package.json` mit `"entrypoint":
+  "bin/codex"`; PAX-Format). Erwartet: `bin/codex-code-mode-host`,
+  `codex-path/rg`, `codex-package.json`. Linux nur als statische musl-Builds
+  (glibc und musl). `agents install codex` antwortet damit nicht mehr
+  `AGENT_015`; die App bietet Installieren an (`actions.install` aus dem
+  Rezept).
+- **`agy`: entschieden, kein Rezept.** Gemessen am 2026-11-20: Das Manifest
+  `manifests/linux_amd64.json` des Updater-Hosts nennt nur `version`
+  (`1.5.13`), `url` und `sha512`; die URL liegt auf
+  `storage.googleapis.com` (einem Host aller Cloud-Storage-Buckets), und das
+  Skript kennt keine Wahl der Version. Ein Laufzeit-Host aus einer festen
+  Liste wäre zulässig (der Lauf hält jeden anderen ohnehin), aber nicht ohne
+  Abruf einer gewählten Version (weder `--version` noch ein Update auf eine
+  gewählte Version, ADR-0023 Punkt 5), mit einer `allow`-Regel für jeden
+  Bucket und nur einer Prüfsumme aus demselben unsignierten Manifest.
+  Neu `DepotRecipe::install_refused`; `AGENT_015` nennt den Grund
+  (`recipe::AGY_INSTALL_REFUSED`).
+
+Tests: `depot/checksums.rs` (Kette hält; anderes Archiv, andere Liste,
+anderes Release, fehlende oder doppelte Zeile, Digest ohne SHA-256, keine
+JSON, `*` vor dem Namen und Großbuchstaben),
+`depot/maintenance/package_tests.rs` (Stellvertreter-Paket landet ganz mit
+Verweis und besteht die Prüfung vor dem Einbinden; Archiv, Liste oder
+Release falsch, Archiv fehlt, erwartete Datei fehlt, Baum benennt das
+Programm selbst als Verweis, Datei oder Ordner, erwartete Datei als
+Verweis: jeweils `AGENT_011` mit Schritt, Depot unverändert; das
+echte Codex-Skript gegen einen Stellvertreter-Hersteller mit einem echten
+`tar.gz`, `curl` als Stellvertreter, `tar`, `awk`, `sha256sum` des Hosts:
+`install --version 0.170.0` ohne Abruf von `channels/latest`, danach
+`update` auf die aktuelle aus `channels/latest`; ein Archiv, das nicht zur
+Liste passt, kommt nie zu `tar`, und als Erfolg gemeldet lehnt der Daemon es
+selbst ab; eine Liste mit der Zeile des Archivs zweimal lehnen Lauf und
+Daemon ab, eine Zeile mit `*` lesen beide; eine aktuelle Version mit
+Leerzeichen oder `/../` beendet den Lauf vor jedem Download),
+`tests/agent_depot.rs` (im echten bwrap: `codex hello` startet
+über den Verweis, das Programm findet seinen Helfer neben seinem echten
+Ort), `maintenance/tests.rs` (`agy` mit Grund), `recipe.rs` (Invarianten:
+Programmname gleich Dateiname des Pfads, erwartete Pfade, höchstens eine
+Art der Prüfung), `codex_adapter.rs`, `agy_adapter.rs`. Mutationsbeweise,
+jeder rot: Aufruf von `check_list` entfernt, Vergleich des Archivs, der
+Liste, des Release-Namens entfernt, Schleife über `expected` entfernt,
+Prüfung auf einen vorhandenen Eintrag entfernt, kein Verweis, Verweis im
+bwrap-Test entfernt, im Skript: Zweig für fremde Zeichen der Version
+entfernt, erste von zwei Zeilen genommen, `*` nicht entfernt.
+
+Docs: Anleitung `agent-depot.md` (Tabelle, was geschützt ist, Grenzen),
+`docs/cli.md`, SECURITY (Wartungslauf, Grenzen), THREAT-MODEL K-36 und
+Änderungszeile, jeweils en und de.
+
+Abweichungen und offen:
+- **Bindung Archiv zu Baum durch den Lauf, nicht den Daemon.** Der Daemon
+  prüft das Archiv, liest aber dessen Einträge nicht; dafür bräuchte er einen
+  Leser für `tar` (Kandidat: Crate `tar` zentral in `daemon/Cargo.toml`, dann
+  vergleicht der Daemon jede Datei des Baums mit ihrem Eintrag). Bis dahin
+  bindet der Lauf (nur `curl`, `sha256sum`, `tar` des Hosts, nichts
+  Heruntergeladenes läuft) den Baum an das geprüfte Archiv; SECURITY und K-36
+  nennen es.
+- Für die Kette bürgt nur TLS zu `releases.openai.com`, wie beim Installer
+  des Herstellers.
+- **Depot-Sitzung von Codex ohne `sandbox_mode`** (aus HUM-515): Die Kopie
+  von `config.toml` trägt `danger-full-access` nicht, Codex' eigene Sandbox
+  startet in unserer nicht; bis zum Kandidaten aus HUM-515 (Vorgaben eines
+  Adapters in die Konfigurationskopie) setzt die Anleitung den Schlüssel
+  über `humanitl agents config codex`. Jetzt, wo Codex installiert, wird
+  der Kandidat dringlicher.
+- Nicht gemessen mit dem echten `codex` aus dem Depot (startet es über den
+  Verweis neben seinen Helfern, Geräte-Anmeldung): HUM-553 Punkt 4.
+  `codex-resources/bwrap` ist nicht erwartet, weil keine Sitzung es nutzt.
+- Kandidaten für eigene Issues, nicht gebaut: ein Leser für `tar` im Daemon,
+  der den Baum an das Archiv bindet (siehe oben); `sha256sum` bzw. `shasum`
+  für Wartungsläufe unter macOS, sobald Seatbelt sie trägt (das Skript
+  nimmt `sha256sum`, das macOS nicht mitbringt).
+- Lokal nicht grün, unabhängig von diesem Issue: `podman::tests::live`
+  (Shim nicht gebaut) und `a_socket_in_the_tree_is_refused` in der
+  Sandbox des Agenten (kein `bind` für Unix-Sockets); außerhalb grün.
+
 ---
 
 ## HUM-567 · Werte der Sitzung auch für `Projects.proposal`, `Argv` und `sandbox image pull`

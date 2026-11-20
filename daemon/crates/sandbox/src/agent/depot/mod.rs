@@ -21,6 +21,8 @@
 //!   `program/<version>/` and the switch of `current`, with a journal.
 //! - [`verify`]: the vendor's signature, checked by the daemon with the
 //!   host's `gpg` on its own copy; the run reports no verdict.
+//! - `checksums`: a vendor's list of checksums instead of a signature
+//!   (HUM-566), checked by the daemon on its own copy.
 //! - [`credential`]: the guard of the one file a session writes back, the
 //!   credential file, checked against the adapter's format (HUM-520);
 //!   [`writeback`] watches it in a running session.
@@ -35,6 +37,7 @@
 
 pub mod account;
 pub mod adopt;
+pub(crate) mod checksums;
 pub mod credential;
 pub mod guard;
 pub mod login_url;
@@ -60,8 +63,8 @@ pub use self::maintenance::{
     Committed, DepotMaintenance, Maintenance, MaintenanceRequest, MaintenanceRun, MaintenanceTask,
 };
 pub use self::recipe::{
-    DepotRecipe, HostPlatform, InstallHost, InstallRecipe, KNOWN, KnownAgent, LoginCallback,
-    LoginFlow, LoginRecipe, SignedManifest,
+    ChecksumList, DepotRecipe, HostPlatform, InstallHost, InstallRecipe, KNOWN, KnownAgent,
+    LoginCallback, LoginFlow, LoginRecipe, SignedManifest,
 };
 pub use self::scratch::Scratch;
 pub use self::store::{Depot, Installed, Manifest, Reservation};

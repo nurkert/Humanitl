@@ -70,6 +70,10 @@ pub struct DepotRecipe {
     /// `None` until every value is sourced, then `install` answers
     /// `AGENT_015`.
     pub install: Option<InstallRecipe>,
+    /// Why there is no [`DepotRecipe::install`], with its evidence, for the
+    /// `why` of `AGENT_015` (HUM-566): an agent whose vendor ships no install
+    /// the depot can pin and check says so instead of a general sentence.
+    pub install_refused: Option<&'static str>,
     /// How a login works (HUM-520).
     pub login: LoginFlow,
     /// The format of the credential file, which the guard of the write-back
@@ -170,6 +174,34 @@ pub struct SignedManifest {
     pub evidence: &'static str,
 }
 
+/// The vendor signs nothing, but publishes a list of SHA-256 checksums of its
+/// release archives, and its release metadata names the SHA-256 of that list
+/// (HUM-566; Codex: `release.json` with `assets[].digest` and
+/// `codex-package_SHA256SUMS`).
+///
+/// The run downloads metadata, list and archive and unpacks the archive into
+/// the program tree; the daemon reads its own copy of the three files after
+/// the run and checks the chain itself (`super::checksums`): the metadata
+/// names the version the run installed, the list has the SHA-256 the metadata
+/// names, and the archive has the SHA-256 the list names for the platform.
+/// What binds the chain is TLS to the vendor's host, the same trust the
+/// vendor's own installer has; there is no key of the vendor's.
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+pub struct ChecksumList {
+    /// The JSON pointer of the release's name in the metadata: `/tag_name`.
+    pub version_pointer: &'static str,
+    /// What precedes the version in that name: `rust-v`.
+    pub version_prefix: &'static str,
+    /// The name of the checksum list among the metadata's `/assets`, each an
+    /// object with `name` and `digest` (`sha256:<hex>`).
+    pub list: &'static str,
+    /// The archive's name in the list, with `{platform}` for the vendor's
+    /// platform name.
+    pub archive: &'static str,
+    /// Where the vendor documents metadata, list and archive.
+    pub evidence: &'static str,
+}
+
 /// What an install or update runs in its maintenance sandbox (HUM-519).
 ///
 /// The daemon builds the run around [`InstallRecipe::script`]: it sets the
@@ -184,7 +216,10 @@ pub struct SignedManifest {
 /// - out: `$HUMANITL_DEPOT_OUT/version` with the version installed (one
 ///   line), the program tree under `$HUMANITL_DEPOT_OUT/program/`, and for a
 ///   signed recipe the manifest, its signature and the vendor's public key
-///   as `signed/manifest`, `signed/signature` and `signed/key.asc`.
+///   as `signed/manifest`, `signed/signature` and `signed/key.asc`; for a
+///   recipe with a [`ChecksumList`] the vendor's release metadata, the list
+///   and the archive the tree came from as `checked/metadata`,
+///   `checked/list` and `checked/archive`.
 ///
 /// Only the program tree is taken over; a launcher or anything else the
 /// installer leaves in `HOME` is discarded with the run.
@@ -201,12 +236,23 @@ pub struct InstallRecipe {
     /// session and of no other.
     pub hosts: &'static [InstallHost],
     /// Where the program lies inside the program tree after the run, a
-    /// relative path; the program the session starts.
+    /// relative path; the program the session starts. When it is not the
+    /// plain name [`DepotRecipe::program`] (Codex: `bin/codex`), the daemon
+    /// puts a relative link of that name at the top of the version directory
+    /// to it, as the vendor's installer does, so the session finds the
+    /// program by its name and the program finds its helpers beside it.
     pub program: &'static str,
+    /// Further files the tree must hold as regular files, relative paths
+    /// (HUM-566): the helpers of a program that comes as a package of
+    /// several files. A tree without one of them is refused.
+    pub expected: &'static [&'static str],
     /// The vendor's names of the platforms it builds for.
     pub platforms: &'static [(HostPlatform, &'static str)],
     /// The vendor's signature, where it signs.
     pub signature: Option<SignedManifest>,
+    /// The vendor's list of checksums, where it publishes one instead of a
+    /// signature (HUM-566).
+    pub checksums: Option<ChecksumList>,
     /// The source the manifest names: where the program comes from.
     pub source: &'static str,
 }
@@ -281,6 +327,7 @@ pub const KNOWN: &[KnownAgent] = &[
             update_off: &[("DISABLE_UPDATES", "1")],
             credential_file: Some(".credentials.json"),
             install: Some(CLAUDE_INSTALL),
+            install_refused: None,
             login: LoginFlow::PastedCode,
             // The keys of `.credentials.json` and the fields of `.claude.json`
             // that a session needs to start logged in are not published by
@@ -384,24 +431,48 @@ pub const KNOWN: &[KnownAgent] = &[
 ///   every start; a configuration run is refused.
 /// - `AGY_CLI_DISABLE_AUTO_UPDATE=true` turns the background self-updater
 ///   off (cli/troubleshooting).
-/// - **No install recipe.** The script downloads a manifest from
-///   `antigravity-cli-auto-updater-974169037036.us-central1.run.app`, the
-///   program from the host the manifest's `url` names, and checks a SHA-512
-///   from the same manifest: no signature, and the program's host is known
-///   only at run time. Until the owner walkthrough (HUM-553 point 5) names
-///   that host, `agents install agy` answers `AGENT_015`.
+/// - **No install recipe, decided in HUM-566** ([`AGY_INSTALL_REFUSED`]):
+///   `agents install agy` answers `AGENT_015` with the reason.
 pub const AGY_RECIPE: DepotRecipe = DepotRecipe {
     program: "agy",
     config_env: None,
     update_off: &[("AGY_CLI_DISABLE_AUTO_UPDATE", "true")],
     credential_file: None,
     install: None,
+    install_refused: Some(AGY_INSTALL_REFUSED),
     login: LoginFlow::ApiKeyOnly,
     credential_format: None,
     login_run: None,
     // No configuration run, so nothing to highlight.
     command_keys: &[],
 };
+
+/// Why the depot installs no `agy` (HUM-566, decision on point 3).
+///
+/// Read 2026-11-20: the install script `https://antigravity.google/cli/install.sh`
+/// reads `<base>/manifests/<platform>.json` from
+/// `antigravity-cli-auto-updater-974169037036.us-central1.run.app`, a JSON
+/// object with `version`, `url` and `sha512`, downloads `url` and compares
+/// its SHA-512 with the same object; it has no option for a version. The
+/// manifest for `linux_amd64` named version `1.5.13` and the URL
+/// `https://storage.googleapis.com/antigravity-public/antigravity-cli/
+/// 1.5.13-5999302598852608/linux-x64/cli_linux_x64.tar.gz`.
+///
+/// A recipe with a host known only at run time would be admissible where the
+/// host comes from a fixed list (the run holds every other host anyway). It
+/// fails on three other points: the manifest names the current version and
+/// no other, and nothing fetches a chosen one, so neither `--version` nor an
+/// update to a chosen version is possible (ADR-0023 point 5); the program's host `storage.googleapis.com` serves
+/// every bucket of Google Cloud Storage, so an `allow` rule for it lets the
+/// run fetch from any bucket an unsigned manifest names; and the only check
+/// is a SHA-512 in that same unsigned manifest, from the same answer as the
+/// URL. The archive's layout is documented nowhere either.
+pub const AGY_INSTALL_REFUSED: &str = "the vendor's installer (antigravity.google/cli/install.sh, \
+     read 2026-11-20) fetches only the current version and offers no way to fetch a chosen one, \
+     so `--version` and an update to a chosen version are impossible; it fetches \
+     the program from storage.googleapis.com, a host of every Cloud Storage bucket, at a URL an \
+     unsigned manifest names, and checks it only against a SHA-512 from that same manifest; \
+     until the vendor publishes pinned, checkable releases nothing is installed";
 
 /// Codex from the depot (HUM-515). Sources, read 2026-11-20: the vendor's
 /// documentation at learn.chatgpt.com and the repository
@@ -417,23 +488,16 @@ pub const AGY_RECIPE: DepotRecipe = DepotRecipe {
 /// - `auth.json` under `CODEX_HOME` with `cli_auth_credentials_store =
 ///   "file"` (learn.chatgpt.com/docs/auth, "Credential storage"), enforced
 ///   by the same requirements file.
-/// - **No install recipe.** The vendor's package (`codex-package-<target>.
-///   tar.gz`, `scripts/install/install.sh`) holds `bin/codex` beside
-///   `bin/codex-code-mode-host`, `codex-path/rg` and
-///   `codex-resources/bwrap`, and the vendor's installer starts the program
-///   through a link `codex -> bin/codex`; the depot starts
-///   `program/<version>/<program>` and takes only a regular file there
-///   (`super::maintenance`). Whether `codex` runs from another place than
-///   `bin/` beside its helpers is not documented and not measured; its
-///   integrity is a SHA-256 list from the same release, not a signature.
-///   Until the owner walkthrough (HUM-553) measures it, `agents install
-///   codex` answers `AGENT_015`.
+/// - The install ([`CODEX_INSTALL`], HUM-566) takes the vendor's whole
+///   package and starts `bin/codex` through a link `codex -> bin/codex`, as
+///   the vendor's installer does.
 pub const CODEX_RECIPE: DepotRecipe = DepotRecipe {
     program: "codex",
     config_env: Some("CODEX_HOME"),
     update_off: &[],
     credential_file: Some("auth.json"),
-    install: None,
+    install: Some(CODEX_INSTALL),
+    install_refused: None,
     login: LoginFlow::DeviceCode,
     credential_format: Some(CODEX_AUTH_JSON),
     login_run: Some(LoginRecipe {
@@ -615,6 +679,104 @@ pub const CODEX_AUTH_JSON: CredentialFormat = CredentialFormat {
     ),
 };
 
+/// Codex from the vendor's release host, checked against its list of
+/// checksums (HUM-566).
+///
+/// Sources, read 2026-11-20: the vendor's installer
+/// `https://github.com/openai/codex/blob/a0a30c40e8dbcc44af52e2df64dcce64368d4422/scripts/install/install.sh`
+/// and the release `0.171.0` on `releases.openai.com`.
+///
+/// - The installer reads from `RELEASES_BASE_URL =
+///   https://releases.openai.com/codex` (GitHub's releases are its fallback,
+///   left out here: one host suffices): the current version as `tag_name`
+///   (`rust-v<version>`) of `<base>/channels/latest`, a pinned one's metadata
+///   at `<base>/releases/<version>/release.json`, the assets at
+///   `<base>/releases/<version>/<asset>`.
+/// - Integrity: no signature. The metadata names the SHA-256 of
+///   `codex-package_SHA256SUMS` (`assets[].digest`, `sha256:<hex>`), the list
+///   one line `<sha256>  <asset>` per archive, and the installer compares the
+///   archive with its line before it unpacks it. The run does the same before
+///   `tar` sees the archive; the daemon checks the chain again on its own
+///   copy after the run (`super::checksums`).
+/// - The package `codex-package-<target>.tar.gz` (measured on
+///   `x86_64-unknown-linux-musl`, 0.171.0, 189 MiB packed, 63 entries): `bin/codex`,
+///   `bin/codex-code-mode-host`, `bin/codex-exec-server`, `codex-path/rg`,
+///   `codex-resources/bwrap`, `codex-resources/voice/…` and
+///   `codex-package.json` (`"entrypoint": "bin/codex"`). The installer
+///   requires `codex-package.json`, `bin/codex`, `bin/codex-code-mode-host`
+///   and `codex-path/rg` (and `bwrap` under Linux, which a session does not
+///   use: Codex's own sandbox does not start in Humanitl's, HUM-515), and
+///   links `codex -> bin/codex` in the release directory.
+/// - Targets: Linux only as static musl builds, for glibc and musl alike.
+/// - Whether `codex` runs from the depot beside its helpers is measured in
+///   the owner walkthrough (HUM-553 point 4); the installer starts it the
+///   same way, through the link.
+pub const CODEX_INSTALL: InstallRecipe = InstallRecipe {
+    script: r#"base=https://releases.openai.com/codex
+out=$HUMANITL_DEPOT_OUT
+version=$HUMANITL_DEPOT_VERSION
+if [ -z "$version" ]; then
+    version=$(curl -fsSL "$base/channels/latest" | tr ',' '\n' \
+        | sed -n 's/.*"tag_name"[[:space:]]*:[[:space:]]*"rust-v\([^"]*\)".*/\1/p' | head -n 1)
+fi
+case $version in
+    *[!0-9A-Za-z.+-]*) echo "humanitl: the vendor named no version: $version" >&2; exit 1 ;;
+    [0-9]*.[0-9]*.[0-9]*) ;;
+    *) echo "humanitl: the vendor named no version: $version" >&2; exit 1 ;;
+esac
+asset="codex-package-$HUMANITL_DEPOT_PLATFORM.tar.gz"
+mkdir -p "$out/program" "$out/checked"
+curl -fsSL -o "$out/checked/metadata" "$base/releases/$version/release.json"
+curl -fsSL -o "$out/checked/list" "$base/releases/$version/codex-package_SHA256SUMS"
+curl -fsSL -o "$out/checked/archive" "$base/releases/$version/$asset"
+expected=$(awk -v asset="$asset" '{ sub(/^\*/, "", $2) }
+    $2 == asset { n++; sum = tolower($1) }
+    END { if (n == 1 && length(sum) == 64) print sum }' "$out/checked/list")
+actual=$(sha256sum "$out/checked/archive" | cut -d ' ' -f 1)
+if [ -z "$expected" ] || [ "$expected" != "$actual" ]; then
+    echo "humanitl: $asset does not match the vendor's checksum list" >&2
+    exit 1
+fi
+tar -xzf "$out/checked/archive" -C "$out/program" --no-same-owner --no-same-permissions
+printf '%s\n' "$version" > "$out/version"
+"#,
+    hosts: &[InstallHost {
+        host: "releases.openai.com",
+        evidence: concat!(
+            "https://github.com/openai/codex/blob/a0a30c40e8dbcc44af52e2df64dcce64368d4422/",
+            "scripts/install/install.sh (RELEASES_BASE_URL https://releases.openai.com/codex, ",
+            "channels/latest, releases/<version>/release.json and assets), read 2026-11-20"
+        ),
+    }],
+    program: "bin/codex",
+    expected: &[
+        "bin/codex-code-mode-host",
+        "codex-path/rg",
+        "codex-package.json",
+    ],
+    platforms: &[
+        (HostPlatform::LinuxX64, "x86_64-unknown-linux-musl"),
+        (HostPlatform::LinuxX64Musl, "x86_64-unknown-linux-musl"),
+        (HostPlatform::LinuxArm64, "aarch64-unknown-linux-musl"),
+        (HostPlatform::LinuxArm64Musl, "aarch64-unknown-linux-musl"),
+        (HostPlatform::MacX64, "x86_64-apple-darwin"),
+        (HostPlatform::MacArm64, "aarch64-apple-darwin"),
+    ],
+    signature: None,
+    checksums: Some(ChecksumList {
+        version_pointer: "/tag_name",
+        version_prefix: "rust-v",
+        list: "codex-package_SHA256SUMS",
+        archive: "codex-package-{platform}.tar.gz",
+        evidence: concat!(
+            "https://github.com/openai/codex/blob/a0a30c40e8dbcc44af52e2df64dcce64368d4422/",
+            "scripts/install/install.sh (checksum_asset, package_asset) and ",
+            "https://releases.openai.com/codex/releases/0.171.0/release.json, read 2026-11-20"
+        ),
+    }),
+    source: "https://releases.openai.com/codex/releases",
+};
+
 /// Claude Code from the vendor's release bucket, verified against its signed
 /// manifest (HUM-519).
 ///
@@ -669,6 +831,7 @@ printf '%s
         ),
     }],
     program: "claude",
+    expected: &[],
     platforms: &[
         (HostPlatform::LinuxX64, "linux-x64"),
         (HostPlatform::LinuxArm64, "linux-arm64"),
@@ -689,6 +852,7 @@ printf '%s
             "(2026-11-19)"
         ),
     }),
+    checksums: None,
     source: "https://downloads.claude.ai/claude-code-releases",
 };
 
@@ -850,6 +1014,11 @@ mod tests {
                 continue;
             };
             assert!(plain_name(recipe.program), "{}: recipe program", agent.id);
+            assert!(
+                recipe.install.is_none() || recipe.install_refused.is_none(),
+                "{}: an install recipe and a reason against one",
+                agent.id
+            );
             if let Some(config_env) = recipe.config_env {
                 assert!(
                     config_env
@@ -899,11 +1068,38 @@ mod tests {
                     agent.id,
                     install.program
                 );
+                // The session starts program/<version>/<program>: the file
+                // itself or the daemon's link to it, which carries its name.
                 assert_eq!(
-                    install.program, recipe.program,
+                    Path::new(install.program)
+                        .file_name()
+                        .and_then(std::ffi::OsStr::to_str),
+                    Some(recipe.program),
                     "{}: the session starts program/<version>/<program>",
                     agent.id
                 );
+                for path in install.expected {
+                    assert!(
+                        super::super::adopt::relative_inside(path) && *path != install.program,
+                        "{}: expected {path}",
+                        agent.id
+                    );
+                }
+                assert!(
+                    install.signature.is_none() || install.checksums.is_none(),
+                    "{}: one way of checking",
+                    agent.id
+                );
+                if let Some(list) = install.checksums {
+                    assert!(list.version_pointer.starts_with('/'), "{}", agent.id);
+                    assert!(list.archive.contains("{platform}"), "{}", agent.id);
+                    assert!(
+                        super::super::adopt::relative_inside(list.list) && !list.list.contains('/'),
+                        "{}",
+                        agent.id
+                    );
+                    assert!(list.evidence.starts_with("https://"), "{}", agent.id);
+                }
                 assert!(!install.platforms.is_empty(), "{}", agent.id);
                 assert!(install.source.starts_with("https://"), "{}", agent.id);
                 if let Some(signature) = install.signature {

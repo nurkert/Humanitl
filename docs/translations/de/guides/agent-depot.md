@@ -1,6 +1,6 @@
 ---
 source: guides/agent-depot.md
-source-sha256: 673ae800ef629ce6cb46856ee83a1e46d6ca55ad6d073d8d3063a01e8b0822b2
+source-sha256: 73647f9dbdaa40223df04413985c78220b2999b6b0d0597f9115941c0990b70c
 lang: de
 ---
 # Das Agent-Depot
@@ -49,9 +49,9 @@ noch nicht läuft: Mit der Kernel-Stufe wird eine Depot-Session abgelehnt, und u
 | Agent | Installation ins Depot | Anmeldung im Depot | Session aus dem Depot |
 |---|---|---|---|
 | Claude Code (`claude`) | ja, von `downloads.claude.ai`, das signierte `manifest.json` des Herstellers geprüft mit dem `gpg` des Hosts | noch nicht: `humanitl agents login claude` antwortet mit `AGENT_014` | ja, mit dem Zugangsschlüssel, den Humanitl verwahrt (unten) |
-| Codex (`codex`) | noch nicht: `AGENT_015` | erklärt (Geräte-Anmeldung), aber ohne Installation gibt es nichts anzumelden | nein |
+| Codex (`codex`) | ja, das ganze Paket des Herstellers von `releases.openai.com`, geprüft gegen seine Liste der Prüfsummen (keine Signatur) | erklärt (Geräte-Anmeldung), mit dem echten `codex` nicht erprobt | aus dem Depot, aber siehe [Heutige Grenzen](#current-limits) |
 | OpenCode, pi | kein Rezept: `AGENT_015` | nein | nein |
-| Antigravity CLI (`agy`) | noch nicht: `AGENT_015` | keine, nur API-Schlüssel: `humanitl agents login agy` antwortet mit `AGENT_014` | nein, es gibt keine Installation |
+| Antigravity CLI (`agy`) | nein: `AGENT_015` nennt den Grund (keine gewählte Version abrufbar, keine signierte Prüfung) | keine, nur API-Schlüssel: `humanitl agents login agy` antwortet mit `AGENT_014` | nein, es gibt keine Installation |
 
 Warum, und was daraus folgt, steht unter [Heutige Grenzen](#current-limits).
 
@@ -165,9 +165,12 @@ fragt vorher und wird abgelehnt, solange eine Session oder ein Lauf das Depot nu
   Besitz des Nutzers des Daemons, Ordner `0700`, Dateien `0600` oder `0700`, geprüft bei jedem
   Öffnen (`AGENT_013`). Es läuft nur in einer Sandbox.
 - **Eine geprüfte, angeheftete Version.** Für Claude Code prüft der Daemon die Signatur des
-  Herstellers mit dem `gpg` des Hosts und den SHA-256 des Programms; die Session bindet den
-  aufgelösten Versionsordner nur lesbar ein, nie den Verweis `current`, sodass ein Update nie eine
-  laufende Session ändert.
+  Herstellers mit dem `gpg` des Hosts und den SHA-256 des Programms. Codex signiert nichts; dort
+  prüft der Daemon seine eigene Kopie der Kette des Herstellers: Die Release-Metadaten nennen den
+  SHA-256 von `codex-package_SHA256SUMS`, diese Liste den SHA-256 des Paketarchivs. Für die Kette
+  bürgt TLS zu `releases.openai.com`, dasselbe Vertrauen wie beim Installer des Herstellers. Die
+  Session bindet den aufgelösten Versionsordner nur lesbar ein, nie den Verweis `current`, sodass
+  ein Update nie eine laufende Session ändert.
 - **Aus einer Session bleibt nichts im Depot.** Eine Session bekommt eine schreibbare Arbeitskopie
   der Konfiguration des Depots, die mit ihrem Ende gelöscht wird. Zurück ins Depot darf nur die
   eine Zugangsdatei, die der Adapter erklärt, und nur über den Wächter der Rückschrift (nächster
@@ -235,17 +238,25 @@ wählst.
   starten. Humanitl rät nie ein Format; bis sie im gemeinsamen Probedurchgang gemessen sind
   (HUM-553, Punkt 3), antwortet `humanitl agents login claude` mit `AGENT_014`, und Claude Code aus
   dem Depot läuft nur mit API-Schlüssel oder Gateway.
-- **Codex.** Das Paket des Herstellers trägt das Programm neben Hilfsprogrammen und startet es über
-  einen Verweis; das Depot startet eine reguläre Datei. Bis das gemessen ist (HUM-553, Punkt 4) und
-  das Depot ein solches Paket tragen kann (HUM-566), antwortet `humanitl agents install codex` mit
-  `AGENT_015`.
+- **Codex.** `humanitl agents install codex [--version V]` übernimmt das Paket des Herstellers
+  (`codex-package-<target>.tar.gz`) ganz: `bin/codex` neben seinen Helfern, gestartet über den
+  Verweis `codex -> bin/codex`, wie es der Installer des Herstellers tut (HUM-566). Der Lauf prüft
+  das Archiv gegen die Liste, bevor `tar` es auspackt, und der Daemon prüft die Kette noch einmal
+  an seiner eigenen Kopie; die Bindung zwischen Archiv und ausgepacktem Baum ruht auf dem Lauf, der
+  nichts Heruntergeladenes ausführt. Ob das echte `codex` von dort läuft, und die
+  Geräte-Anmeldung, misst der gemeinsame Probedurchgang (HUM-553, Punkt 4). Eine Session aus dem
+  Depot liest `config.toml` aus der Kopie des Depots, die `sandbox_mode = "danger-full-access"`
+  noch nicht trägt; Codex' eigene Sandbox startet in der von Humanitl nicht, also setze den
+  Schlüssel mit `humanitl agents config codex`, bis der Adapter seine Vorgaben selbst dort ablegt.
 - **Antigravity CLI.** Der Adapter ist da (HUM-517). `agy` legt seine Anmeldung im Schlüsselbund
   des Systems ab, und der Schlüsselbund des Hosts kommt nie in eine Sandbox; im Depot läuft es
   deshalb nur mit einem Gemini-API-Schlüssel (`humanitl llm key set`), und `humanitl agents login
-  agy` antwortet mit `AGENT_014`. Der Installer des Herstellers nimmt den Host des Programms erst
-  zur Laufzeit aus seinem Manifest und prüft nur einen SHA-512 aus demselben Manifest, keine
-  Signatur; bis das gemessen ist (HUM-553, Punkt 5) und es ein Rezept gibt (HUM-566), antwortet
-  `humanitl agents install agy` mit `AGENT_015`. Ein Konfigurationslauf antwortet ebenfalls mit
+  agy` antwortet mit `AGENT_014`. `humanitl agents install agy` antwortet mit `AGENT_015` und dem
+  Grund (entschieden in HUM-566): Das Manifest des Herstellers nennt die aktuelle Version, und
+  nichts holt eine gewählte, also gehen weder `--version` noch ein Update auf eine gewählte
+  Version; es zeigt auf das Programm unter
+  `storage.googleapis.com`, einem Host aller Cloud-Storage-Buckets; und die einzige Prüfung ist
+  ein SHA-512 in demselben unsignierten Manifest. Ein Konfigurationslauf antwortet ebenfalls mit
   `AGENT_015`: Keine Variable verlegt `~/.gemini` von `agy`, also trägt das Depot nur das Programm,
   und jede Session schreibt ihre Einstellungen neu.
 - **OpenCode und pi** haben kein Rezept fürs Depot; mit `depot` antworten sie mit `AGENT_015`.

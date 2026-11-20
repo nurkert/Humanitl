@@ -51,6 +51,7 @@ static SIGNED: KnownAgent = KnownAgent {
                 evidence: "https://standin.test/docs",
             }],
             program: "standin",
+            expected: &[],
             platforms: PLATFORMS,
             signature: Some(SignedManifest {
                 fingerprint: FPR,
@@ -58,8 +59,10 @@ static SIGNED: KnownAgent = KnownAgent {
                 version_pointer: "/version",
                 evidence: "https://standin.test/docs",
             }),
+            checksums: None,
             source: "https://downloads.standin.test/releases",
         }),
+        install_refused: None,
         login: LoginFlow::ApiKeyOnly,
         credential_format: None,
         login_run: None,
@@ -84,10 +87,13 @@ static UNSIGNED: KnownAgent = KnownAgent {
                 evidence: "https://standin.test/docs",
             }],
             program: "standin",
+            expected: &[],
             platforms: PLATFORMS,
             signature: None,
+            checksums: None,
             source: "https://downloads.standin.test/releases",
         }),
+        install_refused: None,
         login: LoginFlow::ApiKeyOnly,
         credential_format: None,
         login_run: None,
@@ -112,14 +118,14 @@ const GOOD: FakeGpg = FakeGpg {
     bad: false,
 };
 
-struct Fixture {
-    base: tempfile::TempDir,
-    paths: Paths,
-    session: SessionId,
+pub(super) struct Fixture {
+    pub(super) base: tempfile::TempDir,
+    pub(super) paths: Paths,
+    pub(super) session: SessionId,
 }
 
 impl Fixture {
-    fn new() -> Self {
+    pub(super) fn new() -> Self {
         let base = tempfile::tempdir().unwrap();
         let paths = Paths::new(Env::from_pairs([
             ("HOME", base.path().join("home").to_str().unwrap()),
@@ -133,15 +139,15 @@ impl Fixture {
         }
     }
 
-    fn agents(&self) -> PathBuf {
+    pub(super) fn agents(&self) -> PathBuf {
         self.paths.data_dir().join("agents")
     }
 
-    fn depot(&self, agent: &KnownAgent) -> Depot {
+    pub(super) fn depot(&self, agent: &KnownAgent) -> Depot {
         Depot::at(self.agents().join(agent.id), agent.id, uid())
     }
 
-    fn prepare(
+    pub(super) fn prepare(
         &self,
         agent: &'static KnownAgent,
         task: MaintenanceTask,
@@ -162,7 +168,7 @@ impl Fixture {
     }
 
     /// A prepared run whose host `gpg` is the stand-in with a good answer.
-    fn run(
+    pub(super) fn run(
         &self,
         agent: &'static KnownAgent,
         task: MaintenanceTask,
@@ -252,7 +258,7 @@ impl Fixture {
 
     /// Runs the script of `run` on the host as the sandbox would, with the
     /// fixture as the vendor. Returns whether it ended with status 0.
-    fn execute(&self, run: &MaintenanceRun, release: &Path) -> bool {
+    pub(super) fn execute(&self, run: &MaintenanceRun, release: &Path) -> bool {
         std::process::Command::new("/bin/sh")
             .arg("-c")
             .arg(run.script())
@@ -284,7 +290,7 @@ impl Fixture {
     }
 }
 
-fn hex_sum(bytes: &[u8]) -> String {
+pub(super) fn hex_sum(bytes: &[u8]) -> String {
     use std::fmt::Write as _;
     Sha256::digest(bytes)
         .iter()
@@ -296,7 +302,7 @@ fn hex_sum(bytes: &[u8]) -> String {
 
 /// Every entry under `root` with its kind, mode and content, links not
 /// followed; the work directories of runs (`.maintenance`) left out.
-fn snapshot(root: &Path) -> BTreeMap<PathBuf, String> {
+pub(super) fn snapshot(root: &Path) -> BTreeMap<PathBuf, String> {
     let mut out = BTreeMap::new();
     let mut stack = vec![root.to_path_buf()];
     while let Some(dir) = stack.pop() {
@@ -330,7 +336,7 @@ fn snapshot(root: &Path) -> BTreeMap<PathBuf, String> {
     out
 }
 
-fn assert_failed_at(found: &Diagnostic, step: &str) {
+pub(super) fn assert_failed_at(found: &Diagnostic, step: &str) {
     assert_eq!(found.code, AGENT_011, "{}", found.why);
     assert!(
         found.why.contains(&format!("at the step {step}:")),
@@ -1248,22 +1254,33 @@ fn the_platform_must_be_one_the_vendor_builds_for() {
     assert_eq!(found.code, humanitl_core::diagnostics::codes::AGENT_015);
 }
 
+/// `agy` has no install recipe (HUM-566, point 3): the finding names the
+/// reason with its evidence, not a general sentence.
 #[test]
-fn an_agent_without_an_install_recipe_is_agent_015() {
+fn an_agent_without_an_install_recipe_is_agent_015_with_its_reason() {
     let fixture = Fixture::new();
     let found = prepare_at(
         &MaintenanceRequest {
             paths: &fixture.paths,
-            agent: "codex",
+            agent: "agy",
             task: MaintenanceTask::Install,
             version: None,
             session: fixture.session,
         },
-        fixture.depot(crate::agent::depot::recipe::known("codex").unwrap()),
+        fixture.depot(crate::agent::depot::recipe::known("agy").unwrap()),
         Some(HostPlatform::LinuxX64),
     )
     .unwrap_err();
     assert_eq!(found.code, humanitl_core::diagnostics::codes::AGENT_015);
+    for part in [
+        "antigravity.google/cli/install.sh",
+        "no way to fetch a chosen one",
+        "storage.googleapis.com",
+        "SHA-512",
+    ] {
+        assert!(found.why.contains(part), "{part}: {}", found.why);
+    }
+    assert!(!fixture.agents().join("agy").exists());
 }
 
 #[test]
