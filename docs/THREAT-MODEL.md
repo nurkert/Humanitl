@@ -179,8 +179,10 @@ that a human later carries out; Humanitl sees that only if the human reads the d
 
 The agent must send code to the model; these requests are not held. The model host is therefore
 the second open channel and, unlike `/work`, one over the network. The rule is as narrow as
-possible: one host, one port, one scheme, `POST` and `GET`, and thirteen exact inference endpoints
-instead of the surfaces `/v1/` and `/api/` (HUM-261); a path with `..` segments is held (HUM-204).
+possible: one host, one port, one scheme, and thirteen exact inference endpoints instead of the
+surfaces `/v1/` and `/api/` (HUM-261), each with only the method it needs: `POST` on the
+endpoints that compute, `GET` on those that give information, one rule each (HUM-568); a path
+with `..` segments is held (HUM-204).
 Traffic is recorded and scanned (`LLM_005`; every finding stays on its request, the warning
 repeats only for findings new in the run or last warned about 15 minutes or more ago; an expired
 or evicted fingerprint warns again, HUM-354), and with
@@ -1330,6 +1332,7 @@ These attackers are not defended against, and Humanitl does not claim to:
 | 2026-11-20 | K-38: flow events the audit sink loses behind the broadcast stand in the chain as `audit.events_dropped` with their number; after a gap the sink closes only flows it has not heard from since the previous gap, residual: a flow silent across two gaps loses its `flow.responded` | HUM-564 |
 | 2026-11-20 | K-38: a flow whose `Failed` event falls into a gap of the audit sink has no `flow.failed`; `Recorded` names only the flow, the reason stays in the recording | HUM-565 |
 | 2026-11-20 | K-36: an install may take a vendor's package of several files (Codex): the recipe lists the files it expects, the daemon starts the program through a link of its own and checks a vendor's list of checksums on its own copy (release metadata, list, archive); residual: only TLS to the vendor's host vouches for the metadata, and the unpacked tree is bound to the archive by the run, not the daemon. `agy` gets no install: its manifest offers no chosen version, points at a shared storage host and carries its only checksum itself | HUM-566 |
+| 2026-11-20 | K-02: the passthrough pairs each method with its paths: an adapter gives one rule per set of methods (fixed ids `…00ff`, `…00fe`, `…00fd`). Codex passes `POST` only on `/responses` and `GET` only on `/models`; `agy` `POST` only on `models/{model}:generateContent` and `:streamGenerateContent` and `GET` only on the model list; Claude Code `POST` only on the Messages endpoints; OpenCode and pi `POST` on the endpoints that compute and `GET` on `/v1/models`, `/api/tags`, `/api/ps`, `/api/version`. `POST /models`, `GET /responses` and `GET` on an inference endpoint are now held. A path a human writes into `llm.passthrough_paths` keeps both methods. Narrows, weakens nothing | HUM-568 |
 
 Every security-relevant change to the shim, the mount allowlist, the filter or the passthrough gets
 a line here. Vulnerabilities are reported as described in

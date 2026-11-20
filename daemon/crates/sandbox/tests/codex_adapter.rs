@@ -13,6 +13,8 @@
 #![cfg_attr(not(target_os = "linux"), allow(unused_imports, dead_code))]
 #![allow(clippy::unwrap_used, clippy::expect_used, clippy::panic)]
 
+mod passthrough;
+
 use std::collections::BTreeMap;
 use std::ffi::OsString;
 use std::os::unix::fs::PermissionsExt as _;
@@ -31,6 +33,7 @@ use humanitl_sandbox::{
     AdapterRegistry, AgentAdapter, AgentContext, AgentKey, CodexAdapter, SandboxBackend,
     SandboxProfile, SandboxView, files_inside_work,
 };
+use passthrough::passes;
 
 /// A key long enough for `ApiKey::new`.
 const KEY: &str = "sk-proj-test-0123456789abcdef";
@@ -371,80 +374,118 @@ fn the_files_are_key_config_requirements_and_skill() {
     assert_eq!(quiet, expected);
 }
 
-/// The passthrough: `POST` and `GET` on exactly `/responses` and `/models`
-/// below the resolved base: the `OpenAI` API with a key, the endpoint's
-/// surface with an endpoint, the `ChatGPT` backend for a `ChatGPT` login.
+/// The passthrough: `POST` on exactly `/responses` and `GET` on exactly
+/// `/models` below the resolved base, one rule each (HUM-568): the `OpenAI`
+/// API with a key, the endpoint's surface with an endpoint, the `ChatGPT`
+/// backend for a `ChatGPT` login.
 #[test]
 fn the_passthrough_covers_responses_and_models_only() {
     let adapter = CodexAdapter::new();
-    let direct = adapter.llm_passthrough(&keyed(None).llm).expect("a rule");
-    assert!(direct.passthrough_llm);
-    assert!(
-        !direct.allow_private,
-        "the OpenAI API is no private address"
-    );
-    assert_eq!(
-        direct.matcher.host,
-        humanitl_core::rule::HostPattern::Exact(
-            humanitl_core::HostName::parse("api.openai.com").unwrap()
-        )
-    );
-    assert_eq!(
-        direct.matcher.path_prefixes,
-        ["/v1/responses?", "/v1/models?"]
-    );
-    assert_eq!(
-        direct.matcher.methods,
-        Some(vec![Method::POST, Method::GET])
-    );
-    assert_eq!(direct.matcher.port, Some(443));
+    let direct = adapter.llm_passthrough(&keyed(None).llm);
+    let [post, get] = direct.as_slice() else {
+        panic!("two rules: {direct:?}");
+    };
+    for rule in [post, get] {
+        assert!(rule.passthrough_llm);
+        assert!(!rule.allow_private, "the OpenAI API is no private address");
+        assert_eq!(
+            rule.matcher.host,
+            humanitl_core::rule::HostPattern::Exact(
+                humanitl_core::HostName::parse("api.openai.com").unwrap()
+            )
+        );
+        assert_eq!(rule.matcher.port, Some(443));
+        assert!(rule.matcher.path.is_none());
+    }
+    assert_eq!(post.id.to_string(), "01920000-0000-7000-8000-0000000000ff");
+    assert_ne!(post.id, get.id);
+    assert_eq!(post.matcher.methods, Some(vec![Method::POST]));
+    assert_eq!(post.matcher.path_prefixes, ["/v1/responses?"]);
+    assert_eq!(get.matcher.methods, Some(vec![Method::GET]));
+    assert_eq!(get.matcher.path_prefixes, ["/v1/models?"]);
 
-    let gateway = adapter
-        .llm_passthrough(&context(Some("http://10.0.0.5:4000/openai")).llm)
-        .expect("a rule");
-    assert!(gateway.allow_private);
+    let gateway = adapter.llm_passthrough(&context(Some("http://10.0.0.5:4000/openai")).llm);
+    assert!(gateway.iter().all(|rule| rule.allow_private));
+    assert!(gateway.iter().all(|rule| rule.matcher.port == Some(4000)));
     assert_eq!(
-        gateway.matcher.path_prefixes,
-        ["/openai/v1/responses?", "/openai/v1/models?"]
-    );
-    assert_eq!(gateway.matcher.port, Some(4000));
-
-    let chatgpt = adapter.llm_passthrough(&context(None).llm).expect("a rule");
-    assert_eq!(
-        chatgpt.matcher.path_prefixes,
+        gateway
+            .iter()
+            .map(|rule| rule.matcher.path_prefixes.clone())
+            .collect::<Vec<_>>(),
         [
-            "/backend-api/codex/responses?",
-            "/backend-api/codex/models?"
+            vec!["/openai/v1/responses?".to_owned()],
+            vec!["/openai/v1/models?".to_owned()]
+        ]
+    );
+
+    let chatgpt = adapter.llm_passthrough(&context(None).llm);
+    assert_eq!(
+        chatgpt
+            .iter()
+            .map(|rule| rule.matcher.path_prefixes.clone())
+            .collect::<Vec<_>>(),
+        [
+            vec!["/backend-api/codex/responses?".to_owned()],
+            vec!["/backend-api/codex/models?".to_owned()]
         ]
     );
     assert!(CHATGPT_CODEX_BASE_URL.starts_with("https://chatgpt.com/"));
 }
 
-/// The method-path pairs the agent needs, and what the one rule lets pass
-/// besides (HUM-515, review): an own provider posts to `/responses` and gets
-/// `/models`; the built-in provider of a `ChatGPT` login also opens its
-/// WebSocket with `GET /responses`. The matcher pairs no method with a path,
-/// so `POST /models` and `GET /responses` pass at the same origin, and
-/// nothing else: no other method, no other path, no subpath.
+/// The method-path pairs Codex needs and no others (HUM-568, acceptance
+/// criterion 1): `POST /responses` and `GET /models` pass, `GET /responses`,
+/// `POST /models`, any other method, a subpath and another path are held,
+/// for every provider. The WebSocket of the built-in provider is held too: a
+/// rule without `upgrade` never matches one (module documentation).
+///
+/// Mutation proof: one rule with both methods on both paths, as before
+/// HUM-568, turns the `GET /responses` and `POST /models` asserts red.
 #[test]
 fn the_passthrough_pairs_are_the_ones_codex_needs_at_one_origin() {
-    for ctx in [
-        keyed(None),
-        context(Some("http://10.0.0.5:4000")),
-        context(None),
+    for (ctx, base) in [
+        (keyed(None), "https://api.openai.com/v1"),
+        (
+            context(Some("http://10.0.0.5:4000")),
+            "http://10.0.0.5:4000/v1",
+        ),
+        (context(None), "https://chatgpt.com/backend-api/codex"),
     ] {
-        let rule = CodexAdapter::new().llm_passthrough(&ctx.llm).unwrap();
-        let methods = rule.matcher.methods.clone().unwrap();
-        assert_eq!(methods, [Method::POST, Method::GET], "no other method");
-        assert_eq!(rule.matcher.path_prefixes.len(), 2, "no other path");
-        for entry in &rule.matcher.path_prefixes {
+        let rules = CodexAdapter::new().llm_passthrough(&ctx.llm);
+        let at = |path: &str| format!("{base}{path}");
+        assert!(
+            passes(&rules, &Method::POST, &at("/responses"), None),
+            "{base}"
+        );
+        assert!(passes(&rules, &Method::GET, &at("/models"), None), "{base}");
+        assert!(passes(
+            &rules,
+            &Method::GET,
+            &at("/models?client_version=1"),
+            None
+        ));
+        for (method, path) in [
+            (Method::GET, "/responses"),
+            (Method::POST, "/models"),
+            (Method::PUT, "/responses"),
+            (Method::DELETE, "/models"),
+            (Method::POST, "/responses/compact"),
+            (Method::GET, "/models/gpt-5"),
+            (Method::POST, "/files"),
+        ] {
             assert!(
-                entry.ends_with("/responses?") || entry.ends_with("/models?"),
-                "{entry}"
+                !passes(&rules, &method, &at(path), None),
+                "{method} {base}{path} must be held"
             );
-            assert!(entry.ends_with('?'), "exact, no subpath: {entry}");
         }
-        assert!(rule.matcher.path.is_none());
+        assert!(
+            !passes(
+                &rules,
+                &Method::GET,
+                &at("/responses"),
+                Some(humanitl_core::Upgrade::WebSocket)
+            ),
+            "the WebSocket is no plain request and is held"
+        );
     }
 }
 

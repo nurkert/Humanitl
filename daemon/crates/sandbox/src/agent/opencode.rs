@@ -96,11 +96,10 @@ use std::path::{Path, PathBuf};
 use humanitl_config::llm_endpoint;
 use humanitl_config::{AskMode, HoldConfig, LlmConfig};
 use humanitl_core::diagnostics::codes::{AGENT_001, AGENT_002, AGENT_004, LLM_004};
-use humanitl_core::rule::{Action, HostPattern, Matcher, Rule};
+use humanitl_core::rule::Rule;
 use humanitl_core::shell::shell_path;
-use humanitl_core::{Diagnostic, FixAction, HostName, Method, RuleId, Scheme, Severity};
+use humanitl_core::{Diagnostic, FixAction, HostName, Method, Scheme, Severity};
 use url::Url;
-use uuid::Uuid;
 
 use crate::agent::briefing;
 use crate::agent::locate;
@@ -108,6 +107,7 @@ use crate::agent::opencode_models::{
     DEFAULT_RULES, PROVIDER_ID, effective_models, permission_json, render_config, render_models,
     render_tui,
 };
+use crate::agent::passthrough::{self, Route, Target};
 use crate::agent::skill;
 use crate::agent::{
     AgentAdapter, AgentContext, SandboxFile, SandboxLookup, find_in_path, is_executable_file,
@@ -355,9 +355,6 @@ pub fn bash_default_timeout_ms(hold: &HoldConfig) -> Option<u64> {
     }
 }
 
-/// Die Id der Passthrough-Regel; fest, damit sie überall dieselbe ist.
-pub(crate) const PASSTHROUGH_RULE_ID: u128 = 0x0192_0000_0000_7000_8000_0000_0000_00ff;
-
 /// Das Präfix, unter dem Ollama seine gesamte eigene API anbietet.
 ///
 /// Es steht in der Vorgabe von `llm.passthrough_paths`, taugt aber nicht als
@@ -388,6 +385,12 @@ pub const OLLAMA_INFERENCE_PATHS: &[&str] = &[
     "/api/ps",
     "/api/version",
 ];
+
+/// Die Endpunkte aus [`OLLAMA_INFERENCE_PATHS`], die Ollama mit `GET`
+/// anspricht; alle übrigen nehmen nur `POST` (API-Dokumentation von Ollama:
+/// `GET /api/tags`, `GET /api/ps`, `GET /api/version`, `POST /api/show`).
+/// Die Durchreiche gibt jedem Endpunkt genau seine Methode (HUM-568).
+pub const OLLAMA_GET_PATHS: &[&str] = &["/api/tags", "/api/ps", "/api/version"];
 
 /// Das Präfix, unter dem eine OpenAI-kompatible API ihre ganze Fläche anbietet.
 ///
@@ -424,6 +427,12 @@ pub const OPENAI_INFERENCE_PATHS: &[&str] = &[
     "/v1/embeddings",
     "/v1/models",
 ];
+
+/// Der Endpunkt aus [`OPENAI_INFERENCE_PATHS`], den die OpenAI-kompatible
+/// Oberfläche mit `GET` anspricht, die Modellliste; die übrigen rechnen und
+/// nehmen nur `POST`. Die Durchreiche gibt jedem Endpunkt genau seine
+/// Methode (HUM-568).
+pub const OPENAI_GET_PATHS: &[&str] = &["/v1/models"];
 
 /// Host, Schema und Port, für die die Durchreiche gilt.
 ///
@@ -1240,8 +1249,8 @@ impl AgentAdapter for OpenCodeAdapter {
         DEFAULT_RULES
     }
 
-    fn llm_passthrough(&self, llm: &LlmConfig) -> Option<Rule> {
-        passthrough_rule(llm)
+    fn llm_passthrough(&self, llm: &LlmConfig) -> Vec<Rule> {
+        passthrough_rules(llm)
     }
 
     fn preflight(&self, ctx: &AgentContext) -> Vec<Diagnostic> {
@@ -1292,45 +1301,85 @@ pub(crate) fn placeholder_model_finding(llm: &LlmConfig) -> Option<Diagnostic> {
     )
 }
 
-/// The passthrough rule for the LLM endpoint of the user (HUM-039).
+/// The passthrough rules for the LLM endpoint of the user (HUM-039).
 ///
 /// Shared by every adapter that talks to `llm.endpoint` through the
-/// OpenAI-compatible surface (HUM-274): the rule depends on the endpoint and
-/// on `llm.passthrough_paths`, not on the agent, and it keeps its fixed id.
+/// OpenAI-compatible surface (HUM-274): the rules depend on the endpoint and
+/// on `llm.passthrough_paths`, not on the agent. The entries of
+/// [`passthrough_prefixes`] are split by method (HUM-568, [`passthrough`]):
+///
+/// 1. `POST` on the generated endpoints that compute (`chat/completions`,
+///    `completions`, `responses`, `embeddings`, Ollama's `chat`, `generate`,
+///    `embed`, `embeddings`, `show`), the rule with the fixed id `…00ff`;
+/// 2. `GET` on the generated endpoints that give information
+///    ([`OPENAI_GET_PATHS`], [`OLLAMA_GET_PATHS`]);
+/// 3. `POST` and `GET` on every prefix the human wrote into
+///    `llm.passthrough_paths` themselves, such as `/api/pull`: which method
+///    a path of their own needs, only they know.
+///
+/// A part without entries becomes no rule.
 #[must_use]
-pub(crate) fn passthrough_rule(llm: &LlmConfig) -> Option<Rule> {
-    let url = llm.endpoint.as_ref()?;
-    let (host, scheme, port) = passthrough_target(llm)?;
-
-    let matcher = Matcher::host(HostPattern::Exact(host))
-        // `GET` ist dabei, weil OpenCode die Modellliste über
-        // `GET /v1/models` holt.
-        .with_methods(vec![Method::POST, Method::GET])
-        .with_path_prefixes(passthrough_prefixes(url, &llm.passthrough_paths))
-        .with_scheme(scheme)
-        .with_port(port);
-
-    Some(
-        Rule::new(
-            RuleId::from_uuid(Uuid::from_u128(PASSTHROUGH_RULE_ID)),
-            Action::Allow,
-            matcher,
-        )
+pub(crate) fn passthrough_rules(llm: &LlmConfig) -> Vec<Rule> {
+    let Some(url) = llm.endpoint.as_ref() else {
+        return Vec::new();
+    };
+    let Some((host, scheme, port)) = passthrough_target(llm) else {
+        return Vec::new();
+    };
+    let get = get_entries(url);
+    let mut post_routes = Vec::new();
+    let mut get_routes = Vec::new();
+    let mut own = Vec::new();
+    for entry in passthrough_prefixes(url, &llm.passthrough_paths) {
+        if get.contains(&entry) {
+            get_routes.push(entry);
+        } else if humanitl_core::exact_path_of(&entry).is_some() {
+            // Only the adapter generates exact entries; every one that is not
+            // a `GET` endpoint computes.
+            post_routes.push(entry);
+        } else {
+            own.push(entry);
+        }
+    }
+    let target = Target {
+        host,
+        scheme,
+        port,
         // Das Modell steht üblicherweise im eigenen Netz; ohne dieses Recht
         // verweigerte der Proxy die aufgelöste Adresse (ADR-006).
-        .with_allow_private(true)
-        .bundled(true)
-        // Erst dieses Merkmal macht aus der Regel die erklärte Ausnahme:
-        // Der Proxy hält solche Flüsse nicht, zeichnet sie vollständig auf
-        // und warnt vor Funden, statt sie aufzuhalten (`LLM_005`).
-        .passthrough_llm(true)
+        allow_private: true,
         // Ohne Benutzer, Passwort und Query: Die Notiz steht in der
         // Oberfläche und in `rules.yaml` (HUM-261).
-        .with_note(format!(
+        note: format!(
             "LLM passthrough for {}. Logged, never held.",
             llm_endpoint::display(url)
-        )),
+        ),
+    };
+    passthrough::rules(
+        &target,
+        vec![
+            Route::new(&[Method::POST], post_routes),
+            Route::new(&[Method::GET], get_routes),
+            Route::new(&[Method::POST, Method::GET], own),
+        ],
     )
+}
+
+/// The exact entries [`passthrough_prefixes`] generates for the `GET`
+/// endpoints of `endpoint`: [`OPENAI_GET_PATHS`] below its base and, at the
+/// root of a server, [`OLLAMA_GET_PATHS`].
+fn get_entries(endpoint: &Url) -> Vec<String> {
+    let openai = OPENAI_GET_PATHS.iter().map(|path| {
+        let relative = path
+            .strip_prefix(llm_endpoint::OPENAI_SURFACE)
+            .unwrap_or(path);
+        humanitl_core::exact_path_entry(&llm_endpoint::openai_path(endpoint, relative))
+    });
+    let ollama = OLLAMA_GET_PATHS
+        .iter()
+        .filter(|_| llm_endpoint::serves_native_ollama(endpoint))
+        .map(|path| humanitl_core::exact_path_entry(path));
+    openai.chain(ollama).collect()
 }
 
 /// Die Dateien, die der Adapter anlegt, als Pfade.

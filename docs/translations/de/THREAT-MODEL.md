@@ -193,9 +193,10 @@ Humanitl sieht das nur, wenn der Mensch den Diff liest.
 
 Der Agent muss Code an das Modell schicken; diese Anfragen werden nicht angehalten. Der
 Modell-Host ist deshalb der zweite offene Kanal und, anders als `/work`, einer über das Netzwerk.
-Die Regel ist so eng wie möglich: ein Host, ein Port, ein Schema, `POST` und `GET` und dreizehn
-genaue Inferenz-Endpunkte statt der Flächen `/v1/` und `/api/` (HUM-261); ein Pfad mit
-`..`-Segmenten wird angehalten (HUM-204). Der Verkehr wird aufgezeichnet und gescannt (`LLM_005`;
+Die Regel ist so eng wie möglich: ein Host, ein Port, ein Schema und dreizehn genaue
+Inferenz-Endpunkte statt der Flächen `/v1/` und `/api/` (HUM-261), jeder nur mit der Methode,
+die er braucht: `POST` an den Endpunkten, die rechnen, `GET` an denen, die Auskunft geben, je
+eine Regel (HUM-568); ein Pfad mit `..`-Segmenten wird angehalten (HUM-204). Der Verkehr wird aufgezeichnet und gescannt (`LLM_005`;
 jeder Fund bleibt an seiner Anfrage, die Warnung wiederholt sich nur für Funde, die im Lauf neu
 sind oder vor 15 Minuten oder mehr zuletzt gewarnt wurden; ein abgelaufener oder verdrängter
 Fingerabdruck warnt erneut, HUM-354), und mit `hold.hard_block_checksum_secrets` wird ein durch
@@ -1337,6 +1338,7 @@ Gegen diese Angreifer gibt es keine Abwehr, und Humanitl behauptet das auch nich
 | 2026-11-20 | K-38: Flow-Ereignisse, die der Audit-Sink hinter dem Rundfunk verliert, stehen in der Kette als `audit.events_dropped` mit ihrer Zahl; nach einer Lücke schließt der Sink nur Flows ab, von denen er seit der vorigen Lücke nichts gehört hat, Restrisiko: ein Flow, der über zwei Lücken schweigt, verliert sein `flow.responded` | HUM-564 |
 | 2026-11-20 | K-38: Ein Flow, dessen Ereignis `Failed` in eine Lücke des Audit-Sinks fällt, hat kein `flow.failed`; `Recorded` nennt nur den Flow, der Grund bleibt in der Aufzeichnung | HUM-565 |
 | 2026-11-20 | K-36: Eine Installation darf ein Paket des Anbieters aus mehreren Dateien übernehmen (Codex): Das Rezept nennt die erwarteten Dateien, der Daemon startet das Programm über einen eigenen Verweis und prüft eine Liste von Prüfsummen des Anbieters an seiner eigenen Kopie (Release-Metadaten, Liste, Archiv); Restrisiko: für die Metadaten bürgt nur TLS zum Host des Anbieters, und an das Archiv bindet den ausgepackten Baum der Lauf, nicht der Daemon. `agy` wird nicht installiert: sein Manifest bietet keine gewählte Version, zeigt auf einen geteilten Speicher-Host und trägt seine einzige Prüfsumme selbst | HUM-566 |
+| 2026-11-20 | K-02: Die Durchleitung paart jede Methode mit ihren Pfaden: Ein Adapter gibt je Satz von Methoden eine Regel (feste IDs `…00ff`, `…00fe`, `…00fd`). Codex reicht `POST` nur an `/responses` und `GET` nur an `/models` durch; `agy` `POST` nur an `models/{model}:generateContent` und `:streamGenerateContent` und `GET` nur an die Modellliste; Claude Code `POST` nur an die Messages-Endpunkte; OpenCode und pi `POST` an die Endpunkte, die rechnen, und `GET` an `/v1/models`, `/api/tags`, `/api/ps`, `/api/version`. `POST /models`, `GET /responses` und `GET` an einen Inferenz-Endpunkt werden jetzt angehalten. Ein Pfad, den ein Mensch in `llm.passthrough_paths` schreibt, behält beide Methoden. Verengt, schwächt nichts | HUM-568 |
 
 Jede sicherheitsrelevante Änderung am Shim, an der Mount-Erlaubnisliste, am Filter oder an der
 Durchleitung bekommt hier eine Zeile. Schwachstellen werden gemeldet, wie in

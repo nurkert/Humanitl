@@ -388,17 +388,19 @@ fn pi_passthrough_is_the_shared_rule() {
         "https://llm.example.net/api/v1/",
     ] {
         let llm = context(Some(endpoint)).llm;
-        let pi = PiAdapter::new().llm_passthrough(&llm).expect("a rule");
-        let opencode = OpenCodeAdapter::new()
-            .llm_passthrough(&llm)
-            .expect("a rule");
+        let pi = PiAdapter::new().llm_passthrough(&llm);
+        let opencode = OpenCodeAdapter::new().llm_passthrough(&llm);
+        assert!(!pi.is_empty(), "{endpoint}");
         assert_eq!(pi, opencode, "{endpoint}");
-        assert!(pi.passthrough_llm && pi.bundled, "{endpoint}");
+        assert!(
+            pi.iter().all(|rule| rule.passthrough_llm && rule.bundled),
+            "{endpoint}"
+        );
     }
     assert!(
         PiAdapter::new()
             .llm_passthrough(&context(None).llm)
-            .is_none()
+            .is_empty()
     );
 }
 

@@ -64,7 +64,7 @@ use humanitl_core::rule::Rule;
 use humanitl_core::{Diagnostic, FixAction, Severity};
 
 use crate::agent::opencode::{
-    command_preflight, install_fix_for, passthrough_authority, passthrough_rule,
+    command_preflight, install_fix_for, passthrough_authority, passthrough_rules,
     placeholder_model_finding,
 };
 use crate::agent::opencode_models::DEFAULT_RULES;
@@ -702,8 +702,8 @@ impl AgentAdapter for PiAdapter {
         DEFAULT_RULES
     }
 
-    fn llm_passthrough(&self, llm: &LlmConfig) -> Option<Rule> {
-        passthrough_rule(llm)
+    fn llm_passthrough(&self, llm: &LlmConfig) -> Vec<Rule> {
+        passthrough_rules(llm)
     }
 
     fn preflight(&self, ctx: &AgentContext) -> Vec<Diagnostic> {

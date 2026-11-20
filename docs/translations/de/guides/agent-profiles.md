@@ -401,15 +401,16 @@ zweite Bridge in die Sandbox gebraucht. Mit `OPENCODE_MODELS_PATH` und
 
 ### Die Durchleitungsregel
 
-Aus `llm.endpoint` baut der Adapter eine Regel mit fester ID (`…00ff`): `POST` und `GET` zu genau
-diesem Host, Schema und Port erlauben, nur auf den Inferenz-Pfaden (`/v1/chat/completions`,
-`/v1/completions`, `/v1/responses`, `/v1/embeddings`, `/v1/models` und für Ollama `/api/chat`,
-`/api/generate`, `/api/embed`, `/api/embeddings`, `/api/tags`, `/api/show`, `/api/ps`,
-`/api/version`), mit `allow_private`, weil das Modell meist in deinem eigenen Netzwerk steht. Der
+Aus `llm.endpoint` baut der Adapter je Satz von Methoden eine Regel mit fester ID (HUM-568), für
+genau diesen Host, dieses Schema und diesen Port und nur auf den Inferenz-Pfaden: `POST` (`…00ff`)
+auf `/v1/chat/completions`, `/v1/completions`, `/v1/responses`, `/v1/embeddings` und für Ollama
+`/api/chat`, `/api/generate`, `/api/embed`, `/api/embeddings`, `/api/show`; `GET` (`…00fe`) auf
+`/v1/models` und für Ollama `/api/tags`, `/api/ps`, `/api/version`. Beide tragen `allow_private`,
+weil das Modell meist in deinem eigenen Netzwerk steht. Der
 Proxy hält diese Anfragen nie an; er zeichnet sie vollständig auf und warnt bei Funden, statt sie
 anzuhalten (`LLM_005`). Pfade, die den Server verändern, etwa `/api/pull` oder `/v1/files`, gehen
 durch die Warteschlange. Um einen davon durchzulassen, füge seinen Pfad zu
-`llm.passthrough_paths` hinzu.
+`llm.passthrough_paths` hinzu; ein solcher eigener Pfad lässt `POST` und `GET` durch (`…00fd`).
 
 ### Prüfungen vor dem Start
 
@@ -634,7 +635,7 @@ pub trait AgentAdapter: Send + Sync {
     fn env(&self, ctx: &AgentContext) -> Vec<(String, String)>;
     fn files(&self, ctx: &AgentContext) -> Result<Vec<SandboxFile>, Diagnostic>;
     fn default_rules(&self) -> &'static str;
-    fn llm_passthrough(&self, llm: &LlmConfig) -> Option<Rule>;
+    fn llm_passthrough(&self, llm: &LlmConfig) -> Vec<Rule>;
     fn preflight(&self, ctx: &AgentContext) -> Vec<Diagnostic>;
     fn program(&self) -> &'static str;
     fn is_agent_command(&self, command: &[std::ffi::OsString]) -> bool { /* provided */ }
@@ -649,7 +650,7 @@ pub trait AgentAdapter: Send + Sync {
 | `env` | Variablen zusätzlich zur Umgebung des Sandbox-Profils. |
 | `files` | Dateien, die vor dem `exec` in der Sandbox existieren müssen, als `SandboxFile::read_only` oder `SandboxFile::secret`. Nie unter `/work`, nie auf einem Pfad, den die Sandbox selbst setzt (Proxy-Socket, CA, Shim, `/proc`, `/sys`, `/dev`, `/run/humanitl`). Eine kaputte mitgelieferte Vorlage ist `AGENT_003`. |
 | `default_rules` | Die mitgelieferten Regeln des Adapters als `rules.yaml`-Text. Der Daemon parst ihn; das Sandbox-Crate hängt nicht vom Regel-Crate ab. |
-| `llm_passthrough` | Die Regel für `llm.endpoint`, oder `None` ohne brauchbaren Endpunkt. Kopiere `OpenCodeAdapter::llm_passthrough`: enge Pfade, genauer Host, `allow_private`, `passthrough_llm`. |
+| `llm_passthrough` | Die Regeln für `llm.endpoint`, je Satz von Methoden eine (`crate::agent::passthrough`, HUM-568), oder keine ohne brauchbaren Endpunkt. Kopiere `OpenCodeAdapter::llm_passthrough`: enge Pfade, jeder nur mit der Methode, die er braucht, genauer Host, `allow_private`, `passthrough_llm`. |
 | `preflight` | Prüfungen auf dem Rechner vor dem Start. Nur das Dateisystem, nie das Netzwerk. Eine Diagnose mit der Schwere `Blocking` verhindert den Start. |
 | `program` | Der Programmname ohne Pfad. `is_agent_command` vergleicht den Dateinamen eines Befehls damit, sodass `opencode`, `/usr/local/bin/opencode` und `./opencode` derselbe Agent sind. |
 | `is_fullscreen_tui` | `true` lässt `--ask terminal` mit `CLI_002` verweigern. |
@@ -713,9 +714,9 @@ impl AgentAdapter for EchoAdapter {
         "version: 1\nrules: []\n"
     }
 
-    fn llm_passthrough(&self, _llm: &LlmConfig) -> Option<Rule> {
+    fn llm_passthrough(&self, _llm: &LlmConfig) -> Vec<Rule> {
         // Without a passthrough every request to the model is held.
-        None
+        Vec::new()
     }
 
     fn preflight(&self, _ctx: &AgentContext) -> Vec<Diagnostic> {

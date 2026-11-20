@@ -14,6 +14,8 @@
 #![cfg_attr(not(target_os = "linux"), allow(unused_imports, dead_code))]
 #![allow(clippy::unwrap_used, clippy::expect_used, clippy::panic)]
 
+mod passthrough;
+
 use std::collections::BTreeMap;
 use std::ffi::OsString;
 use std::os::unix::fs::PermissionsExt as _;
@@ -33,6 +35,7 @@ use humanitl_sandbox::{
     AdapterRegistry, AgentAdapter, AgentContext, AgentKey, AntigravityAdapter, SandboxBackend,
     SandboxProfile, SandboxView, files_inside_work,
 };
+use passthrough::passes;
 
 /// A key long enough for `ApiKey::new`.
 const KEY: &str = "AIza-test-0123456789abcdefghij";
@@ -325,62 +328,164 @@ fn the_briefing_names_the_outer_boundary() {
     );
 }
 
-/// The passthrough: `POST` and `GET` on the model resources of the Gemini
-/// API with a key, of the gateway below its prefix with an endpoint; none
-/// without a key, where the sign-in is held.
+/// The passthrough: `POST` on the generate calls of a model and `GET` on
+/// the model list, one rule each (HUM-568), at the Gemini API with a key, at
+/// the gateway below its prefix with an endpoint; none without a key, where
+/// the sign-in is held.
 #[test]
 fn the_passthrough_covers_the_model_resources_with_a_key_only() {
     let adapter = AntigravityAdapter::new();
-    let direct = adapter.llm_passthrough(&keyed(None).llm).expect("a rule");
-    assert!(direct.passthrough_llm);
-    assert!(
-        !direct.allow_private,
-        "the Gemini API is no private address"
-    );
+    let rules = adapter.llm_passthrough(&keyed(None).llm);
+    let [generate, list] = rules.as_slice() else {
+        panic!("two rules: {rules:?}");
+    };
+    for rule in [generate, list] {
+        assert!(rule.passthrough_llm);
+        assert!(!rule.allow_private, "the Gemini API is no private address");
+        assert_eq!(
+            rule.matcher.host,
+            humanitl_core::rule::HostPattern::Exact(
+                humanitl_core::HostName::parse("generativelanguage.googleapis.com").unwrap()
+            )
+        );
+        assert_eq!(rule.matcher.port, Some(443));
+    }
+    assert_eq!(generate.matcher.methods, Some(vec![Method::POST]));
     assert_eq!(
-        direct.matcher.host,
-        humanitl_core::rule::HostPattern::Exact(
-            humanitl_core::HostName::parse("generativelanguage.googleapis.com").unwrap()
-        )
+        generate.matcher.path_prefixes,
+        ["/v1beta/models/", "/v1/models/"]
     );
+    assert!(generate.matcher.path.is_some(), "only the generate calls");
+    assert_eq!(list.matcher.methods, Some(vec![Method::GET]));
     assert_eq!(
-        direct.matcher.path_prefixes,
+        list.matcher.path_prefixes,
+        ["/v1beta/models?", "/v1/models?"]
+    );
+    assert!(list.matcher.path.is_none());
+
+    let gateway = adapter.llm_passthrough(&keyed(Some("http://10.0.0.5:4000/gemini/v1beta")).llm);
+    assert!(gateway.iter().all(|rule| rule.allow_private));
+    assert!(gateway.iter().all(|rule| rule.matcher.port == Some(4000)));
+    assert_eq!(
+        gateway
+            .iter()
+            .map(|rule| rule.matcher.path_prefixes.clone())
+            .collect::<Vec<_>>(),
         [
-            "/v1beta/models?",
-            "/v1beta/models/",
-            "/v1/models?",
-            "/v1/models/"
+            vec![
+                "/gemini/v1beta/models/".to_owned(),
+                "/gemini/v1/models/".to_owned()
+            ],
+            vec![
+                "/gemini/v1beta/models?".to_owned(),
+                "/gemini/v1/models?".to_owned()
+            ]
         ]
     );
-    assert_eq!(
-        direct.matcher.methods,
-        Some(vec![Method::POST, Method::GET])
-    );
-    assert_eq!(direct.matcher.port, Some(443));
-    assert!(direct.matcher.path.is_none());
 
-    let gateway = adapter
-        .llm_passthrough(&keyed(Some("http://10.0.0.5:4000/gemini/v1beta")).llm)
-        .expect("a rule");
-    assert!(gateway.allow_private);
-    assert_eq!(
-        gateway.matcher.path_prefixes,
-        [
-            "/gemini/v1beta/models?",
-            "/gemini/v1beta/models/",
-            "/gemini/v1/models?",
-            "/gemini/v1/models/"
-        ]
-    );
-    assert_eq!(gateway.matcher.port, Some(4000));
-
-    assert!(adapter.llm_passthrough(&context(None).llm).is_none());
+    assert!(adapter.llm_passthrough(&context(None).llm).is_empty());
     assert!(
         adapter
             .llm_passthrough(&context(Some("http://10.0.0.5:4000")).llm)
-            .is_none(),
+            .is_empty(),
         "an endpoint without a key: agy signs in with an account"
     );
+}
+
+/// The method-path pairs the Gemini API documents for `agy` and no others
+/// (HUM-568, acceptance criterion 1): `POST` on
+/// `models/{model}:generateContent` and `:streamGenerateContent`, `GET` on
+/// the model list, in both API versions and below a gateway's prefix, also
+/// one with characters a regular expression would read as syntax.
+///
+/// Mutation proofs: the rule before HUM-568 (both methods on the list and
+/// everything below it) turns the `GET` on a model, the `POST` on the list
+/// and the `countTokens` asserts red; the prefix in the pattern without
+/// escaping turns the `.` gateway red (`x` stands where the `.` is).
+#[test]
+fn the_passthrough_pairs_are_the_ones_the_gemini_api_documents() {
+    for (endpoint, base) in [
+        (None, "https://generativelanguage.googleapis.com"),
+        (
+            Some("http://10.0.0.5:4000/gemini/v1beta"),
+            "http://10.0.0.5:4000/gemini",
+        ),
+        (
+            Some("http://10.0.0.5:4000/g.w+(1)"),
+            "http://10.0.0.5:4000/g.w+(1)",
+        ),
+    ] {
+        let rules = AntigravityAdapter::new().llm_passthrough(&keyed(endpoint).llm);
+        let at = |path: &str| format!("{base}{path}");
+        for version in ["/v1beta", "/v1"] {
+            for allowed in [
+                "/models/gemini-2.5-pro:generateContent",
+                "/models/gemini-2.5-pro:streamGenerateContent?alt=sse",
+            ] {
+                assert!(
+                    passes(
+                        &rules,
+                        &Method::POST,
+                        &at(&format!("{version}{allowed}")),
+                        None
+                    ),
+                    "POST {base}{version}{allowed}"
+                );
+            }
+            assert!(passes(
+                &rules,
+                &Method::GET,
+                &at(&format!("{version}/models")),
+                None
+            ));
+            assert!(passes(
+                &rules,
+                &Method::GET,
+                &at(&format!("{version}/models?pageSize=50")),
+                None
+            ));
+            for (method, path) in [
+                (Method::POST, "/models"),
+                (Method::GET, "/models/gemini-2.5-pro"),
+                (Method::GET, "/models/gemini-2.5-pro:generateContent"),
+                (Method::POST, "/models/gemini-2.5-pro:countTokens"),
+                (Method::POST, "/models/gemini-2.5-pro:embedContent"),
+                (Method::POST, "/models/a/b:generateContent"),
+                (Method::POST, "/models/a%2Fb:generateContent"),
+                (Method::POST, "/models/:generateContent"),
+                (Method::POST, "/models/m:generateContentX"),
+                (Method::POST, "/models/m:generateContent/"),
+                (Method::POST, "/models/m:GenerateContent"),
+                (Method::POST, "/models/%2e%2e:generateContent"),
+                (Method::POST, "/models/%2e%2e/files:generateContent"),
+                (Method::POST, "/models/../files/m:generateContent"),
+                (Method::DELETE, "/models/m"),
+                (Method::POST, "/files"),
+                (Method::POST, "/cachedContents"),
+            ] {
+                assert!(
+                    !passes(&rules, &method, &at(&format!("{version}{path}")), None),
+                    "{method} {base}{version}{path} must be held"
+                );
+            }
+        }
+        // The model tree under another prefix of the same host is held.
+        assert!(!passes(
+            &rules,
+            &Method::POST,
+            "http://10.0.0.5:4000/other/v1beta/models/m:generateContent",
+            None
+        ));
+    }
+    // An escaped prefix keeps its `.` literal.
+    let rules =
+        AntigravityAdapter::new().llm_passthrough(&keyed(Some("http://10.0.0.5:4000/g.w+(1)")).llm);
+    assert!(!passes(
+        &rules,
+        &Method::POST,
+        "http://10.0.0.5:4000/gxw+(1)/v1beta/models/m:generateContent",
+        None
+    ));
 }
 
 /// The notice of HUM-516 names the provider the inference really goes to:

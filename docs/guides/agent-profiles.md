@@ -423,16 +423,18 @@ one door.
 
 ### The passthrough rule
 
-From `llm.endpoint` the adapter builds one rule with a fixed id (`…00ff`):
-allow `POST` and `GET` to exactly that host, scheme and port, on the inference
-paths only (`/v1/chat/completions`, `/v1/completions`, `/v1/responses`,
-`/v1/embeddings`, `/v1/models`, and for Ollama `/api/chat`, `/api/generate`,
-`/api/embed`, `/api/embeddings`, `/api/tags`, `/api/show`, `/api/ps`,
-`/api/version`), with `allow_private`, because the model usually sits in your
-own network. The proxy never holds these requests; it records them in full and
+From `llm.endpoint` the adapter builds one rule per set of methods, with
+fixed ids (HUM-568), for exactly that host, scheme and port and on the
+inference paths only: `POST` (`…00ff`) on `/v1/chat/completions`,
+`/v1/completions`, `/v1/responses`, `/v1/embeddings`, and for Ollama
+`/api/chat`, `/api/generate`, `/api/embed`, `/api/embeddings`, `/api/show`;
+`GET` (`…00fe`) on `/v1/models`, and for Ollama `/api/tags`, `/api/ps`,
+`/api/version`. Both carry `allow_private`, because the model usually sits in
+your own network. The proxy never holds these requests; it records them in full and
 warns about findings instead of stopping them (`LLM_005`). Paths that change
 the server, such as `/api/pull` or `/v1/files`, go through the queue. To let
-one of them pass, add its path to `llm.passthrough_paths`.
+one of them pass, add its path to `llm.passthrough_paths`; such a path of your
+own passes `POST` and `GET` (`…00fd`).
 
 ### Checks before the start
 
@@ -669,7 +671,7 @@ pub trait AgentAdapter: Send + Sync {
     fn env(&self, ctx: &AgentContext) -> Vec<(String, String)>;
     fn files(&self, ctx: &AgentContext) -> Result<Vec<SandboxFile>, Diagnostic>;
     fn default_rules(&self) -> &'static str;
-    fn llm_passthrough(&self, llm: &LlmConfig) -> Option<Rule>;
+    fn llm_passthrough(&self, llm: &LlmConfig) -> Vec<Rule>;
     fn preflight(&self, ctx: &AgentContext) -> Vec<Diagnostic>;
     fn program(&self) -> &'static str;
     fn is_agent_command(&self, command: &[std::ffi::OsString]) -> bool { /* provided */ }
@@ -684,7 +686,7 @@ pub trait AgentAdapter: Send + Sync {
 | `env` | Variables in addition to the environment of the sandbox profile. |
 | `files` | Files that must exist in the sandbox before `exec`, as `SandboxFile::read_only` or `SandboxFile::secret`. Never under `/work`, never on a path the sandbox sets itself (proxy socket, CA, shim, `/proc`, `/sys`, `/dev`, `/run/humanitl`). A broken bundled template is `AGENT_003`. |
 | `default_rules` | The adapter's bundled rules as `rules.yaml` text. The daemon parses it; the sandbox crate does not depend on the rules crate. |
-| `llm_passthrough` | The rule for `llm.endpoint`, or `None` without a usable endpoint. Copy `OpenCodeAdapter::llm_passthrough`: narrow paths, exact host, `allow_private`, `passthrough_llm`. |
+| `llm_passthrough` | The rules for `llm.endpoint`, one per set of methods (`crate::agent::passthrough`, HUM-568), or none without a usable endpoint. Copy `OpenCodeAdapter::llm_passthrough`: narrow paths, each with only the method it needs, exact host, `allow_private`, `passthrough_llm`. |
 | `preflight` | Checks on the host before the start. File system only, never the network. A finding with severity `Blocking` prevents the start. |
 | `program` | The program name without a path. `is_agent_command` compares the file name of a command against it, so `opencode`, `/usr/local/bin/opencode` and `./opencode` are the same agent. |
 | `is_fullscreen_tui` | `true` makes `--ask terminal` refuse with `CLI_002`. |
@@ -749,9 +751,9 @@ impl AgentAdapter for EchoAdapter {
         "version: 1\nrules: []\n"
     }
 
-    fn llm_passthrough(&self, _llm: &LlmConfig) -> Option<Rule> {
+    fn llm_passthrough(&self, _llm: &LlmConfig) -> Vec<Rule> {
         // Without a passthrough every request to the model is held.
-        None
+        Vec::new()
     }
 
     fn preflight(&self, _ctx: &AgentContext) -> Vec<Diagnostic> {

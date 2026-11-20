@@ -7888,6 +7888,92 @@ WebSocket-Upgrade des eingebauten Anbieters).
 1. Kein Adapter reicht eine Methode an einen Pfad durch, die er dort nicht
    braucht.
 
+### Stand nach der Umsetzung (2026-11-20)
+Gewählt: mehrere Durchreichregeln je Adapter, nicht Paare im Matcher. Der
+Matcher geht über die Leitung (`RuleMatcher`), ein neues Feld hätte die
+Proto geändert, und die App zeigte eine gepaarte Regel sonst breiter, als
+sie ist. `AgentAdapter::llm_passthrough` gibt jetzt `Vec<Rule>`, je Satz von
+Methoden eine Regel. Gebaut werden sie in einem gemeinsamen Baustein,
+`daemon/crates/sandbox/src/agent/passthrough.rs` (`Route` mit Methoden,
+Pfadeinträgen und optionalem Pfadmuster, `Target` mit Host, Schema, Port,
+`allow_private` und Notiz, `rules`). Feste Ids in der Reihenfolge der
+Routen: `…00ff` (die bisherige Id, jetzt die erste Route, also die Inferenz),
+`…00fe`, `…00fd`; eine Route ohne Methode oder ohne Pfadbedingung wird keine
+Regel und lässt ihre Id frei. `BundledRules` trägt die Durchreiche als
+Liste, `session_passthrough` gibt eine Liste, und `humanitl sandbox run`
+vergleicht die Durchreiche des Daemons Regel für Regel nach Id (nur
+mitgelieferte Regeln mit `passthrough_llm`; eine Regel des Nutzers mit dem
+Vermerk zählte vorher als die Durchreiche, wenn es keine mitgelieferte
+gab).
+
+Die Paare, je Adapter:
+- Claude Code: `POST` auf `/v1/messages` und `/v1/messages/count_tokens`
+  (wie bisher, eine Regel).
+- Codex: `POST` genau auf `<basis>/responses`, `GET` genau auf
+  `<basis>/models`, zwei Regeln. `POST /models` und `GET /responses` werden
+  gehalten. Der Befund aus HUM-515, der eingebaute Anbieter brauche `GET
+  /responses` für sein WebSocket-Upgrade, trifft auf die Regel nicht zu:
+  Eine Regel ohne `upgrade` trifft nie ein Upgrade (`humanitl_rules`,
+  `CompiledRule::matches`), das WebSocket wurde also auch vorher gehalten,
+  und ein gewöhnliches `GET /responses` schickt kein Anbieter. Der Test hält
+  fest, dass das Upgrade gehalten bleibt.
+- `agy` (nur mit Schlüssel): `POST` nur auf
+  `models/{model}:generateContent` und `:streamGenerateContent` unter
+  `/v1beta` und `/v1` (Präfixe der beiden Modellbäume plus ein Pfadmuster
+  `^<präfix>/v1(?:beta)?/models/[A-Za-z0-9._-]+:(?:generateContent|streamGenerateContent)$`,
+  das Präfix eines Gateways maskiert), `GET` genau auf die Modellliste
+  `models`. Gehalten: ein einzelnes Modell lesen, `countTokens`,
+  `embedContent`, alles unter einem Modell mit `/` oder `%2F`.
+- OpenCode und pi (über das Akzeptanzkriterium „kein Adapter"): `POST` auf
+  die erzeugten Endpunkte, die rechnen (`chat/completions`, `completions`,
+  `responses`, `embeddings`, Ollama `chat`, `generate`, `embed`,
+  `embeddings`, `show`), `GET` auf `/v1/models` und Ollama `tags`, `ps`,
+  `version` (neue Konstanten `OPENAI_GET_PATHS`, `OLLAMA_GET_PATHS`), und
+  `POST` mit `GET` in einer dritten Regel nur auf Pfaden, die der Mensch
+  selbst in `llm.passthrough_paths` schreibt; welche Methode dort gebraucht
+  wird, weiß nur er.
+
+Dokumente: `docs/SECURITY.md` 5.1, `docs/THREAT-MODEL.md` K-02 samt Zeile im
+Verlauf, `docs/reference/rules.md` („The LLM passthrough", jetzt zwei Regeln
+im Beispiel), `docs/guides/agent-profiles.md`, je en und de. Die Aussage
+verengt sich nur.
+
+**Tests.** `passthrough.rs` (jede Route eine Regel, unbegrenzte Route keine,
+Ids verschieden, Maskierung des Musters); je Adapter ein Test, der Paare
+über die echte Regel-Engine fragt (`tests/passthrough/mod.rs`, `passes`):
+`codex_adapter.rs` für Schlüssel, Gateway und `ChatGPT` (`GET /responses`,
+`POST /models`, `PUT`, `DELETE`, Unterpfad, WebSocket gehalten);
+`agy_adapter.rs` für API, Gateway und ein Gateway mit `.`, `+`, `(` im
+Präfix; `claude_adapter.rs`; `opencode_adapter.rs` (jede Methode nur an
+ihrem Endpunkt, eigener Pfad mit beiden Methoden in der dritten Regel, nur
+eigene Pfade ergeben eine Regel); `pi_adapter.rs` (dieselben Regeln wie
+OpenCode); `ipc` (`session_passthrough` je Adapter); `humanitl` (Abgleich in
+`sandbox run`: fehlende Regel und andere Methoden werden abgelehnt).
+Mutationsbeweise, jeder rot: Codex mit einer Regel für beide Methoden
+auf beiden Pfaden (Stand vor HUM-568); `agy` mit unmaskiertem Präfix im
+Muster; `agy` mit `GET` und `POST` auf Liste und Unterbaum (Stand vor
+HUM-568); Claude Code mit `GET` dazu; OpenCode ohne Aufteilung nach `GET`
+(alles `POST`); eigene Pfade nur mit `POST`; Routen ohne Pfadbedingung als
+Regel behalten (trifft dann jeden Pfad); Abgleich in `sandbox run` nur über
+die erste Regel.
+
+**Nach dem Review.** Codex (minor, übernommen): Der Abgleich in `sandbox
+run` zählte eine abgeschaltete Regel der Durchreiche als gleich; jetzt
+passt nur eine Regel, die nicht abgeschaltet ist. Test mit abgeschalteter
+`…00fe`, rot ohne die Prüfung. Sonnet als Ersatz für Antigravity (drei
+minor, übernommen): Signatur im Leitfaden der Adapter (`Vec<Rule>`, en und
+de); weitere gehaltene Fälle für `agy` (`/` am Ende, `:GenerateContent`,
+`%2e%2e`, `..`); Test, dass eine Nutzerregel mit `passthrough_llm` nicht als
+Durchreiche des Daemons zählt (`passthrough_of`, ausgelagert aus
+`daemon_passthrough`), rot ohne den Filter auf `bundled`.
+
+**Kandidaten für eigene Issues (nicht gebaut).**
+- `agy`: braucht es `countTokens`, `GET models/{model}` oder
+  `embedContent`? Am echten `agy` messen; bis dahin werden sie gehalten.
+- Codex: Soll die Durchreiche das WebSocket-Upgrade auf `/responses` des
+  eingebauten Anbieters erlauben? Erweitert die Sicherheitsaussage und
+  braucht die Entscheidung des Owners.
+
 ---
 
 ## HUM-569 · App: Gründe der Befunde des Daemons in der Sprache der Oberfläche

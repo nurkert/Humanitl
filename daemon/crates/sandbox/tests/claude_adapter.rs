@@ -12,6 +12,8 @@
 #![cfg_attr(not(target_os = "linux"), allow(unused_imports, dead_code))]
 #![allow(clippy::unwrap_used, clippy::expect_used, clippy::panic)]
 
+mod passthrough;
+
 use std::collections::BTreeMap;
 use std::ffi::OsString;
 use std::os::unix::fs::PermissionsExt as _;
@@ -31,6 +33,7 @@ use humanitl_sandbox::{
     AdapterRegistry, AgentAdapter, AgentContext, AgentKey, ClaudeCodeAdapter, SandboxBackend,
     SandboxProfile, SandboxView, files_inside_work,
 };
+use passthrough::passes;
 
 /// A key long enough for `ApiKey::new`.
 const KEY: &str = "sk-ant-test-0123456789abcdef";
@@ -218,8 +221,9 @@ fn only_the_anthropic_api_itself_is_direct() {
         );
     }
     let odd = context(Some("https://api.anthropic.com:8443/tenant/v1")).llm;
-    let rule = ClaudeCodeAdapter::new().llm_passthrough(&odd).unwrap();
-    assert_eq!(rule.matcher.port, Some(8443));
+    let rules = ClaudeCodeAdapter::new().llm_passthrough(&odd);
+    assert!(!rules.is_empty());
+    assert!(rules.iter().all(|rule| rule.matcher.port == Some(8443)));
     assert_eq!(
         passthrough_authority(&odd).as_deref(),
         Some("api.anthropic.com:8443")
@@ -347,7 +351,10 @@ fn without_key_and_briefing_there_are_no_files() {
 #[test]
 fn the_passthrough_covers_the_messages_endpoints_only() {
     let adapter = ClaudeCodeAdapter::new();
-    let direct = adapter.llm_passthrough(&context(None).llm).expect("a rule");
+    let rules = adapter.llm_passthrough(&context(None).llm);
+    let [direct] = rules.as_slice() else {
+        panic!("one rule: {rules:?}");
+    };
     assert!(direct.passthrough_llm);
     assert!(
         !direct.allow_private,
@@ -366,9 +373,10 @@ fn the_passthrough_covers_the_messages_endpoints_only() {
     assert_eq!(direct.matcher.methods, Some(vec![Method::POST]));
     assert_eq!(direct.matcher.port, Some(443));
 
-    let gateway = adapter
-        .llm_passthrough(&context(Some("http://10.0.0.5:4000/anthropic")).llm)
-        .expect("a rule");
+    let rules = adapter.llm_passthrough(&context(Some("http://10.0.0.5:4000/anthropic")).llm);
+    let [gateway] = rules.as_slice() else {
+        panic!("one rule: {rules:?}");
+    };
     assert!(gateway.allow_private);
     assert_eq!(
         gateway.matcher.path_prefixes,
@@ -378,6 +386,48 @@ fn the_passthrough_covers_the_messages_endpoints_only() {
         ]
     );
     assert_eq!(gateway.matcher.port, Some(4000));
+}
+
+/// The method-path pairs Claude Code needs and no others (HUM-568,
+/// acceptance criterion 1): `POST` on the two Messages endpoints, and no
+/// `GET` there, no model list, no subpath.
+#[test]
+fn the_passthrough_pairs_are_the_ones_claude_code_needs() {
+    for (ctx, base) in [
+        (context(None), "https://api.anthropic.com"),
+        (
+            context(Some("http://10.0.0.5:4000/anthropic")),
+            "http://10.0.0.5:4000/anthropic",
+        ),
+    ] {
+        let rules = ClaudeCodeAdapter::new().llm_passthrough(&ctx.llm);
+        let at = |path: &str| format!("{base}{path}");
+        assert!(passes(&rules, &Method::POST, &at("/v1/messages"), None));
+        assert!(passes(
+            &rules,
+            &Method::POST,
+            &at("/v1/messages?beta=true"),
+            None
+        ));
+        assert!(passes(
+            &rules,
+            &Method::POST,
+            &at("/v1/messages/count_tokens"),
+            None
+        ));
+        for (method, path) in [
+            (Method::GET, "/v1/messages"),
+            (Method::GET, "/v1/messages/count_tokens"),
+            (Method::GET, "/v1/models"),
+            (Method::POST, "/v1/messages/batches"),
+            (Method::POST, "/v1/files"),
+        ] {
+            assert!(
+                !passes(&rules, &method, &at(path), None),
+                "{method} {base}{path} must be held"
+            );
+        }
+    }
 }
 
 /// Without `llm.endpoint` the inference goes to `api.anthropic.com`, so the

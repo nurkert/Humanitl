@@ -840,8 +840,12 @@ jede Inferenz angehalten, müsste ein Mensch mehrmals pro Minute bestätigen; da
 durch, und nach zwei Stunden klickt er alles blind weg.
 
 *Was Humanitl tut.* Die Durchleitung ist eine Regel, kein Loch im Filter: genau ein Host, ein
-Port, ein Schema, die Methoden `POST` und `GET` (die Modellliste ist ein `GET`) und eine Liste
-von Endpunkten. Ein Eintrag nennt einen Endpunkt und nie eine ganze API-Fläche. Die Vorgabe von
+Port, ein Schema und eine Liste von Endpunkten, jeder nur mit der Methode, die er braucht. Eine
+Regel trägt eine Liste von Methoden für alle ihre Pfade, deshalb ist die Durchleitung je Satz
+von Methoden eine Regel (HUM-568): `POST` an den Endpunkten, die rechnen, `GET` an denen, die
+Auskunft geben (die Modellliste und `tags`, `ps` und `version` von Ollama), und `POST` mit `GET`
+nur an einem Pfad, den der Mensch selbst in `llm.passthrough_paths` schreibt. Ein `GET` an einen
+Inferenz-Endpunkt oder ein `POST` an die Modellliste wird angehalten. Ein Eintrag nennt einen Endpunkt und nie eine ganze API-Fläche. Die Vorgabe von
 `llm.passthrough_paths` ist `["/v1/", "/api/"]`, und Humanitl leitet diese beiden nicht als
 Präfixe durch: Beide würden Aufrufe abdecken, die den Server verändern (`POST /api/pull`,
 `POST /api/create`, `DELETE /api/delete`, `POST /v1/files`, `/v1/uploads`, `/v1/vector_stores`,
@@ -862,6 +866,13 @@ einem `..`-Segment passt nie auf ein Präfix, weil nur der Server ihn auflöst; 
 jede Regel, die eine Anfrage durchlässt (`allow`, `redact`) und ein Pfadmuster oder Präfixe
 trägt, auch wenn er als `%2e%2e` oder `..;` getarnt ist (HUM-204). Jede andere Anfrage an
 denselben Host wird normal angehalten.
+
+Die Adapter der Agenten mit eigenem Anbieter paaren Methode und Pfad genauso: Claude Code `POST`
+an `/v1/messages` und `/v1/messages/count_tokens`; Codex `POST` an `/responses` und `GET` an
+`/models` unter seiner Basis (sein WebSocket an `/responses` ist ein Upgrade, das keine Regel
+der Durchleitung trifft, und wird angehalten); die Antigravity CLI mit Schlüssel `POST` nur an
+`models/{model}:generateContent` und `:streamGenerateContent` und `GET` nur an die Modellliste
+`models`, in `/v1beta` und `/v1`.
 
 Der Verkehr wird vollständig aufgezeichnet und läuft durch die Detektoren für Funde; ein Fund
 erzeugt eine Warnung (`LLM_005`, mit Host und Anzahlen und nie mit dem gefundenen Wert), hält

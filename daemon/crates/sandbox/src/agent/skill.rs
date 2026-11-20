@@ -35,7 +35,7 @@
 //! |---|---|
 //! | Jede HTTP(S)-Anfrage geht über den Proxy der Umgebung, sonst nichts | wie im Briefing: `--unshare-all` in `crate::bwrap_args`, `humanitl_proxy::ca::ENV_KIT` |
 //! | Erlaubt: sofort hinaus; nicht erlaubt: sofort `403`; weder noch: der nächste Abschnitt | `humanitl_proxy::pipeline::RulesPipeline`: `Matched { Allow }` und `Matched { Block }` entscheiden ohne Hold, `Ask` und `Default` gehen in den Hold |
-//! | Modell-Aufrufe erlaubt eine mitgelieferte Regel auf ihren eingestellten Pfaden, sie warten hier nie | `crate::agent::opencode::passthrough_rule` mit `passthrough_llm(true)` und den Pfaden aus `llm.passthrough_paths`, im Proxy `DecisionSource::Passthrough` ohne Hold; nennt die Konfiguration einen Pfad, der kein Modell-Aufruf ist (etwa `/api/pull`), deckt die Regel auch ihn, darum steht „sonst nichts auf diesem Host“ nicht im Text |
+//! | Modell-Aufrufe erlaubt eine mitgelieferte Regel auf ihren eingestellten Pfaden, sie warten hier nie | `crate::agent::opencode::passthrough_rules` mit `passthrough_llm(true)` und den Pfaden aus `llm.passthrough_paths`, im Proxy `DecisionSource::Passthrough` ohne Hold; nennt die Konfiguration einen Pfad, der kein Modell-Aufruf ist (etwa `/api/pull`), deckt die Regel auch ihn, darum steht „sonst nichts auf diesem Host“ nicht im Text |
 //! | `Blocked by Humanitl.` mit den Zeilen `reason:`, `flow:`, `host:`, `note:` | `humanitl_core::block::block_response` und `failed_response` |
 //! | `403`: hier nicht erlaubt, ein Geheimnis oder eine private Adresse | `BlockReason::http_status`: `User`, `Rule`, `AuthorityMismatch`, `PrivateAddress`, `Secret` |
 //! | `504` mit `reason: timeout` | `BlockReason::Timeout` aus `Decision::TimedOut` |

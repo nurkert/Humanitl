@@ -6691,8 +6691,15 @@ mod tests {
         assert!(!masks.expected_at(&hash, "api.anthropic.com:443"));
 
         let config = (*service.inner.config()).clone();
-        let rule = crate::session::session_passthrough(&config).expect("a passthrough");
+        let rules = crate::session::session_passthrough(&config);
+        let [rule] = rules.as_slice() else {
+            panic!("one passthrough rule: {rules:?}");
+        };
         assert_eq!(rule.matcher.port, Some(8443));
+        assert_eq!(
+            rule.matcher.methods,
+            Some(vec![humanitl_core::Method::POST])
+        );
         assert_eq!(
             rule.matcher.path_prefixes,
             ["/tenant/v1/messages?", "/tenant/v1/messages/count_tokens?"]
@@ -6794,10 +6801,22 @@ mod tests {
         assert!(masks.expected_at(&hash, "api.openai.com:443"));
         assert!(!masks.expected_at(&hash, "chatgpt.com:443"));
         let config = (*service.inner.config()).clone();
-        let rule = crate::session::session_passthrough(&config).expect("a passthrough");
+        let routes: Vec<_> = crate::session::session_passthrough(&config)
+            .into_iter()
+            .map(|rule| (rule.matcher.methods, rule.matcher.path_prefixes))
+            .collect();
         assert_eq!(
-            rule.matcher.path_prefixes,
-            ["/v1/responses?", "/v1/models?"]
+            routes,
+            [
+                (
+                    Some(vec![humanitl_core::Method::POST]),
+                    vec!["/v1/responses?".to_owned()]
+                ),
+                (
+                    Some(vec![humanitl_core::Method::GET]),
+                    vec!["/v1/models?".to_owned()]
+                ),
+            ]
         );
     }
 
@@ -6884,15 +6903,23 @@ mod tests {
             "the key goes in x-goog-api-key, not in Authorization"
         );
         let config = (*service.inner.config()).clone();
-        let rule = crate::session::session_passthrough(&config).expect("a passthrough");
+        let rules = crate::session::session_passthrough(&config);
+        let [generate, list] = rules.as_slice() else {
+            panic!("two passthrough rules: {rules:?}");
+        };
         assert_eq!(
-            rule.matcher.path_prefixes,
-            [
-                "/v1beta/models?",
-                "/v1beta/models/",
-                "/v1/models?",
-                "/v1/models/"
-            ]
+            generate.matcher.methods,
+            Some(vec![humanitl_core::Method::POST])
+        );
+        assert_eq!(
+            generate.matcher.path_prefixes,
+            ["/v1beta/models/", "/v1/models/"]
+        );
+        assert!(generate.matcher.path.is_some(), "only the generate calls");
+        assert_eq!(list.matcher.methods, Some(vec![humanitl_core::Method::GET]));
+        assert_eq!(
+            list.matcher.path_prefixes,
+            ["/v1beta/models?", "/v1/models?"]
         );
     }
 
@@ -7090,7 +7117,8 @@ mod tests {
             |config| config.llm.endpoint = None,
         );
         let config = (*service.inner.config()).clone();
-        let keyed = crate::session::session_passthrough(&config).expect("a keyed passthrough");
+        let keyed = crate::session::session_passthrough(&config);
+        assert!(!keyed.is_empty(), "a keyed passthrough");
         let other = humanitl_core::rule::Rule::new(
             humanitl_core::RuleId::new(),
             humanitl_core::rule::Action::Allow,
@@ -7098,7 +7126,7 @@ mod tests {
                 humanitl_core::HostName::parse("example.com").unwrap(),
             )),
         );
-        store.set_bundled(&[keyed, other.clone()]);
+        store.set_bundled(&[keyed, vec![other.clone()]].concat());
 
         let shell = service
             .inner

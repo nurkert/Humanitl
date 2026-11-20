@@ -634,7 +634,7 @@ async fn a_profile_rule_cannot_grant_itself_the_rank_of_the_passthrough() {
     );
 
     // Genau der Weg, den `apply_session` und `load_rules` nehmen.
-    let (group, refused) = BundledRules::new(None, profile_rules);
+    let (group, refused) = BundledRules::new(Vec::new(), profile_rules);
     assert!(
         refused.iter().any(|d| d.code.as_str() == "RULES_010"),
         "the withdrawn mark is said out loud: {refused:?}"
