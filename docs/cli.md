@@ -396,7 +396,15 @@ profiles, the project choice, the company policy and the start, so
 `config.toml`. A daemon older than contract 1.49 does not know the floor as a
 key of the session, and `humanitl run` then ends with `CLI_004` instead of
 starting without it. With the floor at `kernel`, only `qemu` starts; any other
-backend ends with `SANDBOX_035` instead of running below it.
+backend ends with `SANDBOX_035` instead of running below it. `humanitl sandbox
+plan` sends the same values with the preview and the daemon resolves them
+over the saved project choice of the folder, so preview and start show the
+same floor; a daemon older than contract 1.55 sees only the backend of these
+values (`Plan.backend`), and a preview with any other ends with `CLI_004`
+instead of showing a plan the start would not get. `humanitl sessions` sends
+none of them.
+`humanitl projects proposal` computes the proposal without these values and
+says so in a warning (`CLI_004`) that names them.
 
 **What `humanitl doctor` says about the kernel level.** In the group of the
 kernel level the doctor gives one line per prerequisite: `kvm` (`/dev/kvm`),

@@ -409,6 +409,7 @@ async fn a_plan_answers_for_a_directory_that_does_not_apply_yet() {
                 llm_server: String::new(),
                 session_profile: String::new(),
                 backend: String::new(),
+                cli_overrides: Vec::new(),
             })),
         },
     )
@@ -507,6 +508,7 @@ fn plan_profile(name: &str) -> v1::SandboxRequest {
             llm_server: String::new(),
             session_profile: String::new(),
             backend: String::new(),
+            cli_overrides: Vec::new(),
         })),
     }
 }
@@ -522,6 +524,7 @@ fn plan_work_dir(dir: &str) -> v1::SandboxRequest {
             llm_server: String::new(),
             session_profile: String::new(),
             backend: String::new(),
+            cli_overrides: Vec::new(),
         })),
     }
 }

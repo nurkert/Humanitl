@@ -95,18 +95,16 @@ pub async fn run(ctx: &Context, cmd: &ProjectsCmd) -> Result<u8, Failure> {
             return clean(ctx, &mut client, selection, *yes).await;
         }
         ProjectsCmd::Proposal { path } => {
-            let folder = path.as_deref().unwrap_or_else(|| std::path::Path::new("."));
+            let (request, notice) = proposal_request(ctx, path.as_deref());
+            // Der Vorschlag kennt die Werte der Sitzung nicht (HUM-559); wer
+            // sie gesetzt hat, erfährt es, statt dass sie still wegfallen.
+            if let Some(notice) = notice {
+                ctx.render.diagnostic(&notice);
+            }
             // Mit Frist wie `humanitl doctor`: Der Daemon wartet auf eine
             // langsame Suche der Backends höchstens bis kurz davor und nennt
             // die Stufe dann „wird geprüft" (HUM-502), statt zu hängen.
-            let mut request = tonic::Request::new(v1::ProjectsRequest {
-                op: Some(v1::projects_request::Op::Proposal(
-                    v1::projects_request::Proposal {
-                        path: absolute(ctx, folder),
-                        ..v1::projects_request::Proposal::default()
-                    },
-                )),
-            });
+            let mut request = tonic::Request::new(request);
             request.set_timeout(PROPOSAL_DEADLINE);
             let proposal = client
                 .projects(request)
@@ -596,11 +594,131 @@ fn local_time(seconds: i64) -> String {
     crate::render::local_time(seconds, "%Y-%m-%d %H:%M")
 }
 
+/// Die Anfrage von `humanitl projects proposal [PATH]` und die Warnung über
+/// die Werte der Sitzung, die der Vorschlag nicht kennt (HUM-559,
+/// [`unseen_session_values`]); keine, wenn sich die Konfiguration nicht
+/// auflösen lässt.
+fn proposal_request(
+    ctx: &Context,
+    path: Option<&std::path::Path>,
+) -> (v1::ProjectsRequest, Option<Diagnostic>) {
+    let folder = path.unwrap_or_else(|| std::path::Path::new("."));
+    let notice = ctx.config().ok().and_then(|resolved| {
+        unseen_session_values(&crate::cmd::run::client_overrides(ctx, &resolved))
+    });
+    let request = v1::ProjectsRequest {
+        op: Some(v1::projects_request::Op::Proposal(
+            v1::projects_request::Proposal {
+                path: absolute(ctx, folder),
+                ..v1::projects_request::Proposal::default()
+            },
+        )),
+    };
+    (request, notice)
+}
+
+/// Die Warnung, dass der Startvorschlag diese Werte der Sitzung nicht
+/// kennt (HUM-559), oder `None` ohne solche Werte.
+///
+/// `Projects.proposal` rechnet mit der Konfiguration des Daemons und der
+/// Projektwahl, ohne die Werte, die ein `humanitl run` dieses Aufrufs als
+/// `Start.cli_overrides` schickte: Flags, Umgebung und die Datei aus
+/// `--config`. Eine Untergrenze von dort gälte beim Start, im Vorschlag
+/// nicht; `humanitl sandbox plan` zeigt den Start mit ihr.
+fn unseen_session_values(overrides: &[v1::sandbox_request::CliOverride]) -> Option<Diagnostic> {
+    if overrides.is_empty() {
+        return None;
+    }
+    let values = overrides
+        .iter()
+        .map(|pair| format!("{} = {:?}", pair.path, pair.value))
+        .collect::<Vec<_>>()
+        .join(", ");
+    Some(
+        Diagnostic::builder(codes::CLI_004, Severity::Warning)
+            .why(format!(
+                "the proposal shows a start without the session values of this command line \
+                 and environment ({values}); a run with them would apply them, a raised \
+                 sandbox.min_isolation above all. The preview with them: humanitl sandbox plan \
+                 with the same flags"
+            ))
+            .fix(humanitl_core::FixAction::CopyCommand(
+                "humanitl sandbox plan".to_owned(),
+            ))
+            .build(),
+    )
+}
+
 #[cfg(test)]
 mod tests {
     #![allow(clippy::unwrap_used, clippy::expect_used, clippy::panic)]
 
     use super::*;
+
+    /// Der Vorschlag nennt die Werte der Sitzung, die er nicht kennt
+    /// (HUM-559), und schweigt ohne sie.
+    #[test]
+    fn the_proposal_names_the_session_values_it_does_not_see() {
+        assert!(unseen_session_values(&[]).is_none());
+        let notice = unseen_session_values(&[v1::sandbox_request::CliOverride {
+            path: "sandbox.min_isolation".to_owned(),
+            value: "kernel".to_owned(),
+        }])
+        .expect("a floor of the command line is named");
+        assert_eq!(notice.code.as_str(), "CLI_004");
+        assert_eq!(notice.severity, Severity::Warning);
+        assert!(
+            notice.why.contains("sandbox.min_isolation = \"kernel\""),
+            "{}",
+            notice.why
+        );
+    }
+
+    /// `projects proposal` builds its warning from the session values of the
+    /// call (HUM-559): a floor flag yields it, a call without one does not.
+    ///
+    /// Mutation proof: `proposal_request` without the call of
+    /// `unseen_session_values` returns no warning for the floor flag.
+    #[test]
+    fn the_proposal_command_warns_about_a_floor_of_the_command_line() {
+        let home = tempfile::tempdir().unwrap();
+        let context = |args: &[&str]| {
+            let matches = crate::cli::command()
+                .try_get_matches_from(["humanitl", "projects", "proposal"].iter().chain(args))
+                .unwrap();
+            let env = humanitl_config::Env::from_pairs([
+                ("HOME", home.path().display().to_string()),
+                (
+                    "XDG_CONFIG_HOME",
+                    home.path().join("cfg").display().to_string(),
+                ),
+            ]);
+            Context {
+                paths: humanitl_config::Paths::new(env.clone()),
+                env,
+                cwd: home.path().to_path_buf(),
+                cli_config: crate::cli::config_pairs(&matches),
+                config_file: None,
+                profile: None,
+                profile_means: crate::cmd::ProfileMeaning::Session,
+                render: crate::render::Renderer::new(false, 0, true),
+                source_lock: humanitl_config::agents::SourceLock::none(),
+            }
+        };
+        let (request, notice) =
+            proposal_request(&context(&["--sandbox-min-isolation", "kernel"]), None);
+        assert!(matches!(
+            request.op,
+            Some(v1::projects_request::Op::Proposal(_))
+        ));
+        let notice = notice.expect("the floor is named");
+        assert!(
+            notice.why.contains("sandbox.min_isolation"),
+            "{}",
+            notice.why
+        );
+        assert!(proposal_request(&context(&[]), None).1.is_none());
+    }
 
     /// Review HUM-533: Ein `n` am Terminal löscht nichts und endet mit Exit 1.
     #[test]

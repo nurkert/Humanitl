@@ -1276,6 +1276,16 @@ message SandboxRequest {
     // ihr Backend. Ein Daemon vor Minor 38 kennt das Feld nicht und nimmt die
     // Einstellung.
     string backend = 7;
+    // Wie `Start.cli_overrides` (HUM-559): dieselben Werte der Sitzung, mit
+    // derselben Erlaubnisliste und derselben Pruefung; ein Pfad ausserhalb
+    // ist `CONFIG_003` wie beim Start. Der Schnappschuss ist dann der eines
+    // Starts mit diesen Werten, vor allem mit der Untergrenze
+    // `sandbox.min_isolation`, die nur hebt: Liegt das gewaehlte Backend
+    // darunter, nennt der Plan `SANDBOX_035` wie der Start. Steht
+    // `sandbox.backend` hier und in `backend`, gilt `backend`. Waehrend eine
+    // Sitzung laeuft, gelten ihre Werte. Ein Daemon vor Minor 55 kennt das
+    // Feld nicht und zeigt den Plan ohne diese Werte.
+    repeated CliOverride cli_overrides = 8;
   }
 }
 

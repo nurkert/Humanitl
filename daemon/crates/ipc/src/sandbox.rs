@@ -1197,8 +1197,17 @@ impl SandboxService {
                     inner.argv(&v1::sandbox_request::Plan::default(), &tx);
                 });
             }
+            // Erst die gespeicherte Projektwahl des Ordners wie beim Start
+            // (HUM-559): Sie liegt in der Aufzeichnung, die asynchron liest.
             Some(Op::Plan(plan)) => {
-                tokio::task::spawn_blocking(move || inner.snapshot_or_diagnostic(&plan, &tx));
+                tokio::spawn(async move {
+                    let loaded = inner.plan_project_choice(&plan).await;
+                    let _ = tokio::task::spawn_blocking(move || {
+                        let choice = loaded.as_ref().map(Option::as_ref);
+                        inner.snapshot_or_diagnostic_with(&plan, choice, &tx);
+                    })
+                    .await;
+                });
             }
             // Die drei Garantien werden an der laufenden Sandbox gemessen.
             // Das ist blockierende Arbeit — der Bericht des Shims wird mit
@@ -1476,43 +1485,82 @@ impl Inner {
     /// server all name the same saved server. Since HUM-440 the backend of
     /// the run (`Plan.backend`) joins them, as `sandbox.backend` in
     /// `Start.cli_overrides` would: choice, preflight and snapshot are the
-    /// ones of a start on that backend. A resolution that fails falls back
-    /// to the slot; the second value is its diagnostic when the plan asked
-    /// for a session profile or a backend (`CONFIG_001` for a profile that
-    /// does not exist, `CONFIG_003` for a backend the schema does not know),
-    /// otherwise the start reports it itself.
+    /// ones of a start on that backend. Since HUM-559 the session values of
+    /// the run (`Plan.cli_overrides`) join them as `Start.cli_overrides`
+    /// would, above all the floor `sandbox.min_isolation`, so a preview with
+    /// a raised floor refuses with `SANDBOX_035` where the start does. A
+    /// resolution that fails falls back to the slot; the second value is its
+    /// diagnostic when the plan asked for a session profile, a backend or
+    /// session values (`CONFIG_001` for a profile that does not exist,
+    /// `CONFIG_003` for a backend the schema does not know or a path a
+    /// session may not set), otherwise the start reports it itself.
     fn plan_config(&self, plan: &v1::sandbox_request::Plan) -> (Arc<Config>, Option<Diagnostic>) {
+        self.plan_config_with(plan, Ok(None))
+    }
+
+    /// [`Inner::plan_config`] with the saved project choice of the plan's
+    /// folder as the layer above the project profile and below the session
+    /// values, as the start resolves it (HUM-559,
+    /// [`Inner::plan_project_choice`]). A choice that did not load
+    /// (`CONFIG_024`) is the diagnostic of the plan, as it stops the start;
+    /// the configuration beside it is the one without the choice.
+    fn plan_config_with(
+        &self,
+        plan: &v1::sandbox_request::Plan,
+        choice: ChoiceLoad<'_>,
+    ) -> (Arc<Config>, Option<Diagnostic>) {
         if self.holds_session_config() {
             return (self.config(), None);
         }
-        let project = non_empty(&plan.work_dir).map(PathBuf::from).or_else(|| {
-            lock(&self.pending)
-                .starting_work_dir
-                .as_ref()
-                .map(|(dir, _)| dir.clone())
-        });
+        let (choice, unloaded) = match choice {
+            Ok(choice) => (choice, None),
+            Err(refusal) => (None, Some(refusal.clone())),
+        };
+        let project = self.plan_project(plan);
         let profile = non_empty(&plan.session_profile);
         // Unverändert wie in `Start.cli_overrides`: Nur der leere Text heißt
         // keine Wahl; ein Name mit Leerzeichen ist dort `CONFIG_003` und hier
         // ebenso.
         let backend = (!plan.backend.is_empty()).then(|| plan.backend.clone());
-        let asked = profile.is_some() || backend.is_some();
+        // Die Werte der Sitzung wie in `session_request` beim Start
+        // (HUM-559): derselbe getrimmte Pfad, derselbe ungetrimmte Wert.
+        let overrides: Vec<(String, String)> = plan
+            .cli_overrides
+            .iter()
+            .map(|entry| (entry.path.trim().to_owned(), entry.value.clone()))
+            .collect();
+        let asked = profile.is_some() || backend.is_some() || !overrides.is_empty();
         match self.resolver.resolve_plan(
             profile,
             project.as_deref(),
             non_empty(&plan.llm_server),
             backend,
+            &overrides,
+            choice,
         ) {
-            Ok(now) => (Arc::new(now.config), None),
+            Ok(now) => (Arc::new(now.config), unloaded),
             Err(diagnostic) => {
                 tracing::debug!(
                     code = %diagnostic.code,
                     why = %diagnostic.why,
                     "configuration not read afresh; the previous one answers"
                 );
-                (self.config(), asked.then_some(diagnostic))
+                (self.config(), unloaded.or(asked.then_some(diagnostic)))
             }
         }
+    }
+
+    /// The project folder a `Plan` names for its resolution: the folder of
+    /// the request, else the one of the start that holds the claim. `None`
+    /// leaves it to [`SessionResolver::stored_work_dir`], as
+    /// [`SessionResolver::resolve_plan`] does.
+    fn plan_project(&self, plan: &v1::sandbox_request::Plan) -> Option<PathBuf> {
+        non_empty(&plan.work_dir).map(PathBuf::from).or_else(|| {
+            lock(&self.pending)
+                .starting_work_dir
+                .as_ref()
+                .map(|(dir, _)| dir.clone())
+        })
     }
 
     /// Puts the configuration as it stands on disk into the slot, for the
@@ -1680,9 +1728,60 @@ impl Inner {
         plan: &v1::sandbox_request::Plan,
         tx: &mpsc::Sender<v1::SandboxEvent>,
     ) {
-        for event in self.consistent_plan(plan, || {}) {
+        self.snapshot_or_diagnostic_with(plan, Ok(None), tx);
+    }
+
+    /// [`Inner::snapshot_or_diagnostic`] mit der Projektwahl des Ordners
+    /// (HUM-559).
+    fn snapshot_or_diagnostic_with(
+        &self,
+        plan: &v1::sandbox_request::Plan,
+        choice: ChoiceLoad<'_>,
+        tx: &mpsc::Sender<v1::SandboxEvent>,
+    ) {
+        for event in self.consistent_plan_with(plan, choice, || {}) {
             let _ = tx.blocking_send(event);
         }
+    }
+
+    /// Die gespeicherte Projektwahl des Ordners eines `Plan`, wie
+    /// [`Inner::start_project`] sie für den Start lädt (HUM-559): Ohne sie
+    /// zeigte die Vorschau eine Untergrenze, die der Start mit der Wahl
+    /// darüber nicht hat.
+    ///
+    /// Der Ordner ist der, mit dem der Plan auflöst ([`Inner::plan_project`],
+    /// sonst `sandbox.work_dir` der Konfiguration, wie sie jetzt auf der
+    /// Platte steht, wie der Start nach `refresh_for_start`), ungeprüft wie
+    /// in `plan_config`: Er wählt hier nur Zeile und Projekt-Profil; geprüft
+    /// wird er im Plan danach und beim Start.
+    ///
+    /// `Ok(None)`, solange eine Sitzung ihre Konfiguration veröffentlicht hat
+    /// (dann antwortet deren Konfiguration), ohne Register, Ordner oder
+    /// bekannten Ordner.
+    ///
+    /// # Errors
+    ///
+    /// Wie der Start ([`Inner::project_in`]): `CONFIG_024` für eine
+    /// gespeicherte Wahl, die nicht mehr lädt, und der Befund der
+    /// Aufzeichnung. Der Plan scheitert dann wie der Start, statt ohne die
+    /// Wahl eine schwächere Untergrenze zu zeigen.
+    async fn plan_project_choice(
+        &self,
+        plan: &v1::sandbox_request::Plan,
+    ) -> Result<Option<humanitl_config::ProjectChoice>, Diagnostic> {
+        if self.recorder.is_none() || self.holds_session_config() {
+            return Ok(None);
+        }
+        let Some(dir) = self
+            .plan_project(plan)
+            .or_else(|| self.resolver.stored_work_dir())
+        else {
+            return Ok(None);
+        };
+        if dir.as_os_str().is_empty() {
+            return Ok(None);
+        }
+        Ok(self.project_in(&dir).await?.choice)
     }
 
     /// The events of a `Plan`, built until claim, publication and handle held
@@ -1694,13 +1793,25 @@ impl Inner {
     /// later start to inherit, however many `Plan`s run at once.
     /// `between` runs after each build; tests use it to change the session at
     /// exactly that point.
+    #[cfg(test)]
     fn consistent_plan(
         &self,
         plan: &v1::sandbox_request::Plan,
+        between: impl FnMut(),
+    ) -> Vec<v1::SandboxEvent> {
+        self.consistent_plan_with(plan, Ok(None), between)
+    }
+
+    /// [`Inner::consistent_plan`] mit der Projektwahl des Ordners (HUM-559).
+    fn consistent_plan_with(
+        &self,
+        plan: &v1::sandbox_request::Plan,
+        choice: ChoiceLoad<'_>,
         mut between: impl FnMut(),
     ) -> Vec<v1::SandboxEvent> {
-        let (events, wish) = self.consistent(
+        let (events, wish) = self.consistent_with(
             plan,
+            choice,
             |config, refused| {
                 let built = self.plan_events(config, refused, plan);
                 between();
@@ -1724,13 +1835,25 @@ impl Inner {
     fn consistent<T>(
         &self,
         plan: &v1::sandbox_request::Plan,
+        build: impl FnMut(&Arc<Config>, Option<&Diagnostic>) -> T,
+        discard: impl FnMut(T),
+    ) -> T {
+        self.consistent_with(plan, Ok(None), build, discard)
+    }
+
+    /// [`Inner::consistent`] with the project choice of the plan's folder
+    /// (HUM-559).
+    fn consistent_with<T>(
+        &self,
+        plan: &v1::sandbox_request::Plan,
+        choice: ChoiceLoad<'_>,
         mut build: impl FnMut(&Arc<Config>, Option<&Diagnostic>) -> T,
         mut discard: impl FnMut(T),
     ) -> T {
         let mut attempt = 1;
         loop {
             let before = self.generation();
-            let (config, refused) = self.plan_config(plan);
+            let (config, refused) = self.plan_config_with(plan, choice);
             let answer = build(&config, refused.as_ref());
             if self.generation() == before || attempt >= SNAPSHOT_ATTEMPTS {
                 return answer;
@@ -5480,6 +5603,10 @@ fn session_request(
     })
 }
 
+/// Die gespeicherte Projektwahl eines `Plan` (HUM-559): geladen, keine, oder
+/// der Befund, an dem auch der Start scheiterte.
+type ChoiceLoad<'a> = Result<Option<&'a humanitl_config::ProjectChoice>, &'a Diagnostic>;
+
 fn plan_of(start: &v1::sandbox_request::Start) -> v1::sandbox_request::Plan {
     v1::sandbox_request::Plan {
         profile: start.profile.clone(),
@@ -5492,6 +5619,10 @@ fn plan_of(start: &v1::sandbox_request::Start) -> v1::sandbox_request::Plan {
         // die Konfiguration der Sitzung, die `apply_session` auflöst
         // (HUM-440); der Plan braucht es nicht ein zweites Mal.
         backend: String::new(),
+        // Ebenso alle Werte der Sitzung (HUM-559): Sie gelten über
+        // `apply_session`, und ein Wert, den der Start ablehnt, lehnt er dort
+        // ab, nicht ein zweites Mal im Plan.
+        cli_overrides: Vec::new(),
     }
 }
 

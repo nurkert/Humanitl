@@ -58,7 +58,20 @@ impl Inner {
         if dir.as_os_str().is_empty() {
             return Err(no_project_folder());
         }
-        let identity = ProjectIdentity::of(&dir).ok();
+        self.project_in(&dir).await
+    }
+
+    /// [`Inner::start_project`] for this folder: its identity and its saved
+    /// choice, checked against the resolution of this folder.
+    ///
+    /// # Errors
+    ///
+    /// As [`Inner::start_project`], without `SANDBOX_053`.
+    pub(super) async fn project_in(
+        &self,
+        dir: &std::path::Path,
+    ) -> Result<StartProject, Diagnostic> {
+        let identity = ProjectIdentity::of(dir).ok();
         let choice = match (self.recorder.as_ref(), identity.as_ref()) {
             (Some(recorder), Some(identity)) => {
                 let row = recorder
@@ -314,6 +327,24 @@ mod tests {
             )
         }
 
+        /// Wie [`Fixture::service`], aber mit einem Resolver, der wie der
+        /// Daemon von der Platte liest; nur so löst ein `Plan` frisch auf.
+        fn live_service(&self) -> SandboxService {
+            let paths = self.paths();
+            let base = humanitl_config::resolve(
+                &humanitl_config::ProfileSelection::default(),
+                None,
+                paths.env(),
+                &[],
+            )
+            .unwrap();
+            SandboxService::new(
+                SessionResolver::new(paths, base),
+                self.session,
+                SandboxPorts::none().with_recorder(self.recorder.clone()),
+            )
+        }
+
         fn folder(&self, name: &str) -> std::path::PathBuf {
             let dir = self.home.path().join(name);
             std::fs::create_dir_all(&dir).unwrap();
@@ -483,6 +514,158 @@ mod tests {
         inner.remember(&plan).unwrap();
         let project = inner.start_project(&plan).await.expect("B starts");
         assert!(project.choice.is_some());
+    }
+
+    /// Die Vorschau löst mit der gespeicherten Projektwahl auf wie der Start
+    /// (HUM-559): Die Wahl hebt die Untergrenze auf `kernel` (mit dem VM-Backend, so
+    /// dass sie lädt), die Kommandozeile schickt `policy` und `auto`. Der
+    /// Start behält `kernel` und lehnt `auto` mit `SANDBOX_035` ab; der Plan
+    /// muss dasselbe zeigen, nicht `policy`.
+    ///
+    /// Mutationsbeweis: Ohne die Wahl in `resolve_plan` (oder ohne
+    /// `plan_project_choice` im Arm von `Op::Plan`) zeigt der Plan `auto`
+    /// ohne `SANDBOX_035`, und der Test wird rot.
+    #[tokio::test(flavor = "multi_thread")]
+    async fn the_preview_resolves_with_the_saved_choice_like_the_start() {
+        let fixture = Fixture::new();
+        let service = fixture.live_service();
+        let dir = known(
+            &fixture,
+            "project",
+            &format!(
+                r#"{{"sandbox.min_isolation":"kernel","sandbox.backend":"{}"}}"#,
+                humanitl_sandbox::VM_BACKEND
+            ),
+        )
+        .await;
+        let overrides = vec![
+            v1::sandbox_request::CliOverride {
+                path: "sandbox.min_isolation".to_owned(),
+                value: "policy".to_owned(),
+            },
+            v1::sandbox_request::CliOverride {
+                path: "sandbox.backend".to_owned(),
+                value: humanitl_sandbox::AUTO_BACKEND.to_owned(),
+            },
+        ];
+        let codes = |events: &[v1::SandboxEvent]| -> Vec<String> {
+            events
+                .iter()
+                .filter_map(|event| match &event.event {
+                    Some(v1::sandbox_event::Event::Diagnostic(found)) => Some(found.code.clone()),
+                    _ => None,
+                })
+                .collect()
+        };
+        let plan: Vec<v1::SandboxEvent> = service
+            .stream(v1::SandboxRequest {
+                op: Some(v1::sandbox_request::Op::Plan(v1::sandbox_request::Plan {
+                    cli_overrides: overrides.clone(),
+                    ..plan_for(&dir)
+                })),
+            })
+            .collect()
+            .await;
+        assert!(
+            codes(&plan).contains(&"SANDBOX_035".to_owned()),
+            "{:?}",
+            codes(&plan)
+        );
+
+        let start: Vec<v1::SandboxEvent> = service
+            .stream(v1::SandboxRequest {
+                op: Some(v1::sandbox_request::Op::Start(v1::sandbox_request::Start {
+                    work_dir: dir.display().to_string(),
+                    command: vec!["/bin/true".to_owned()],
+                    sandbox_mode: "direct".to_owned(),
+                    cli_overrides: overrides,
+                    ..v1::sandbox_request::Start::default()
+                })),
+            })
+            .collect()
+            .await;
+        assert!(
+            codes(&start).contains(&"SANDBOX_035".to_owned()),
+            "{:?}",
+            codes(&start)
+        );
+    }
+
+    /// Die Ereignisse eines `Plan`, und der Status darin.
+    async fn plan_answer(
+        service: &SandboxService,
+        plan: v1::sandbox_request::Plan,
+    ) -> (Vec<String>, Option<v1::sandbox_event::Status>) {
+        let events: Vec<v1::SandboxEvent> = service
+            .stream(v1::SandboxRequest {
+                op: Some(v1::sandbox_request::Op::Plan(plan)),
+            })
+            .collect()
+            .await;
+        let mut codes = Vec::new();
+        let mut status = None;
+        for event in events {
+            match event.event {
+                Some(v1::sandbox_event::Event::Diagnostic(found)) => codes.push(found.code),
+                Some(v1::sandbox_event::Event::Status(found)) => status = Some(found),
+                _ => {}
+            }
+        }
+        (codes, status)
+    }
+
+    /// Eine gespeicherte Wahl, die nicht mehr lädt, hält den Plan auf wie den
+    /// Start (HUM-559): `CONFIG_024`, statt ohne die Wahl eine schwächere
+    /// Untergrenze zu zeigen.
+    ///
+    /// Mutationsbeweis: `plan_project_choice` mit `.ok()` statt `?` (der
+    /// Befund verworfen) zeigt den Plan ohne `CONFIG_024`, und der Test wird
+    /// rot.
+    #[tokio::test(flavor = "multi_thread")]
+    async fn a_choice_that_no_longer_loads_stops_the_preview_like_the_start() {
+        let fixture = Fixture::new();
+        let service = fixture.live_service();
+        let dir = known(&fixture, "floor", r#"{"sandbox.min_isolation":"kernel"}"#).await;
+        let (codes, status) = plan_answer(&service, plan_for(&dir)).await;
+        assert!(codes.contains(&"CONFIG_024".to_owned()), "{codes:?}");
+        assert_eq!(
+            status.expect("a status follows").state,
+            v1::SandboxState::Failed as i32
+        );
+    }
+
+    /// Ohne Ordner in der Anfrage lädt der Plan die Wahl des Ordners, den die
+    /// Konfiguration jetzt nennt, nicht den aus dem Zwischenstand des Daemons
+    /// (HUM-559): `sandbox.work_dir` wechselt von A (mit Wahl `ask_mode =
+    /// none`) zu B (ohne Wahl), und der Plan für B zeigt die Wahl von A nicht.
+    ///
+    /// Mutationsbeweis: `plan_project_choice` mit dem Ordner aus
+    /// `self.config()` statt `stored_work_dir` lädt die Wahl von A, und der
+    /// Plan zeigt `none`.
+    #[tokio::test(flavor = "multi_thread")]
+    async fn the_preview_loads_the_choice_of_the_folder_configured_now() {
+        let fixture = Fixture::new();
+        let a = known(&fixture, "a", r#"{"hold.ask_mode":"none"}"#).await;
+        let b = fixture.folder("b");
+        let config = fixture.paths().config_path();
+        std::fs::create_dir_all(config.parent().unwrap()).unwrap();
+        let point_at = |dir: &std::path::Path| {
+            std::fs::write(
+                &config,
+                format!("[sandbox]\nwork_dir = {:?}\n", dir.display().to_string()),
+            )
+            .unwrap();
+        };
+        point_at(&a);
+        let service = fixture.live_service();
+        let (_, at_a) = plan_answer(&service, v1::sandbox_request::Plan::default()).await;
+        assert_eq!(at_a.expect("a status").ask_mode, "none");
+
+        point_at(&b);
+        let (codes, at_b) = plan_answer(&service, v1::sandbox_request::Plan::default()).await;
+        let at_b = at_b.expect("a status");
+        assert_eq!(at_b.work_dir, b.display().to_string(), "{codes:?}");
+        assert_ne!(at_b.ask_mode, "none", "{codes:?}");
     }
 
     /// Eine gespeicherte Wahl, die nicht mehr lädt, hält den Start auf
