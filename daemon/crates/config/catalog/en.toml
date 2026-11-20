@@ -9,6 +9,7 @@
 [categories]
 models = "Models"
 agent = "Agent"
+agents = "Agents"
 sandbox = "Sandbox"
 requests = "Requests"
 interface = "Interface"
@@ -47,6 +48,11 @@ title = "Coding agent"
 help = "The agent a new session starts in the sandbox."
 details = "The agent the next session starts in the sandbox. Humanitl writes its configuration, endpoint, models and key for it."
 keywords = ["agent", "OpenCode", "pi", "coding", "assistant"]
+
+[entries."agents.depot"]
+title = "Agent depot"
+help = "Per agent: whether sessions start the program installed on this machine or the copy in the depot, which version the depot holds, and whether it is logged in. Install, update, log in and configure run in a sandbox of their own."
+keywords = ["agents", "depot", "Claude Code", "Codex", "install", "update", "version", "login", "credentials", "source", "host"]
 
 [entries."sandbox.work_dir"]
 title = "Project folder"

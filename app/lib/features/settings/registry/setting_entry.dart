@@ -44,6 +44,10 @@ abstract final class SettingIds {
   /// file, the button asks `Egress(check)`.
   static const String egressCheck = 'egress.check';
 
+  /// The cards of the agent depot (HUM-521); no key of the file, the cards
+  /// read and write through `Agents` and the keys `agents.<id>.*`.
+  static const String agentsDepot = 'agents.depot';
+
   /// The group of the keyboard shortcuts of [scope] (HUM-420).
   static String shortcutGroup(ShortcutScope scope) => 'shortcuts.${scope.name}';
 
@@ -62,6 +66,7 @@ class SettingsPageData {
     required this.config,
     required this.status,
     this.daemonRestart,
+    this.onOpenSession,
   });
 
   /// The configuration as `GetConfig` answered.
@@ -73,6 +78,11 @@ class SettingsPageData {
   /// The restart control the shell hands in, or null where no shell is
   /// above (a golden of the overlay alone).
   final Widget? daemonRestart;
+
+  /// Shows the terminal of the running session, as the shell does for any
+  /// session (HUM-521); null where no shell is above. A maintenance run of
+  /// the agent depot is such a session.
+  final VoidCallback? onOpenSession;
 }
 
 /// Draws the row of an entry.

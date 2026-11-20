@@ -8,7 +8,7 @@
 [reasons]
 file_only = "an expert value: only in config.toml (humanitl config set or edit), no row"
 backend_tuning = "tuning of one sandbox backend: only in config.toml, the backend row chooses the backend"
-agent_source = "per agent through humanitl agents source and the RPC Agents; the section in the app is HUM-521"
+agent_source = "per agent through humanitl agents and the RPC Agents; the row agents.depot of the section Agents draws them in the app (HUM-521)"
 project_only = "chosen per project on the first-start screen (Projects.save_choice, HUM-538); globally only in config.toml"
 server_table = "written by LlmServers through the row llm.servers, never by hand"
 terminal = "a setting of the terminal client; only in config.toml until the settings TUI edits it (HUM-541)"

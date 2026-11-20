@@ -5037,6 +5037,64 @@ Oberfläche gehen. Die App ist ein dünner Client der RPCs.
    `agents.<id>.credential_writeback` sind in der App erreichbar.
 2. Eine gesperrte Quelle ist sichtbar und in der App nicht änderbar.
 
+### Stand nach der Umsetzung (2026-11-20)
+
+Gebaut: die Kategorie „Agenten" der Einstellungen (Katalog-Eintrag
+`agents.depot`, `Control::Special`) mit einer Karte je bekanntem Agenten:
+Umschalter Host/Depot über `Agents.set_source`, Version mit Signatur,
+Anmeldung mit letzter Rückschrift, Größe, Schalter
+`agents.<id>.credential_writeback` über `SetConfig`, die Befunde des Depots
+als Karte mit `why` und `fix`, der letzte Wartungslauf (läuft, Anmelde-URLs
+mit „Im Browser öffnen" nur bei `openable`, Callback-Feld nur bei
+`callback_paste`, geänderte Dateien mit hervorgehobenen `command_keys` und
+Übernehmen/Verwerfen, Ergebnis oder Befunde), die nur lesende Ansicht von
+`config/` und die Knöpfe Installieren, Aktualisieren, Anmelden,
+Konfigurieren, Konfiguration zeigen und Entfernen (mit Rückfrage).
+Versionswahl: „Aktuelle", eine eingegebene Version oder eine der Versionen
+im Depot für ein Zurück (umschalten ohne Lauf). Installieren, Aktualisieren
+und Konfigurieren schließen die Einstellungen und zeigen das Terminal der
+Sitzung auf der Sandbox-Seite; eine Anmeldung bleibt an der Karte, weil URL
+und Callback-Feld dort stehen, mit „Terminal öffnen" daneben. Während eines
+Laufs liest die Karte den Stand alle 1,5 s neu.
+
+Abweichung, im Daemon nachgezogen: Der Status nannte weder die Versionen im
+Depot noch, welche Operation offen ist; die App hätte beides selbst
+ableiten müssen (und ob ein Adapter eine Anmeldung kann, weiß nur das
+Rezept). Neu `AgentDepot.versions` (neueste zuerst, nur Ordner mit gültigem
+Namen und passendem Manifest, `Depot::versions`) und `AgentDepot.actions`
+(`AgentActions`: `install`, `update`, `login`, `config`, `config_show`,
+`remove`, `source_host`, `source_depot`, aus Rezept, Depot, Sperre und
+laufendem Lauf, dazu ob jetzt eine Sitzung starten könnte und ob das Depot
+seine Prüfung besteht), `AgentDepot.credential_writeback` (wirksamer Wert),
+Zustand `discarded` nach Verwerfen, und eine Konfiguration, die nach einem
+Neustart des Daemons noch auf der Platte wartet, steht als `confirm` im
+Status. Protokoll 1.54. Ein Daemon davor schickt keine `actions`; die App
+bietet dann nichts an. Agenten ohne Rezept zeigen, was der Daemon annimmt:
+Quelle Depot (mit `AGENT_015`), Schalter der Rückschrift, Entfernen eines
+vorhandenen Depots. Der Konfigurationslauf kopiert in
+`<id>.config-staging/` und macht daraus erst nach vollständiger Kopie mit
+einem `rename` den wartenden Vorschlag; ein Abbruch dazwischen hinterlässt
+keinen halben Vorschlag, der Rest geht beim nächsten Lauf unter der
+Wartungssperre weg (Mutationsbeweis: Kopie direkt in den Vorschlag färbt
+`an_interrupted_copy_leaves_no_pending_proposal` rot). Eine Entscheidung
+über einen Vorschlag, der nur auf der Platte lag, ersetzt einen beendeten
+Lauf im Speicher.
+
+Tests: `app/test/features/settings/agents_settings_test.dart` (je Zustand
+nicht installiert, installiert, angemeldet, gesperrt, Fehler, dazu
+Quelle, Rückschrift, Versionswahl, Zurück, Konfigurationsansicht,
+Konfigurationslauf mit Übernehmen und Verwerfen, URL eines fremden Hosts,
+Callback, Entfernen, Absage des Daemons; alle unter
+`TargetPlatformVariant` Linux und macOS), Goldens
+`settings_agents_cards` und `settings_agents_runs` (hell und dunkel, en und
+de), im Daemon `agents/tests.rs` (Aktionen aus Rezept, Depot und Sperre;
+laufender Lauf nimmt sie zurück) und `store.rs` (Versionen, Reihenfolge).
+Mutationsbeweise, jeder rot: Sperre in der Karte ignoriert (`locked =
+false`), Knopf „Im Browser öffnen" auch für eine URL, die sich nicht öffnen lassen soll.
+
+Die neue Kategorie verschiebt die linke Spalte; die Goldens der
+Einstellungen und der Shell mit offener Einstellung sind deshalb erneuert.
+
 ---
 
 ## HUM-522 · Agent-Depot: Ende-zu-Ende-Lauf mit Claude Code und Anleitung

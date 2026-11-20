@@ -708,6 +708,14 @@ class GrpcDaemonClient implements DaemonClient {
   }
 
   @override
+  Future<AgentsStatus> agents(AgentsOp op) async {
+    final pb.AgentsStatus status = await _unary(
+      (CallOptions options) => _stub.agents(op.toProto(), options: options),
+    );
+    return status.toDomain();
+  }
+
+  @override
   Future<SandboxBackendList> sandboxBackends({String? backend}) async {
     // Immer mit Plan, demselben wie für den Schnappschuss (HUM-440): Der
     // Daemon misst dann an der Konfiguration eines Starts dieser App, samt

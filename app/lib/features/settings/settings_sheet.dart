@@ -41,6 +41,7 @@ class SettingsSheet extends StatefulWidget {
     this.focusKey,
     this.focusSerial = 0,
     this.daemonRestart,
+    this.onOpenSession,
     super.key,
   });
 
@@ -61,6 +62,9 @@ class SettingsSheet extends StatefulWidget {
 
   /// See [SettingsPanel.daemonRestart].
   final Widget? daemonRestart;
+
+  /// See [SettingsPanel.onOpenSession].
+  final VoidCallback? onOpenSession;
 
   /// The share of the window height the panel covers.
   static const double heightFraction = 0.75;
@@ -132,6 +136,7 @@ class _SettingsSheetState extends State<SettingsSheet>
     focusKey: widget.focusKey,
     focusSerial: widget.focusSerial,
     daemonRestart: widget.daemonRestart,
+    onOpenSession: widget.onOpenSession,
     frame: _frame,
   );
 

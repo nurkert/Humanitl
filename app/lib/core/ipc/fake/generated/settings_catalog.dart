@@ -22,38 +22,43 @@ const String fakeSettingsCatalogJson = r'''
         "title": "Agent"
       },
       {
-        "id": "sandbox",
+        "id": "agents",
         "order": 2,
+        "title": "Agenten"
+      },
+      {
+        "id": "sandbox",
+        "order": 3,
         "title": "Sandbox"
       },
       {
         "id": "requests",
-        "order": 3,
+        "order": 4,
         "title": "Anfragen"
       },
       {
         "id": "interface",
-        "order": 4,
+        "order": 5,
         "title": "Ansicht"
       },
       {
         "id": "shortcuts",
-        "order": 5,
+        "order": 6,
         "title": "Tastenkürzel"
       },
       {
         "id": "network",
-        "order": 6,
+        "order": 7,
         "title": "Netz"
       },
       {
         "id": "egress",
-        "order": 7,
+        "order": 8,
         "title": "Entscheidungs-Proxy"
       },
       {
         "id": "daemon",
-        "order": 8,
+        "order": 9,
         "title": "Daemon"
       }
     ],
@@ -203,6 +208,34 @@ const String fakeSettingsCatalogJson = r'''
         "order": 0,
         "tier": "advanced",
         "title": "Coding-Agent"
+      },
+      {
+        "category": "agents",
+        "choices": [],
+        "client": "",
+        "control": "special",
+        "details": "",
+        "help": "Je Agent: ob Sitzungen das auf diesem Rechner installierte Programm starten oder die Kopie im Depot, welche Version das Depot hält und ob es angemeldet ist. Installieren, Aktualisieren, Anmelden und Konfigurieren laufen in einer eigenen Sandbox.",
+        "id": "agents.depot",
+        "inProjectChoice": false,
+        "isKey": false,
+        "keywords": [
+          "Agenten",
+          "Depot",
+          "Claude Code",
+          "Codex",
+          "installieren",
+          "aktualisieren",
+          "Version",
+          "Anmeldung",
+          "Zugangsdaten",
+          "Quelle",
+          "Host"
+        ],
+        "nextSession": false,
+        "order": 0,
+        "tier": "basic",
+        "title": "Agent-Depot"
       },
       {
         "category": "sandbox",
@@ -748,38 +781,43 @@ const String fakeSettingsCatalogJson = r'''
         "title": "Agent"
       },
       {
-        "id": "sandbox",
+        "id": "agents",
         "order": 2,
+        "title": "Agents"
+      },
+      {
+        "id": "sandbox",
+        "order": 3,
         "title": "Sandbox"
       },
       {
         "id": "requests",
-        "order": 3,
+        "order": 4,
         "title": "Requests"
       },
       {
         "id": "interface",
-        "order": 4,
+        "order": 5,
         "title": "Interface"
       },
       {
         "id": "shortcuts",
-        "order": 5,
+        "order": 6,
         "title": "Keyboard shortcuts"
       },
       {
         "id": "network",
-        "order": 6,
+        "order": 7,
         "title": "Network"
       },
       {
         "id": "egress",
-        "order": 7,
+        "order": 8,
         "title": "Decision proxy"
       },
       {
         "id": "daemon",
-        "order": 8,
+        "order": 9,
         "title": "Daemon"
       }
     ],
@@ -930,6 +968,34 @@ const String fakeSettingsCatalogJson = r'''
         "order": 0,
         "tier": "advanced",
         "title": "Coding agent"
+      },
+      {
+        "category": "agents",
+        "choices": [],
+        "client": "",
+        "control": "special",
+        "details": "",
+        "help": "Per agent: whether sessions start the program installed on this machine or the copy in the depot, which version the depot holds, and whether it is logged in. Install, update, log in and configure run in a sandbox of their own.",
+        "id": "agents.depot",
+        "inProjectChoice": false,
+        "isKey": false,
+        "keywords": [
+          "agents",
+          "depot",
+          "Claude Code",
+          "Codex",
+          "install",
+          "update",
+          "version",
+          "login",
+          "credentials",
+          "source",
+          "host"
+        ],
+        "nextSession": false,
+        "order": 0,
+        "tier": "basic",
+        "title": "Agent depot"
       },
       {
         "category": "sandbox",

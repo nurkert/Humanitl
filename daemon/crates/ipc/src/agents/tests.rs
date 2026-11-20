@@ -311,3 +311,147 @@ fn every_answer_names_the_last_run_of_its_agent() {
         assert_eq!(entry.maintenance, expected, "{}", entry.agent);
     }
 }
+
+/// HUM-521: the client switches its buttons by `actions` and decides
+/// nothing itself; the daemon derives them from recipe, depot and lock.
+#[test]
+fn the_actions_follow_recipe_depot_and_lock() {
+    let dir = tempfile::tempdir().unwrap();
+    let paths = paths(dir.path());
+    let fresh = status(&paths, &Config::default(), &SourceLock::none(), None);
+    let claude = of(&fresh, "claude").actions.unwrap();
+    assert!(claude.install && !claude.update && !claude.config && !claude.remove);
+    assert!(claude.source_host && claude.source_depot);
+    // Claude Code declares no login run yet (HUM-520), so no login.
+    assert!(!claude.login);
+    // Ohne Rezept: kein Lauf, aber `set_source depot` nimmt der Daemon an.
+    let opencode = of(&fresh, "opencode").actions.unwrap();
+    assert!(!opencode.install && opencode.source_depot && opencode.source_host);
+    assert!(!opencode.remove, "no depot, nothing to remove");
+    assert!(of(&fresh, "opencode").credential_writeback);
+
+    fill(&paths, "claude");
+    let filled = status(&paths, &Config::default(), &locked(), None);
+    let entry = of(&filled, "claude");
+    assert_eq!(entry.versions, vec!["2.1.0"]);
+    let claude = entry.actions.unwrap();
+    assert!(!claude.install && claude.update && claude.config && claude.config_show);
+    assert!(claude.remove);
+    assert!(!claude.source_host, "the lock takes host away");
+
+    let used = status(
+        &paths,
+        &Config::default(),
+        &SourceLock::none(),
+        Some("claude"),
+    );
+    assert!(!of(&used, "claude").actions.unwrap().remove);
+}
+
+#[test]
+fn a_running_run_takes_back_every_maintenance_action() {
+    let dir = tempfile::tempdir().unwrap();
+    let paths = paths(dir.path());
+    fill(&paths, "claude");
+    let mut status = status(&paths, &Config::default(), &SourceLock::none(), None);
+    let run = v1::AgentMaintenance {
+        sandbox_id: "s1".to_owned(),
+        task: "update".to_owned(),
+        state: "running".to_owned(),
+        ..v1::AgentMaintenance::default()
+    };
+    let runs = std::collections::BTreeMap::from([("claude".to_owned(), run)]);
+    with_maintenance(&mut status, &runs);
+    let actions = of(&status, "claude").actions.unwrap();
+    assert!(!actions.update && !actions.config && !actions.remove && !actions.install);
+    assert!(actions.config_show && actions.source_host);
+}
+
+/// HUM-521 (review): an agent without a recipe whose depot exists can still
+/// lose it, as `agents remove` does.
+#[test]
+fn a_depot_without_recipe_can_be_removed() {
+    let dir = tempfile::tempdir().unwrap();
+    let paths = paths(dir.path());
+    fill(&paths, "opencode");
+    let state = status(&paths, &Config::default(), &SourceLock::none(), None);
+    let actions = of(&state, "opencode").actions.unwrap();
+    assert!(actions.remove && actions.config_show);
+    assert!(!actions.install && !actions.update && !actions.login && !actions.config);
+}
+
+/// HUM-521 (review): a depot that fails its checks takes no install; the
+/// run would stop with `AGENT_013`.
+#[test]
+fn an_unusable_depot_offers_no_install() {
+    let dir = tempfile::tempdir().unwrap();
+    let paths = paths(dir.path());
+    fill(&paths, "claude");
+    let current = paths.agents_dir().join("claude/current");
+    std::fs::remove_file(&current).unwrap();
+    std::fs::write(&current, b"not a link").unwrap();
+    let state = status(&paths, &Config::default(), &SourceLock::none(), None);
+    let entry = of(&state, "claude");
+    assert!(entry.version.is_empty());
+    let actions = entry.actions.unwrap();
+    assert!(!actions.install && !actions.update, "{entry:?}");
+    assert!(actions.remove);
+}
+
+/// HUM-521 (review): no run while the daemon could not start a session.
+#[test]
+fn without_a_start_no_run_is_offered() {
+    let dir = tempfile::tempdir().unwrap();
+    let paths = paths(dir.path());
+    fill(&paths, "claude");
+    let mut state = status(&paths, &Config::default(), &SourceLock::none(), None);
+    with_startable(&mut state, true);
+    assert!(of(&state, "claude").actions.unwrap().update);
+    with_startable(&mut state, false);
+    let actions = of(&state, "claude").actions.unwrap();
+    assert!(!actions.install && !actions.update && !actions.login && !actions.config);
+    assert!(actions.remove && actions.config_show);
+}
+
+/// HUM-521 (review): after a restart of the daemon a configuration that
+/// waits on disk still stands in the status, ahead of an ended run.
+#[test]
+fn a_configuration_waiting_on_disk_is_shown() {
+    let dir = tempfile::tempdir().unwrap();
+    let paths = paths(dir.path());
+    fill(&paths, "claude");
+    let pending = account::pending_dir(&paths, "claude");
+    std::fs::create_dir_all(&pending).unwrap();
+    std::fs::write(pending.join("settings.json"), br#"{"hooks":{}}"#).unwrap();
+    let mut state = status(&paths, &Config::default(), &SourceLock::none(), None);
+    let run = of(&state, "claude").maintenance.clone().unwrap();
+    assert_eq!(run.state, "confirm");
+    assert_eq!(run.task, "config");
+    assert_eq!(run.config_changes[0].path, "settings.json");
+    let ended = v1::AgentMaintenance {
+        task: "install".to_owned(),
+        state: "done".to_owned(),
+        ..v1::AgentMaintenance::default()
+    };
+    let runs = std::collections::BTreeMap::from([("claude".to_owned(), ended)]);
+    with_maintenance(&mut state, &runs);
+    assert_eq!(
+        of(&state, "claude").maintenance.clone().unwrap().state,
+        "confirm"
+    );
+}
+
+#[test]
+fn accept_and_discard_are_told_apart() {
+    let wish = || v1::agents_request::Agent {
+        agent: "claude".to_owned(),
+    };
+    assert_eq!(
+        config_decision_of(Some(&v1::agents_request::Op::ConfigAccept(wish()))),
+        Some(("claude".to_owned(), true))
+    );
+    assert_eq!(
+        config_decision_of(Some(&v1::agents_request::Op::ConfigDiscard(wish()))),
+        Some(("claude".to_owned(), false))
+    );
+}

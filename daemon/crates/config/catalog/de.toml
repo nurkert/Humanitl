@@ -6,6 +6,7 @@
 [categories]
 models = "Modelle"
 agent = "Agent"
+agents = "Agenten"
 sandbox = "Sandbox"
 requests = "Anfragen"
 interface = "Ansicht"
@@ -44,6 +45,11 @@ title = "Coding-Agent"
 help = "Der Agent, den eine neue Sitzung in der Sandbox startet."
 details = "Der Agent, den die nächste Sitzung in der Sandbox startet. Humanitl schreibt ihm Konfiguration, Endpunkt, Modelle und Schlüssel."
 keywords = ["Agent", "OpenCode", "pi", "programmieren", "Assistent"]
+
+[entries."agents.depot"]
+title = "Agent-Depot"
+help = "Je Agent: ob Sitzungen das auf diesem Rechner installierte Programm starten oder die Kopie im Depot, welche Version das Depot hält und ob es angemeldet ist. Installieren, Aktualisieren, Anmelden und Konfigurieren laufen in einer eigenen Sandbox."
+keywords = ["Agenten", "Depot", "Claude Code", "Codex", "installieren", "aktualisieren", "Version", "Anmeldung", "Zugangsdaten", "Quelle", "Host"]
 
 [entries."sandbox.work_dir"]
 title = "Projektordner"
