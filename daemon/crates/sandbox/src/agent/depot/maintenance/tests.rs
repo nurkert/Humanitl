@@ -61,6 +61,9 @@ static SIGNED: KnownAgent = KnownAgent {
             source: "https://downloads.standin.test/releases",
         }),
         login: LoginFlow::ApiKeyOnly,
+        credential_format: None,
+        login_run: None,
+        command_keys: &[],
     }),
 };
 
@@ -86,6 +89,9 @@ static UNSIGNED: KnownAgent = KnownAgent {
             source: "https://downloads.standin.test/releases",
         }),
         login: LoginFlow::ApiKeyOnly,
+        credential_format: None,
+        login_run: None,
+        command_keys: &[],
     }),
 };
 

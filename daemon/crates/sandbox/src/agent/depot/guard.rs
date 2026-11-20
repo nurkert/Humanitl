@@ -37,8 +37,10 @@
 //! 6. A maintenance run (HUM-563, [`super::DepotSession::maintenance_home`])
 //!    has no project: its work place is its own work directory beside the
 //!    depots, bound at [`MAINTENANCE_HOME_DST`] and nowhere else, without a
-//!    depot mount, a host program, a session bind or an extension of the
-//!    profile. That directory lies under the daemon's data directory, which
+//!    host program, a session bind or an extension of the profile. An
+//!    install run carries no depot mount; a login or configuration run
+//!    (HUM-520, [`super::DepotSession::maintenance_program`]) carries the one
+//!    of its own agent and starts exactly its program. That directory lies under the daemon's data directory, which
 //!    the mount policy refuses for a project; [`work_place`] admits exactly
 //!    it and nothing else.
 
@@ -149,8 +151,22 @@ fn check_maintenance(request: &PlanRequest<'_>) -> Result<(), Diagnostic> {
             ))
             .build())
     };
-    if depot.mount.is_some() || session.agent_program.is_some() {
-        return refused("carries an agent program");
+    if session.agent_program.is_some() {
+        return refused("carries an agent program of the host");
+    }
+    if let Some(mount) = &depot.mount {
+        // A login or configuration run (HUM-520) starts the depot program of
+        // its own agent, and nothing else.
+        let own = depot.maintenance_program.as_deref() == Some(mount.agent.as_str());
+        let starts_it = session
+            .command
+            .first()
+            .is_some_and(|first| Path::new(first) == mount.program_dst());
+        if !own || !starts_it {
+            return refused("carries an agent program other than the one it runs");
+        }
+    } else if depot.maintenance_program.is_some() {
+        return refused("names an agent to run without its depot mount");
     }
     if profile.mounts.work.dst != Path::new(MAINTENANCE_HOME_DST) {
         return refused(&format!(

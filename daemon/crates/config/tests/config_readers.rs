@@ -82,17 +82,18 @@ const REGISTER: &[(&str, &str)] = &[
     // Vorprüfung (HUM-309).
     ("agent.pi.web_access", "effective"),
     // Gelesen von `effective_source` im Start, in der Vorprüfung, im Status
-    // und im Doctor (ADR-0023, HUM-518). `credential_writeback` hat bis zum
-    // Wächter für das Zurückschreiben keinen Leser; HUM-520 baut ihn.
-    ("agents.agy.credential_writeback", "pending(HUM-520)"),
+    // und im Doctor (ADR-0023, HUM-518); `credential_writeback` vom Start
+    // einer Sitzung mit einem Agenten aus dem Depot, der den Wächter der
+    // Rückschrift einschaltet (HUM-520).
+    ("agents.agy.credential_writeback", "effective"),
     ("agents.agy.source", "effective"),
-    ("agents.claude.credential_writeback", "pending(HUM-520)"),
+    ("agents.claude.credential_writeback", "effective"),
     ("agents.claude.source", "effective"),
-    ("agents.codex.credential_writeback", "pending(HUM-520)"),
+    ("agents.codex.credential_writeback", "effective"),
     ("agents.codex.source", "effective"),
-    ("agents.opencode.credential_writeback", "pending(HUM-520)"),
+    ("agents.opencode.credential_writeback", "effective"),
     ("agents.opencode.source", "effective"),
-    ("agents.pi.credential_writeback", "pending(HUM-520)"),
+    ("agents.pi.credential_writeback", "effective"),
     ("agents.pi.source", "effective"),
     ("agents.source", "effective"),
     // Gelesen in `humanitld` beim Öffnen des Audit-Schreibers (HUM-050).
@@ -463,8 +464,8 @@ fn the_keys_without_a_reader_are_the_known_ones() {
     // verdrahtet oder streicht, zieht ihn hier und im Register zugleich nach.
     // Die acht Schlüssel unter `sandbox.podman` (HUM-431) verdrahtet HUM-433,
     // die acht unter `sandbox.qemu` (HUM-464) der Adapter aus HUM-444.
-    // Die fünf `agents.<id>.credential_writeback` legt HUM-518 an; lesen wird
-    // sie der Wächter für das Zurückschreiben aus HUM-520.
+    // Die fünf `agents.<id>.credential_writeback` legt HUM-518 an; seit
+    // HUM-520 liest sie der Start einer Sitzung aus dem Depot.
     let pending: Vec<&str> = register()
         .iter()
         .filter(|(_, readiness)| readiness.is_pending())
@@ -473,11 +474,6 @@ fn the_keys_without_a_reader_are_the_known_ones() {
     assert_eq!(
         pending,
         vec![
-            "agents.agy.credential_writeback",
-            "agents.claude.credential_writeback",
-            "agents.codex.credential_writeback",
-            "agents.opencode.credential_writeback",
-            "agents.pi.credential_writeback",
             "pseudonyms.max_response_bytes",
             "pseudonyms.translate_responses",
         ]

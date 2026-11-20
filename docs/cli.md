@@ -1862,6 +1862,33 @@ update switch is off as well (`DISABLE_UPDATES=1` for Claude Code). One run at a
 no session runs in this daemon (`CLI_005`). The kernel level and Seatbelt (macOS) do not carry a
 maintenance run yet (`AGENT_015`).
 
+`humanitl agents login AGENT [--open] [--yes]` logs the agent in once for every session (HUM-520):
+a maintenance run that starts the depot program with the adapter's login command, its
+configuration a writable copy, only the adapter's login hosts without a hold. It attaches like
+`install`. The agent prints its login URL into the terminal; with `--open` the command opens it in
+the browser of this machine, but only a URL to one of the adapter's login hosts, never any other.
+After the run only the credential file goes back into the depot, checked by the guard of the
+write-back; everything else the login wrote is discarded. Every later session of the agent starts
+logged in, also a disposable one; a token it renews goes back the same guarded way while it runs
+and at its end (`agents.AGENT.credential_writeback = false` turns that off). A refused write-back
+is `AGENT_012`, an older token or another account `AGENT_016`, both in `humanitl agents status`. A
+login the adapter cannot store yet, because it declares no format of its credential file, answers
+`AGENT_014` before anything starts.
+
+`humanitl agents callback AGENT URL` delivers the callback URL from the browser's address bar into
+the running login, for an agent that waits for the browser on its own loopback: exactly
+`http://localhost:<port><path>?<query>` of the adapter is accepted and delivered by one process
+inside the run; no port of this machine is forwarded into the sandbox. Under Seatbelt (macOS) the
+sandbox shares the host's loopback, so there is no callback, only the device flow (`AGENT_014`).
+
+`humanitl agents config AGENT [--yes]` runs the agent on a writable copy of its configuration
+without a project, so you can change its settings there. Afterwards the command lists every
+changed file with its changed keys, marks the keys that run commands with `!` (for Claude Code
+`hooks`, `apiKeyHelper`, `statusLine`, `mcpServers`, `env`) and asks whether to take them over;
+only a yes (or `--yes`) changes the configuration in the depot. Without a terminal the changes
+wait: `humanitl agents config AGENT --accept` or `--discard` decides later. `humanitl agents config
+AGENT --show` lists the configuration as it is, with its keys that run commands.
+
 ## `humanitl sessions`
 
 `humanitl sessions` without a subcommand prints the running session, or the one a start here would

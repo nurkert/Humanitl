@@ -4873,6 +4873,112 @@ späteren. Der Wächter lässt nur die Zugangsdatei durch, und nur geprüft.
    Sitzungen) und die Tabelle der Seitenkanäle in `README.md` (en und de)
    im selben Commit.
 
+### Stand nach der Umsetzung (2026-11-20)
+
+Gebaut: der Wächter der Rückschrift (`sandbox/src/agent/depot/credential.rs`).
+Er liest genau die eine Zugangsdatei des Adapters mit `openat`, `O_NOFOLLOW`
+und `O_NONBLOCK` aus der Kopie der Sitzung, nur eine reguläre Datei bis
+64 KiB, prüft sie gegen das Format des Adapters (`CredentialFormat`: Felder
+als JSON-Zeiger mit Form `Object`, `Token`, `Text`, `Count`, `Flag`,
+`TextList` und Pflicht, dazu Ablauf mit Einheit und Kontofeld), bei jeder
+späteren Rückschrift auch gegen die gespeicherte Datei (gleiche Schlüssel,
+gleiche Form, nicht älter, dasselbe Konto; ohne Ablauf im Format nur aus einer
+Sitzung, die auf der gespeicherten Datei begann; bei gleichem Ablauf ebenso),
+lehnt einen Ablauf mehr als 400 Tage voraus ab und schreibt die eigene
+Serialisierung des geprüften Werts unter einer Sperre je Agent über eine
+temporäre Datei `0600` und `rename`. `depot/writeback.rs` beobachtet die Datei
+einer laufenden Sitzung alle 10 s und einmal am Ende vor dem Löschen der Kopie
+(neuer Haken `SandboxHandle::before_cleanup`); `credential_writeback = false`
+schaltet ihn ab, der Schlüssel ist damit wirksam. Jedes Ergebnis geht als
+`SandboxNotice::CredentialWriteback` ins Audit-Log (`agent.credential_writeback`,
+nur SHA-256 alt und neu), eine Ablehnung bis zur nächsten Übernahme in den
+Status; `writeback.json` im Depot nennt die Sitzung, die zuletzt schrieb.
+Anmeldung und Konfigurationslauf als Wartungsläufe (`MaintenanceTask::Login`,
+`Config`, `depot/account.rs`): Programm des Depots nur lesbar, Kopie der
+Konfiguration schreibbar, eigener `HOME`, kein Projekt; der Wächter der
+Pläne lässt eine Einhängung des Depots im Wartungslauf nur für den
+gekennzeichneten Agenten und genau sein Programm zu
+(`DepotSession::maintenance_program`). Nach der Anmeldung nur die
+Zugangsdatei über den Wächter und benannte Felder einer anderen Datei
+(`NamedFields`, vom Daemon gelesen, geprüft, in die Kopie im Depot
+geschrieben, nie die Datei). Der Konfigurationslauf legt die Änderung unter
+`agents/.maintenance/<id>.config-pending/` ab, listet Dateien und Schlüssel,
+hebt Schlüssel mit Befehlen hervor (`command_keys`, für Claude Code `hooks`,
+`apiKeyHelper`, `statusLine`, `mcpServers`, `env`) und ersetzt `config/` erst
+nach `config_accept`. URLs einer Anmeldung liest ein Leser zwischen Lauf und
+Terminal (`depot/login_url.rs`); `openable` nur für die Anmeldehosts des
+Adapters. Callback: genau `http://localhost:<port><pfad>?<query>`, zugestellt
+mit `curl` als weitere Shell im Lauf (`open_shell`), nur bei eigenem Loopback
+(`Backend::own_loopback`, unter Seatbelt nie, `callback_paste = false`). RPC
+`Agents` mit `login`, `config`, `config_accept`, `config_discard`,
+`config_show`, `deliver_callback` (Protokoll 1.53); CLI `humanitl agents login
+<id> [--open]`, `agents callback <id> <url>`, `agents config <id> [--show |
+--accept | --discard] [--yes]`. Befunde `AGENT_012`, `AGENT_014`, `AGENT_016`
+und neu `AGENT_019` (Konfigurationslauf nicht übernommen; keiner der drei
+vorgesehenen Codes passte), mit ARB und `diagnostic_l10n.dart`. Docs:
+SECURITY Abschnitt 5.7 und Tabelle, K-36 dritter Teil, README-Tabelle (en, de),
+`docs/cli.md` (en, de), `PROTOCOL.md`, CONVENTIONS 4.17.
+
+Tests: Stellvertreter-Format in `credential/tests.rs` (Erneuerung `0600`,
+erste Anmeldung, Pflichtschlüssel, Typ, Zusatzschlüssel, Übergröße, optionaler
+Schlüssel später, `"hooks"`, 65 KiB, Symlink auf eine gültige Datei des Hosts,
+FIFO, älteres Token, anderes Konto, zwei Sitzungen, ohne Ablauf, Abbruch beim
+Schreiben, `.claude.json` mit `mcpServers` und `oauthAccount`), `writeback.rs`
+(nach dem Ende im Depot, `credential_writeback = false`), `account/tests.rs`
+(Anmeldelauf, Seatbelt-Fall mit Einstellung im `why`, Konfigurationslauf nur
+nach Bestätigung, `hooks` hervorgehoben), `login_url.rs` (URL-Erkennung,
+Callback mit anderem Host, Port, Pfad abgelehnt), Wächter der Pläne, und Ende
+zu Ende im bwrap (`ipc/tests/depot_maintenance.rs`,
+`a_login_in_the_sandbox_takes_back_only_the_credential_file`: Anmeldung mit
+Stellvertreter-Programm, danach eine Sitzung, die angemeldet startet und
+erneuert). Mutationsbeweise, jeder rot: Formatprüfung `Ok(())`, ganzer
+Arbeitsordner übernommen, `O_NOFOLLOW` entfernt, Altersvergleich entfernt,
+`rename` durch direktes Schreiben ersetzt, Vergleich mit der gespeicherten
+Datei entfernt, Pflichtschlüsselprüfung entfernt, ganze `.claude.json`
+übernommen.
+
+Abweichung von Punkt 4 („Erste Anmeldung"): Die erste Zugangsdatei speichert
+nur ein Anmeldelauf (`Origin::Login`), nie eine gewöhnliche Sitzung
+(`AGENT_012`), damit keine Sitzung das Konto wählt (Review). Eine Anmeldung
+prüft Zugangsdatei und benannte Felder vollständig, bevor sie eines davon
+schreibt, und hält dabei eine Sperre; scheitert das Schreiben der Felder,
+kommt die frühere Zugangsdatei (oder keine) zurück, beides im Audit-Log.
+Benannte Felder dürfen zusammen 64 KiB groß sein, die Datei, aus der sie
+kommen, und die zusammengeführte Datei im Depot 4 MiB. Die Suche nach
+Schlüsseln mit Befehlen geht auch in Objekte, die einen Skalar ersetzen, und
+in Arrays. Die Liste eines Konfigurationslaufs nennt Schlüssel mit
+Befehlen immer und zuerst, ungekürzt; gekürzt werden nur die übrigen (50,
+dazu `keys_omitted`).
+
+Abweichungen und offen:
+- **Formate der echten Agenten nicht erklärt.** Sie gehören in die Issues der
+  Adapter (HUM-514 nennt `.credentials.json` mit Format und Anmeldehosts,
+  HUM-515, HUM-517); HUM-520 baut den Mechanismus. Die Schlüssel von Claude Codes
+  `.credentials.json` und die Felder von `.claude.json`, die eine Sitzung
+  ohne erneute Einrichtung braucht (etwa `oauthAccount`), sind nicht
+  veröffentlicht und hier nicht gemessen; im Rezept stehen
+  `credential_format: None` und `login_run: None` (auch Anmeldekommando und
+  Anmeldehosts unbelegt). Bis zur Messung im gemeinsamen Probedurchgang
+  (HUM-553) nimmt der Wächter für Claude Code nichts zurück, und
+  `agents login claude` antwortet `AGENT_014`. Akzeptanzkriterium 1 ist damit
+  nur mit dem Stellvertreter belegt. Codex und `agy` haben noch kein Rezept
+  (HUM-515, HUM-517).
+- Der `fix` von `AGENT_014` unter Seatbelt nennt die Einstellung des
+  Anbieters im `why`, nicht als `FixAction`: Es gibt keine Art für eine
+  Einstellung beim Anbieter. Seatbelt lehnt Wartungsläufe ohnehin noch ab
+  (`AGENT_015`, HUM-563); belegt ist das Verhalten als Unit-Test, nicht im
+  CI-Job `macos`.
+- Das Zustellen des Callbacks braucht `curl` im `/usr` des Hosts; ohne
+  `curl` endet es mit `AGENT_014`. Ende zu Ende nicht getestet (kein Adapter
+  mit Callback).
+- Eine Sitzung, die die CLI ohne Daemon startet (`humanitl sandbox run`),
+  schreibt nichts zurück.
+- Öffnen der URL in der CLI nur mit `--open` (die Bestätigung vorab), weil das
+  Terminal während des Anhängens im Rohmodus ist; die App (HUM-521) zeigt die
+  URLs aus `AgentMaintenance.login_urls`.
+- Ein wartender Konfigurationslauf steht nach einem Neustart des Daemons nur
+  noch auf der Platte; `agents config <id> --accept` übernimmt ihn trotzdem.
+
 ---
 
 ## HUM-521 · App: Abschnitt „Agenten" für Quelle und Depot

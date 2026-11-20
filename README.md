@@ -170,9 +170,9 @@ issue branch and on `main` ([`docs/SECURITY.md` section 9](docs/SECURITY.md#9-wh
 
 Read [`docs/THREAT-MODEL.md`](docs/THREAT-MODEL.md) before relying on Humanitl.
 
-### Five declared side channels
+### Six declared side channels
 
-Five side channels are declared, shown in the app and not closed. Two of them are open data paths
+Six side channels are declared, shown in the app and not closed. Two of them are open data paths
 out of the sandbox:
 
 | Channel | Data can leave? | What it means |
@@ -182,6 +182,7 @@ out of the sandbox:
 | [Terminal output](docs/SECURITY.md#5-declared-side-channels) | no | It comes from the agent and is filtered, not trusted. |
 | [Host names in the recording](docs/SECURITY.md#5-declared-side-channels) | no | They stand in plain text in the recording and in every export. |
 | [Package caches](docs/SECURITY.md#5-declared-side-channels) | no | They are per project and carry data between sessions of that project. |
+| [The credential file of the depot](docs/SECURITY.md#57-the-credential-file-of-the-depot) | no | With an agent from the depot, a renewed login goes back into the depot so the next session starts logged in. Only that one file, checked against the agent's format, never older and never of another account; within its format a session can still leave a few bytes for the next one. Every write-back is in the audit log; `agents.<id>.credential_writeback = false` turns it off. |
 
 **Finally, you are the classifier:** an approved request goes out, so read what you approve
 ([`docs/SECURITY.md`](docs/SECURITY.md#5-declared-side-channels)). Responses and WebSocket frames

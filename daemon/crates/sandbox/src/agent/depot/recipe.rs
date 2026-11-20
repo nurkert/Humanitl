@@ -30,6 +30,8 @@
 //! inside the configuration copy, the config crate's lists in step), so a new
 //! entry is checked without a new test.
 
+use super::credential::{CredentialFormat, NamedFields};
+
 /// How an agent logs in inside a maintenance run (HUM-520 builds the run).
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
 pub enum LoginFlow {
@@ -64,6 +66,51 @@ pub struct DepotRecipe {
     pub install: Option<InstallRecipe>,
     /// How a login works (HUM-520).
     pub login: LoginFlow,
+    /// The format of the credential file, which the guard of the write-back
+    /// checks (HUM-520, [`super::credential`]). `None` until every key is
+    /// sourced from the vendor or measured: then nothing is taken back, and
+    /// `agents login` answers `AGENT_014`. The guard never guesses a format.
+    pub credential_format: Option<CredentialFormat>,
+    /// The login run (HUM-520); `None` until its command and hosts are
+    /// sourced, then `agents login` answers `AGENT_014`.
+    pub login_run: Option<LoginRecipe>,
+    /// The keys of the agent's configuration files that run commands; the
+    /// configuration run highlights a change of them (HUM-520 point 5).
+    pub command_keys: &'static [&'static str],
+}
+
+/// A login inside a maintenance run (HUM-520 point 1).
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+pub struct LoginRecipe {
+    /// The words after the depot program: `["auth", "login"]`.
+    pub args: &'static [&'static str],
+    /// The vendor's login hosts with their evidence: `allow` rules of the
+    /// run's session alone, and the only hosts whose URL a client may open
+    /// on the host after a click or confirmation; every other URL is shown,
+    /// never opened.
+    pub hosts: &'static [InstallHost],
+    /// Where the agent waits for the browser's callback on its own loopback,
+    /// if it does (Codex: `localhost:1455/auth/callback`). The daemon
+    /// delivers a pasted callback URL inside the run, never by forwarding a
+    /// port; on a backend that shares the host's loopback only the device
+    /// flow works ([`LoginFlow::DeviceCode`]).
+    pub callback: Option<LoginCallback>,
+    /// Single named keys of another file that hold the account
+    /// ([`NamedFields`]); never the file.
+    pub named: Option<NamedFields>,
+    /// Where the person turns the device flow on at the vendor, for the
+    /// `fix` of `AGENT_014` when only the device flow is possible and it
+    /// failed.
+    pub device_flow_setting: Option<&'static str>,
+}
+
+/// The callback of a browser login on the agent's loopback.
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+pub struct LoginCallback {
+    /// The port, `1455`.
+    pub port: u16,
+    /// The path, `/auth/callback`.
+    pub path: &'static str,
 }
 
 /// One host an install or update reaches, with the place of the vendor's
@@ -229,6 +276,17 @@ pub const KNOWN: &[KnownAgent] = &[
             credential_file: Some(".credentials.json"),
             install: Some(CLAUDE_INSTALL),
             login: LoginFlow::PastedCode,
+            // The keys of `.credentials.json` and the fields of `.claude.json`
+            // that a session needs to start logged in are not published by
+            // the vendor; they are to be measured in the owner walkthrough
+            // (HUM-553) before a format is declared here. Until then nothing
+            // is taken back and `agents login claude` answers `AGENT_014`.
+            credential_format: None,
+            login_run: None,
+            // code.claude.com/docs/en/settings (2026-11-16, HUM-514): `hooks`,
+            // `apiKeyHelper`, `statusLine`, `mcpServers` and `env` make the
+            // agent run a command or change what it runs.
+            command_keys: &["hooks", "apiKeyHelper", "statusLine", "mcpServers", "env"],
         }),
     },
     // github.com/openai/codex README (2026-11-17): `npm install -g

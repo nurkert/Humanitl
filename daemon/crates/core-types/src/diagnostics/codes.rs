@@ -1931,9 +1931,9 @@ registry! {
         "`CopyCommand` with `humanitl agents install <id>` (HUM-519); or, without a company lock, `CopyCommand` with `humanitl agents source <id> host`.";
     /// The depot holds the agent but no login for it: `credentials/` holds no
     /// credential file. A warning, the agent asks for a login itself; the
-    /// login inside a sandbox comes with HUM-520 (HUM-518).
+    /// login run of HUM-520 stores one for every session (HUM-518).
     AGENT_009 => "agent", "Agent in the depot not logged in", "#agent_009",
-        "The depot of this agent holds an installed version and no stored login. The agent starts and asks for a login itself; a login made in a session is discarded with the session until the login run exists.",
+        "The depot of this agent holds an installed version and no stored login. The agent starts and asks for a login itself; a login made in a session goes back into the depot only through the guard of the write-back, and only where the adapter declares the format of its credential file. `humanitl agents login <id>` logs in once for every session.",
         "`CopyCommand` with `humanitl agents login <id>` (HUM-520).";
     /// The source of the agent is fixed to `depot` by a company policy, and
     /// something asked for `host`: a start with a program of the host, or a
@@ -2029,6 +2029,45 @@ registry! {
     AGENT_011 => "agent", "Agent install or update failed", "#agent_011",
         "Install and update of a depot agent run in a sandbox, and the daemon takes the result over only when every check passes: the version is the one asked for and only an update changes an installed one; where the vendor signs, the daemon itself verified its own copy of the vendor's manifest with the host's `gpg` and the key the adapter fixes, and the program's SHA-256 matches that manifest (the run only downloads, and no verdict of it counts); the program tree holds only regular files, directories and relative links inside it, no socket, FIFO, device, hard link, set-ID bit or name that is not UTF-8, within its caps. A missing `gpg` is a failure, never an unsigned install. The sentence names the step that failed; the depot is as it was before.",
         "`CopyCommand` with `humanitl agents install <id>` to run again after a failed download; `humanitl agents update <id>` when a version is installed already; install `gnupg` on the host when `gpg` is missing. A failed signature, checksum or tree check has no fix to go around it.";
+
+    // HUM-520: login in the sandbox and the guard of the credential write-back
+    // (ADR-0023 points 4, 5 and 7).
+    /// The credential file a session or the login run left was not taken back
+    /// into the depot: it is a link, a FIFO or no regular file, larger than
+    /// 64 KiB, no JSON object, holds a key the adapter's format does not
+    /// know, a value of another type or form, misses a required key, has
+    /// other keys than the stored file, or the depot could not take it. The
+    /// stored file is unchanged; the refusal is in the audit log with the
+    /// SHA-256 of both files, never their content (HUM-520).
+    AGENT_012 => "agent", "Credential write-back refused", "#agent_012",
+        "Only one file goes from a session back into the depot, the credential file the adapter names, and only checked: opened without following a link, a regular file of at most 64 KiB, a JSON object with only the keys of the adapter's format, every value of its type and form, every required key present; after the first login also exactly the keys of the stored file. This file failed a check, and the stored login stays as it was. Nothing else a session writes ever reaches the depot.",
+        "`CopyCommand` with `humanitl agents login <id>` when the stored login no longer works; otherwise none, the session keeps its own copy until it ends.";
+    /// A login run did not end with a stored login: the agent's login
+    /// failed, left no credential file of the adapter's format, the adapter
+    /// declares no login run or no credential format yet, or a pasted
+    /// callback URL could not be delivered (another host, port or path, or a
+    /// backend that shares the host's loopback, where only the device flow
+    /// works) (HUM-520).
+    AGENT_014 => "agent", "Agent login failed", "#agent_014",
+        "The login of a depot agent runs in a sandbox, and only the credential file it leaves, checked by the guard of the write-back, reaches the depot. The login failed, left no such file, or the adapter declares no login run or credential format yet, so nothing would be taken back. A callback URL pasted from the browser is delivered inside the run only when it is exactly the agent's callback on its own loopback, and only on a backend whose sandbox has a loopback of its own; under Seatbelt on macOS only the device flow works.",
+        "`CopyCommand` with `humanitl agents login <id>` to try again; where the device flow is off at the vendor, the sentence names the setting that turns it on.";
+    /// A write-back of the credential file names another account than the
+    /// login, carries a token that expires earlier than the stored one, or
+    /// comes from a session that started before another session stored a
+    /// newer file (formats without an expiry). The stored file stays: an
+    /// older login never replaces a newer one, and only a login run changes
+    /// the account (HUM-520).
+    AGENT_016 => "agent", "Credential of another account or older", "#agent_016",
+        "Two sessions can renew the same login, and some vendors swap the refresh token on each renewal. The daemon never writes an older token over a newer one: the file of this session expires earlier than the stored one, or, where the format carries no expiry, another session stored a file after this session started. Or the file names another account than the one logged in; only a login run changes the account. The stored login stays as it was.",
+        "`CopyCommand` with `humanitl agents login <id>` when the agent asks for a login again.";
+    /// A configuration run of a depot agent was not taken over: the run
+    /// failed, its copy held something else than regular files and
+    /// directories or exceeded its caps (64 MiB, 10 000 entries), no run is
+    /// waiting for a confirmation, or replacing `config/` failed. `config/`
+    /// of the depot is as it was (HUM-520).
+    AGENT_019 => "agent", "Configuration run not taken over", "#agent_019",
+        "The configuration of a depot agent changes only through a configuration run that the person confirms: the agent runs on a writable copy without a project, the daemon lists every changed file and highlights the keys that run commands, and only a confirmation replaces `config/` of the depot, in one step. This run, or its confirmation, did not get that far, and `config/` is as it was.",
+        "`CopyCommand` with `humanitl agents config <id>` to run it again.";
 
     // HUM-550: the data locations for `uninstall.sh --purge`.
     /// `humanitl config paths` refuses to print a data location that holds a

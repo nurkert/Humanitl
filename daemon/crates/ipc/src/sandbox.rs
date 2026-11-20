@@ -117,6 +117,8 @@ use crate::summary::SummaryWatch;
 use crate::terminal::{HeldNotices, TerminalHub};
 use crate::v1;
 
+mod account;
+pub(crate) use account::config_change_to_proto;
 mod cleanup;
 mod maintenance;
 mod project;
@@ -717,6 +719,9 @@ struct Inner {
     /// Der letzte Wartungslauf je Agent in diesem Daemon (HUM-563): läuft,
     /// fertig oder gescheitert, mit seinen Befunden. `Agents` nennt ihn.
     maintenance: Mutex<BTreeMap<String, v1::AgentMaintenance>>,
+    /// Die abgelehnten Rückschriften der Zugangsdatei je Agent, bis zur
+    /// nächsten Übernahme (HUM-520); `Agents` nennt sie im Status.
+    writeback_refusals: account::Refusals,
 }
 
 /// Woran der Dienst hängt, wenn eine Sitzung startet.
@@ -919,6 +924,7 @@ impl SandboxService {
                     .depot_agents
                     .unwrap_or(humanitl_sandbox::agent::depot::KNOWN),
                 maintenance: Mutex::new(BTreeMap::new()),
+                writeback_refusals: Arc::default(),
             }),
         }
     }
@@ -3207,7 +3213,7 @@ impl Inner {
         // [`Inner::work_dir_source`] die der laufenden Sitzung.
         let work_dir_source = self.work_dir_source(&self.config(), &self.pending_choice(), plan);
         let handle = backend.launch(&launch)?;
-        prepared.hand_scratch_to(&handle);
+        self.hand_scratch(prepared, &handle);
         let sandbox = handle.id;
         let handle = Arc::new(handle);
         let started = Arc::clone(&handle);
@@ -3762,6 +3768,15 @@ impl Inner {
             ));
         }
         crate::exec::open(&handle, hub.sandbox(), &shells, request, hub.notices())
+    }
+
+    /// Gibt den Arbeitsordner des Depots an die Sandbox; der Wächter der
+    /// Rückschrift beobachtet seine Zugangsdatei bis zum Ende (HUM-520).
+    fn hand_scratch(&self, prepared: &Prepared, handle: &SandboxHandle) {
+        let writeback = prepared
+            .depot_agent()
+            .and_then(|agent| self.writeback_for(&self.config(), &agent));
+        prepared.hand_scratch_to(handle, writeback);
     }
 
     /// Das Terminal der laufenden Sitzung; siehe [`SandboxService::terminal`].
@@ -4748,9 +4763,13 @@ impl Prepared {
 
     /// Der Arbeitsordner des Depots geht mit der Sandbox (HUM-518); bis
     /// zum Start räumt ihn sein Wert weg, wenn Plan oder Start scheitern.
-    fn hand_scratch_to(&self, handle: &SandboxHandle) {
+    fn hand_scratch_to(
+        &self,
+        handle: &SandboxHandle,
+        writeback: Option<humanitl_sandbox::agent::depot::writeback::Writeback>,
+    ) {
         if let Some(scratch) = lock(&self.depot_scratch).take() {
-            scratch.hand_to(handle);
+            scratch.hand_to_with(handle, writeback);
         }
     }
 

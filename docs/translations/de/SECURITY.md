@@ -132,8 +132,9 @@ den Vertrauensregeln aus `locate.rs` geprüft (Besitzer, kein Schreibrecht für 
 aus dem Baum); und eine Arbeitskopie von `config/` und der Zugangsdatei des Depots unter dem
 Laufzeitordner der Sitzung (höchstens 64 MiB), schreibbar unter `/run/humanitl/agent-config`, am
 Ende der Sitzung gelöscht und nach einem Absturz beim nächsten Start. Nichts, was eine Sitzung
-schreibt, bleibt im Depot; das geprüfte Zurückschreiben der Zugangsdatei folgt mit HUM-520. Die
-Kernel-Stufe trägt das Depot noch nicht und lehnt eine solche Sitzung mit `AGENT_015` ab.
+schreibt, bleibt im Depot, außer der einen Zugangsdatei, und die nur über den Wächter der
+Rückschrift ([Abschnitt 5.7](#57-die-zugangsdatei-des-depots)). Die Kernel-Stufe trägt das Depot
+noch nicht und lehnt eine solche Sitzung mit `AGENT_015` ab.
 
 **Ein Wächter.** Der Plan jedes Backends prüft zuerst das endgültige Kommando und die Einhängungen
 der Sitzung: ein Pfad auf dem Host, ein Wrapper oder ein Symlink auf ein Programm, das ein Adapter
@@ -194,6 +195,33 @@ einer Sitzung ist der Programmordner nur lesbar; ein Selbst-Update des Agenten s
 Absicht. *Grenzen:* Die Version eines Rezepts ohne Signatur ist das Wort des Laufs, nur auf ihre
 Form geprüft; Kernel-Stufe und Seatbelt lehnen einen Wartungslauf vorerst ab (`AGENT_015`); ein Lauf
 zur Zeit, und nur, solange keine andere Sitzung läuft.
+
+**Anmelde- und Konfigurationslauf (HUM-520).** `humanitl agents login` und `humanitl agents config`
+sind Wartungsläufe derselben Art, die statt eines Rezepts das Programm des Depots starten: der
+Programmordner nur lesbar, eine schreibbare Kopie von `config/` und der Zugangsdatei als
+Konfigurationsordner des Agenten, der eigene Arbeitsordner als `HOME`, kein Projekt. Der Wächter
+lässt in einem Wartungslauf eine Einhängung des Depots nur für den Agenten zu, den der Daemon dafür
+gekennzeichnet hat, und nur mit genau diesem Programm als Kommando. Eine Anmeldung erreicht ohne
+Halt nur die Anmeldehosts des Adapters, als Regeln dieses Laufs; danach geht nur die Zugangsdatei
+zurück, über den Wächter der Rückschrift ([Abschnitt 5.7](#57-die-zugangsdatei-des-depots)), und,
+wo der Adapter sie nennt, einzelne Schlüssel einer anderen Datei, die der Daemon selbst ausliest,
+gegen ihre erklärte Form prüft (zusammen höchstens 64 KiB, aus einer Datei von höchstens 4 MiB, über
+die auch das Zusammenführen nicht hinauswachsen darf) und erst in seine eigene Kopie schreibt, wenn
+Zugangsdatei und Schlüssel alle bestanden haben; scheitert das Schreiben der Schlüssel, kommt die
+frühere Anmeldung unter derselben Sperre zurück, eine Anmeldung gilt ganz oder gar nicht (ein Agent, der Kontozustand
+neben `mcpServers` in einer Datei hält, bekommt diese Datei nie übernommen). Jede andere Änderung
+des Anmeldelaufs geht mit seiner Kopie. Die URLs, die eine Anmeldung ausgibt, werden gezeigt; ein
+Client öffnet eine auf dem Host nur nach Klick oder `--open`, und nur, wenn ihr Host ein
+Anmeldehost des Adapters ist. Wo ein Agent auf seinem eigenen Loopback auf den Rückruf des Browsers
+wartet, wird kein Port des Hosts in die Sandbox weitergeleitet: Der Mensch fügt die URL aus dem
+Browser ein, der Daemon nimmt genau `http://localhost:<port><pfad>?<query>` an und stellt sie mit
+einem Prozess im Lauf zu, und nur auf einem Backend, dessen Sandbox ein eigenes Loopback hat; unter
+Seatbelt teilt die Sandbox das des Hosts, dort geht nur der Geräte-Fluss, und eine gescheiterte
+Anmeldung nennt die Einstellung beim Anbieter (`AGENT_014`). Ein Konfigurationslauf legt seine
+geänderte Kopie beiseite, listet jede geänderte Datei mit den Schlüsseln, die Befehle ausführen,
+hervorgehoben (für Claude Code `hooks`, `apiKeyHelper`, `statusLine`, `mcpServers`, `env`), und
+ersetzt `config/` in einem Schritt erst, wenn der Mensch bestätigt (sonst `AGENT_019`); die
+Zugangsdatei reist nie auf diesem Weg.
 
 ### Vertrauenswürdige Basis
 
@@ -794,6 +822,7 @@ keines. Alle Kanäle unten werden in der Anwendung angezeigt, nicht versteckt.
 | Terminal-Ausgabe | der Mensch liest, was der Agent schreibt | der Daemon filtert jeden Bytestrom, bevor ein Client ihn sieht (Erlaubnisliste); Banner „Ausgabe des Agenten ist nicht vertrauenswürdig" | |
 | Host-Namen im Log | blockierte Anfragen bleiben sichtbar | dokumentiert; der Export enthält Hosts, Pfade, Header und Bodies im Klartext und sagt das vor dem Schreiben | optionales Pseudonymisieren der Hosts |
 | Paket-Caches | wiederholte Installationen | Caches pro Projekt, nie über Vertrauensstufen hinweg geteilt | schreibgeschützte Start-Caches |
+| die Zugangsdatei des Depots | eine erneuerte Anmeldung muss die Sitzung überdauern | nur die eine Datei, die der Adapter nennt, geht zurück, ohne einem Link zu folgen geöffnet, höchstens 64 KiB, gegen das Format des Adapters und die gespeicherte Datei geprüft, nie älter und nie von einem anderen Konto, atomar unter einer Sperre geschrieben, jedes Ergebnis im Audit-Log mit den SHA-256 beider Dateien; `agents.<id>.credential_writeback = false` schaltet es ab | ein verschlüsselter Speicher mit Schlüssel aus dem Schlüsselbund (HUM-523) |
 
 ### 5.1 Die LLM-Durchleitung
 
@@ -1396,6 +1425,65 @@ Eine ehrliche Liste dessen, was in 0.1 fehlt oder schwächer ist, als man annehm
     wird, und die erste Freigabe der Session wartet auf eine Bestätigung. `RECORDER_005` sagt,
     wann die Aufzeichnung wieder funktioniert. Verlorene Flows werden nicht nachträglich
     geschrieben.
+
+### 5.7 Die Zugangsdatei des Depots
+
+*Warum es ihn gibt.* Mit dem Agent-Depot (HUM-518) geschieht eine Anmeldung einmal und gilt für
+jede Sitzung. Tokens laufen ab, und manche Anbieter tauschen den Refresh-Token bei jeder Nutzung;
+eine Erneuerung in einer Sitzung muss deshalb ins Depot, sonst startet die nächste Sitzung
+abgemeldet oder mit einem Token, das nicht mehr gilt. Das ist ein Kanal aus einer Sitzung in jede
+spätere: Was eine kompromittierte Sitzung ins Depot schreiben kann, wirkt in jeder Sitzung danach
+wieder.
+
+*Was Humanitl tut* (HUM-520, ADR-0023 Punkt 4). Genau eine Datei geht zurück, die Zugangsdatei,
+die der Adapter nennt, und nur über den Wächter:
+
+1. Sie wird relativ zur Kopie der Konfiguration der Sitzung mit `openat` und `O_NOFOLLOW` geöffnet
+   (und `O_NONBLOCK`, damit ein FIFO den Daemon nicht aufhält); sie muss eine reguläre Datei von
+   höchstens 64 KiB sein. Nichts anderes der Kopie wird gelesen: eine geänderte `settings.json`,
+   eine zweite Datei neben der Zugangsdatei oder etwas an der Stelle des Programms erreicht das
+   Depot nie.
+2. Sie muss ein JSON-Objekt im Format des Adapters sein: nur bekannte Schlüssel, jeder Wert vom
+   erwarteten Typ und in erwarteter Form (ein Token aus sichtbarem ASCII, ein kurzer Text, eine
+   ganze Zahl, ein Schalter, eine Liste von Texten), jeder Pflichtschlüssel vorhanden, ein Ablauf
+   höchstens 400 Tage voraus. Bei der ersten Anmeldung ist das die ganze Prüfung; die erste Datei
+   speichert nur ein Anmeldelauf, den der Mensch startet, nie eine Sitzung, so dass keine Sitzung
+   das Konto wählt. Jede spätere Rückschrift muss zudem genau die Schlüssel der gespeicherten Datei
+   haben, keinen mehr und keinen weniger, jeden in derselben Form.
+3. Wo das Format einen Ablauf trägt, darf die neue Datei nicht früher ablaufen als die
+   gespeicherte, und bei gleichem Ablauf muss sie aus einer Sitzung kommen, die auf der
+   gespeicherten Datei begann; wo es keinen trägt, schreibt nur eine solche Sitzung zurück. Wo das Format ein Konto nennt, muss die neue Datei dasselbe nennen; nur ein
+   Anmeldelauf wechselt das Konto. Sonst `AGENT_016`, und die gespeicherte Datei bleibt: Von zwei
+   Sitzungen, die dieselbe Anmeldung erneuern, gewinnt das neuere Token, und ein älteres
+   überschreibt es nie.
+4. Geschrieben wird die eigene Serialisierung des geprüften Werts durch den Daemon, nicht die Bytes
+   der Sitzung; Leerraum, Reihenfolge der Schlüssel oder doppelte Schlüssel tragen nichts ins Depot.
+   Sie geht in eine temporäre Datei `0600` neben den Ordnern des Depots, wird synchronisiert und
+   unter einer Sperre je Agent mit `rename` eingesetzt; ein Absturz hinterlässt die alte oder die
+   neue Datei.
+5. Jedes Ergebnis steht im Audit-Log als `agent.credential_writeback` mit Agent, Sitzung, Ergebnis
+   und den SHA-256 der gespeicherten und der angebotenen Datei, nie mit ihrem Inhalt. Eine
+   Ablehnung (`AGENT_012` oder `AGENT_016`) lässt die gespeicherte Datei unverändert und steht in
+   `humanitl agents status`, bis die nächste Rückschrift übernommen ist; der Status nennt auch die
+   Sitzung, die zuletzt schrieb.
+
+Der Daemon sieht sich die Datei alle 10 Sekunden an, solange die Sitzung läuft, und noch einmal an
+ihrem Ende, bevor die Kopie gelöscht wird. Mit `agents.<id>.credential_writeback = false` geht
+nichts zurück. Ein Adapter, der kein Format seiner Zugangsdatei erklärt, bekommt gar nichts
+zurück; der Wächter rät nie ein Format.
+
+*Was bleibt.* Innerhalb des Formats gehören die Werte der Sitzung: Eine kompromittierte Sitzung
+kann ein gültig aussehendes Token desselben Kontos schreiben, das nicht funktioniert, oder eines,
+das in seinen Zeichen ein paar Bytes trägt, und die nächste Sitzung liest es. Das ist ein
+verdeckter Kanal zwischen Sitzungen desselben Agenten, begrenzt durch das Format und 64 KiB,
+sichtbar als Rückschrift im Audit-Log, und geschlossen durch `credential_writeback = false` um den
+Preis einer neuen Anmeldung, wann immer das Token abläuft. Zwei Sitzungen bei einem Anbieter, der
+seinen Refresh-Token rotiert, können einander das Token ungültig machen; dann ist eine neue
+Anmeldung nötig (`humanitl agents login <id>`). Andere Prozesse desselben Nutzers können das Depot
+ändern wie jede Datei unter dem Datenordner ([Abschnitt 5.6](#56-weitere-bekannte-grenzen),
+[außerhalb des Umfangs](#außerhalb-des-umfangs)). Die Zugangsdatei liegt unverschlüsselt im Depot,
+`0600`, wie die eigene Datei des Anbieters auf dem Host; Verschlüsselung mit einem Schlüssel aus
+dem Schlüsselbund ist HUM-523.
 
 ### Außerhalb des Umfangs
 

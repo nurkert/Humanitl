@@ -715,3 +715,51 @@ fn a_maintenance_run_carries_nothing_else_of_the_host() {
     moved.work_src = PathBuf::from("/nonexistent-hum563/elsewhere");
     assert!(check(&maintenance_profile(), &moved, &options).is_err());
 }
+
+/// A login or configuration run (HUM-520) carries the depot mount of its own
+/// agent and starts exactly that program; an install run carries none.
+#[test]
+fn a_login_run_carries_only_its_own_depot_program() {
+    let home = Path::new("/nonexistent-hum520/agents/.maintenance/claude-run");
+    let options = LaunchOptions::default();
+    let check = |session: &SessionContext| {
+        guard::check(&PlanRequest::new(&maintenance_profile(), session, &options))
+    };
+    let mount = DepotMount {
+        agent: "claude".to_owned(),
+        version: "1.0.0".to_owned(),
+        program_dir: PathBuf::from("/nonexistent-hum520/agents/claude/program/1.0.0"),
+        program: "claude".to_owned(),
+        scratch: PathBuf::from("/nonexistent-hum520/scratch"),
+        env: Vec::new(),
+    };
+    let run = |agent: Option<&str>, mount: Option<DepotMount>, command: &[&str]| {
+        let mut session = maintenance_session(home);
+        session.command = command.iter().map(OsString::from).collect();
+        session.agent_depot.maintenance_program = agent.map(ToOwned::to_owned);
+        session.agent_depot.mount = mount;
+        session
+    };
+    let program = "/run/humanitl/agent/claude";
+    check(&run(
+        Some("claude"),
+        Some(mount.clone()),
+        &[program, "auth", "login"],
+    ))
+    .unwrap();
+    // An install run with a mount.
+    assert!(check(&run(None, Some(mount.clone()), &[program])).is_err());
+    // The mount of another agent.
+    assert!(check(&run(Some("codex"), Some(mount.clone()), &[program])).is_err());
+    // Another command beside the mount.
+    assert!(
+        check(&run(
+            Some("claude"),
+            Some(mount),
+            &["/bin/sh", "-c", program]
+        ))
+        .is_err()
+    );
+    // A named agent without a mount.
+    assert!(check(&run(Some("claude"), None, &[program])).is_err());
+}

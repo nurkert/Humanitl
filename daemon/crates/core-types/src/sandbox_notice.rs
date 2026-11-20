@@ -43,6 +43,21 @@ pub enum SandboxNotice {
         /// Jede Garantie mit ihrem Ergebnis, in der Reihenfolge der Prüfung.
         results: Vec<CheckedGuarantee>,
     },
+    /// Der Wächter des Agent-Depots hat die Zugangsdatei einer Sitzung oder
+    /// eines Anmeldelaufs übernommen oder abgelehnt (HUM-520). Nie der
+    /// Inhalt, nur die SHA-256.
+    CredentialWriteback {
+        /// Der Agent, wie in `agents.<id>`.
+        agent: String,
+        /// Ob die Datei jetzt im Depot steht.
+        accepted: bool,
+        /// Der Code einer Ablehnung (`AGENT_012`, `AGENT_016`).
+        code: Option<String>,
+        /// SHA-256 der gespeicherten Datei davor.
+        sha256_old: Option<String>,
+        /// SHA-256 der angebotenen Datei.
+        sha256_new: Option<String>,
+    },
 }
 
 /// Eine Garantie in [`SandboxNotice::IsolationChecked`].

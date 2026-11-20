@@ -1670,7 +1670,7 @@ Agent not installed in the depot
 
 Agent in the depot not logged in
 
-**Auslöser.** The depot of this agent holds an installed version and no stored login. The agent starts and asks for a login itself; a login made in a session is discarded with the session until the login run exists.
+**Auslöser.** The depot of this agent holds an installed version and no stored login. The agent starts and asks for a login itself; a login made in a session goes back into the depot only through the guard of the write-back, and only where the adapter declares the format of its credential file. `humanitl agents login <id>` logs in once for every session.
 
 **Fix.** `CopyCommand` with `humanitl agents login <id>` (HUM-520).
 
@@ -1721,6 +1721,38 @@ Agent install or update failed
 **Auslöser.** Install and update of a depot agent run in a sandbox, and the daemon takes the result over only when every check passes: the version is the one asked for and only an update changes an installed one; where the vendor signs, the daemon itself verified its own copy of the vendor's manifest with the host's `gpg` and the key the adapter fixes, and the program's SHA-256 matches that manifest (the run only downloads, and no verdict of it counts); the program tree holds only regular files, directories and relative links inside it, no socket, FIFO, device, hard link, set-ID bit or name that is not UTF-8, within its caps. A missing `gpg` is a failure, never an unsigned install. The sentence names the step that failed; the depot is as it was before.
 
 **Fix.** `CopyCommand` with `humanitl agents install <id>` to run again after a failed download; `humanitl agents update <id>` when a version is installed already; install `gnupg` on the host when `gpg` is missing. A failed signature, checksum or tree check has no fix to go around it.
+
+#### AGENT_012
+
+Credential write-back refused
+
+**Auslöser.** Only one file goes from a session back into the depot, the credential file the adapter names, and only checked: opened without following a link, a regular file of at most 64 KiB, a JSON object with only the keys of the adapter's format, every value of its type and form, every required key present; after the first login also exactly the keys of the stored file. This file failed a check, and the stored login stays as it was. Nothing else a session writes ever reaches the depot.
+
+**Fix.** `CopyCommand` with `humanitl agents login <id>` when the stored login no longer works; otherwise none, the session keeps its own copy until it ends.
+
+#### AGENT_014
+
+Agent login failed
+
+**Auslöser.** The login of a depot agent runs in a sandbox, and only the credential file it leaves, checked by the guard of the write-back, reaches the depot. The login failed, left no such file, or the adapter declares no login run or credential format yet, so nothing would be taken back. A callback URL pasted from the browser is delivered inside the run only when it is exactly the agent's callback on its own loopback, and only on a backend whose sandbox has a loopback of its own; under Seatbelt on macOS only the device flow works.
+
+**Fix.** `CopyCommand` with `humanitl agents login <id>` to try again; where the device flow is off at the vendor, the sentence names the setting that turns it on.
+
+#### AGENT_016
+
+Credential of another account or older
+
+**Auslöser.** Two sessions can renew the same login, and some vendors swap the refresh token on each renewal. The daemon never writes an older token over a newer one: the file of this session expires earlier than the stored one, or, where the format carries no expiry, another session stored a file after this session started. Or the file names another account than the one logged in; only a login run changes the account. The stored login stays as it was.
+
+**Fix.** `CopyCommand` with `humanitl agents login <id>` when the agent asks for a login again.
+
+#### AGENT_019
+
+Configuration run not taken over
+
+**Auslöser.** The configuration of a depot agent changes only through a configuration run that the person confirms: the agent runs on a writable copy without a project, the daemon lists every changed file and highlights the keys that run commands, and only a confirmation replaces `config/` of the depot, in one step. This run, or its confirmation, did not get that far, and `config/` is as it was.
+
+**Fix.** `CopyCommand` with `humanitl agents config <id>` to run it again.
 
 ### Bereich edit
 

@@ -133,9 +133,8 @@
           "properties": {
             "credential_writeback": {
               "default": true,
-              "description": "Ob eine Sitzung die geprüfte Zugangsdatei des Agenten ins Depot zurückschreiben darf, damit eine erneuerte Anmeldung die Sitzung überdauert. Wirkt ab dem Wächter für das Zurückschreiben (HUM-520); bis dahin bleibt nichts einer Sitzung im Depot. Im Projekt-Profil gesperrt.",
+              "description": "Ob eine Sitzung die geprüfte Zugangsdatei des Agenten ins Depot zurückschreiben darf, damit eine erneuerte Anmeldung die Sitzung überdauert. Der Wächter lässt nur diese eine Datei durch, im Format des Adapters, nie älter und nie von einem anderen Konto (HUM-520); mit `false` bleibt nichts einer Sitzung im Depot. Im Projekt-Profil gesperrt.",
               "type": "boolean",
-              "x-pending-issue": "HUM-520",
               "x-project-scope": "denied",
               "x-tier": "expert"
             },
@@ -169,9 +168,8 @@
           "properties": {
             "credential_writeback": {
               "default": true,
-              "description": "Ob eine Sitzung die geprüfte Zugangsdatei des Agenten ins Depot zurückschreiben darf, damit eine erneuerte Anmeldung die Sitzung überdauert. Wirkt ab dem Wächter für das Zurückschreiben (HUM-520); bis dahin bleibt nichts einer Sitzung im Depot. Im Projekt-Profil gesperrt.",
+              "description": "Ob eine Sitzung die geprüfte Zugangsdatei des Agenten ins Depot zurückschreiben darf, damit eine erneuerte Anmeldung die Sitzung überdauert. Der Wächter lässt nur diese eine Datei durch, im Format des Adapters, nie älter und nie von einem anderen Konto (HUM-520); mit `false` bleibt nichts einer Sitzung im Depot. Im Projekt-Profil gesperrt.",
               "type": "boolean",
-              "x-pending-issue": "HUM-520",
               "x-project-scope": "denied",
               "x-tier": "expert"
             },
@@ -205,9 +203,8 @@
           "properties": {
             "credential_writeback": {
               "default": true,
-              "description": "Ob eine Sitzung die geprüfte Zugangsdatei des Agenten ins Depot zurückschreiben darf, damit eine erneuerte Anmeldung die Sitzung überdauert. Wirkt ab dem Wächter für das Zurückschreiben (HUM-520); bis dahin bleibt nichts einer Sitzung im Depot. Im Projekt-Profil gesperrt.",
+              "description": "Ob eine Sitzung die geprüfte Zugangsdatei des Agenten ins Depot zurückschreiben darf, damit eine erneuerte Anmeldung die Sitzung überdauert. Der Wächter lässt nur diese eine Datei durch, im Format des Adapters, nie älter und nie von einem anderen Konto (HUM-520); mit `false` bleibt nichts einer Sitzung im Depot. Im Projekt-Profil gesperrt.",
               "type": "boolean",
-              "x-pending-issue": "HUM-520",
               "x-project-scope": "denied",
               "x-tier": "expert"
             },
@@ -241,9 +238,8 @@
           "properties": {
             "credential_writeback": {
               "default": true,
-              "description": "Ob eine Sitzung die geprüfte Zugangsdatei des Agenten ins Depot zurückschreiben darf, damit eine erneuerte Anmeldung die Sitzung überdauert. Wirkt ab dem Wächter für das Zurückschreiben (HUM-520); bis dahin bleibt nichts einer Sitzung im Depot. Im Projekt-Profil gesperrt.",
+              "description": "Ob eine Sitzung die geprüfte Zugangsdatei des Agenten ins Depot zurückschreiben darf, damit eine erneuerte Anmeldung die Sitzung überdauert. Der Wächter lässt nur diese eine Datei durch, im Format des Adapters, nie älter und nie von einem anderen Konto (HUM-520); mit `false` bleibt nichts einer Sitzung im Depot. Im Projekt-Profil gesperrt.",
               "type": "boolean",
-              "x-pending-issue": "HUM-520",
               "x-project-scope": "denied",
               "x-tier": "expert"
             },
@@ -277,9 +273,8 @@
           "properties": {
             "credential_writeback": {
               "default": true,
-              "description": "Ob eine Sitzung die geprüfte Zugangsdatei des Agenten ins Depot zurückschreiben darf, damit eine erneuerte Anmeldung die Sitzung überdauert. Wirkt ab dem Wächter für das Zurückschreiben (HUM-520); bis dahin bleibt nichts einer Sitzung im Depot. Im Projekt-Profil gesperrt.",
+              "description": "Ob eine Sitzung die geprüfte Zugangsdatei des Agenten ins Depot zurückschreiben darf, damit eine erneuerte Anmeldung die Sitzung überdauert. Der Wächter lässt nur diese eine Datei durch, im Format des Adapters, nie älter und nie von einem anderen Konto (HUM-520); mit `false` bleibt nichts einer Sitzung im Depot. Im Projekt-Profil gesperrt.",
               "type": "boolean",
-              "x-pending-issue": "HUM-520",
               "x-project-scope": "denied",
               "x-tier": "expert"
             },

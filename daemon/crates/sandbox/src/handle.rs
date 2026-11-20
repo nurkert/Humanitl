@@ -250,6 +250,21 @@ pub struct StatusSnapshot {
     pub closed: bool,
 }
 
+/// Work that runs once at the end of a sandbox, before its directories are
+/// removed ([`SandboxHandle::before_cleanup`]).
+/// Once `done`, the end has taken them, and a later hook runs at once.
+#[derive(Default)]
+pub(crate) struct CleanupHooks {
+    hooks: Vec<Box<dyn FnOnce() + Send>>,
+    done: bool,
+}
+
+impl std::fmt::Debug for CleanupHooks {
+    fn fmt(&self, f: &mut std::fmt::Formatter<'_>) -> std::fmt::Result {
+        write!(f, "CleanupHooks({}, done: {})", self.hooks.len(), self.done)
+    }
+}
+
 /// Der geteilte Zustand hinter dem Handle.
 #[derive(Debug, Default)]
 pub(crate) struct Shared {
@@ -260,6 +275,9 @@ pub(crate) struct Shared {
     /// Descriptors that live as long as the sandbox: the reservation of an
     /// agent depot (HUM-518).
     held: Mutex<Vec<std::os::fd::OwnedFd>>,
+    /// What runs at the end of the sandbox before its directories go
+    /// (HUM-520: the last look at the credential file of the depot copy).
+    before_cleanup: Mutex<CleanupHooks>,
     exited: Condvar,
     report: Mutex<ReportSnapshot>,
     report_changed: Condvar,
@@ -476,6 +494,16 @@ impl Shared {
         // Die Lebensleine geht deshalb jetzt zu, und der Shim beendet den
         // Container binnen `KILL_GRACE`, auch wenn niemand mehr `kill` ruft.
         self.close_lifeline();
+        // Before the directories go: a hook still reads what the session left
+        // in them (HUM-520).
+        let hooks = {
+            let mut cleanup = lock(&self.before_cleanup);
+            cleanup.done = true;
+            std::mem::take(&mut cleanup.hooks)
+        };
+        for hook in hooks {
+            hook();
+        }
         // Vor dem Status: Wer auf ihn wartet, beendet womöglich gleich den Prozess.
         let dirs = std::mem::take(&mut *lock(&self.session_dir));
         for dir in dirs {
@@ -1029,6 +1057,19 @@ impl SandboxHandle {
     /// ein Handle hält.
     pub fn remove_at_exit(&self, dir: PathBuf) {
         self.shared.remove_at_exit(dir);
+    }
+
+    /// Runs `hook` once when the sandbox ends, before the directories of
+    /// [`SandboxHandle::remove_at_exit`] go (HUM-520: the last look at the
+    /// credential file in the depot copy). After the end it runs at once.
+    pub fn before_cleanup(&self, hook: Box<dyn FnOnce() + Send>) {
+        let mut cleanup = lock(&self.shared.before_cleanup);
+        if cleanup.done {
+            drop(cleanup);
+            hook();
+        } else {
+            cleanup.hooks.push(hook);
+        }
     }
 
     /// Keeps `fd` open until the sandbox ends (HUM-518: the reservation of

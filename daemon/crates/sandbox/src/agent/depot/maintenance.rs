@@ -61,26 +61,40 @@ pub const ENV_PLATFORM: &str = "HUMANITL_DEPOT_PLATFORM";
 /// The result directory in the sandbox.
 pub const ENV_OUT: &str = "HUMANITL_DEPOT_OUT";
 
-/// What a maintenance run does (ADR-0023 point 5). HUM-520 adds the login
-/// and the configuration run; a caller that maps a task to words of its own
-/// (`as_str`, the protocol's operations) matches every variant, so a new
-/// one shows up there at compile time.
+/// What a maintenance run does (ADR-0023 point 5). A caller that maps a
+/// task to words of its own (`as_str`, the protocol's operations) matches
+/// every variant, so a new one shows up there at compile time.
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
 pub enum MaintenanceTask {
     /// The first install; refused when the depot holds a version.
     Install,
     /// A new version, or back to one the depot holds.
     Update,
+    /// A login with the depot program (HUM-520, [`super::account`]): only
+    /// the checked credential file goes back.
+    Login,
+    /// A run of the agent on a writable copy of its configuration, taken
+    /// over only after confirmation (HUM-520, [`super::account`]).
+    Config,
 }
 
 impl MaintenanceTask {
-    /// The word of the CLI: `install` or `update`.
+    /// The word of the CLI: `install`, `update`, `login` or `config`.
     #[must_use]
     pub const fn as_str(self) -> &'static str {
         match self {
             Self::Install => "install",
             Self::Update => "update",
+            Self::Login => "login",
+            Self::Config => "config",
         }
+    }
+
+    /// Whether the run starts the depot program (login and configuration)
+    /// rather than an install recipe.
+    #[must_use]
+    pub const fn runs_agent(self) -> bool {
+        matches!(self, Self::Login | Self::Config)
     }
 }
 
@@ -222,6 +236,15 @@ pub(crate) fn prepare_for(
     depot: Depot,
     platform: Option<HostPlatform>,
 ) -> Result<Maintenance, Diagnostic> {
+    if request.task.runs_agent() {
+        return Err(Diagnostic::builder(AGENT_015, Severity::Error)
+            .why(format!(
+                "a {} run of {} is no install; it is prepared as a run of the agent",
+                request.task.as_str(),
+                agent.display_name
+            ))
+            .build());
+    }
     let install = agent
         .recipe
         .and_then(|recipe| recipe.install)
@@ -349,7 +372,8 @@ fn pinned(
                 }
             }
         }
-        (MaintenanceTask::Install, None) => {}
+        (MaintenanceTask::Install, None)
+        | (MaintenanceTask::Login | MaintenanceTask::Config, _) => {}
     }
     Ok(None)
 }
@@ -906,7 +930,7 @@ pub(crate) fn session_rules(
 
 /// The work directory of a run, under the daemon's data directory and
 /// beside the depots, never inside one.
-fn work_dir(paths: &Paths, agent: &str, session: SessionId) -> PathBuf {
+pub(crate) fn work_dir(paths: &Paths, agent: &str, session: SessionId) -> PathBuf {
     let data = std::fs::canonicalize(paths.data_dir()).unwrap_or_else(|_| paths.data_dir());
     data.join("agents")
         .join(".maintenance")
@@ -915,7 +939,7 @@ fn work_dir(paths: &Paths, agent: &str, session: SessionId) -> PathBuf {
 
 /// One run per agent at a time: an exclusive lock on
 /// `agents/<id>.maintenance.lock`.
-fn maintenance_lock(depot: &Depot) -> Result<Reservation, Diagnostic> {
+pub(crate) fn maintenance_lock(depot: &Depot) -> Result<Reservation, Diagnostic> {
     depot.lock_named("maintenance").map_err(|found| {
         if found.code == AGENT_018 {
             failed(

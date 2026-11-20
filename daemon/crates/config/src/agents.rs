@@ -136,12 +136,8 @@ pub struct AgentSourceSettings {
         extend("x-tier" = "advanced", "x-project-scope" = "denied")
     )]
     pub source: Option<AgentSource>,
-    /// Ob eine Sitzung die geprüfte Zugangsdatei des Agenten ins Depot zurückschreiben darf, damit eine erneuerte Anmeldung die Sitzung überdauert. Wirkt ab dem Wächter für das Zurückschreiben (HUM-520); bis dahin bleibt nichts einer Sitzung im Depot. Im Projekt-Profil gesperrt.
-    #[schemars(extend(
-        "x-tier" = "expert",
-        "x-project-scope" = "denied",
-        "x-pending-issue" = "HUM-520"
-    ))]
+    /// Ob eine Sitzung die geprüfte Zugangsdatei des Agenten ins Depot zurückschreiben darf, damit eine erneuerte Anmeldung die Sitzung überdauert. Der Wächter lässt nur diese eine Datei durch, im Format des Adapters, nie älter und nie von einem anderen Konto (HUM-520); mit `false` bleibt nichts einer Sitzung im Depot. Im Projekt-Profil gesperrt.
+    #[schemars(extend("x-tier" = "expert", "x-project-scope" = "denied"))]
     pub credential_writeback: bool,
 }
 

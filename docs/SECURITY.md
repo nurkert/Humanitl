@@ -122,9 +122,9 @@ the resolved version directory `program/<version>/`, never the `current` link, r
 the bind (owner, no write for others, no symbolic link out of the tree); and a scratch copy of the
 depot's `config/` and credential file under the session's runtime directory (at most 64 MiB),
 writable at `/run/humanitl/agent-config`, deleted when the session ends and, after a crash, on the
-next start. Nothing a session writes stays in the depot; the guarded write-back of the credential
-file follows with HUM-520. The kernel level does not carry the depot yet and refuses such a session
-with `AGENT_015`.
+next start. Nothing a session writes stays in the depot except the one credential file, and only
+through the guard of the write-back ([section 5.7](#57-the-credential-file-of-the-depot)). The
+kernel level does not carry the depot yet and refuses such a session with `AGENT_015`.
 
 **One guard.** Every backend's plan first checks the final command and binds of the session: a
 host path, a wrapper or a symbolic link to a program an adapter recognises as a depot agent, or a
@@ -180,6 +180,30 @@ it, and sessions keep the version they started with. In a session the program di
 read-only, so an agent's self-update fails there on purpose. *Limits:* an unsigned recipe's version
 is the run's word, checked only for its form; the kernel level and Seatbelt refuse a maintenance run
 for now (`AGENT_015`); one run at a time, and only while no other session runs.
+
+**Login and configuration runs (HUM-520).** `humanitl agents login` and `humanitl agents config`
+are maintenance runs of the same kind that start the depot program instead of a recipe: the
+program directory read-only, a writable copy of `config/` and the credential file as the agent's
+configuration directory, its own work directory as `HOME`, no project. The guard admits a depot
+mount in a maintenance run only for the agent the daemon marked for it, and only with that
+program as the command. A login reaches only the adapter's login hosts without a hold, as rules of
+this run; afterwards only the credential file goes back, through the guard of the write-back
+([section 5.7](#57-the-credential-file-of-the-depot)), and, where the adapter names them, single
+keys of another file that the daemon reads, checks against their declared form (at most 64 KiB
+together, from a file of at most 4 MiB, which the merge may not outgrow) and writes into its own
+copy, only after the credential file and these keys all passed; if writing the keys fails, the
+earlier login is put back under the same lock, so a login is all or nothing (an agent that keeps account state beside `mcpServers` in one file never gets that file
+taken over). Every other change of the login run goes with its copy. The URLs a login prints are
+shown; a client opens one on the host only after a click or `--open`, and only when its host is
+one of the adapter's login hosts. Where an agent waits for a browser callback on its own loopback,
+no port of the host is forwarded into the sandbox: the person pastes the URL from the browser, the
+daemon accepts exactly `http://localhost:<port><path>?<query>` and delivers it with one process
+inside the run, and only on a backend whose sandbox has a loopback of its own; under Seatbelt the
+sandbox shares the host's, so only the device flow works there, and a failed login names the
+vendor's setting (`AGENT_014`). A configuration run lays its changed copy aside, lists every
+changed file with the keys that run commands highlighted (for Claude Code `hooks`, `apiKeyHelper`,
+`statusLine`, `mcpServers`, `env`), and replaces `config/` in one step only after the person
+confirms (`AGENT_019` otherwise); the credential file never travels this way.
 
 ### Trusted computing base
 
@@ -752,6 +776,7 @@ channels below are shown in the application, not hidden.
 | terminal output | the human reads what the agent writes | the daemon filters every byte stream before a client sees it (allowlist); banner "agent output is not trustworthy" | |
 | host names in the log | blocked requests stay visible | documented; the export carries hosts, paths, headers and bodies in plain text and says so before writing | optional host redaction |
 | package caches | repeated installs | caches per project, never shared across trust levels | read-only seed caches |
+| the credential file of the depot | a renewed login has to outlive the session | only the one file the adapter names goes back, opened without following a link, at most 64 KiB, checked against the adapter's format and the stored file, never older and never another account, written atomically under a lock, every outcome in the audit log with the SHA-256 of both files; `agents.<id>.credential_writeback = false` turns it off | an encrypted store with a key from the keyring (HUM-523) |
 
 ### 5.1 The LLM passthrough
 
@@ -1392,6 +1417,59 @@ An honest list of what is missing in 0.1 or weaker than one might assume:
     connects during the outage; the status bar turns red, every new card says it will not be
     recorded, and the first approval of the session pauses for a confirmation. `RECORDER_005`
     says when recording works again. Lost flows are not written afterwards.
+
+### 5.7 The credential file of the depot
+
+*Why it exists.* With the agent depot (HUM-518) a login happens once and holds for every session.
+Tokens expire, and some vendors swap the refresh token on every use, so a renewal made in a
+session has to reach the depot, or the next session starts logged out or with a token that no
+longer works. This is a channel from a session into every later one: whatever a compromised
+session manages to write into the depot acts again in every session after it.
+
+*What Humanitl does* (HUM-520, ADR-0023 point 4). Exactly one file goes back, the credential file
+the adapter names, and only through the guard:
+
+1. It is opened relative to the session's copy of the configuration with `openat` and
+   `O_NOFOLLOW` (and `O_NONBLOCK`, so a FIFO cannot stall the daemon); it must be a regular file of
+   at most 64 KiB. Nothing else of the copy is read: a changed `settings.json`, a second file
+   beside the credential file or anything in the program's place never reaches the depot.
+2. It must be a JSON object in the adapter's format: only known keys, each value of the expected
+   type and form (a token of visible ASCII, a short text, a whole number, a flag, a list of
+   texts), every required key present, an expiry at most 400 days ahead. At the first login that
+   is the whole check; only a login run, which the person starts, stores the first file, never a
+   session, so no session chooses the account. Every later write-back must also have exactly the
+   keys of the stored file, no more and no fewer, each of the same form.
+3. Where the format carries an expiry, the new file must not expire earlier than the stored one,
+   and with the same expiry it must come from a session that started on the stored file; where
+   the format carries none, only such a session writes back. Where the
+   format names an account, the new file must name the same one; only a login run changes the
+   account. Otherwise `AGENT_016`, and the stored file stays: of two sessions renewing the same
+   login, the newer token wins and an older one never overwrites it.
+4. What is written is the daemon's own serialisation of the checked value, not the session's
+   bytes, so whitespace, key order or duplicate keys carry nothing into the depot. It is written
+   to a temporary file `0600` beside the depot's directories, synced, and put in place with
+   `rename` under a lock per agent; a crash leaves the old file or the new one.
+5. Every outcome stands in the audit log as `agent.credential_writeback` with the agent, the
+   session, the result and the SHA-256 of the stored and the offered file, never their content. A
+   refusal (`AGENT_012` or `AGENT_016`) leaves the stored file unchanged and stands in
+   `humanitl agents status` until the next write-back is taken over; the status also names the
+   session that wrote last.
+
+The daemon looks at the file every 10 seconds while the session runs and once more when it ends,
+before the copy is removed. With `agents.<id>.credential_writeback = false` nothing goes back. An
+adapter that declares no format of its credential file gets nothing back at all; the guard never
+guesses a format.
+
+*What remains.* Within the format, the values are the session's: a compromised session can write
+a valid-looking token of the same account that does not work, or one that encodes a few bytes in
+its characters, and the next session reads it. That is a covert channel between sessions of the
+same agent, bounded by the format and 64 KiB, visible as a write-back in the audit log, and closed
+by `credential_writeback = false` at the price of a fresh login whenever the token expires. Two
+sessions with a vendor that rotates its refresh token can invalidate each other's token; then a new
+login is needed (`humanitl agents login <id>`). Other processes of the same user can change the
+depot as they can any file under the data directory ([section 5.6](#56-other-known-limits),
+[out of scope](#out-of-scope)). The credential file lies unencrypted in the depot, `0600`, like the
+vendor's own file on the host; encryption with a key from the keyring is HUM-523.
 
 ### Out of scope
 

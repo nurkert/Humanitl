@@ -993,8 +993,18 @@ Backend kennt das Depot nicht, `AGENT_017` Kommando nennt ein Programm des
 Hosts eines Depot-Agenten, `AGENT_018` Depot von der laufenden Sitzung
 eingehängt (`agents remove`). HUM-519: `AGENT_011` Installation oder Update
 gescheitert, mit dem Schritt (`run`, `result`, `pin`, `signature`, `checksum`,
-`tree`, `commit`) im `why`. `AGENT_012`, `AGENT_014` und `AGENT_016`
-registriert HUM-520. Dazu `LLM_004` für „kein Modell konfiguriert".
+`tree`, `commit`) im `why`. HUM-520: `AGENT_012` Rückschrift der Zugangsdatei
+abgelehnt, `AGENT_014` Anmeldung gescheitert oder Callback nicht zustellbar,
+`AGENT_016` anderes Konto oder älteres Token, `AGENT_019` Konfigurationslauf
+nicht übernommen. Dazu `LLM_004` für „kein Modell konfiguriert".
+
+**Audit der Rückschrift (HUM-520).** Jedes Ergebnis des Wächters der
+Zugangsdatei geht als `SandboxNotice::CredentialWriteback` über den Kanal
+`sandbox_notices` ins Audit-Log, als Art `agent.credential_writeback` mit
+`agent`, `accepted`, `code` (`AGENT_012`, `AGENT_016` oder `null`),
+`sha256_old` und `sha256_new`, nie mit dem Inhalt oder dem Konto. Der Zustand
+`confirm` eines `AgentMaintenance` heißt: ein Konfigurationslauf wartet auf
+`config_accept` oder `config_discard`.
 
 ### 4.18 Aus der Umsetzung des History-Bildschirms (HUM-032, 2026-09-04)
 

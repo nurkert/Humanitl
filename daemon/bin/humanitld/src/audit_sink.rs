@@ -44,8 +44,9 @@ use std::time::SystemTime;
 
 use humanitl_audit::RecordKind;
 use humanitl_audit::kinds::{
-    CheckOutcome, DecisionKind, FlowBlockedReason, FlowDecided, FlowReceived, FlowResponded,
-    InterceptResumed, IsolationCheck, SandboxDoorCapped, SessionEnded, SessionStarted,
+    AgentCredentialWriteback, CheckOutcome, DecisionKind, FlowBlockedReason, FlowDecided,
+    FlowReceived, FlowResponded, InterceptResumed, IsolationCheck, SandboxDoorCapped, SessionEnded,
+    SessionStarted,
 };
 use humanitl_audit_log::AuditHandle;
 use humanitl_core::{
@@ -341,6 +342,19 @@ pub(crate) fn sandbox_record(notice: &SandboxNotice) -> RecordKind {
         SandboxNotice::DoorCapped { cap } => {
             RecordKind::SandboxDoorCapped(SandboxDoorCapped { cap: *cap })
         }
+        SandboxNotice::CredentialWriteback {
+            agent,
+            accepted,
+            code,
+            sha256_old,
+            sha256_new,
+        } => RecordKind::AgentCredentialWriteback(AgentCredentialWriteback {
+            agent: agent.clone(),
+            accepted: *accepted,
+            code: code.clone(),
+            sha256_old: sha256_old.clone(),
+            sha256_new: sha256_new.clone(),
+        }),
         SandboxNotice::IsolationChecked { results } => RecordKind::IsolationCheck(IsolationCheck {
             results: results
                 .iter()

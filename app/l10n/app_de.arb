@@ -1916,6 +1916,14 @@
   "diagSANDBOX055Why": "Der Gast hat sich bereit gemeldet, aber das Gerät, über das der Daemon ihn erreicht, antwortet nicht mehr. Starte die Sitzung neu; wiederholt es sich, braucht das Programm des Geräts eine neuere Fassung.",
   "diagAGENT011Title": "Installation oder Update des Agenten gescheitert",
   "diagAGENT011Why": "Die Installation oder das Update hat nicht jede Prüfung bestanden, deshalb wurde nichts übernommen, und das Depot ist wie vorher. Die Meldung nennt den Schritt, der scheiterte.",
+  "diagAGENT012Title": "Rückschrift der Zugangsdatei abgelehnt",
+  "diagAGENT012Why": "Die Zugangsdatei dieser Sitzung hat eine Prüfung des Wächters nicht bestanden und wurde nicht übernommen; die gespeicherte Anmeldung bleibt, wie sie war. Nichts anderes, was eine Sitzung schreibt, erreicht je das Depot.",
+  "diagAGENT014Title": "Anmeldung des Agenten gescheitert",
+  "diagAGENT014Why": "Die Anmeldung lief in einer Sandbox und endete ohne geprüfte Zugangsdatei im Depot, oder die eingefügte Callback-URL war nicht der Callback des Agenten oder ließ sich nicht zustellen. Die Meldung nennt den Grund.",
+  "diagAGENT016Title": "Zugangsdatei eines anderen Kontos oder älter",
+  "diagAGENT016Why": "Eine ältere Anmeldung ersetzt nie eine neuere, und nur ein Anmeldelauf wechselt das Konto. Die Zugangsdatei dieser Sitzung war älter oder nannte ein anderes Konto, deshalb bleibt die gespeicherte Anmeldung.",
+  "diagAGENT019Title": "Konfigurationslauf nicht übernommen",
+  "diagAGENT019Why": "Die Konfiguration eines Depot-Agenten ändert sich nur über einen bestätigten Konfigurationslauf. Dieser Lauf oder seine Bestätigung kam nicht so weit, deshalb ist die Konfiguration wie vorher.",
   "diagCONFIG025Title": "Datenort nicht ausgebbar",
   "diagCONFIG025Why": "Ein Datenort enthält einen Zeilenumbruch oder ein anderes Steuerzeichen und lässt sich deshalb nicht zeilenweise ausgeben, ohne andere Verzeichnisse zu nennen. Es wurde nichts ausgegeben."
 }
