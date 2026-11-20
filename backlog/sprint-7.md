@@ -4615,6 +4615,173 @@ die der Launcher bei `depot` maskiert (HUM-518 Punkt 4).
    Wegwerf-Sitzung.
 2. Die Anmeldedaten des Hosts erreichen die Sandbox nicht.
 
+### Stand nach der Umsetzung (2026-11-20)
+
+Gebaut: `daemon/crates/sandbox/src/agent/agy.rs` (`AntigravityAdapter`,
+fünfter Eintrag im Register, `agent.adapter = "agy"`, auch in Katalog und
+App), aus den Bausteinen von HUM-514 und HUM-515 (Starter mit memfd-Datei,
+aufgelöster Endpunkt für Umgebung, Durchreiche, Briefing, Hinweis und
+Maske, `key_header`, `command_preflight`, kein kopierter Adapter). Quellen,
+gelesen 2026-11-20, jede mit Adresse im Code: antigravity.google/docs
+(`/install?tab=cli`, `/getting-started?tab=cli`, `/cli/troubleshooting`,
+`/cli/reference`, `/settings`, `/sandbox`, `/rules`, `/skills`,
+`/enterprise`), das Installationsskript
+`https://antigravity.google/cli/install.sh` und die Gemini-API-Referenz
+`https://aistudio.google.com/api-reference`. `agy` ist nicht quelloffen;
+nichts ist am echten Programm gemessen.
+
+Belegt und umgesetzt:
+- Programm: `curl -fsSL https://antigravity.google/cli/install.sh | bash`
+  legt ein einzelnes natives Programm unter `~/.local/bin/agy` ab
+  (getting-started; das Skript lädt je Plattform einen „flat native build"
+  und prüft SHA-512 aus demselben Manifest). Bindung aus `~/.local/bin` wie
+  bei Claude Code (HUM-278), `AGENT_001` nennt den Installer.
+- Zustand: `~/.gemini/antigravity-cli/settings.json` (install, settings),
+  Regeln in `~/.gemini/GEMINI.md` (rules), Skills der CLI in
+  `~/.gemini/antigravity-cli/skills/` (skills). Keine Variable verlegt
+  `~/.gemini`; der Adapter legt alles ins tmpfs-Home der Sitzung. Briefing
+  als `~/.gemini/GEMINI.md`, Skill `humanitl` dort, beide nur lesbar.
+- Anmeldung: Tokens „in the OS-native keyring … Linux Secret Service/dbus"
+  (install, Reiter CLI), kein Rückfall in eine Datei beschrieben.
+  Deshalb nur API-Schlüssel: mit `llm.api_key_ref` steht
+  `"modelProvider": "gemini"` in den Einstellungen, `GEMINI_API_KEY` „is
+  read only from the environment" (install). Der Schlüssel kommt als
+  memfd-Datei `/etc/humanitl/agy/llm-api-key`, der Starter (`agy::KEY_START`)
+  liest ihn mit `read` und exportiert ihn; in keinem `argv`, in keiner
+  Variable des Plans.
+- Einstellungen schreibbar: Die CLI schreibt sie selbst
+  (`trustedWorkspaces` „The CLI adds these entries for you", erste
+  Einrichtung mit Farbschema und Vertrauen). Der Adapter legt deshalb eine
+  nur lesbare Vorlage `/etc/humanitl/agy/settings.json` an, und der
+  Starter schreibt sie vor jedem Start nach
+  `~/.gemini/antigravity-cli/settings.json`; der Starter steht deshalb
+  auch ohne Schlüssel vor dem Agenten. Inhalt: `showFeedbackSurvey =
+  false`, mit Schlüssel `modelProvider`, mit Gateway und Modell `model`.
+  Vertrauen in `/work` setzt der Adapter nicht; die Frage stellt `agy`.
+- Nebenverkehr: `AGY_CLI_DISABLE_AUTO_UPDATE=true` (troubleshooting:
+  „native, statically linked self-updater"). Telemetrie hat keinen
+  Schlüssel in `settings.json`, „Enable Telemetry" in `/config` ist „saved
+  with your account" (cli/reference); mit API-Schlüssel gibt es kein Konto.
+  Was `agy` trotzdem sendet, wird gehalten.
+- Modell und Hosts: mit Schlüssel „model requests go directly to the
+  Gemini API" (install), also `generativelanguage.googleapis.com:443`,
+  Kopfzeile `x-goog-api-key`, `POST /v1beta/models/{model}:generateContent`
+  bzw. `:streamGenerateContent`, `GET /v1beta/models` (api-reference).
+  Durchreiche: `POST` und `GET` auf `/v1beta/models` und `/v1/models` genau
+  und alles darunter, an dieser einen Origin; `x-goog-api-key` ist dort
+  kein Fund. `llm.endpoint` (außer der Gemini-API selbst, `is_direct_api`)
+  wird `GOOGLE_GEMINI_BASE_URL` (install: „custom Gemini-compatible
+  endpoint"), ohne Zugangsdaten, Query und API-Version, Loopback über den
+  Alias-Namen; die Durchreiche gilt dann unter dessen Präfix.
+- Hinweis HUM-516: mit Schlüssel `generativelanguage.googleapis.com`, ohne
+  Schlüssel `cloudcode-pa.googleapis.com` (enterprise: „the client
+  connects to the global endpoints … during sign-in, to find licenses and
+  load the model catalog"); dieser Host wird gehalten, nie durchgereicht.
+- Eigene Sandbox von `agy`: Linux mit „Kernel namespaces" (sandbox); wo
+  unprivilegierte Nutzer-Namensräume gesperrt sind, wirken
+  `enableTerminalSandbox` und `--sandbox` nicht, Auto-Modus fehlt.
+  Humanitl startet mit `--disable-userns`; der Sandbox-Test belegt
+  `nested_userns=refused` wie bei Codex. Das Briefing nennt Humanitl als
+  äußere Grenze.
+- Depot (`depot/recipe.rs`, `AGY_RECIPE`): `LoginFlow::ApiKeyOnly`,
+  `update_off = AGY_CLI_DISABLE_AUTO_UPDATE=true`, keine Zugangsdatei.
+  `agents login agy` antwortet `AGENT_014` mit `why` (API-Schlüssel aus dem
+  Schlüsselbund von Humanitl, Schlüsselbund und Session-Bus des Hosts
+  kommen nie in eine Sandbox) und neu mit `fix` `humanitl llm key set`
+  (für jedes `ApiKeyOnly`). Orte einer Host-Installation unverändert
+  (`/usr/bin/agy`, `/usr/local/bin/agy`, `/opt/homebrew/bin/agy`): das Skript
+  kennt nur `~/.local/bin` oder `--dir`, kein npm-Paket.
+
+Abweichungen und offen:
+- **`modelProvider` nicht im Depot, sondern in der Sitzung.**
+  `DepotRecipe::config_env` ist jetzt `Option`: Für `agy` verlegt keine
+  Variable `~/.gemini`, also trägt das Depot nur das Programm, und die
+  Einstellungen schreibt der Starter wie bei der Quelle `host` ins
+  tmpfs-Home. Nach dem Review wird für ein solches Rezept keine Kopie
+  angelegt und nichts unter `/run/humanitl/agent-config` eingehängt
+  (`DepotMount::scratch` ist `Option`, alle Backends); der Start hält nur
+  die Reservierung des Depots (`Scratch::reservation_only`). Ein
+  Konfigurationslauf für `agy` antwortet `AGENT_015`, weil keine Sitzung
+  lesen würde, was er schreibt. `HOME` auf die Kopie zu
+  legen hätte Briefing, Skill und Vorlage des Adapters verdeckt und mit dem
+  `HOME` des Wartungslaufs kollidiert. Kandidat für ein eigenes Issue: ein
+  Depot-Ort relativ zu `HOME` (Kopie unter `~/.gemini/antigravity-cli`
+  eingehängt), wie ADR-0023 Punkt 2 ihn nennt.
+- **Kein Installationsrezept** (`install: None`, `agents install agy`
+  antwortet `AGENT_015`): Das Skript holt das Manifest von
+  `antigravity-cli-auto-updater-974169037036.us-central1.run.app`, das
+  Programm von dem Host, den das Feld `url` des Manifests nennt, und prüft
+  nur SHA-512 aus demselben Manifest, keine Signatur. Der Host des
+  Programms ist erst zur Laufzeit bekannt. Unter macOS entfernt das
+  Skript `com.apple.quarantine`. Messpunkt in HUM-553 Punkt 5.
+- **Doku schweigt** zu: Proxy und zusätzlicher CA für den eigenen Verkehr
+  der CLI (`sandboxProxy`/`certFile` gelten nur für Befehle in ihrer
+  eigenen Sandbox); der Adapter setzt `SSL_CERT_FILE` (Go `crypto/x509`,
+  pkg.go.dev) und verlässt sich für den Proxy auf das Env-Kit, weil das
+  Skript die CLI „Go-Native" nennt — eine Ableitung, keine Zusage. Ein
+  direkter Weg scheitert ohnehin geschlossen. Ebenso offen: welche
+  API-Version die CLI nutzt, ob sie den Schlüssel in `x-goog-api-key` oder
+  in `?key=` schickt (in der Query bliebe er ein Fund), ob sie ohne
+  Schlüsselbund in eine Datei schreibt, welche Hosts die Anmeldung mit
+  persönlichem Konto braucht, eine systemweite Ablage für Regeln oder
+  Skills, eine Variable für den Ort von `~/.gemini`.
+- **Schlüssel konfiguriert, aber nicht angekommen** (nach dem Review, gilt
+  für Claude Code, Codex und `agy` an einer Stelle in `ipc`): Gibt der
+  Speicher den Schlüssel nicht heraus (`LLM_009` als Warnung für eine Shell
+  des Aufrufers) oder gehört er zu einem anderen Endpunkt, sieht der
+  Adapter die Konfiguration ohne `llm.api_key_ref`, und der Start setzt die
+  Durchreiche einer Sitzung ohne Schlüssel an die Stelle der installierten
+  (`Inner::passthrough_without_key`). Für `agy` heißt das: keine
+  Durchreiche zur Gemini-API, kein `modelProvider` in der Vorlage; für
+  Codex der eingebaute Anbieter; für Claude Code bleibt die Durchreiche
+  gleich, weil sie nicht vom Schlüssel abhängt.
+- **Ohne Schlüssel** startet `agy` mit der Anmeldung über ein Google-Konto,
+  findet in der Sandbox keinen Schlüsselbund und meldet das selbst
+  (troubleshooting: „secret keyring is locked"); kein eigener Befund von
+  Humanitl, weil das Verhalten von `agy` ohne Schlüsselbund nicht belegt
+  ist.
+- Kein Ende-zu-Ende-Lauf mit dem echten `agy` (nicht installiert, nicht
+  quelloffen); belegt ist der Weg mit dem Stellvertreter-Programm im
+  echten bwrap, der echte Lauf steht in HUM-553 Punkt 5.
+- Wie bei Claude Code und Codex: Eine Shell des Aufrufers (`humanitl run --
+  bash`), die `agy` von Hand startet, bekommt weder Einstellungen noch
+  Schlüssel; der Starter gilt nur dem Agenten. Der Shim startet `/bin/sh`,
+  ein fehlendes Programm endet mit 127 der Shell; die Vorprüfung
+  (`AGENT_001`) fängt den Fall vorher.
+- Unter macOS nicht gegengeprüft; die Pfade liegen dort gleich unter
+  `HOME`.
+
+Tests: `daemon/crates/sandbox/tests/agy_adapter.rs` (Register, Kommando,
+Env-Kit, Basis-URL eines Gateways, Direktprüfung, Vorlage der
+Einstellungen, Starter mit und ohne Schlüssel, Dateien, Briefing,
+Durchreiche, Hinweis, Vorprüfung, Rezept, `agents login agy` mit
+`AGENT_014` und `fix`, Konfigurationslauf mit `AGENT_015`, und im echten
+bwrap ein Stellvertreter hinter dem Starter neben einem gefälschten
+Host-Home mit `~/.gemini` (Einstellungen, `oauth_creds.json`, `GEMINI.md`),
+`~/.config/Antigravity`, einer Schlüsselbund-Datei und einem gefälschten
+Bus-Socket im gefälschten Laufzeitordner: Schlüssel in der Umgebung, nicht
+in `argv` oder der Umgebung des Plans, Einstellungen mit
+`modelProvider` und schreibbar, Updater aus, CA lesbar, Briefing und Skill
+da, kein `DBUS_SESSION_BUS_ADDRESS`, kein Bus-Socket, Markierung des
+Host-Logins nirgends unter `/home`, `/etc`, `/tmp`, `/work`, `/run`,
+Vorlage und Schlüsseldatei nur lesbar, verschachtelter Nutzer-Namensraum
+abgelehnt), `ipc` (Schlüssel als Datei und über den Starter, Maske
+`x-goog-api-key` an `generativelanguage.googleapis.com:443`, Durchreiche),
+Widget-Test der Wahl in den Einstellungen und Breitentest mit sechs
+Agenten (en und de, Linux und macOS, kein Überlauf bei kleinster
+Fenstergröße; die Wahl bleibt einzeilig, rund 450 Pixel bleiben frei,
+Mutation: zehnfache Beschriftung „Antigravity" läuft um 113 Pixel über,
+alle vier Fälle rot). Angepasst: drei Tests, die `agy`
+als Agenten ohne Rezept nahmen, nehmen jetzt `pi`. Mutationsbeweise, jeder
+rot: Host-Login (`oauth_creds.json` aus dem gefälschten Host-Home) als
+Datei in `~/.gemini` der Sandbox (`host_login=absent`), `SSL_CERT_FILE`
+aus der Umgebung des Adapters entfernt (Env-Kit-Test; das Profil trägt
+`SSL_CERT_FILE` zusätzlich), Schlüssel als Wort des Starters (Starter- und
+Sandbox-Test), `DBUS_SESSION_BUS_ADDRESS` in der Umgebung des Adapters
+(Env-Kit- und Sandbox-Test), der gefälschte Bus-Socket als nur lesbare
+Einhängung im Profil (Plan scheitert mit `SANDBOX_006`, Laufzeitordner).
+Docs: README-Liste der Agenten, SECURITY (Fund, en, de), THREAT-MODEL
+K-02 und Änderungszeile (en, de).
 
 ---
 
@@ -6203,6 +6370,37 @@ Durchgang mit der KI über die ganze Liste.
      `program/<version>/codex` startet, wenn es nicht unter `bin/` neben
      `codex-code-mode-host` und `codex-path/rg` liegt (Voraussetzung für ein
      Installationsrezept).
+5. HUM-517, Antigravity CLI (`agy`): am echten Programm (Installer
+   `curl -fsSL https://antigravity.google/cli/install.sh | bash`) nachmessen,
+   was der Adapter aus der Doku (antigravity.google/docs, gelesen
+   2026-11-20) ableitet; `agy` ist nicht quelloffen, nichts davon lief hier:
+   - `humanitl go` mit `agy` und einem echten Gemini-API-Schlüssel aus dem
+     Schlüsselbund bis zum Prompt (Akzeptanzkriterium 1): ob die Kopfzeile
+     „Gemini API key" erscheint, ob `agy` den Proxy aus `HTTPS_PROXY` nimmt
+     und der CA aus `SSL_CERT_FILE` traut (keine TLS-Fehler), welche
+     API-Version und welche Pfade es anfragt (die Durchreiche deckt nur
+     `/v1beta/models` und `/v1/models` samt Unterpfaden), ob der Schlüssel
+     in `x-goog-api-key` geht (in `?key=` erschiene er als Fund), und welche
+     Anfragen gehalten erscheinen (Telemetrie, Updater-Host
+     `antigravity-cli-auto-updater-974169037036.us-central1.run.app`
+     trotz `AGY_CLI_DISABLE_AUTO_UPDATE=true`);
+   - ob die erste Einrichtung (Farbschema, Darstellung, Vertrauen in
+     `/work`) mit den Einstellungen startet, die der Starter schreibt, und
+     sie zurückschreibt;
+   - ob `agy` ohne Schlüssel und ohne Schlüsselbund (keine D-Bus-Sitzung in
+     der Sandbox) eine Anmeldung in eine Datei schreibt oder abbricht, mit
+     welcher Meldung, und welche Hosts die Anmeldung mit persönlichem Konto
+     erreicht (die Doku nennt nur `cloudcode-pa.googleapis.com` und
+     `businessaicode.googleapis.com` für Unternehmen); daran hängt, ob das
+     Depot `agy` später mit gespeicherter Anmeldung unterstützt;
+   - ob `~/.gemini/GEMINI.md` als globale Regel und der Skill unter
+     `~/.gemini/antigravity-cli/skills/humanitl/` geladen werden
+     (`/skills`);
+   - für ein Installationsrezept: den Host, den das Feld `url` des
+     Manifests `manifests/<plattform>.json` nennt, ob das Paket ein
+     einzelnes Programm oder ein `.tar.gz` ist, und ob der Hersteller eine
+     Signatur veröffentlicht (das Skript prüft nur SHA-512 aus demselben
+     Manifest).
 
 Weitere Punkte hängen spätere Issues hier an.
 

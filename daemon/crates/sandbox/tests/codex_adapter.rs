@@ -494,7 +494,7 @@ fn the_preflight_names_the_installer_when_codex_is_missing() {
 #[test]
 fn the_depot_recipe_declares_home_login_and_format() {
     let recipe = CodexAdapter::new().depot_recipe().expect("a depot recipe");
-    assert_eq!(recipe.config_env, ENV_CODEX_HOME);
+    assert_eq!(recipe.config_env, Some(ENV_CODEX_HOME));
     assert_eq!(recipe.credential_file, Some("auth.json"));
     assert!(recipe.credential_format.is_some());
     assert_eq!(recipe.login, depot::LoginFlow::DeviceCode);

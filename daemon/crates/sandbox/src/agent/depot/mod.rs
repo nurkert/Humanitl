@@ -95,8 +95,11 @@ pub struct DepotMount {
     pub program_dir: PathBuf,
     /// The program's file name in it.
     pub program: String,
-    /// The scratch on the host.
-    pub scratch: PathBuf,
+    /// The scratch on the host, bound writable at [`DEPOT_CONFIG_DST`];
+    /// `None` for an agent whose configuration no variable moves
+    /// ([`DepotRecipe::config_env`], `agy`, HUM-517): nothing would read a
+    /// copy, so none is made and none is mounted.
+    pub scratch: Option<PathBuf>,
     /// What the agent gets in its environment: the configuration variable
     /// and the self-update switches.
     pub env: Vec<(String, String)>,
@@ -355,17 +358,24 @@ fn mount_for(
         Purpose::Start => Some(depot.reserve_for_session()?),
     };
     let installed = depot.installed()?;
-    let scratch_path = scratch::scratch_path(input.paths, input.session);
+    let copied = recipe.config_env.is_some();
+    let scratch_path = copied.then(|| scratch::scratch_path(input.paths, input.session));
     let scratch = match reservation {
         None => None,
-        Some(reservation) => Some(scratch::create(
+        Some(reservation) if copied => Some(scratch::create(
             input.paths,
             input.session,
             &depot,
             Some(reservation),
         )?),
+        // No copy: the reservation alone goes with the sandbox.
+        Some(reservation) => Some(Scratch::reservation_only(reservation)),
     };
-    let mut env = vec![(recipe.config_env.to_owned(), DEPOT_CONFIG_DST.to_owned())];
+    let mut env: Vec<(String, String)> = recipe
+        .config_env
+        .map(|key| (key.to_owned(), DEPOT_CONFIG_DST.to_owned()))
+        .into_iter()
+        .collect();
     env.extend(
         recipe
             .update_off

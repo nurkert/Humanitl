@@ -94,7 +94,7 @@ use humanitl_core::{Diagnostic, FixAction, FlowEvent, SandboxNoticeSink, Severit
 use humanitl_proxy::rules_store::RulesStore;
 use humanitl_proxy::session::{SessionSettings, SessionState};
 use humanitl_recorder::Recorder;
-use humanitl_sandbox::agent::{claude, codex, opencode, pi};
+use humanitl_sandbox::agent::{agy, claude, codex, opencode, pi};
 use humanitl_sandbox::summary::SessionSummary;
 use humanitl_sandbox::{
     AdapterRegistry, AgentContext, AgentKey, Backend, CheckResult, DisposableLayer, IsolationCheck,
@@ -258,6 +258,10 @@ pub static VISIBLE_ENV: &[&str] = &[
     // variable `OPENAI_API_KEY` is never in the plan.
     codex::ENV_CODEX_HOME,
     codex::ENV_CA_CERTIFICATE,
+    // The Antigravity adapter (HUM-517), by name for the same reason; its
+    // key variable `GEMINI_API_KEY` is never in the plan.
+    agy::ENV_DISABLE_AUTO_UPDATE,
+    agy::ENV_BASE_URL,
 ];
 
 /// Die Variable, die allein die Sitzung kennt.
@@ -4181,6 +4185,9 @@ impl Inner {
         // An adapter that does not exist is `CONFIG_003` for every command;
         // without that, an empty command would silently start a shell.
         let agent = self.agent_contribution(&config, &work_src, &profile, command, need)?;
+        if agent.keyless && need == KeyNeed::Start {
+            self.passthrough_without_key(&config);
+        }
 
         let mut session_env = vec![(ENV_SESSION.to_owned(), self.session.to_string())];
         session_env.extend(agent.env.iter().cloned());
@@ -4367,8 +4374,18 @@ impl Inner {
             }
             Err(found) => return Err(found),
         };
+        // A reference without a delivered key (the store gave none out, or
+        // the key belongs to another endpoint) is no key for the session:
+        // the adapter sees the configuration without it, so its files,
+        // environment and passthrough are those of a session without a key
+        // (HUM-517, review).
+        let keyless = config.llm.api_key_ref.is_some() && matches!(key, AgentKey::None);
+        let mut llm = config.llm.clone();
+        if keyless {
+            llm.api_key_ref = None;
+        }
 
-        let ctx = AgentContext::new(self.session, work_src.to_path_buf(), config.llm.clone())
+        let ctx = AgentContext::new(self.session, work_src.to_path_buf(), llm)
             // Das Kommando, das wirklich läuft: das genannte, sonst das der
             // Konfiguration. Der Adapter prüft damit den Pfad, der gestartet
             // wird, und nicht einen anderen, den er auf dem Host fände
@@ -4453,7 +4470,33 @@ impl Inner {
             depot: depot.session,
             scratch: depot.scratch,
             launcher: adapter.launcher(&ctx),
+            keyless,
         })
+    }
+
+    /// Puts the passthrough of a session without a key in place of the one
+    /// `apply_resolved` installed from the key reference (HUM-517, review):
+    /// a passthrough an adapter declares only with a key (the Gemini API for
+    /// `agy`, Codex's own provider) must not stay open, unheld, for a
+    /// session whose key never arrived. The rest of the bundled group stays
+    /// as it is; the next session installs its own group.
+    fn passthrough_without_key(&self, config: &Config) {
+        let Some(store) = self.rules.as_ref() else {
+            return;
+        };
+        let mut keyless = config.clone();
+        keyless.llm.api_key_ref = None;
+        let rest = store
+            .list()
+            .into_iter()
+            // The bundled group: `set_bundled` marks every rule of it.
+            .filter(|stored| stored.rule.bundled && !stored.rule.passthrough_llm)
+            .map(|stored| stored.rule);
+        let bundled: Vec<humanitl_core::rule::Rule> = crate::session::session_passthrough(&keyless)
+            .into_iter()
+            .chain(rest)
+            .collect();
+        store.set_bundled(&bundled);
     }
 
     /// Das Agent-Depot dieser Sitzung (HUM-518), mit der Sperre des
@@ -4792,6 +4835,8 @@ struct AgentContribution {
     /// The adapter's words in front of the agent's final command
     /// ([`humanitl_sandbox::AgentAdapter::launcher`], HUM-514).
     launcher: Vec<OsString>,
+    /// `llm.api_key_ref` is set and no key reached the session (HUM-517).
+    keyless: bool,
 }
 
 /// The final command with the adapter's launcher in front, when the command
@@ -4869,7 +4914,7 @@ fn given_against_choice(
 fn started_without_key(mut found: Diagnostic) -> Diagnostic {
     found.severity = Severity::Warning;
     found.why = format!(
-        "{}; the session starts anyway, without the key, and an agent started in it has no          access key for the model",
+        "{}; the session starts anyway, without the key, and an agent started in it has no          access key for the model; a passthrough to the model that needs the key is not set",
         found.why
     );
     found
@@ -6604,6 +6649,101 @@ mod tests {
         );
     }
 
+    /// With `agent.adapter = "agy"` and no `llm.endpoint` the key travels as
+    /// a sandbox file, the launcher in front of the agent writes the
+    /// settings and moves the key into `GEMINI_API_KEY` inside the sandbox,
+    /// and its mask names `x-goog-api-key` at
+    /// `generativelanguage.googleapis.com:443`, where the Gemini API takes it
+    /// (HUM-517): in no `argv`, in no variable of the plan.
+    ///
+    /// Mutation proofs: the key in the adapter's `env` turns the `argv`
+    /// assert red; `key_header` left at `authorization` turns the mask
+    /// assert red.
+    #[tokio::test]
+    async fn the_key_reaches_agy_through_a_file_and_its_launcher_only() {
+        const KEY: &str = "AIza-sandbox-0123456789abcdef";
+        let home = tempfile::TempDir::new().unwrap();
+        let paths = humanitl_config::Paths::new(humanitl_config::Env::from_pairs([(
+            "XDG_DATA_HOME",
+            home.path().join("data").display().to_string(),
+        )]));
+        let keys =
+            KeyStore::for_paths(&paths).with_secret_tool(Some(fake_secret_tool(home.path())));
+        let stored = keys
+            .store(&humanitl_config::secret::ApiKey::new(KEY).unwrap())
+            .unwrap();
+        let recorder = Recorder::open(
+            &home.path().join("data/humanitl.db"),
+            &home.path().join("data/blobs"),
+            humanitl_recorder::RecorderSettings::default(),
+        )
+        .unwrap();
+        let key_ref = stored.key_ref.to_string();
+        let service = service_configured(
+            &home,
+            "agy",
+            Some(&key_ref),
+            SandboxPorts::none()
+                .with_keys(keys)
+                .with_recorder(recorder.clone()),
+            |config| config.llm.endpoint = None,
+        );
+        let prepared = service
+            .inner
+            .prepare_keyed(&v1::sandbox_request::Plan::default(), &[], KeyNeed::Start)
+            .expect("the session is prepared");
+
+        let secret = prepared
+            .session
+            .files
+            .iter()
+            .find(|file| file.secret)
+            .expect("the key travels as a file");
+        assert_eq!(secret.dst, Path::new(agy::API_KEY_DST));
+        assert_eq!(secret.content, KEY.as_bytes());
+        assert_eq!(
+            prepared
+                .session
+                .command
+                .get(2)
+                .map(|word| word.to_string_lossy().into_owned()),
+            Some(agy::KEY_START.to_owned()),
+            "the launcher stands in front of the agent"
+        );
+        let argv = shell_line(&prepared.argv());
+        assert!(!argv.contains(KEY), "the key reached argv: {argv}");
+        for (name, value) in &prepared.session.session_env {
+            assert!(
+                !value.contains(KEY),
+                "the key reached the environment as {name}"
+            );
+            assert_ne!(name, agy::ENV_API_KEY, "the plan sets the key variable");
+            assert_ne!(name, "DBUS_SESSION_BUS_ADDRESS");
+        }
+        let hash = humanitl_core::http::sha256(KEY.as_bytes());
+        let masks = recorder.masks();
+        assert!(masks.expected_in(
+            &hash,
+            "generativelanguage.googleapis.com:443",
+            "x-goog-api-key"
+        ));
+        assert!(
+            !masks.expected_at(&hash, "generativelanguage.googleapis.com:443"),
+            "the key goes in x-goog-api-key, not in Authorization"
+        );
+        let config = (*service.inner.config()).clone();
+        let rule = crate::session::session_passthrough(&config).expect("a passthrough");
+        assert_eq!(
+            rule.matcher.path_prefixes,
+            [
+                "/v1beta/models?",
+                "/v1beta/models/",
+                "/v1/models?",
+                "/v1/models/"
+            ]
+        );
+    }
+
     /// Zeichnet eine Anfrage mit `Authorization: Bearer <key>` auf und liest
     /// ihre Kopfzeilen aus der Aufzeichnung zurück.
     async fn recorded_authorization(recorder: &Recorder, key: &str) -> Vec<(String, String)> {
@@ -6767,6 +6907,74 @@ mod tests {
             .prepare_keyed(&v1::sandbox_request::Plan::default(), &[], KeyNeed::Start)
             .expect_err("the agent itself still stops");
         assert_eq!(refused.code, codes::LLM_009);
+    }
+
+    /// A key reference whose key never reached the session (`LLM_009` for a
+    /// caller's shell) leaves no passthrough that only a key opens
+    /// (HUM-517, review): for `agy` the Gemini API is held again, the seed
+    /// carries no `modelProvider`, and the rest of the bundled group stays.
+    /// With the key delivered the passthrough stands.
+    ///
+    /// Mutation proof: dropping the call of `passthrough_without_key` turns
+    /// the first assert red. The seed follows the delivered key itself
+    /// (`AgentContext::llm_key`).
+    #[test]
+    fn a_session_without_its_key_keeps_no_keyed_passthrough() {
+        let home = tempfile::TempDir::new().unwrap();
+        let paths = humanitl_config::Paths::new(humanitl_config::Env::from_pairs([(
+            "XDG_DATA_HOME",
+            home.path().join("data").display().to_string(),
+        )]));
+        let keys =
+            KeyStore::for_paths(&paths).with_secret_tool(Some(fake_secret_tool(home.path())));
+        let store = Arc::new(RulesStore::in_memory(SessionId::new()));
+        let service = service_configured(
+            &home,
+            "agy",
+            Some("secret-service:humanitl/gemini"),
+            SandboxPorts::none()
+                .with_keys(keys)
+                .with_rules(Arc::clone(&store)),
+            |config| config.llm.endpoint = None,
+        );
+        let config = (*service.inner.config()).clone();
+        let keyed = crate::session::session_passthrough(&config).expect("a keyed passthrough");
+        let other = humanitl_core::rule::Rule::new(
+            humanitl_core::RuleId::new(),
+            humanitl_core::rule::Action::Allow,
+            humanitl_core::rule::Matcher::host(humanitl_core::rule::HostPattern::Exact(
+                humanitl_core::HostName::parse("example.com").unwrap(),
+            )),
+        );
+        store.set_bundled(&[keyed, other.clone()]);
+
+        let shell = service
+            .inner
+            .prepare_keyed(
+                &v1::sandbox_request::Plan::default(),
+                &[OsString::from("bash")],
+                KeyNeed::Start,
+            )
+            .expect("a shell starts without the key");
+        let bundled: Vec<_> = store
+            .list()
+            .into_iter()
+            .filter(|stored| stored.rule.bundled)
+            .map(|stored| stored.rule)
+            .collect();
+        assert!(
+            !bundled.iter().any(|rule| rule.passthrough_llm),
+            "the Gemini API stays open without a key: {bundled:?}"
+        );
+        assert!(bundled.iter().any(|rule| rule.id == other.id));
+        let seed = shell
+            .session
+            .files
+            .iter()
+            .find(|file| file.dst == Path::new(agy::SETTINGS_SEED_DST))
+            .expect("the settings seed");
+        let seed = String::from_utf8_lossy(&seed.content).into_owned();
+        assert!(!seed.contains("modelProvider"), "{seed}");
     }
 
     /// HUM-532: Ohne gewählten Ordner nennt der Plan keinen, gleich in
@@ -9442,7 +9650,7 @@ mod tests {
                 "agent.command: {}",
                 found.why
             );
-            for caller in [&["/usr/local/bin/claude"][..], &["agy"][..]] {
+            for caller in [&["/usr/local/bin/claude"][..], &["pi"][..]] {
                 let found = start_path(&home, lock.clone(), None, caller, tweak).unwrap_err();
                 assert_eq!(
                     found.code.as_str(),
@@ -9474,14 +9682,17 @@ mod tests {
             .unwrap();
         let mount = prepared.session.agent_depot.mount.clone().unwrap();
         assert!(mount.program_dir.ends_with("program/1.0.0"));
-        assert!(mount.scratch.is_dir(), "a start copies the configuration");
+        assert!(
+            mount.scratch.as_ref().unwrap().is_dir(),
+            "a start copies the configuration"
+        );
         assert!(
             prepared.session.agent_program.is_none(),
             "nothing of the host"
         );
         drop(prepared);
         assert!(
-            !mount.scratch.exists(),
+            !mount.scratch.as_ref().unwrap().exists(),
             "an unlaunched plan takes its scratch along"
         );
 

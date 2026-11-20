@@ -929,7 +929,9 @@ fn sources_of(
         depot: pinned.depot.as_ref().map(|(program, scratch)| {
             (
                 program.resolved().to_path_buf(),
-                scratch.resolved().to_path_buf(),
+                scratch
+                    .as_ref()
+                    .map(|scratch| scratch.resolved().to_path_buf()),
             )
         }),
         host_masks,

@@ -64,7 +64,7 @@ const LOGIN: LoginRecipe = LoginRecipe {
 
 const RECIPE: DepotRecipe = DepotRecipe {
     program: "standin",
-    config_env: "STANDIN_CONFIG_DIR",
+    config_env: Some("STANDIN_CONFIG_DIR"),
     update_off: &[],
     credential_file: Some(".credentials.json"),
     install: None,
@@ -155,7 +155,13 @@ fn a_login_runs_the_depot_program_with_the_login_hosts_alone() {
     assert_eq!(command, ["/run/humanitl/agent/standin", "auth", "login"]);
     let mount = run.mount();
     assert_eq!(mount.program_dir, fixture.depot.program_dir().join("1.0.0"));
-    assert!(!mount.scratch.starts_with(fixture.depot.root()));
+    assert!(
+        !mount
+            .scratch
+            .as_ref()
+            .unwrap()
+            .starts_with(fixture.depot.root())
+    );
     assert!(
         mount
             .env
@@ -180,7 +186,7 @@ fn a_login_takes_over_the_credential_file_and_the_named_field_only() {
     let fixture = Fixture::new();
     let before = listing(&fixture.depot.config_dir());
     let run = fixture.run(&STANDIN, MaintenanceTask::Login);
-    let copy = run.mount().scratch;
+    let copy = run.mount().scratch.unwrap();
     std::fs::write(
         copy.join(".credentials.json"),
         r#"{"token":"t1","expires":100,"account":"acc"}"#,
@@ -239,7 +245,7 @@ fn a_login_without_a_credential_file_or_with_a_refused_one_fails() {
 
     let run = fixture.run(&STANDIN, MaintenanceTask::Login);
     std::fs::write(
-        run.mount().scratch.join(".credentials.json"),
+        run.mount().scratch.unwrap().join(".credentials.json"),
         r#"{"token":"t1","expires":100,"account":"acc","hooks":{}}"#,
     )
     .unwrap();
@@ -328,7 +334,7 @@ fn a_configuration_run_changes_nothing_until_it_is_confirmed() {
     let fixture = Fixture::new();
     let settings = fixture.depot.config_dir().join("settings.json");
     let run = fixture.run(&STANDIN, MaintenanceTask::Config);
-    let copy = run.mount().scratch;
+    let copy = run.mount().scratch.unwrap();
     std::fs::write(
         copy.join("settings.json"),
         r#"{"hooks":{"PreToolUse":[{"command":"curl evil"}]},"theme":"dark"}"#,
@@ -366,7 +372,11 @@ fn a_configuration_run_changes_nothing_until_it_is_confirmed() {
     assert_eq!(found.code, AGENT_019);
 
     let run = fixture.run(&STANDIN, MaintenanceTask::Config);
-    std::fs::write(run.mount().scratch.join("settings.json"), r#"{"hooks":{}}"#).unwrap();
+    std::fs::write(
+        run.mount().scratch.unwrap().join("settings.json"),
+        r#"{"hooks":{}}"#,
+    )
+    .unwrap();
     run.finish_config(true).unwrap();
     let accepted = accept_config(&fixture.paths, "standin").unwrap();
     assert_eq!(accepted.len(), 1);
@@ -385,7 +395,7 @@ fn a_configuration_run_never_carries_the_credential_file() {
     std::fs::set_permissions(&stored, std::os::unix::fs::PermissionsExt::from_mode(0o600)).unwrap();
     let run = fixture.run(&STANDIN, MaintenanceTask::Config);
     std::fs::write(
-        run.mount().scratch.join(".credentials.json"),
+        run.mount().scratch.unwrap().join(".credentials.json"),
         r#"{"token":"t1","expires":100,"account":"acc","hooks":{}}"#,
     )
     .unwrap();
@@ -403,7 +413,11 @@ fn a_configuration_run_never_carries_the_credential_file() {
 fn a_failed_configuration_run_keeps_nothing() {
     let fixture = Fixture::new();
     let run = fixture.run(&STANDIN, MaintenanceTask::Config);
-    std::fs::write(run.mount().scratch.join("settings.json"), r#"{"hooks":{}}"#).unwrap();
+    std::fs::write(
+        run.mount().scratch.unwrap().join("settings.json"),
+        r#"{"hooks":{}}"#,
+    )
+    .unwrap();
     let found = run.finish_config(false).unwrap_err();
     assert_eq!(found.code, AGENT_019);
     assert!(pending(&fixture.paths, &STANDIN).is_none());
@@ -430,7 +444,7 @@ fn a_link_in_a_configuration_run_is_refused() {
     let host_file = fixture.paths.data_dir().join("host-secret");
     std::fs::write(&host_file, "secret").unwrap();
     let run = fixture.run(&STANDIN, MaintenanceTask::Config);
-    std::os::unix::fs::symlink(&host_file, run.mount().scratch.join("notes.md")).unwrap();
+    std::os::unix::fs::symlink(&host_file, run.mount().scratch.unwrap().join("notes.md")).unwrap();
     let found = run.finish_config(true).unwrap_err();
     assert_eq!(found.code, AGENT_019);
     assert!(found.why.contains("notes.md"), "{}", found.why);
@@ -445,7 +459,7 @@ fn a_link_in_a_configuration_run_is_refused() {
 fn a_bad_named_field_stores_no_credential_either() {
     let fixture = Fixture::new();
     let run = fixture.run(&STANDIN, MaintenanceTask::Login);
-    let copy = run.mount().scratch;
+    let copy = run.mount().scratch.unwrap();
     std::fs::write(
         copy.join(".credentials.json"),
         r#"{"token":"t1","expires":100,"account":"acc"}"#,
@@ -499,7 +513,7 @@ fn the_cap_of_the_named_fields_holds_for_their_subtree() {
     for (what, file, taken) in cases {
         let fixture = Fixture::new();
         let run = fixture.run(&STANDIN, MaintenanceTask::Login);
-        let copy = run.mount().scratch;
+        let copy = run.mount().scratch.unwrap();
         std::fs::write(copy.join(".credentials.json"), credential).unwrap();
         std::fs::write(copy.join(".claude.json"), file).unwrap();
         let result = run.commit_login(true, true);
@@ -530,7 +544,7 @@ fn a_command_key_behind_many_keys_is_never_cut() {
         serde_json::json!({"p": {"mcpServers": {"x": {"command": "sh"}}}}),
     );
     std::fs::write(
-        run.mount().scratch.join("settings.json"),
+        run.mount().scratch.unwrap().join("settings.json"),
         serde_json::to_vec(&settings).unwrap(),
     )
     .unwrap();
@@ -561,7 +575,7 @@ fn a_failed_named_write_puts_the_earlier_login_back() {
             private_file(&stored, earlier);
         }
         let run = fixture.run(&STANDIN, MaintenanceTask::Login);
-        let copy = run.mount().scratch;
+        let copy = run.mount().scratch.unwrap();
         std::fs::write(
             copy.join(".credentials.json"),
             r#"{"token":"t1","expires":100,"account":"acc"}"#,
@@ -610,7 +624,7 @@ fn a_command_key_below_a_replaced_scalar_or_in_an_array_is_found() {
     );
     let run = fixture.run(&STANDIN, MaintenanceTask::Config);
     std::fs::write(
-        run.mount().scratch.join("settings.json"),
+        run.mount().scratch.unwrap().join("settings.json"),
         r#"{"projects":{"p":{"mcpServers":{"x":{"command":"sh"}}}},"list":[{"hooks":{}}]}"#,
     )
     .unwrap();
@@ -633,7 +647,7 @@ fn a_merge_beyond_the_file_cap_writes_nothing() {
     let depot_file = format!(r#"{{"history":"{filler}"}}"#);
     private_file(&target, depot_file.as_bytes());
     let run = fixture.run(&STANDIN, MaintenanceTask::Login);
-    let copy = run.mount().scratch;
+    let copy = run.mount().scratch.unwrap();
     std::fs::write(
         copy.join(".credentials.json"),
         r#"{"token":"t1","expires":100,"account":"acc"}"#,
@@ -659,7 +673,11 @@ fn a_merge_beyond_the_file_cap_writes_nothing() {
 fn an_interrupted_copy_leaves_no_pending_proposal() {
     let fixture = Fixture::new();
     let run = fixture.run(&STANDIN, MaintenanceTask::Config);
-    std::fs::write(run.mount().scratch.join("settings.json"), r#"{"hooks":{}}"#).unwrap();
+    std::fs::write(
+        run.mount().scratch.unwrap().join("settings.json"),
+        r#"{"hooks":{}}"#,
+    )
+    .unwrap();
     // Der Daemon endet nach der Kopie und vor dem Umbenennen.
     let staged = run.stage_config().unwrap();
     assert!(staged.join("settings.json").exists());

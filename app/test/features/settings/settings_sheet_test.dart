@@ -518,6 +518,25 @@ void main() {
     expect(tester.widget<HSegmented<String>>(control).selected, 'codex');
   }, variant: TargetPlatformVariant.only(TargetPlatform.linux));
 
+  testWidgets('the agent switch offers Antigravity and writes agy', (
+    WidgetTester tester,
+  ) async {
+    final FakeDaemonClient client = configured();
+    await openSettings(tester, client);
+    await showSettingsCategory(tester, SettingsCategory.agent);
+    final Finder control = find.byKey(const Key('settings-agent'));
+    final Finder agy = find.descendant(
+      of: control,
+      matching: find.text('Antigravity'),
+    );
+    await tester.ensureVisible(agy);
+    await tester.pumpAndSettle();
+    await tester.tap(agy);
+    await tester.pumpAndSettle();
+    expect(client.configWrites.last, ('agent.adapter', 'agy'));
+    expect(tester.widget<HSegmented<String>>(control).selected, 'agy');
+  }, variant: TargetPlatformVariant.only(TargetPlatform.linux));
+
   testWidgets('the agent switch shows OpenCode when agent.adapter is unset', (
     WidgetTester tester,
   ) async {

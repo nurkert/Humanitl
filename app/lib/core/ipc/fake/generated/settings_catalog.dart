@@ -196,6 +196,10 @@ const String fakeSettingsCatalogJson = r'''
           {
             "title": "Codex",
             "value": "codex"
+          },
+          {
+            "title": "Antigravity CLI",
+            "value": "agy"
           }
         ],
         "client": "",
@@ -213,6 +217,9 @@ const String fakeSettingsCatalogJson = r'''
           "claude",
           "Codex",
           "codex",
+          "Antigravity",
+          "agy",
+          "Gemini",
           "programmieren",
           "Assistent"
         ],
@@ -968,6 +975,10 @@ const String fakeSettingsCatalogJson = r'''
           {
             "title": "Codex",
             "value": "codex"
+          },
+          {
+            "title": "Antigravity CLI",
+            "value": "agy"
           }
         ],
         "client": "",
@@ -985,6 +996,9 @@ const String fakeSettingsCatalogJson = r'''
           "claude",
           "Codex",
           "codex",
+          "Antigravity",
+          "agy",
+          "Gemini",
           "coding",
           "assistant"
         ],

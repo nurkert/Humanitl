@@ -191,12 +191,16 @@ only as a sandbox file. For Claude Code, which reads its key only from its envir
 inside the sandbox reads that file and exports `ANTHROPIC_API_KEY` (or `ANTHROPIC_AUTH_TOKEN`
 towards a gateway) before it starts the agent; the key never stands in the plan's environment or
 in an `argv` (HUM-514). Codex gets the same shell, which exports `OPENAI_API_KEY` for the provider
-the adapter declares in its `config.toml` (HUM-515). It is masked in the recording and a
+the adapter declares in its `config.toml` (HUM-515), and so does the Antigravity CLI, which
+exports `GEMINI_API_KEY` (HUM-517); the host's keyring, where `agy` keeps a Google sign-in, and
+the session bus never enter a sandbox. It is masked in the recording and a
 finding everywhere except in `Authorization`, or `X-Api-Key` for Claude Code, towards the agent's
 inference endpoint (`llm.endpoint`, for Claude Code without it `api.anthropic.com:443`, whose
 passthrough covers only `/v1/messages` and `/v1/messages/count_tokens`, for Codex with a key and
 without it `api.openai.com:443`, whose passthrough covers only `/v1/responses` and
-`/v1/models`). With several saved model
+`/v1/models`, for the Antigravity CLI with a key and without it `x-goog-api-key` towards
+`generativelanguage.googleapis.com:443`, whose passthrough covers only `/v1beta/models` and
+`/v1/models` and what lies below them). With several saved model
 servers (HUM-289) each has its own keyring item, and only the active server's origin gets a key and
 is the passthrough of the next session; a probe sends a saved server's key only to that server's own
 origin, never to another's; an endpoint from the environment or the command line above the active
@@ -1296,6 +1300,7 @@ These attackers are not defended against, and Humanitl does not claim to:
 | 2026-11-20 | K-02: Claude Code (HUM-514) gets the provider key from its sandbox file through a shell inside the sandbox that exports `ANTHROPIC_API_KEY` or `ANTHROPIC_AUTH_TOKEN`, never through the plan's environment or `argv`; the key is no finding in `X-Api-Key` towards the agent's inference endpoint, `api.anthropic.com:443` for Claude Code without `llm.endpoint`, whose passthrough covers only the Messages endpoints | HUM-514 |
 | 2026-11-20 | K-02: Codex (HUM-515) gets the provider key from its sandbox file through the same shell inside the sandbox, which exports `OPENAI_API_KEY` for the provider the adapter declares; the key is no finding in `Authorization` towards `api.openai.com:443` with a key and without `llm.endpoint`, whose passthrough covers only `POST`/`GET` on `/v1/responses` and `/v1/models`. Codex's own sandbox (`sandbox_mode`) is `danger-full-access`, because its bubblewrap needs a user namespace that the outer sandbox refuses (`--disable-userns`); the outer boundary stays Humanitl. |
 | 2026-11-20 | K-36: the write-back guard never takes two files without a named account for the same account; wherever the object holding the account is present (Codex: `tokens`), the account must be a non-empty string, else the file is refused at the login too; a format may require one of several keys to hold a value (`one_of`), restrict a key to an enumeration (`OneOf`), demand material for a value (`requires`) and keep a key as stored (`fixed`; Codex: `auth_mode` only `apikey` or `chatgpt`, never changed by a session) | HUM-515 |
+| 2026-11-20 | K-02: the Antigravity CLI (HUM-517) gets a Gemini API key from its sandbox file through the same shell inside the sandbox, which exports `GEMINI_API_KEY` and writes `modelProvider = "gemini"` into its settings on the sandbox's own home; the key is no finding in `x-goog-api-key` towards `generativelanguage.googleapis.com:443` with a key and without `llm.endpoint`, whose passthrough covers only `POST`/`GET` on `/v1beta/models` and `/v1/models` and below. Its Google sign-in lives in the host's keyring over D-Bus, which never enters a sandbox; the depot supports `agy` with an API key only. Its own terminal sandbox cannot start inside ours (`--disable-userns`); the outer boundary stays Humanitl. | HUM-517 |
 
 Every security-relevant change to the shim, the mount allowlist, the filter or the passthrough gets
 a line here. Vulnerabilities are reported as described in

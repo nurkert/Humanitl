@@ -716,7 +716,10 @@ impl SeatbeltBackend {
                     ),
                     (
                         crate::agent::depot::DEPOT_CONFIG_DST.to_owned(),
-                        mount.scratch.canonicalize().ok(),
+                        mount
+                            .scratch
+                            .as_ref()
+                            .and_then(|scratch| scratch.canonicalize().ok()),
                     ),
                 ]
             })
@@ -900,7 +903,12 @@ impl SeatbeltBackend {
         // der Arbeitsordner der Sitzung lesbar und beschreibbar.
         if let Some(mount) = &session.agent_depot.mount {
             read_only.extend(mount.program_dir.canonicalize().ok());
-            writable.extend(mount.scratch.canonicalize().ok());
+            writable.extend(
+                mount
+                    .scratch
+                    .as_ref()
+                    .and_then(|scratch| scratch.canonicalize().ok()),
+            );
         }
         // Die Ordner zwischen Projekt und Maske dürfen weder umbenannt noch
         // gelöscht werden: Sonst zöge `mv .git .gitx` die Maske von
