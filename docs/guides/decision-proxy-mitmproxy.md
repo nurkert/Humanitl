@@ -262,7 +262,10 @@ The briefing of the agent tells it the same: wait, then `502`; a `403` is final.
 Humanitl records such a request with the decision source `upstream` (in the audit
 `decision: forward`, `decided_by: upstream`) and the status of mitmproxy's answer.
 It does not claim an allow or a block it did not see; the history in the app reads
-"Forwarded, proxy answered 403".
+"Forwarded, proxy answered 403". A request whose connection mitmproxy closes without
+an answer (`444`) has no status; history and recording keep it as failed with
+`upstream_proxy_closed`, and the HMAC audit log ends it with `flow.failed` and the
+same reason (HUM-565).
 
 ## Who resolves names
 

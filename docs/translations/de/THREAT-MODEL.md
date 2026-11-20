@@ -1187,7 +1187,10 @@ wartet, fällt er hinter den Rundfunk der Ereignisse zurück und verliert Flow-E
 die Kette zeigt, wo und wie viele, nie was. Ein Flow ohne ein einziges Ereignis über zwei
 aufeinanderfolgende Lücken, etwa einer, der so lange gehalten wird oder in seiner Antwort schweigt,
 gilt als verloren: Endet er doch noch, fehlt sein `flow.responded`, und eine Zurücknahme danach
-zählt in `session.ended` noch einmal. Ein abgeschlossener Flow, der die Registry verlassen hat,
+zählt in `session.ended` noch einmal. Ein Flow, dessen Ereignis `Failed` in eine Lücke fällt, hat
+kein `flow.failed` (HUM-565): Das `Recorded` danach nennt nur den Flow, nicht, wie er endete, also
+zeigt die Kette die Entscheidung und die Lücke, aber weder ein Scheitern noch dessen Grund; der
+steht weiter in der Aufzeichnung. Ein abgeschlossener Flow, der die Registry verlassen hat,
 verliert, was nur die Registry wusste (ob der Scan die ganze Anfrage sah, den Fund der harten Sperre
 seiner Zeile), und ohne Aufzeichnung zeigt `ListFlows` nur die letzten abgeschlossenen Flows.
 
@@ -1317,6 +1320,7 @@ Gegen diese Angreifer gibt es keine Abwehr, und Humanitl behauptet das auch nich
 | 2026-11-20 | K-02: Die Antigravity CLI (HUM-517) bekommt einen Gemini-API-Schlüssel aus ihrer Datei in der Sandbox über dieselbe Shell in der Sandbox, die `GEMINI_API_KEY` exportiert und `modelProvider = "gemini"` in ihre Einstellungen im eigenen Home der Sandbox schreibt; der Schlüssel ist kein Fund in `x-goog-api-key` gegenüber `generativelanguage.googleapis.com:443` mit Schlüssel und ohne `llm.endpoint`, dessen Durchleitung nur `POST`/`GET` auf `/v1beta/models` und `/v1/models` und darunter umfasst. Ihre Google-Anmeldung liegt im Schlüsselbund des Hosts über D-Bus, der nie in eine Sandbox kommt; das Depot unterstützt `agy` nur mit API-Schlüssel. Ihre eigene Terminal-Sandbox kann in unserer nicht starten (`--disable-userns`); die äußere Grenze bleibt Humanitl. | HUM-517 |
 | 2026-11-19 | K-38 neu: Die Flow-Registry hält höchstens `limits.registry_max_finished_flows` abgeschlossene Flows (Vorgabe 10 000), gehaltene und laufende gehen nie; die Warteschlange des Audit-Schreibers hält höchstens 4 096 Records, und eine volle lässt den Absender warten, sodass keine Meldung der Sandbox verworfen wird | HUM-556 |
 | 2026-11-20 | K-38: Flow-Ereignisse, die der Audit-Sink hinter dem Rundfunk verliert, stehen in der Kette als `audit.events_dropped` mit ihrer Zahl; nach einer Lücke schließt der Sink nur Flows ab, von denen er seit der vorigen Lücke nichts gehört hat, Restrisiko: ein Flow, der über zwei Lücken schweigt, verliert sein `flow.responded` | HUM-564 |
+| 2026-11-20 | K-38: Ein Flow, dessen Ereignis `Failed` in eine Lücke des Audit-Sinks fällt, hat kein `flow.failed`; `Recorded` nennt nur den Flow, der Grund bleibt in der Aufzeichnung | HUM-565 |
 
 Jede sicherheitsrelevante Änderung am Shim, an der Mount-Erlaubnisliste, am Filter oder an der
 Durchleitung bekommt hier eine Zeile. Schwachstellen werden gemeldet, wie in

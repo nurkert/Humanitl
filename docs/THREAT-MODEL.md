@@ -1174,7 +1174,10 @@ on a full queue it falls behind the event broadcast and loses flow events with `
 documented limit "events never written" (`docs/SECURITY.md`, section 8); the chain shows where and
 how many, never what. A flow without a single event across two consecutive gaps, for example one
 held or silent in its response that long, counts as lost: if it ends after all, its `flow.responded`
-is missing, and a retraction after that point counts once more in `session.ended`. A finished flow
+is missing, and a retraction after that point counts once more in `session.ended`. A flow whose
+`Failed` event falls into a gap has no `flow.failed` (HUM-565): the `Recorded` after it names only
+the flow, not how it ended, so the chain shows the decision and the gap but neither a failure nor
+its reason, which stays in the recording. A finished flow
 that has left the registry loses what only the registry knew (whether the scan saw the whole
 request, the hard-block finding of its row), and without a recording `ListFlows` shows only the last
 finished flows.
@@ -1313,6 +1316,7 @@ These attackers are not defended against, and Humanitl does not claim to:
 | 2026-11-20 | K-36: the write-back guard never takes two files without a named account for the same account; wherever the object holding the account is present (Codex: `tokens`), the account must be a non-empty string, else the file is refused at the login too; a format may require one of several keys to hold a value (`one_of`), restrict a key to an enumeration (`OneOf`), demand material for a value (`requires`) and keep a key as stored (`fixed`; Codex: `auth_mode` only `apikey` or `chatgpt`, never changed by a session) | HUM-515 |
 | 2026-11-20 | K-02: the Antigravity CLI (HUM-517) gets a Gemini API key from its sandbox file through the same shell inside the sandbox, which exports `GEMINI_API_KEY` and writes `modelProvider = "gemini"` into its settings on the sandbox's own home; the key is no finding in `x-goog-api-key` towards `generativelanguage.googleapis.com:443` with a key and without `llm.endpoint`, whose passthrough covers only `POST`/`GET` on `/v1beta/models` and `/v1/models` and below. Its Google sign-in lives in the host's keyring over D-Bus, which never enters a sandbox; the depot supports `agy` with an API key only. Its own terminal sandbox cannot start inside ours (`--disable-userns`); the outer boundary stays Humanitl. | HUM-517 |
 | 2026-11-20 | K-38: flow events the audit sink loses behind the broadcast stand in the chain as `audit.events_dropped` with their number; after a gap the sink closes only flows it has not heard from since the previous gap, residual: a flow silent across two gaps loses its `flow.responded` | HUM-564 |
+| 2026-11-20 | K-38: a flow whose `Failed` event falls into a gap of the audit sink has no `flow.failed`; `Recorded` names only the flow, the reason stays in the recording | HUM-565 |
 
 Every security-relevant change to the shim, the mount allowlist, the filter or the passthrough gets
 a line here. Vulnerabilities are reported as described in

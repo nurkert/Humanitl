@@ -1740,8 +1740,9 @@ freigegeben durch eine Regel, einen Menschen oder den Entscheidungs-Proxy deiner
   (`UpstreamError::ProxyClosed`, HUM-555). Ein abfangender Proxy schließt selbst; durch einen
   Tunnel, den er nicht abfängt, hat womöglich das Ziel geschlossen, und Humanitl kann das nicht
   immer unterscheiden. Warum, sagt der Grund nie: Eine Entscheidung dort und ein Fehler des
-  Proxys sehen gleich aus. Er steht in der Historie und der Aufzeichnung (`FlowSummary.error`),
-  nicht im HMAC-Audit-Log, das für einen gescheiterten Fluss noch keinen Eintrag hat.
+  Proxys sehen gleich aus. Er steht in der Historie und der Aufzeichnung (`FlowSummary.error`)
+  und seit HUM-565 im HMAC-Audit-Log als `flow.failed` mit Fluss und Grund, unter der Sitzung,
+  ohne etwas von der Anfrage.
   `upstream_connect` bleibt für einen Proxy, der nicht erreichbar ist, `CONNECT` ablehnt oder
   `407` sagt.
 - *Grenze: eigene Antworten des Proxys.* Humanitl kann eine Antwort, die der Proxy selbst
@@ -1839,7 +1840,10 @@ Die Aufzeichnung ist lokal: Flows, Entscheidungen und Bodies in SQLite unter
 JSON mit `seq`, `ts`, `session`, `kind`, `data`, dem Hash des Vorgängers (`prev`) und seinem
 eigenen `hash`, versiegelt mit HMAC-SHA256. Bodies, Header, Klartextwerte von Funden und die Notiz
 zu einer Blockierung stehen nie im Log; der Pfad einer Anfrage nur als SHA-256; der Host im
-Klartext.
+Klartext. Ein Fluss, dessen Weg zum Ziel scheitert (DNS, Verbindung, TLS, private Adresse, Frist
+oder der Entscheidungs-Proxy dahinter, der ohne Antwort schließt), endet mit `flow.failed`, das
+nur den Fluss und den Grund `upstream_*` trägt, den auch der Agent in seinem `502` liest
+(HUM-565); ohne ihn endete ein solcher Fluss nach `flow.decided` ohne Ergebnis.
 
 Der HMAC-Schlüssel liegt unter `$XDG_DATA_HOME/humanitl/keys/audit.key` (`0600` in einem
 Verzeichnis mit `0700`, mit `AUDIT_005` verweigert, wenn andere ihn lesen können oder er einem

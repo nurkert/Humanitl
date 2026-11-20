@@ -344,8 +344,8 @@ Im Probelauf lautete dieses `502` noch `Blocked by Humanitl.` mit dem Grund
 erreichbar. Seit HUM-555 nennt seine erste Zeile statt Humanitl den Proxy
 dahinter oder das Ziel dahinter, und die Historie verbucht den Fluss als
 gescheitert mit diesem Grund (`FlowSummary.error`), nicht als Ziel, das niemand
-erreichte. Das HMAC-Audit-Log hat für einen gescheiterten Fluss noch keinen
-Eintrag; es zeigt nur die Weiterleitung.
+erreichte. Seit HUM-565 schließt das HMAC-Audit-Log einen solchen Fluss nach
+der Weiterleitung mit `flow.failed` und demselben Grund ab.
 
 ```text
 Closed without an answer by the decision proxy or the target behind it.

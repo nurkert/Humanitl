@@ -320,8 +320,9 @@ In the trial that `502` still read `Blocked by Humanitl.` with the reason
 `upstream_connect`, as if Humanitl had decided or the target were down. Since
 HUM-555 its first line names the proxy behind, or the target behind it, instead
 of Humanitl, and the history records the flow as failed with that reason
-(`FlowSummary.error`), not as a target nobody reached. The HMAC audit log has no
-record for a failed flow yet; it shows only the forward.
+(`FlowSummary.error`), not as a target nobody reached. Since HUM-565 the HMAC
+audit log ends such a flow with `flow.failed` and the same reason, after the
+forward.
 
 ```text
 Closed without an answer by the decision proxy or the target behind it.
