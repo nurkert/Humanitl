@@ -624,6 +624,94 @@ void main() {
       TargetPlatform.macOS,
     }),
   );
+
+  // HUM-570: Während der Sperre steht der Fokus unter den `Shortcuts` der
+  // App, und Tab führt zum nächsten Bedienelement nach der Zeile,
+  // Umschalt-Tab zum vorigen, wie von einem bedienbaren Segment aus. Das
+  // Entsperren holt ihn danach nicht zurück. Mutationsbeweis: ohne das
+  // Auffangen in `SandboxBackendSegments` bewegt Tab den Fokus nicht, und
+  // dieser Test ist rot.
+  for (final bool backward in <bool>[false, true]) {
+    testWidgets(
+      '${backward ? 'Shift+Tab' : 'Tab'} moves on while the row is locked, '
+      'and the reload leaves the focus there',
+      (WidgetTester tester) async {
+        final _HeldClient client = _HeldClient()
+          ..sandboxBackendList = clientWith().sandboxBackendList;
+        await openSettings(tester, client);
+        final Finder target = find.descendant(
+          of: row,
+          matching: find.text('container'),
+        );
+        await _centre(tester, target);
+
+        // Wohin Tab von der bedienbaren Zeile aus führt: vom letzten Segment
+        // vorwärts, vom ersten rückwärts.
+        Focus.of(
+          tester.element(
+            find.descendant(
+              of: row,
+              matching: find.text(backward ? 'Automatic' : 'container'),
+            ),
+          ),
+        ).requestFocus();
+        await tester.pump();
+        expect(focusInRow(tester), isTrue);
+        await _tab(tester, backward: backward);
+        final FocusNode? expected = FocusManager.instance.primaryFocus;
+        expect(expected, isNotNull);
+        expect(focusInRow(tester), isFalse);
+        // Tab rollt zum Ziel; die Zeile steht danach wieder, wo sie stand.
+        await _centre(tester, target);
+
+        Focus.of(tester.element(target)).requestFocus();
+        await tester.pump();
+        expect(focusInRow(tester), isTrue);
+        final Completer<SandboxBackendList> held =
+            Completer<SandboxBackendList>();
+        client.held = held;
+        await tester.sendKeyEvent(LogicalKeyboardKey.enter);
+        await tester.pump();
+        await tester.pump();
+        await tester.pump(const Duration(milliseconds: 600));
+        expect(tester.widget<HSegmented<String>>(row).enabled, isFalse);
+        expect(focusInRow(tester), isFalse);
+
+        final FocusNode? locked = FocusManager.instance.primaryFocus;
+        await _tab(tester, backward: backward);
+        expect(FocusManager.instance.primaryFocus, isNot(same(locked)));
+        expect(FocusManager.instance.primaryFocus, same(expected));
+
+        held.complete(client.sandboxBackendList);
+        await tester.pumpAndSettle();
+        expect(tester.widget<HSegmented<String>>(row).enabled, isTrue);
+        expect(FocusManager.instance.primaryFocus, same(expected));
+        expect(focusInRow(tester), isFalse);
+      },
+      variant: TargetPlatformVariant(<TargetPlatform>{
+        TargetPlatform.linux,
+        TargetPlatform.macOS,
+      }),
+    );
+  }
+}
+
+/// Rollt [target] in die Mitte seiner Ansicht.
+Future<void> _centre(WidgetTester tester, Finder target) async {
+  unawaited(Scrollable.ensureVisible(tester.element(target), alignment: 0.5));
+  await tester.pumpAndSettle();
+}
+
+/// Drückt Tab, mit [backward] Umschalt-Tab.
+Future<void> _tab(WidgetTester tester, {bool backward = false}) async {
+  if (backward) {
+    await tester.sendKeyDownEvent(LogicalKeyboardKey.shiftLeft);
+  }
+  await tester.sendKeyEvent(LogicalKeyboardKey.tab);
+  if (backward) {
+    await tester.sendKeyUpEvent(LogicalKeyboardKey.shiftLeft);
+  }
+  await tester.pump();
 }
 
 /// Ein Fake, der die nächste Liste erst nennt, wenn der Test [held] erfüllt.

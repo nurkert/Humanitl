@@ -7520,6 +7520,81 @@ ihn nicht, bis die Sperre endet.
 ### Akzeptanzkriterien
 1. Tab wirkt auch während der Sperre.
 
+### Stand nach der Umsetzung (2026-11-20)
+`SandboxBackendSegments` in `core/ui/sandbox_backend_choice.dart` fängt den
+Fokus selbst auf: Der Knoten um die Segmente ist jetzt fokussierbar (aus der
+Tab-Reihenfolge bleibt er heraus, und von sich aus fordert ihn niemand an).
+Hatte die Wahl beim Sperren den Fokus, fordert der Baustein ihn schon in
+`didUpdateWidget` für diesen Knoten an. Die gesperrten Segmente geben den
+Fokus erst im folgenden Aufbau ab, an das zuletzt fokussierte Kind ihres
+Bereichs, und das ist dann dieser Knoten, nicht mehr der Wurzelbereich der
+Ansicht. Der Knoten liegt unter den `Shortcuts` der App, und Tab und
+Umschalt-Tab gehen von ihm aus zum Bedienelement nach oder vor der Wahl.
+Die Rückgabe aus HUM-560 bleibt: Der Baustein hängt sich erst an den
+Fokus-Manager, wenn der Fokus auf dem Knoten angekommen ist, jede Bewegung
+von dort fort hebt sie endgültig auf, und beim Entsperren gibt er den Fokus
+nur dann dem gewählten Segment, wenn er noch in der Wahl steht. Das Merken
+des Knotens, auf den der Fokus fiel, entfällt damit; es ist immer dieser
+Knoten. Nebenbei behoben: Bei der zweiten Wahl per Tastatur fiel der Fokus
+über den Verlauf des Bereichs auf das zuvor gewählte, ebenfalls gesperrte
+Segment, ohne dass ein Fokuswechsel gemeldet wurde; die Rückgabe aus HUM-560
+lief dann ohne Aufsicht und holte den Fokus auch nach Tab zurück.
+
+**Tests.** sandbox und settings: Wahl per Enter, Liste zurückgehalten, Tab
+bzw. Umschalt-Tab führt genau zu dem Bedienelement, zu dem Tab vom letzten
+bzw. Umschalt-Tab vom ersten bedienbaren Segment führt, und das Entsperren
+lässt den Fokus dort; je unter Linux und macOS. sandbox: zweite Wahl per
+Tastatur, der Fokus steht auf dem Knoten der Wahl, Tab geht weiter, das
+Entsperren holt ihn nicht zurück. Der Test „Fokus fort und zurück“ im
+Abschnitt bringt den Fokus jetzt wie der Test der Zeile mit `requestFocus`
+auf den Knoten zurück, auf den die Sperre ihn schob, statt mit `unfocus`
+auf den Wurzelbereich. Mutationsbeweise: der Baustein ohne diese Änderung
+macht alle neuen Tests rot (Tab bewegt den Fokus nicht); ohne das Anfordern
+beim Sperren sind die Tests von Tab, Umschalt-Tab, zweiter Wahl und die
+Rückgabe-Tests aus HUM-510 und HUM-560 rot; ohne den Listener am
+Fokus-Manager bleiben die Tests „Fokus fort und zurück“ aus HUM-560 in
+Abschnitt und Zeile rot. Keine Goldens geändert: Der Knoten zeichnet keinen
+Fokusrahmen.
+
+**Nach dem Review.** Codex (blocking), Sonnet als Ersatz für Antigravity
+(minor), derselbe Punkt: In der ersten Fassung forderte der Baustein den
+Knoten erst nach dem Bild der Sperre an, und sein Listener holte einen
+verlorenen Fokus nach. Nahm im Bild der Sperre ein anderes Bedienelement
+oder ein Dialog den Fokus, zog ihn das zurück auf die Wahl. Jetzt fordert
+der Baustein den Knoten nur einmal an, vor jeder anderen Anforderung im
+Bild der Sperre; eine spätere gewinnt. Erreicht der Fokus den Knoten nicht,
+entfällt die Rückgabe, und der Fokus bleibt, wo er ist. Eine Prüfung, wohin
+der Fokus fiel, versagte in der Zeile der Einstellungen: Dort fiel er über
+den Verlauf auf ein echtes Bedienelement außerhalb der Wahl, von dem Fallen
+nicht zu unterscheiden; sie wurde verworfen. Tests: ein Knopf, der im Bild
+der Sperre den Fokus anfordert, und ein Fokusbereich im Overlay mit
+`autofocus`, der wie ein Dialog im selben Bild erscheint, je unter Linux
+und macOS; der Fokus bleibt dort, auch nach dem Entsperren. Rot mit einem
+erneuten Anfordern, wenn der Fokus den Knoten nicht erreicht. Sonnet
+außerdem: Der Knoten meldete sich der Semantik als fokussierbar und machte
+damit den nächsten Semantikknoten darüber, die rollbare Ansicht,
+fokussierbar. Er trägt jetzt `includeSemantics: false`; Test auf den
+Semantikknoten der Wahl, rot mit `includeSemantics: true`.
+
+Codex im Delta (major, als minor gewertet, weil kein Weg der App es tut):
+Eine Anforderung, die vor dem Aufbau der Sperre gestellt, vom Fokus-Manager
+aber noch nicht vollzogen war, überschrieb die Anforderung der Sperre. Der
+Baustein liest jetzt beim Sperren über die öffentliche Schnittstelle, wen
+der Bereich der Wahl als nächsten fokussiert (`focusedChild` des
+umschließenden Bereichs, das eine Anforderung sofort setzt). Liegt der
+außerhalb der Wahl, fordert er nichts an, und die Rückgabe entfällt. Test in
+`test/core/ui/sandbox_backend_segments_test.dart`: Ein Elternteil fordert
+in seinem Aufbau vor dem der Segmente den Fokus für ein anderes Element an;
+der Fokus bleibt dort, auch nach dem Entsperren; Gegenprobe ohne fremde
+Anforderung fängt auf und gibt zurück; je unter Linux und macOS. Rot ohne
+den Blick auf `focusedChild`. Im Bildschirm lässt sich diese Reihenfolge
+nicht herstellen, weil `pump` vorgemerkte Wechsel vor jedem Bild vollzieht.
+
+Bekannt, nicht geändert: Die Leserichtung ordnet den Knoten nach seinem
+Rechteck ein. Steht die Wahl halb unter der Reiterzeile des Reiters
+Isolation, zählt er zu deren Zeile, und Tab springt zu einem Reiter; die
+Tests rollen die Wahl deshalb in die Mitte der Ansicht.
+
 ---
 
 ## HUM-571 · Test `hold::a_decision_after_the_deadline_is_refused` wackelt unter Last
