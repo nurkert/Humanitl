@@ -1760,8 +1760,11 @@ Das Agent-Depot (ADR-0023): ein Agent, einmal unter dem Datenordner des Daemons 
 jeder Sandbox von dort genommen statt von diesem Rechner. `humanitl agents status [AGENT]` zeigt je
 Agent die Quelle (`host` oder `depot`, mit Herkunft oder Firmenvorgabe), die installierte Version
 und Signatur, die Anmeldung und die Größe; nichts aus dem Depot wird dafür gestartet.
-`humanitl agents source AGENT host|depot` setzt `agents.AGENT.source`, `humanitl agents remove
-AGENT` entfernt ein Depot (fragt vorher, mit `--yes` nicht).
+`humanitl agents source AGENT host|depot` setzt `agents.AGENT.source` (zurück auf `host` behält
+das Depot; unter einer Firmenvorgabe wird `host` mit `AGENT_010` abgelehnt), `humanitl agents
+remove AGENT` entfernt ein Depot mit Programm, Konfiguration und Anmeldung (fragt vorher, mit
+`--yes` nicht; abgelehnt mit `AGENT_018`, solange eine Session oder ein Lauf es nutzt). Mit
+`--json` gibt `status` ein Objekt mit der Liste `agents` aus.
 
 `humanitl agents install AGENT [--version V]` und `humanitl agents update AGENT [--version V]`
 führen Installation und Update als **Wartungslauf** aus (HUM-563): eine Sandbox wie die einer
@@ -1819,6 +1822,18 @@ sie übernommen werden; nur ein Ja (oder `--yes`) ändert die Konfiguration im D
 warten die Änderungen: `humanitl agents config AGENT --accept` oder `--discard` entscheidet später.
 `humanitl agents config AGENT --show` listet die Konfiguration, wie sie ist, mit ihren Schlüsseln,
 die Befehle ausführen.
+
+Was jeder Agent heute im Depot kann, und Claude Code aus dem Depot Schritt für Schritt, steht in
+der [Anleitung zum Agent-Depot](guides/agent-depot.md). Kurz: Claude Code installiert sich von
+`downloads.claude.ai` mit geprüftem signiertem Manifest, kann sich im Depot aber noch nicht
+anmelden. Das Format seiner Zugangsdatei ist nicht erklärt, bis es gemessen ist (HUM-553), deshalb
+antwortet `humanitl agents login claude` mit `AGENT_014`, und eine Session bekommt ihren Zugang
+stattdessen aus dem Schlüssel von Humanitl (`humanitl llm key set`; als `ANTHROPIC_API_KEY`, oder
+mit einem Gateway in `llm.endpoint` als `ANTHROPIC_AUTH_TOKEN` mit `ANTHROPIC_BASE_URL`). Die
+Antigravity CLI läuft aus dem Depot nur mit einem Gemini-API-Schlüssel: `humanitl agents login agy`
+antwortet mit `AGENT_014`, ein Konfigurationslauf mit `AGENT_015`, weil keine Variable ihr
+`~/.gemini` verlegt. Codex und die Antigravity CLI haben noch kein Installationsrezept, OpenCode
+und pi kein Rezept fürs Depot; für sie antwortet `install` mit `AGENT_015`.
 
 ## Die globalen Schalter
 

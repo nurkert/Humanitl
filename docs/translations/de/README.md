@@ -17,6 +17,7 @@ Code; die CI schlägt fehl, wenn sie veraltet sind.
 | [`guides/install.md`](guides/install.md) | Voraussetzungen, `.deb`, AppImage, der Nutzerdienst, Prüfungen, Entfernen |
 | [`guides/first-session.md`](guides/first-session.md) | vom Bildschirm „Einrichten“ bis zur ersten angehaltenen Anfrage, einer Regel und der Prüfung der Audit-Kette |
 | [`guides/agent-profiles.md`](guides/agent-profiles.md) | Session-Profile, der OpenCode-Adapter, einen Adapter schreiben, Hosts, die nach Hause telefonieren |
+| [`guides/agent-depot.md`](guides/agent-depot.md) | das Agent-Depot: wann es sich lohnt, Claude Code aus dem Depot Schritt für Schritt, was es schützt und was nicht, die Firmenvorgabe, heutige Grenzen |
 
 ## Referenz
 
