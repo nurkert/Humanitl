@@ -165,18 +165,30 @@ impl HandoverListener {
         wait: Duration,
         expected_uid: u32,
     ) -> Result<(), String> {
-        if fds.len() > MAX_FDS {
-            return Err(format!(
-                "the shim would need {} descriptors and the handover carries at most {MAX_FDS}",
-                fds.len()
-            ));
-        }
         let Self {
             listener,
             path,
             token,
         } = self;
-        wait_readable(&listener, wait)?;
+        if fds.len() > MAX_FDS {
+            // Wie nach einer abgelaufenen Wartezeit: Socket und Datei gehen.
+            drop(listener);
+            let _ = std::fs::remove_file(&path);
+            return Err(format!(
+                "the shim would need {} descriptors and the handover carries at most {MAX_FDS}",
+                fds.len()
+            ));
+        }
+        if let Err(err) = wait_readable(&listener, wait) {
+            // Niemand kam: Socket und Datei gehen beide. Die Datei zählt, nicht
+            // nur der Deskriptor: Ein Kindprozess, der gerade abgespalten und
+            // noch nicht `exec`t ist, hält den lauschenden Socket kurz geerbt
+            // (`CLOEXEC` greift erst beim `exec`); über den Pfad erreicht ihn
+            // danach trotzdem niemand mehr (HUM-558).
+            drop(listener);
+            let _ = std::fs::remove_file(&path);
+            return Err(err);
+        }
         let accepted = accept_with(&listener, SOCKET_FLAGS).and_then(cloexec);
         // Genau eine Verbindung: Der lauschende Socket geht zu, bevor irgend
         // etwas an der angenommenen geprüft wird. Jede weitere bekommt
@@ -573,8 +585,16 @@ mod tests {
             .unwrap_err();
         assert!(err.contains("did not come"), "{err}");
         assert!(started.elapsed() < Duration::from_secs(5));
+        // Der Pfad ist weg, nicht nur der Deskriptor: Ein späterer Shim findet
+        // keinen Socket mehr, auch wenn ein gerade abgespaltener Kindprozess
+        // eines anderen Tests den Deskriptor noch geerbt hält (HUM-558).
+        assert!(
+            std::fs::symlink_metadata(&path).is_err(),
+            "the socket file outlived the wait: {}",
+            path.display()
+        );
         let late = connect_to(&path).unwrap_err();
-        assert_eq!(late.raw_os_error(), Some(libc_econnrefused()));
+        assert_eq!(late.kind(), io::ErrorKind::NotFound, "{late}");
     }
 
     /// Ein Verzeichnis, dessen absoluter Pfad länger ist, als ein
@@ -621,6 +641,7 @@ mod tests {
     #[test]
     fn too_many_descriptors_are_refused_before_anyone_connects() {
         let (_dir, listener) = listener();
+        let path = listener.path().to_path_buf();
         let (_read, write) = std::io::pipe().unwrap();
         let write = OwnedFd::from(write);
         let many: Vec<BorrowedFd<'_>> = (0..=MAX_FDS).map(|_| write.as_fd()).collect();
@@ -628,9 +649,9 @@ mod tests {
             .serve(&many, Duration::from_millis(10), uid())
             .unwrap_err();
         assert!(err.contains("at most"), "{err}");
-    }
-
-    fn libc_econnrefused() -> i32 {
-        rustix::io::Errno::CONNREFUSED.raw_os_error()
+        assert!(
+            std::fs::symlink_metadata(&path).is_err(),
+            "the socket file stayed"
+        );
     }
 }
