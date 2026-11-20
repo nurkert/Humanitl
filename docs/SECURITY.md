@@ -1656,7 +1656,8 @@ of the person's choice".
   intercepting proxy closes itself; through a tunnel it does not intercept, the target may have
   closed, and Humanitl cannot always tell which. The reason never says why: a decision there and
   an error of the proxy look the same. It stands in the history and the recording
-  (`FlowSummary.error`), not in the HMAC audit log, which has no record for a failed flow yet.
+  (`FlowSummary.error`) and, since HUM-565, in the HMAC audit log as `flow.failed` with the flow
+  and the reason, under the session, without anything of the request.
   `upstream_connect` stays for a proxy that is not reachable, refuses `CONNECT` or answers `407`.
 - *Limit: the proxy's own answers.* Humanitl cannot tell an answer the proxy wrote itself from
   one it relayed from the target; inside the tunnel both come over the proxy's TLS connection, and
@@ -1966,6 +1967,10 @@ addition the log `$XDG_DATA_HOME/humanitl/audit/audit.jsonl` (HUM-050). Every re
 canonical JSON with `seq`, `ts`, `session`, `kind`, `data`, the predecessor's hash (`prev`) and its
 own `hash`, sealed with HMAC-SHA256. Bodies, headers, plain-text values of findings and the note of
 a block never stand in the log; the path of a request only as SHA-256; the host in plain text.
+A flow whose way to the target fails (DNS, connect, TLS, private address, timeout, or the decision
+proxy behind closing without an answer) ends with `flow.failed`, which carries only the flow and the
+reason `upstream_*` that the agent also reads in its `502` (HUM-565); without it such a flow ended
+after `flow.decided` without a result.
 
 The HMAC key lives at `$XDG_DATA_HOME/humanitl/keys/audit.key` (`0600` in a `0700` directory,
 refused with `AUDIT_005` if others can read it or it belongs to another user). **Head anchoring:**

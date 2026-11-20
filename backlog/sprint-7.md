@@ -7415,6 +7415,52 @@ Burp und mitmproxy sagen das heute als Grenze.
 ### Akzeptanzkriterien
 1. Jeder gescheiterte Flow hat im HMAC-Audit-Log einen Eintrag mit Grund.
 
+### Stand nach der Umsetzung (2026-11-20)
+
+- **Neue Art `flow.failed`** (`humanitl_audit::kinds::FlowFailed::of`,
+  `{ "flow", "reason" }`). Der Grund ist `UpstreamError::reason`, also immer
+  `upstream_*` und derselbe Text wie in der Zeile `reason:` des `502` an den
+  Agenten. Die Sitzung steht im Feld `session` des Records; nichts von der
+  Anfrage, auch nicht die Adresse hinter `upstream_private_address`.
+  `RecordKind::NAMES` jetzt 29.
+- **Sink:** `FlowEvent::Failed` schreibt den Record sofort, nicht erst mit
+  `Recorded`, damit ein in einer Lücke verlorenes `Recorded` ihn nicht
+  mitnimmt; auch für einen Flow, den die Tabelle nicht mehr kennt. Ein
+  ausstehendes `flow.received` geht ihm voraus. `FlowEvent::Failed` ist heute
+  der einzige Weg, auf dem ein Flow scheitert: `PROXY_005` und ein
+  abgebrochener Handschlag enden als Block des Systems und stehen schon als
+  `flow.decided` mit `flow.blocked_reason` im Log. „Der Code der Diagnose" aus
+  der Spezifikation hat deshalb heute keinen Fall; das Feld heißt allgemein
+  `reason`, falls ein späterer Weg einen Code trägt.
+- **Grenze aus dem Review (Codex, teilweise übernommen):** Fällt das
+  Ereignis `Failed` selbst in eine Lücke des Sinks, fehlt `flow.failed`.
+  `FlowEvent::Recorded` trägt nur Flow und Zeit, nicht wie der Flow endete;
+  aus einem fehlenden Status ließe sich ein Scheitern nur raten (auch
+  `ResponseHeaders` kann in der Lücke liegen), der Grund gar nicht. Das
+  Ereignis wird dafür nicht erweitert; die Grenze steht in K-38 (en, de)
+  samt Zeile im Änderungsverzeichnis, die Lücke selbst als
+  `audit.events_dropped`, der Grund in der Aufzeichnung.
+- **Doku:** `docs/SECURITY.md` 8 und Nachfragemodus `upstream` (en, de),
+  Anleitungen zu Burp und mitmproxy (en, de), `docs/THREAT-MODEL.md` K-38
+  (en, de), `backlog/CONVENTIONS.md` 4.59, Modulkommentare von `kinds.rs`
+  und `audit_sink.rs`.
+- **Tests:** `a_flow_the_proxy_behind_closes_leaves_flow_failed_with_its_reason`
+  (`audit_sink.rs`, echter Sink am Rundfunk, Folge der Ereignisse wie in
+  `crates/proxy/tests/decision_proxy_end_to_end.rs`: genau `flow.failed` mit
+  `upstream_proxy_closed` unter der Sitzung, nur zwei Felder, kein
+  `flow.responded`, nichts vom Pfad oder Body);
+  `a_failure_flushes_the_pending_arrival_and_needs_no_known_flow`
+  (`Received` direkt gefolgt von `Failed` ergibt `flow.received` vor
+  `flow.failed`; nach einer Lücke ein `Failed` für einen unbekannten Flow ergibt
+  `flow.failed` mit `upstream_dns`);
+  `a_failed_flow_carries_its_flow_and_reason_only` (`kinds.rs`, auch ohne
+  Adresse bei `upstream_private_address`). Mutationsbeweise, jeweils rot: ohne
+  den Record im Sink, mit `UpstreamError::as_str` statt `reason`
+  (`proxy_closed`), ohne `flush_received` im Zweig `Failed`.
+- **Kandidat für ein eigenes Issue:** `session.ended` zählt gescheiterte
+  Flows nicht eigens; eine Zahl `failed` dort wäre eine Änderung des Schemas
+  von `session.ended` samt App.
+
 ---
 
 ## HUM-566 · Agent-Depot: Installation von Paketen aus mehreren Dateien (Codex) und mit Laufzeit-Host (agy)

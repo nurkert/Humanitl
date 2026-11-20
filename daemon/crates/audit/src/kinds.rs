@@ -32,12 +32,16 @@
 //! `audit.events_dropped` kommt aus HUM-564 dazu: Der Sink des Ereignisstroms
 //! ist hinter den Rundfunk zurückgefallen und hat Flow-Ereignisse verloren;
 //! der Record nennt nur ihre Zahl und markiert so die Lücke in der Kette.
+//! `flow.failed` kommt aus HUM-565 dazu: Der Weg zum Ziel ist gescheitert, und
+//! der Record nennt Flow und Grund, damit ein solcher Flow in der Kette nicht
+//! ohne Ergebnis endet.
 
 use std::time::SystemTime;
 
 use humanitl_core::rule::{Expiry, Rule};
 use humanitl_core::{
     DecidedFindings, Decision, DecisionSource, Finding, FlowId, HttpRequest, ResumeReason,
+    UpstreamError,
 };
 use jiff::Timestamp;
 use serde_json::{Value, json};
@@ -406,6 +410,33 @@ pub struct FlowResponded {
     pub duration_ms: u64,
     /// Ob die Antwort gestreamt statt gepuffert durchlief.
     pub streamed: bool,
+}
+
+/// `flow.failed`: Der Weg zum Ziel ist gescheitert (HUM-565).
+///
+/// Ohne diesen Record endete ein solcher Flow in der Kette nach
+/// `flow.decided` ohne Ergebnis: Ein `flow.responded` gibt es nicht, weil
+/// keine Antwort kam. Die Sitzung steht im Record selbst, nicht in `data`.
+/// Vom Inhalt der Anfrage steht hier nichts, auch nicht die Adresse hinter
+/// `upstream_private_address`; die nennt die Aufzeichnung.
+#[derive(Debug, Clone, PartialEq, Eq)]
+pub struct FlowFailed {
+    /// Der Flow.
+    pub flow: String,
+    /// Der Grund, wie ihn die Antwort an den Client in der Zeile `reason:`
+    /// nennt, immer mit Präfix `upstream_` ([`UpstreamError::reason`]).
+    pub reason: String,
+}
+
+impl FlowFailed {
+    /// Der Record zu einem gescheiterten Weg zum Ziel.
+    #[must_use]
+    pub fn of(flow: FlowId, error: UpstreamError) -> Self {
+        Self {
+            flow: flow.to_string(),
+            reason: error.reason().to_owned(),
+        }
+    }
 }
 
 /// `flow.blocked_reason`: ein Block ohne Entscheidung eines Menschen.
@@ -844,6 +875,8 @@ pub enum RecordKind {
     AgentCredentialWriteback(AgentCredentialWriteback),
     /// Der Sink des Audit-Logs hat Flow-Ereignisse verloren (HUM-564).
     AuditEventsDropped(AuditEventsDropped),
+    /// Der Weg zum Ziel ist gescheitert (HUM-565).
+    FlowFailed(FlowFailed),
 }
 
 impl RecordKind {
@@ -879,11 +912,12 @@ impl RecordKind {
             Self::SandboxDoorCapped(_) => "sandbox.door_capped",
             Self::AgentCredentialWriteback(_) => "agent.credential_writeback",
             Self::AuditEventsDropped(_) => "audit.events_dropped",
+            Self::FlowFailed(_) => "flow.failed",
         }
     }
 
     /// Alle Namen, in der Reihenfolge der Tabelle.
-    pub const NAMES: [&'static str; 28] = [
+    pub const NAMES: [&'static str; 29] = [
         "daemon.started",
         "daemon.stopped",
         "session.started",
@@ -912,6 +946,7 @@ impl RecordKind {
         "sandbox.door_capped",
         "agent.credential_writeback",
         "audit.events_dropped",
+        "flow.failed",
     ];
 
     /// `data` dieser Art.
@@ -1015,6 +1050,7 @@ impl RecordKind {
             Self::SandboxDoorCapped(d) => json!({ "cap": d.cap }),
             Self::AgentCredentialWriteback(d) => d.data(),
             Self::AuditEventsDropped(d) => d.data(),
+            Self::FlowFailed(d) => json!({ "flow": d.flow, "reason": d.reason }),
         }
     }
 }
@@ -1029,13 +1065,16 @@ pub fn data_ts(at: Timestamp) -> String {
 mod tests {
     #![allow(clippy::unwrap_used, clippy::expect_used, clippy::panic)]
 
+    use std::net::{IpAddr, Ipv4Addr};
+
     use humanitl_core::{
         Authority, BlockReason, BodyRef, Decision, DecisionSource, FlowId, HostName, HttpRequest,
-        Method, RuleId, Scheme,
+        Method, RuleId, Scheme, UpstreamError,
     };
 
     use super::{
-        AuditEventsDropped, DecisionKind, FlowBlockedReason, FlowDecided, FlowReceived, RecordKind,
+        AuditEventsDropped, DecisionKind, FlowBlockedReason, FlowDecided, FlowFailed, FlowReceived,
+        RecordKind,
     };
     use crate::canonical::canonical_json;
 
@@ -1052,7 +1091,7 @@ mod tests {
 
     #[test]
     fn every_kind_has_the_name_of_the_table_and_canonical_data() {
-        assert_eq!(RecordKind::NAMES.len(), 28);
+        assert_eq!(RecordKind::NAMES.len(), 29);
         for name in RecordKind::NAMES {
             let (area, verb) = name.split_once('.').unwrap();
             assert!(!area.is_empty() && !verb.is_empty(), "{name}");
@@ -1077,6 +1116,31 @@ mod tests {
         assert!(RecordKind::NAMES.contains(&kind.name()));
         let text = String::from_utf8(canonical_json(&kind.data()).unwrap()).unwrap();
         assert_eq!(text, r#"{"dropped":12,"open_flows":3}"#);
+    }
+
+    /// HUM-565: Ein gescheiterter Flow nennt Flow und Grund, sonst nichts;
+    /// auch die Adresse hinter `upstream_private_address` nicht.
+    #[test]
+    fn a_failed_flow_carries_its_flow_and_reason_only() {
+        let flow = FlowId::new();
+        let kind = RecordKind::FlowFailed(FlowFailed::of(flow, UpstreamError::ProxyClosed));
+        assert_eq!(kind.name(), "flow.failed");
+        assert!(RecordKind::NAMES.contains(&kind.name()));
+        let text = String::from_utf8(canonical_json(&kind.data()).unwrap()).unwrap();
+        assert_eq!(
+            text,
+            format!(r#"{{"flow":"{flow}","reason":"upstream_proxy_closed"}}"#)
+        );
+
+        let private = FlowFailed::of(
+            flow,
+            UpstreamError::PrivateAddress(IpAddr::V4(Ipv4Addr::new(10, 0, 0, 1))),
+        );
+        assert_eq!(private.reason, "upstream_private_address");
+        let text =
+            String::from_utf8(canonical_json(&RecordKind::FlowFailed(private).data()).unwrap())
+                .unwrap();
+        assert!(!text.contains("10.0.0.1"), "{text}");
     }
 
     #[test]

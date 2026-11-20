@@ -13,6 +13,7 @@
 //! | `Received`, dann `Analyzed` | `flow.received`, sobald die Funde feststehen, spätestens mit der Entscheidung |
 //! | `Decided`, `TimedOut` | `flow.decided` mit `unresolved_findings` und `acknowledged` (HUM-160); bei einem Block des Daemons zusätzlich `flow.blocked_reason` |
 //! | `Forwarded`, `ResponseHeaders`, `ResponseChunk`, `Recorded` | `flow.responded`; nach `decided_by: upstream` (HUM-512) ist sein `status` alles, was Humanitl von der Entscheidung des Proxys dahinter weiß |
+//! | `Failed` | `flow.failed` mit dem Grund `upstream_*`, etwa `upstream_proxy_closed` hinter einem Entscheidungs-Proxy (HUM-565); ein `flow.responded` folgt dann nicht |
 //! | `Intercept` | `intercept.paused` oder `intercept.resumed` mit dem Grund (HUM-407) |
 //! | Rückstand am Rundfunk (`RecvError::Lagged`) | `audit.events_dropped` mit der Zahl der verlorenen Ereignisse (HUM-564) |
 //! | Ende des Sinks | `session.ended` mit den Zahlen der Sitzung |
@@ -50,8 +51,8 @@ use std::time::SystemTime;
 use humanitl_audit::RecordKind;
 use humanitl_audit::kinds::{
     AgentCredentialWriteback, AuditEventsDropped, CheckOutcome, DecisionKind, FlowBlockedReason,
-    FlowDecided, FlowReceived, FlowResponded, InterceptResumed, IsolationCheck, SandboxDoorCapped,
-    SessionEnded, SessionStarted,
+    FlowDecided, FlowFailed, FlowReceived, FlowResponded, InterceptResumed, IsolationCheck,
+    SandboxDoorCapped, SessionEnded, SessionStarted,
 };
 use humanitl_audit_log::AuditHandle;
 use humanitl_core::{
@@ -230,6 +231,17 @@ impl Tally {
                 let pending = self.flows.entry(*flow_id).or_default();
                 pending.response_bytes = pending.response_bytes.saturating_add(*len);
             }
+            // Der Weg zum Ziel ist gescheitert (HUM-565). Der Record steht
+            // sofort, nicht erst mit `Recorded`: Ging das `Recorded` in einer
+            // Lücke verloren, bliebe der Flow sonst ohne Ergebnis. Auch ein
+            // Flow, den die Tabelle nicht mehr kennt, bekommt ihn; die Id
+            // reicht. Geht dagegen `Failed` selbst in einer Lücke verloren,
+            // fehlt der Record: `Recorded` nennt nur den Flow, nicht, wie er
+            // endete (`docs/THREAT-MODEL.md`, K-38).
+            FlowEvent::Failed { flow_id, error, .. } => {
+                self.flush_received(*flow_id);
+                self.record(RecordKind::FlowFailed(FlowFailed::of(*flow_id, *error)));
+            }
             FlowEvent::Recorded { flow_id, at } => self.recorded(*flow_id, *at),
             // Beginn und Ende der Pause des Abfangens (HUM-407).
             FlowEvent::Intercept { change, .. } => self.record(match change {
@@ -242,7 +254,6 @@ impl Tally {
             // `sandbox_notices` in `main` schon selbst ins Log, bevor es in
             // den Strom geht (HUM-477): Hier fiele es mit dem Rückstand weg.
             FlowEvent::Sandbox { .. }
-            | FlowEvent::Failed { .. }
             | FlowEvent::Lagged { .. }
             | FlowEvent::Diagnostic { .. }
             | FlowEvent::AgentAsk { .. } => {}
@@ -452,7 +463,7 @@ mod tests {
     use humanitl_core::{
         Authority, BlockReason, BodyRef, Decision, DecisionSource, Finding, FindingKind,
         FindingLocation, FlowEvent, FlowId, HostName, HttpRequest, Method, RuleId, Scheme,
-        SessionId, Tier,
+        SessionId, Tier, UpstreamError,
     };
 
     use humanitl_audit::kinds::SessionStarted;
@@ -641,6 +652,120 @@ mod tests {
         assert_eq!(records[1].body.data["decided_by"], "upstream");
         assert_eq!(records[2].body.data["status"], 403);
         assert_eq!(records[3].body.data["upstream"], 1);
+    }
+
+    /// HUM-565: Ein Flow, den der Entscheidungs-Proxy dahinter ohne Antwort
+    /// schließt, endet im Log nicht ohne Ergebnis. Die Folge der Ereignisse
+    /// ist die, die der Proxy veröffentlicht
+    /// (`crates/proxy/tests/decision_proxy_end_to_end.rs`): Weiterleitung an
+    /// den Proxy, dann `Failed(ProxyClosed)`, dann `Recorded`. Über den
+    /// echten Sink am Rundfunk, damit auch die Sitzung des Records geprüft
+    /// ist: `flow.failed` steht unter ihr, mit Flow und
+    /// `upstream_proxy_closed` und sonst nichts, und kein `flow.responded`
+    /// erfindet eine Antwort.
+    #[tokio::test]
+    async fn a_flow_the_proxy_behind_closes_leaves_flow_failed_with_its_reason() {
+        let (_dir, writer) = log();
+        let session = SessionId::new();
+        let (events, receiver) = tokio::sync::broadcast::channel(64);
+        let sink = AuditSink::start(writer.handle(), session, started(), receiver);
+        let flow = FlowId::new();
+        let at = SystemTime::now();
+        for event in [
+            received(flow, "/v1/secret-path?token=geheim", b"{\"secret\":1}"),
+            FlowEvent::Analyzed {
+                flow_id: flow,
+                at,
+                findings: Vec::new(),
+            },
+            FlowEvent::Decided {
+                flow_id: flow,
+                at,
+                decision: Decision::Allow,
+                source: DecisionSource::Upstream,
+                findings: humanitl_core::DecidedFindings::unresolved(0),
+            },
+            FlowEvent::Forwarded { flow_id: flow, at },
+            FlowEvent::Failed {
+                flow_id: flow,
+                at,
+                error: UpstreamError::ProxyClosed,
+            },
+            FlowEvent::Recorded { flow_id: flow, at },
+        ] {
+            events.send(event).unwrap();
+        }
+        let ended = sink.finish().await;
+        assert_eq!((ended.flows_total, ended.upstream), (1, 1));
+
+        let (text, records) = records(writer);
+        let kinds: Vec<&str> = records.iter().map(|r| r.body.kind.as_str()).collect();
+        assert_eq!(
+            kinds,
+            [
+                "session.started",
+                "flow.received",
+                "flow.decided",
+                "flow.failed",
+                "session.ended"
+            ],
+            "{text}"
+        );
+        let failed = &records[3].body;
+        assert_eq!(failed.session, session.to_string());
+        assert_eq!(failed.data["flow"], flow.to_string());
+        assert_eq!(failed.data["reason"], "upstream_proxy_closed");
+        assert_eq!(
+            failed.data.as_object().unwrap().len(),
+            2,
+            "only flow and reason: {}",
+            failed.data
+        );
+        assert!(!text.contains("secret"), "{text}");
+    }
+
+    /// HUM-565: Scheitert ein Flow, bevor seine Funde feststehen, geht sein
+    /// ausstehendes `flow.received` dem `flow.failed` voraus. Und ein `Failed`
+    /// eines Flows, den die Tabelle nach einer Lücke nicht mehr kennt, steht
+    /// trotzdem im Log, mit seinem Grund.
+    #[test]
+    fn a_failure_flushes_the_pending_arrival_and_needs_no_known_flow() {
+        let (_dir, writer) = log();
+        let mut tally = Tally::new(writer.handle(), SessionId::new());
+        let flow = FlowId::new();
+        tally.apply(&received(flow, "/x", b""));
+        tally.apply(&FlowEvent::Failed {
+            flow_id: flow,
+            at: SystemTime::now(),
+            error: UpstreamError::Connect,
+        });
+        tally.lagged(3);
+        let unknown = FlowId::new();
+        tally.apply(&FlowEvent::Failed {
+            flow_id: unknown,
+            at: SystemTime::now(),
+            error: UpstreamError::Dns,
+        });
+        tally.finish();
+
+        let (text, records) = records(writer);
+        let kinds: Vec<&str> = records.iter().map(|r| r.body.kind.as_str()).collect();
+        assert_eq!(
+            kinds,
+            [
+                "flow.received",
+                "flow.failed",
+                "audit.events_dropped",
+                "flow.failed",
+                "session.ended"
+            ],
+            "{text}"
+        );
+        assert_eq!(records[0].body.data["flow"], flow.to_string());
+        assert_eq!(records[1].body.data["flow"], flow.to_string());
+        assert_eq!(records[1].body.data["reason"], "upstream_connect");
+        assert_eq!(records[3].body.data["flow"], unknown.to_string());
+        assert_eq!(records[3].body.data["reason"], "upstream_dns");
     }
 
     /// Beginn und Ende der Pause stehen im Log, dazwischen jede Anfrage, die

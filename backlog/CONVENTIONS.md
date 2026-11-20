@@ -4108,3 +4108,25 @@ allen übrigen; jedes Ereignis eines Flows (`FlowEvent::flow_id`) löscht es.
 Die Tabelle hält so höchstens die offenen Flows zweier Lücken. Die Grenze, die
 bleibt, steht in `docs/THREAT-MODEL.md` K-38: Ein Flow ohne Ereignis über zwei
 Lücken gilt als verloren; endet er doch, fehlt sein `flow.responded`.
+
+### 4.59 Aus der Umsetzung des gescheiterten Flows im Audit-Log (HUM-565, 2026-11-20)
+
+**Neue Art `flow.failed`.** `data` ist `{ "flow": string, "reason": string }`
+(`humanitl_audit::kinds::FlowFailed::of`), der Grund ist
+`UpstreamError::reason`, also immer `upstream_*` und derselbe Text wie in der
+Zeile `reason:` des `502` an den Agenten (`upstream_dns`, `upstream_connect`,
+`upstream_tls`, `upstream_private_address`, `upstream_timeout`,
+`upstream_proxy_closed`). Die Sitzung steht im Feld `session` des Records,
+nicht in `data`. Nichts von der Anfrage, auch nicht die Adresse hinter
+`upstream_private_address`; die bleibt in der Aufzeichnung. Der Audit-Sink
+schreibt den Record sofort bei `FlowEvent::Failed`, nicht erst mit
+`Recorded`, auch für einen Flow, den seine Tabelle nicht mehr kennt; ein
+ausstehendes `flow.received` geht ihm voraus. `FlowEvent::Failed` ist heute
+der einzige Weg, auf dem ein Flow scheitert: Ein abgelehnter Übergang
+(`PROXY_005`) und ein abgebrochener Handschlag enden als Block des Systems
+und stehen schon als `flow.decided` mit `flow.blocked_reason` im Log; ein
+Befund am Flow, etwa ein Fehler der Aufzeichnung, lässt den Flow weiterlaufen.
+`RecordKind::NAMES` hat damit 29 Namen; `session.ended` zählt gescheiterte
+Flows weiter nicht eigens. Fällt `Failed` selbst in eine Lücke des Sinks,
+fehlt der Record: `Recorded` nennt nur den Flow, und das Ereignis wird dafür
+nicht erweitert (`docs/THREAT-MODEL.md` K-38).

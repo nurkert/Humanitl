@@ -273,7 +273,10 @@ endgültig.
 Humanitl zeichnet eine solche Anfrage mit der Entscheidungsquelle `upstream` auf (im
 Audit `decision: forward`, `decided_by: upstream`) und mit dem Status der Antwort
 von mitmproxy. Es behauptet keine Freigabe und keine Sperre, die es nicht gesehen
-hat; der Verlauf in der App zeigt „Weitergereicht, Proxy antwortete 403".
+hat; der Verlauf in der App zeigt „Weitergereicht, Proxy antwortete 403". Eine
+Anfrage, deren Verbindung mitmproxy ohne Antwort schließt (`444`), hat keinen Status;
+Historie und Aufzeichnung führen sie als gescheitert mit `upstream_proxy_closed`, und
+das HMAC-Audit-Log schließt sie mit `flow.failed` und demselben Grund ab (HUM-565).
 
 ## Wer Namen auflöst
 
