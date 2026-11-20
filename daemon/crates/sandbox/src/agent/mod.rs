@@ -21,11 +21,12 @@
 //!    sonst nichts. Ob der LLM-Endpunkt antwortet, beantwortet die Probe aus
 //!    HUM-039, nicht der Adapter.
 //!
-//! The MVP ships two adapters, [`opencode::OpenCodeAdapter`] and
-//! [`pi::PiAdapter`] (HUM-274); further ones (Aider, Codex, Claude Code) come
-//! after the MVP and do not touch this core.
+//! The MVP shipped two adapters, [`opencode::OpenCodeAdapter`] and
+//! [`pi::PiAdapter`] (HUM-274); [`claude::ClaudeCodeAdapter`] (HUM-514) is
+//! the third. Further ones (Codex, Antigravity) do not touch this core.
 
 pub mod briefing;
+pub mod claude;
 pub mod cloud;
 pub mod depot;
 pub mod locate;
@@ -43,6 +44,7 @@ use humanitl_config::{AgentBriefing, HoldConfig, Language, LlmConfig, PiWebAcces
 use humanitl_core::rule::Rule;
 use humanitl_core::{Diagnostic, SessionId};
 
+pub use crate::agent::claude::ClaudeCodeAdapter;
 pub use crate::agent::locate::{
     AGENT_PROGRAM_DIR, AgentProgram, bind_agent_program, plan_agent_program, plan_configured_agent,
 };
@@ -719,6 +721,20 @@ pub trait AgentAdapter: Send + Sync {
         command
     }
 
+    /// Words the daemon puts in front of the agent's final command, after its
+    /// program is bound (HUM-514): a shell inside the sandbox that moves a
+    /// secret from a sandbox file into the agent's environment and `exec`s
+    /// the agent, for an agent that reads its key only from the environment.
+    /// The shape is `[/bin/sh, -c, script, name]`, the one
+    /// [`shown_program`] sees through. Empty for almost every adapter.
+    ///
+    /// The words never carry the secret itself: `bwrap` carries its
+    /// arguments and its `--setenv` values on its own command line, which
+    /// every process of the same user reads in `/proc/<pid>/cmdline`.
+    fn launcher(&self, _ctx: &AgentContext) -> Vec<OsString> {
+        Vec::new()
+    }
+
     /// Die Umgebungsvariablen des Agenten, zusätzlich zum Env-Kit, das der
     /// Launcher setzt (`humanitl_proxy::ca::ENV_KIT`, HUM-014).
     fn env(&self, ctx: &AgentContext) -> Vec<(String, String)>;
@@ -759,6 +775,16 @@ pub trait AgentAdapter: Send + Sync {
     /// diesen. `None` heißt: kein Endpunkt, also kein Hinweis.
     fn inference_endpoint(&self, llm: &LlmConfig) -> Option<url::Url> {
         llm.endpoint.clone()
+    }
+
+    /// The header, in lower case, in which the agent sends its key to
+    /// [`AgentAdapter::inference_endpoint`] (HUM-514). There and only there
+    /// the key is no finding (`SecretMasks::expected_in`); in any other
+    /// header or at any other target it stays one. `authorization` for a
+    /// bearer token, the default; Claude Code with `ANTHROPIC_API_KEY` says
+    /// `x-api-key`.
+    fn key_header(&self, _llm: &LlmConfig) -> &'static str {
+        "authorization"
     }
 
     /// Vorprüfung auf dem Host, vor dem Start. Leer heißt: nichts gefunden.
@@ -879,6 +905,28 @@ pub fn command_is_the_agent(config: &humanitl_config::Config, command: &[OsStrin
     std::path::Path::new(named).file_name() == std::path::Path::new(own).file_name()
 }
 
+/// The scripts of an adapter's shell in front of the agent: `OpenCode`'s
+/// start on a shared loopback (HUM-365) and Claude Code's key launchers
+/// (HUM-514). [`shown_program`] sees through exactly these.
+const LAUNCH_SCRIPTS: &[&str] = &[
+    opencode::SHARED_LOOPBACK_START,
+    claude::KEY_START_API_KEY,
+    claude::KEY_START_AUTH_TOKEN,
+];
+
+/// The program of a command, also when an adapter's shell stands in front
+/// of it (`[/bin/sh, -c, script, name, program, ...]`, see
+/// [`AgentAdapter::launcher`]); for the sessions list and the status.
+#[must_use]
+pub fn shown_program(command: &[OsString]) -> Option<&OsString> {
+    match command {
+        [_, _, script, _, program, ..] if LAUNCH_SCRIPTS.iter().any(|known| script == *known) => {
+            Some(program)
+        }
+        _ => command.first(),
+    }
+}
+
 /// Die eingebauten Adapter.
 ///
 /// Eine Liste statt einer Map: es sind wenige, die Reihenfolge ist die der
@@ -892,7 +940,11 @@ impl AdapterRegistry {
     #[must_use]
     pub fn builtin() -> Self {
         Self {
-            adapters: vec![Box::new(OpenCodeAdapter::new()), Box::new(PiAdapter::new())],
+            adapters: vec![
+                Box::new(OpenCodeAdapter::new()),
+                Box::new(PiAdapter::new()),
+                Box::new(ClaudeCodeAdapter::new()),
+            ],
         }
     }
 

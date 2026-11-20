@@ -4465,6 +4465,8 @@
   "@diagCONFIG025Title": {"description": "Title of the diagnostic CONFIG_025 (docs/DIAGNOSTICS.md, HUM-550): humanitl config paths refuses a data location with a line break or another control character, because uninstall.sh --purge reads that list line by line."},
   "diagCONFIG025Why": "A data location holds a line break or another control character, so it cannot be printed one per line without naming other directories. Nothing was printed.",
   "@diagCONFIG025Why": {"description": "Generic cause of CONFIG_025. Stands in the cause slot only when the diagnostic carries no sentence of the daemon's own (HUM-052)."},
+  "settingsAgentClaude": "Claude Code",
+  "@settingsAgentClaude": {"description": "Option of agent.adapter: the Claude Code agent. A product name, not translated (HUM-514)."},
   "settingsAgentsLoading": "Reading the agent depot…",
   "@settingsAgentsLoading": {"description": "Section Agents of the settings (HUM-521): shown while Agents(status) has not answered yet."},
   "settingsAgentsLoadFailed": "The daemon did not answer about the agent depot.",

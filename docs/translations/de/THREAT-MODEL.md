@@ -37,7 +37,7 @@ ihrem Kopf, den Body ungescannt; sie greift nie, solange `hold.hard_block_checks
 | Schutzgut | Wo es liegt | Warum es zählt | Geschützt durch |
 |---|---|---|---|
 | Projektdaten | das Projektverzeichnis, eingehängt unter `/work` | Code und Daten von Kunden unter Verschwiegenheits- und DSGVO-Pflichten | die drei Garantien; kein Egress außer freigegebenen Anfragen und dem erklärten LLM-Host |
-| Zugangsdaten | die Umgebung des Rechners, `~/.ssh`, `~/.netrc`, Schlüsselbunde, Tokens in anderen Prozessen | ein gestohlenes Token öffnet Systeme weit über das Projekt hinaus | PID-Namespace, Mount-Erlaubnisliste, saubere Umgebung (`--clearenv`), der LLM-Schlüssel nur als Datei in der Sandbox |
+| Zugangsdaten | die Umgebung des Rechners, `~/.ssh`, `~/.netrc`, Schlüsselbunde, Tokens in anderen Prozessen | ein gestohlenes Token öffnet Systeme weit über das Projekt hinaus | PID-Namespace, Mount-Erlaubnisliste, saubere Umgebung (`--clearenv`), der LLM-Schlüssel nur als Datei in der Sandbox (für Claude Code in der Sandbox in die Umgebung des Agenten übernommen, HUM-514) |
 | LLM-Prompts | unterwegs zum LLM-Host, in der Aufzeichnung | sie tragen jeden Code, den der Agent dem Modell zeigt | erklärter Seitenkanal; vollständige Aufzeichnung und Scan auf Funde; der Nutzer wählt den Host |
 | Audit-Log | `$XDG_DATA_HOME/humanitl/audit/audit.jsonl`, Anker in `humanitl.db` | Beleg dafür, was ein Agent tatsächlich hinausgeschickt hat | Hash-Kette mit HMAC, Anker in Datei und Datenbank |
 | CA-Schlüssel | `$XDG_DATA_HOME/humanitl/ca/ca.key`, `0600` | wer ihn hat, kann TLS für jede Verbindung fälschen, die der Humanitl-CA vertraut | nie in der Sandbox, nie im Vertrauensspeicher des Rechners; nur innerhalb der Sandbox vertrauenswürdig |
@@ -201,9 +201,14 @@ Fingerabdruck warnt erneut, HUM-354), und mit `hold.hard_block_checksum_secrets`
 Prüfsumme bestätigtes Secret blockiert (`HOLD_004`). Der Zugangsschlüssel eines Anbieters
 (HUM-140) liegt im Schlüsselbund des Systems (unter macOS im Anmelde-Schlüsselbund, HUM-349; das
 Seatbelt-Profil erreicht kein `securityd` und kein `~/Library/Keychains`, der Agent kann also nicht
-danach fragen) und erreicht den Agenten nur als Datei in der
-Sandbox; in der Aufzeichnung und in einem Fund ist er überall verdeckt, außer in `Authorization`
-gegenüber `llm.endpoint`. Bei mehreren gespeicherten Modellservern (HUM-289) hat jeder einen
+danach fragen) und erreicht die Sandbox nur als Datei. Für Claude Code, das seinen Schlüssel nur
+aus seiner Umgebung liest, liest eine Shell in der Sandbox diese Datei und exportiert
+`ANTHROPIC_API_KEY` (gegenüber einem Gateway `ANTHROPIC_AUTH_TOKEN`), bevor sie den Agenten
+startet; der Schlüssel steht nie in der Umgebung des Plans oder in einem `argv` (HUM-514). In der
+Aufzeichnung und in einem Fund ist er überall verdeckt, außer in `Authorization`, für Claude Code
+in `X-Api-Key`, gegenüber dem Inferenz-Endpunkt des Agenten (`llm.endpoint`, für Claude Code ohne
+ihn `api.anthropic.com:443`, dessen Durchleitung nur `/v1/messages` und
+`/v1/messages/count_tokens` umfasst). Bei mehreren gespeicherten Modellservern (HUM-289) hat jeder einen
 eigenen Eintrag im Schlüsselbund, und nur der Ursprung des aktiven Servers bekommt einen Schlüssel
 und ist die Durchleitung der nächsten Session; eine Probe schickt den Schlüssel eines
 gespeicherten Servers nur an dessen eigenen Ursprung, nie an den eines anderen; ein Endpunkt aus
@@ -1255,6 +1260,7 @@ Gegen diese Angreifer gibt es keine Abwehr, und Humanitl behauptet das auch nich
 | 2026-11-19 | K-33: Jedes Gefängnis der Kernel-Stufe verdeckt die übrigen Programme der Unit hinter `/dev/null`, erlaubt keinen weiteren Nutzer-Namensraum (`--disable-userns`), hängt seine Wurzel, `/dev` und die leeren tmpfs der Wurzel des Gasts nur lesbar neu ein, bindet die Masken über dem Projekt aus tmpfs der Unit mit `noexec` und legt einen seccomp-Filter auf, der `execveat` und, außer beim Emulator, `memfd_create` ohne `MFD_NOEXEC_SEAL` verweigert; Rest: Code, den ein übernommener Prozess in seinem eigenen Speicher ausführt, und die Programme der Unit unter dem `/usr` des Gasts im Gefängnis des Dienstes der Wurzel | HUM-557 |
 | 2026-11-19 | K-36 zweiter Teil: Installation und Update als Wartungslauf ohne Projekt, nur die Hosts des Rezepts ohne Halt als Regeln des Laufs, die Übernahme vom Daemon geprüft, verifiziert und umgeschaltet, die Version angeheftet | HUM-563 |
 | 2026-11-20 | K-36 vollständig (dritter Teil): Anmelde- und Konfigurationslauf mit dem Programm des Depots; zurück geht nur die Zugangsdatei, über einen Wächter gegen Persistenz, Kontotausch und ältere Tokens paralleler Sitzungen, jedes Ergebnis im Audit-Log als `agent.credential_writeback`; der verdeckte Kanal über die Zugangsdatei benannt; Konfiguration nur nach Bestätigung; ein eingefügter Rückruf im Lauf zugestellt, nie ein weitergeleiteter Port | HUM-520 |
+| 2026-11-20 | K-02: Claude Code (HUM-514) bekommt den Schlüssel des Anbieters aus seiner Datei in der Sandbox über eine Shell in der Sandbox, die `ANTHROPIC_API_KEY` oder `ANTHROPIC_AUTH_TOKEN` exportiert, nie über die Umgebung des Plans oder `argv`; in `X-Api-Key` gegenüber dem Inferenz-Endpunkt des Agenten ist der Schlüssel kein Fund, für Claude Code ohne `llm.endpoint` `api.anthropic.com:443`, dessen Durchleitung nur die Messages-Endpunkte umfasst | HUM-514 |
 
 Jede sicherheitsrelevante Änderung am Shim, an der Mount-Erlaubnisliste, am Filter oder an der
 Durchleitung bekommt hier eine Zeile. Schwachstellen werden gemeldet, wie in

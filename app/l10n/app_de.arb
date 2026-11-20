@@ -1926,6 +1926,7 @@
   "diagAGENT019Why": "Die Konfiguration eines Depot-Agenten ändert sich nur über einen bestätigten Konfigurationslauf. Dieser Lauf oder seine Bestätigung kam nicht so weit, deshalb ist die Konfiguration wie vorher.",
   "diagCONFIG025Title": "Datenort nicht ausgebbar",
   "diagCONFIG025Why": "Ein Datenort enthält einen Zeilenumbruch oder ein anderes Steuerzeichen und lässt sich deshalb nicht zeilenweise ausgeben, ohne andere Verzeichnisse zu nennen. Es wurde nichts ausgegeben.",
+  "settingsAgentClaude": "Claude Code",
   "settingsAgentsLoading": "Agent-Depot wird gelesen …",
   "settingsAgentsLoadFailed": "Der Daemon hat zum Agent-Depot nicht geantwortet.",
   "settingsAgentsRetry": "Erneut versuchen",

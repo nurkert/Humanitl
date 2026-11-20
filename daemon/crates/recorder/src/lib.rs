@@ -224,6 +224,13 @@ impl Recorder {
         self.masks.add_for(secret, authority);
     }
 
+    /// Wie [`Recorder::mask_secret`], mit der Kopfzeile, in der der
+    /// Schlüssel an `authority` steht, etwa `x-api-key` für Claude Code
+    /// (HUM-514, [`SecretMasks::expected_in`]).
+    pub fn mask_secret_in(&self, secret: &str, authority: Option<&str>, header: &str) {
+        self.masks.add_for_header(secret, authority, header);
+    }
+
     /// Die Masken dieser Aufzeichnung, als geteilter Wert.
     ///
     /// Der Daemon gibt sie dem Scanner der Funde: Ein Schlüssel, den

@@ -209,13 +209,18 @@ impl Tier1Scanner {
     }
 
     /// Ob `finding` der Zugangsschlüssel des Modells genau dort ist, wo er
-    /// hingehört: in `Authorization` einer Anfrage an sein eigenes Ziel
-    /// (HUM-140). Nur dann fällt der Fund weg.
+    /// hingehört: in der Kopfzeile, die seine Maske nennt, einer Anfrage an
+    /// sein eigenes Ziel. Vorgabe ist `Authorization` (HUM-140); Claude Code
+    /// mit `ANTHROPIC_API_KEY` trägt `X-Api-Key` in seiner Maske (HUM-514).
+    /// Nur dann fällt der Fund weg.
     fn expected_key(&self, finding: &Finding, authority: &str) -> bool {
-        matches!(
-            &finding.location,
-            FindingLocation::Header(name) if name.as_str() == "authorization"
-        ) && self.masks.expected_at(&finding.value_hash, authority)
+        match &finding.location {
+            FindingLocation::Header(name) => {
+                self.masks
+                    .expected_in(&finding.value_hash, authority, name.as_str())
+            }
+            _ => false,
+        }
     }
 
     /// Die Kennungen der eingehängten Detektoren, für `humanitl doctor`.
@@ -501,7 +506,8 @@ mod tests {
     /// Ein Schlüssel ohne bekanntes Format findet kein Muster; der Detektor
     /// für bekannte Geheimnisse findet ihn trotzdem, im Rumpf, in einer
     /// eigenen Kopfzeile und in der Query, auch kodiert, an jeden Host. Nur
-    /// `Authorization` an seinem Ziel bleibt frei (HUM-140, Review).
+    /// die Kopfzeile seiner Maske (Vorgabe `Authorization`) an seinem Ziel
+    /// bleibt frei (HUM-140, Review, HUM-514).
     #[test]
     fn a_known_key_without_a_known_format_is_found_wherever_it_leaves() {
         const KEY: &str = "local-key-0123456789abcdef";
@@ -561,7 +567,64 @@ mod tests {
         assert_eq!(
             found_at(&scanner.scan(&own, &[])),
             ["header:x-api-key"],
-            "at its own target, any other header is still a finding"
+            "at its own target, any other header than its mask's is still a finding"
+        );
+    }
+
+    /// Claude Code sends a key from `ANTHROPIC_API_KEY` in `X-Api-Key`
+    /// (HUM-514), and its mask says so: at its own target that is no
+    /// finding, at another host it stays one, and a key whose mask names
+    /// `Authorization` (`OpenCode`'s) stays one in `X-Api-Key` even at its
+    /// own target.
+    ///
+    /// Mutation proofs: `expected_key` that ignores the header of the mask
+    /// (`expected_at` for every header) turns the last assert red; one that
+    /// passes only `authorization` turns the first red.
+    #[test]
+    fn a_known_key_in_x_api_key_is_no_finding_only_at_its_own_target() {
+        const KEY: &str = "sk-ant-api03-0123456789abcdefghij";
+        let request = |host: &str| {
+            let mut request = humanitl_core::HttpRequest::new(
+                humanitl_core::Method::POST,
+                humanitl_core::Scheme::Https,
+                humanitl_core::Authority::new(humanitl_core::HostName::parse(host).unwrap(), 443),
+                "/v1/messages",
+            );
+            request.headers.insert(
+                HeaderName::from_static("x-api-key"),
+                humanitl_core::http::HeaderValue::from_str(KEY).unwrap(),
+            );
+            request
+        };
+        let masks = SecretMasks::default();
+        let scanner = Tier1Scanner::new(&humanitl_findings::FindingsSettings::default())
+            .unwrap()
+            .with_masks(masks.clone());
+        masks.add_for_header(KEY, Some("api.anthropic.com:443"), "x-api-key");
+        assert!(
+            scanner
+                .scan(&request("api.anthropic.com"), &[])
+                .findings
+                .is_empty(),
+            "the key in X-Api-Key at its own target is no finding"
+        );
+        assert!(
+            !scanner
+                .scan(&request("evil.example"), &[])
+                .findings
+                .is_empty(),
+            "the key in X-Api-Key at another host stays a finding"
+        );
+
+        // A key whose mask names `Authorization`, as every adapter's but
+        // Claude Code's: in `X-Api-Key` it stays a finding at its target.
+        masks.add_for(KEY, Some("api.anthropic.com:443"));
+        assert!(
+            !scanner
+                .scan(&request("api.anthropic.com"), &[])
+                .findings
+                .is_empty(),
+            "OpenCode's key in X-Api-Key stays a finding"
         );
     }
 

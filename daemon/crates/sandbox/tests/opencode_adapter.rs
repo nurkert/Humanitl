@@ -1724,7 +1724,7 @@ fn opencode_passthrough_needs_an_endpoint() {
 #[test]
 fn the_registry_knows_opencode() {
     let registry = AdapterRegistry::builtin();
-    assert_eq!(registry.ids(), vec!["opencode", "pi"]);
+    assert_eq!(registry.ids(), vec!["opencode", "pi", "claude"]);
     let adapter = registry.get("opencode").expect("the builtin adapter");
     assert_eq!(adapter.id(), "opencode");
     assert!(

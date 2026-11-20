@@ -1049,7 +1049,11 @@ sich weder zuverlässig verdecken noch finden.
 *Wo er ein Fund ist.* Der Detektor `known-secret` sucht den Schlüssel wörtlich und URL-kodiert in
 jedem Header, in der Query (roh und dekodiert) und im dekodierten Body jeder Anfrage, an jeden
 Host. Jedes Vorkommen ist ein Fund `api_key:llm` der Stufe `checksum`. An genau einer Stelle ist
-er kein Fund: im `Authorization`-Header einer Anfrage an Host und Port von `llm.endpoint`. Ein
+er kein Fund: in der Kopfzeile, die sein Adapter nennt, `Authorization` oder `X-Api-Key`, in der
+Claude Code seinen Schlüssel an die Anthropic-API schickt (HUM-514), einer Anfrage an Host und
+Port des Inferenz-Endpunkts des Agenten, also von `llm.endpoint`, für Claude Code ohne Gateway
+`api.anthropic.com:443`. Kopfzeile und Ziel reisen mit der Maske des Schlüssels; der Schlüssel
+eines anderen Agenten in `X-Api-Key` bleibt ein Fund. Ein
 Fund hält eine Anfrage nicht von selbst an; sie wird ohnehin angehalten, wenn keine Regel ihren
 Host erlaubt, und mit eingeschaltetem `hold.hard_block_checksum_secrets` hält der Fund sie wegen
 seiner Stufe an. Im Pfad vor `?` und im Host sucht kein Detektor; dort verdeckt nur die

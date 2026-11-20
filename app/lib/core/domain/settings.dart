@@ -43,11 +43,16 @@ abstract final class FormKeys {
   /// way to a target, such as a company CA (HUM-257).
   static const String tlsTrustSystemStore = 'tls.trust_system_store';
 
-  /// The agent the next session starts: `opencode` or `pi` (HUM-274).
+  /// The agent the next session starts: `opencode`, `pi` (HUM-274) or
+  /// `claude` (HUM-514).
   static const String agentAdapter = 'agent.adapter';
 
   /// The agents the daemon knows, in the order of its registry (HUM-274).
-  static const List<String> agentAdapters = <String>['opencode', 'pi'];
+  static const List<String> agentAdapters = <String>[
+    'opencode',
+    'pi',
+    'claude',
+  ];
 
   /// All of them.
   static const List<String> all = <String>[

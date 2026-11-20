@@ -156,13 +156,12 @@ done
 NO_PROXY="$address" no_proxy="$address" "$program" --server "http://$address" "$@"
 "#;
 
-/// Das Programm eines Kommandos, auch wenn [`SHARED_LOOPBACK_START`] es trägt.
+/// Das Programm eines Kommandos, auch wenn [`SHARED_LOOPBACK_START`] oder
+/// ein anderes Startskript eines Adapters es trägt
+/// ([`crate::agent::shown_program`]).
 #[must_use]
 pub fn shown_program(command: &[OsString]) -> Option<&OsString> {
-    match command {
-        [_, _, script, _, program, ..] if script == SHARED_LOOPBACK_START => Some(program),
-        _ => command.first(),
-    }
+    crate::agent::shown_program(command)
 }
 
 /// Das Verzeichnis, in dem die Dateien dieses Adapters in der Sandbox liegen.
@@ -357,7 +356,7 @@ pub fn bash_default_timeout_ms(hold: &HoldConfig) -> Option<u64> {
 }
 
 /// Die Id der Passthrough-Regel; fest, damit sie überall dieselbe ist.
-const PASSTHROUGH_RULE_ID: u128 = 0x0192_0000_0000_7000_8000_0000_0000_00ff;
+pub(crate) const PASSTHROUGH_RULE_ID: u128 = 0x0192_0000_0000_7000_8000_0000_0000_00ff;
 
 /// Das Präfix, unter dem Ollama seine gesamte eigene API anbietet.
 ///
