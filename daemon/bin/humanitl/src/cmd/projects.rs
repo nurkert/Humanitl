@@ -30,6 +30,10 @@ const MAX_PAGES: usize = 100;
 /// Die Frist für `proposal`, als `grpc-timeout` gesendet (HUM-536).
 const PROPOSAL_DEADLINE: std::time::Duration = std::time::Duration::from_secs(10);
 
+/// Die erste Minor des Vertrags, deren Vorschlag die Werte der Sitzung
+/// kennt (`Proposal.cli_overrides`, HUM-567).
+pub const PROPOSAL_OVERRIDES_MINOR: u32 = 57;
+
 /// Führt `humanitl projects <cmd>` aus.
 ///
 /// # Errors
@@ -95,9 +99,16 @@ pub async fn run(ctx: &Context, cmd: &ProjectsCmd) -> Result<u8, Failure> {
             return clean(ctx, &mut client, selection, *yes).await;
         }
         ProjectsCmd::Proposal { path } => {
-            let (request, notice) = proposal_request(ctx, path.as_deref());
-            // Der Vorschlag kennt die Werte der Sitzung nicht (HUM-559); wer
-            // sie gesetzt hat, erfährt es, statt dass sie still wegfallen.
+            let info = client
+                .get_info(())
+                .await
+                .map_err(|status| Failure::new(status_diagnostic(&status, "GetInfo")))?
+                .into_inner();
+            crate::cmd::daemon::check_proto(&info)?;
+            let (request, notice) = proposal_request(ctx, path.as_deref(), info.proto_minor);
+            // Ein Daemon vor 1.57 kennt die Werte der Sitzung im Vorschlag
+            // nicht (HUM-559, HUM-567); wer sie gesetzt hat, erfährt es,
+            // statt dass sie still wegfallen.
             if let Some(notice) = notice {
                 ctx.render.diagnostic(&notice);
             }
@@ -594,22 +605,36 @@ fn local_time(seconds: i64) -> String {
     crate::render::local_time(seconds, "%Y-%m-%d %H:%M")
 }
 
-/// Die Anfrage von `humanitl projects proposal [PATH]` und die Warnung über
-/// die Werte der Sitzung, die der Vorschlag nicht kennt (HUM-559,
-/// [`unseen_session_values`]); keine, wenn sich die Konfiguration nicht
-/// auflösen lässt.
+/// Die Anfrage von `humanitl projects proposal [PATH]` an einen Daemon der
+/// Minor `minor`, und die Warnung über die Werte der Sitzung, die er im
+/// Vorschlag nicht sieht.
+///
+/// Die Werte sind die eines Starts dieses Aufrufs
+/// ([`crate::cmd::run::client_overrides`]: Flags, Umgebung, Datei aus
+/// `--config`, die Untergrenze als aufgelöster strengster Wert). Ab 1.57
+/// reisen sie in `Proposal.cli_overrides` (HUM-567), und der Vorschlag ist der
+/// Start mit ihnen; davor warnt der Befehl wie seit HUM-559
+/// ([`unseen_session_values`]) und schickt sie nicht. Lässt sich die
+/// Konfiguration nicht auflösen, gehen keine Werte mit und keine Warnung.
 fn proposal_request(
     ctx: &Context,
     path: Option<&std::path::Path>,
+    minor: u32,
 ) -> (v1::ProjectsRequest, Option<Diagnostic>) {
     let folder = path.unwrap_or_else(|| std::path::Path::new("."));
-    let notice = ctx.config().ok().and_then(|resolved| {
-        unseen_session_values(&crate::cmd::run::client_overrides(ctx, &resolved))
+    let overrides = ctx.config().ok().map_or_else(Vec::new, |resolved| {
+        crate::cmd::run::client_overrides(ctx, &resolved)
     });
+    let (cli_overrides, notice) = if minor >= PROPOSAL_OVERRIDES_MINOR {
+        (overrides, None)
+    } else {
+        (Vec::new(), unseen_session_values(&overrides, minor))
+    };
     let request = v1::ProjectsRequest {
         op: Some(v1::projects_request::Op::Proposal(
             v1::projects_request::Proposal {
                 path: absolute(ctx, folder),
+                cli_overrides,
                 ..v1::projects_request::Proposal::default()
             },
         )),
@@ -617,15 +642,19 @@ fn proposal_request(
     (request, notice)
 }
 
-/// Die Warnung, dass der Startvorschlag diese Werte der Sitzung nicht
-/// kennt (HUM-559), oder `None` ohne solche Werte.
+/// Die Warnung, dass der Startvorschlag eines Daemons der Minor `minor`
+/// diese Werte der Sitzung nicht kennt (HUM-559), oder `None` ohne solche
+/// Werte.
 ///
-/// `Projects.proposal` rechnet mit der Konfiguration des Daemons und der
-/// Projektwahl, ohne die Werte, die ein `humanitl run` dieses Aufrufs als
-/// `Start.cli_overrides` schickte: Flags, Umgebung und die Datei aus
-/// `--config`. Eine Untergrenze von dort gälte beim Start, im Vorschlag
+/// Vor 1.57 rechnet `Projects.proposal` mit der Konfiguration des Daemons
+/// und der Projektwahl, ohne die Werte, die ein `humanitl run` dieses
+/// Aufrufs als `Start.cli_overrides` schickte: Flags, Umgebung und die Datei
+/// aus `--config`. Eine Untergrenze von dort gälte beim Start, im Vorschlag
 /// nicht; `humanitl sandbox plan` zeigt den Start mit ihr.
-fn unseen_session_values(overrides: &[v1::sandbox_request::CliOverride]) -> Option<Diagnostic> {
+fn unseen_session_values(
+    overrides: &[v1::sandbox_request::CliOverride],
+    minor: u32,
+) -> Option<Diagnostic> {
     if overrides.is_empty() {
         return None;
     }
@@ -637,10 +666,11 @@ fn unseen_session_values(overrides: &[v1::sandbox_request::CliOverride]) -> Opti
     Some(
         Diagnostic::builder(codes::CLI_004, Severity::Warning)
             .why(format!(
-                "the proposal shows a start without the session values of this command line \
-                 and environment ({values}); a run with them would apply them, a raised \
-                 sandbox.min_isolation above all. The preview with them: humanitl sandbox plan \
-                 with the same flags"
+                "the daemon speaks contract 1.{minor}, and a proposal with the session values \
+                 of this command line and environment ({values}) needs \
+                 1.{PROPOSAL_OVERRIDES_MINOR}; it shows a start without them, while a run with \
+                 them would apply them, a raised sandbox.min_isolation above all. The preview \
+                 with them: humanitl sandbox plan with the same flags"
             ))
             .fix(humanitl_core::FixAction::CopyCommand(
                 "humanitl sandbox plan".to_owned(),
@@ -655,15 +685,19 @@ mod tests {
 
     use super::*;
 
-    /// Der Vorschlag nennt die Werte der Sitzung, die er nicht kennt
-    /// (HUM-559), und schweigt ohne sie.
+    /// Der Vorschlag eines älteren Daemons nennt die Werte der Sitzung, die
+    /// er nicht kennt (HUM-559), mit der Minor, die sie braucht (HUM-567),
+    /// und schweigt ohne sie.
     #[test]
     fn the_proposal_names_the_session_values_it_does_not_see() {
-        assert!(unseen_session_values(&[]).is_none());
-        let notice = unseen_session_values(&[v1::sandbox_request::CliOverride {
-            path: "sandbox.min_isolation".to_owned(),
-            value: "kernel".to_owned(),
-        }])
+        assert!(unseen_session_values(&[], 55).is_none());
+        let notice = unseen_session_values(
+            &[v1::sandbox_request::CliOverride {
+                path: "sandbox.min_isolation".to_owned(),
+                value: "kernel".to_owned(),
+            }],
+            55,
+        )
         .expect("a floor of the command line is named");
         assert_eq!(notice.code.as_str(), "CLI_004");
         assert_eq!(notice.severity, Severity::Warning);
@@ -672,52 +706,95 @@ mod tests {
             "{}",
             notice.why
         );
+        assert!(notice.why.contains("1.57"), "{}", notice.why);
     }
 
-    /// `projects proposal` builds its warning from the session values of the
-    /// call (HUM-559): a floor flag yields it, a call without one does not.
+    /// Ein Kontext für `humanitl projects proposal` mit diesen Argumenten,
+    /// in einem leeren Zuhause.
+    fn proposal_context(home: &std::path::Path, args: &[&str]) -> Context {
+        let matches = crate::cli::command()
+            .try_get_matches_from(["humanitl", "projects", "proposal"].iter().chain(args))
+            .unwrap();
+        let env = humanitl_config::Env::from_pairs([
+            ("HOME", home.display().to_string()),
+            ("XDG_CONFIG_HOME", home.join("cfg").display().to_string()),
+        ]);
+        Context {
+            paths: humanitl_config::Paths::new(env.clone()),
+            env,
+            cwd: home.to_path_buf(),
+            cli_config: crate::cli::config_pairs(&matches),
+            config_file: None,
+            profile: None,
+            profile_means: crate::cmd::ProfileMeaning::Session,
+            render: crate::render::Renderer::new(false, 0, true),
+            source_lock: humanitl_config::agents::SourceLock::none(),
+        }
+    }
+
+    /// Die Werte der Sitzung einer Anfrage des Vorschlags.
+    fn sent_values(request: &v1::ProjectsRequest) -> Vec<v1::sandbox_request::CliOverride> {
+        match &request.op {
+            Some(v1::projects_request::Op::Proposal(proposal)) => proposal.cli_overrides.clone(),
+            other => panic!("no proposal: {other:?}"),
+        }
+    }
+
+    /// `projects proposal` against a daemon before 1.57 builds its warning
+    /// from the session values of the call and sends none (HUM-559): a
+    /// floor flag yields it, a call without one does not.
     ///
     /// Mutation proof: `proposal_request` without the call of
     /// `unseen_session_values` returns no warning for the floor flag.
     #[test]
     fn the_proposal_command_warns_about_a_floor_of_the_command_line() {
         let home = tempfile::tempdir().unwrap();
-        let context = |args: &[&str]| {
-            let matches = crate::cli::command()
-                .try_get_matches_from(["humanitl", "projects", "proposal"].iter().chain(args))
-                .unwrap();
-            let env = humanitl_config::Env::from_pairs([
-                ("HOME", home.path().display().to_string()),
-                (
-                    "XDG_CONFIG_HOME",
-                    home.path().join("cfg").display().to_string(),
-                ),
-            ]);
-            Context {
-                paths: humanitl_config::Paths::new(env.clone()),
-                env,
-                cwd: home.path().to_path_buf(),
-                cli_config: crate::cli::config_pairs(&matches),
-                config_file: None,
-                profile: None,
-                profile_means: crate::cmd::ProfileMeaning::Session,
-                render: crate::render::Renderer::new(false, 0, true),
-                source_lock: humanitl_config::agents::SourceLock::none(),
-            }
-        };
-        let (request, notice) =
-            proposal_request(&context(&["--sandbox-min-isolation", "kernel"]), None);
-        assert!(matches!(
-            request.op,
-            Some(v1::projects_request::Op::Proposal(_))
-        ));
+        let floor = proposal_context(home.path(), &["--sandbox-min-isolation", "kernel"]);
+        let (request, notice) = proposal_request(&floor, None, PROPOSAL_OVERRIDES_MINOR - 1);
+        assert!(sent_values(&request).is_empty());
         let notice = notice.expect("the floor is named");
         assert!(
             notice.why.contains("sandbox.min_isolation"),
             "{}",
             notice.why
         );
-        assert!(proposal_request(&context(&[]), None).1.is_none());
+        let plain = proposal_context(home.path(), &[]);
+        assert!(
+            proposal_request(&plain, None, PROPOSAL_OVERRIDES_MINOR - 1)
+                .1
+                .is_none()
+        );
+    }
+
+    /// From 1.57 `projects proposal` sends exactly the session values a
+    /// start of the same call sends (HUM-567): flag floor and backend reach
+    /// `Proposal.cli_overrides`, and no warning follows.
+    ///
+    /// Mutation proof: `proposal_request` sending empty `cli_overrides`, or
+    /// the threshold at 58, fails the first assertion; the warning kept
+    /// for a new daemon fails the second.
+    #[test]
+    fn the_proposal_sends_the_session_values_of_a_start() {
+        let home = tempfile::tempdir().unwrap();
+        let ctx = proposal_context(
+            home.path(),
+            &[
+                "--sandbox-min-isolation",
+                "kernel",
+                "--backend",
+                humanitl_sandbox::VM_BACKEND,
+            ],
+        );
+        let (request, notice) = proposal_request(&ctx, None, PROPOSAL_OVERRIDES_MINOR);
+        let start = crate::cmd::run::client_overrides(&ctx, &ctx.config().unwrap());
+        assert!(
+            start
+                .iter()
+                .any(|pair| pair.path == "sandbox.min_isolation" && pair.value == "kernel"),
+            "{start:?}"
+        );
+        assert_eq!(sent_values(&request), start);
+        assert!(notice.is_none(), "{notice:?}");
     }
 
     /// Review HUM-533: Ein `n` am Terminal löscht nichts und endet mit Exit 1.

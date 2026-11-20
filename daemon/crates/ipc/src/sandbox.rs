@@ -1215,10 +1215,14 @@ impl SandboxService {
             // Lesen heisst hier: ein Profil von der Platte lesen und eine
             // Kommandozeile bauen. Das ist blockierende Arbeit und gehoert
             // deshalb auf einen eigenen Faden, nicht in die Ereignisschleife.
+            // Davor die gespeicherte Projektwahl wie beim Start (HUM-567):
+            // `argv` für den eingestellten Ordner, `argv_plan` für den
+            // Ordner und die Werte seines Plans.
             Some(Op::Argv(())) => {
-                tokio::task::spawn_blocking(move || {
-                    inner.argv(&v1::sandbox_request::Plan::default(), &tx);
-                });
+                Inner::spawn_argv(inner, v1::sandbox_request::Plan::default(), tx);
+            }
+            Some(Op::ArgvPlan(plan)) => {
+                Inner::spawn_argv(inner, plan, tx);
             }
             // Erst die gespeicherte Projektwahl des Ordners wie beim Start
             // (HUM-559): Sie liegt in der Aufzeichnung, die asynchron liest.
@@ -1260,11 +1264,7 @@ impl SandboxService {
                 match crate::validate::pull_id(&request.pull_id)
                     .and_then(|id| inner.image_pulls.register(id))
                 {
-                    Ok(slot) => {
-                        tokio::task::spawn_blocking(move || {
-                            inner.image_pull(&request, slot, &tx);
-                        });
-                    }
+                    Ok(slot) => Inner::spawn_image_pull(inner, request, slot, tx),
                     Err(diagnostic) => {
                         let _ = tx.try_send(diagnostic_event(&diagnostic));
                     }
@@ -1415,20 +1415,24 @@ impl Inner {
         &self,
         plan: &v1::sandbox_request::Plan,
     ) -> Result<(humanitl_config::SandboxRef, String), Diagnostic> {
-        self.plan_sandbox_with(plan, ProfileRead::Tolerant)
+        self.plan_sandbox_with(plan, ProfileRead::Tolerant, Ok(None))
     }
 
     /// [`Inner::plan_sandbox`] mit der Wahl, was ein Sandbox-Profil heißt,
     /// das sich nicht lesen lässt: [`ProfileRead::Tolerant`] verlangt dann
     /// kein Backend, [`ProfileRead::Strict`] gibt seinen Befund zurück, wie
-    /// der Start ihn gäbe (HUM-500, für das Ziehen).
+    /// der Start ihn gäbe (HUM-500, für das Ziehen). `choice` ist die
+    /// gespeicherte Projektwahl des Ordners ([`Inner::plan_project_choice`],
+    /// HUM-567); eine, die nicht lud, ist der Befund.
     fn plan_sandbox_with(
         &self,
         plan: &v1::sandbox_request::Plan,
         read: ProfileRead,
+        choice: ChoiceLoad<'_>,
     ) -> Result<(humanitl_config::SandboxRef, String), Diagnostic> {
-        self.consistent(
+        self.consistent_with(
             plan,
+            choice,
             |config, refused| {
                 if let Some(found) = refused {
                     return Err(found.clone());
@@ -1446,11 +1450,54 @@ impl Inner {
         )
     }
 
+    /// Der Plan eines Ziehens (HUM-567): Ein Ordner darin wählt Projekt-Profil
+    /// und gespeicherte Projektwahl wie beim Start, und ein Ordner, den der
+    /// Start ablehnt, hält auch das Ziehen auf (`SANDBOX_006`): Ein Ziehen
+    /// für einen anderen Ordner träfe den Start nicht.
+    ///
+    /// Eine Ausnahme: Ein Ordner, der nur das aktuelle Verzeichnis des
+    /// Aufrufers ist (`WorkDirSource::CurrentDir`), etwa das
+    /// Heimatverzeichnis selbst, wählt kein Projekt. Die Kommandozeile
+    /// schickt den Ordner, in dem `humanitl run` desselben Aufrufs startete,
+    /// auch wenn niemand ihn genannt hat; ein Ziehen aus einem beliebigen
+    /// Verzeichnis nimmt dann den eingestellten Ordner wie ohne Ordner, wie
+    /// vor HUM-567. Blockierend: liest Konfiguration und Ordner.
+    ///
+    /// # Errors
+    ///
+    /// `SANDBOX_006` für einen genannten Ordner, den der Start ablehnt.
+    fn pull_plan(
+        &self,
+        mut plan: v1::sandbox_request::Plan,
+    ) -> Result<v1::sandbox_request::Plan, Diagnostic> {
+        let dir = plan.work_dir.trim();
+        if dir.is_empty() {
+            return Ok(plan);
+        }
+        let from = crate::work_dir::source_from_proto(plan.work_dir_source.as_ref());
+        let configured = self.resolver.stored_work_dir();
+        match crate::work_dir::check_requested(
+            &self.paths,
+            configured.as_deref(),
+            Path::new(dir),
+            &from,
+        ) {
+            Ok(_) => Ok(plan),
+            Err(_) if matches!(from, humanitl_sandbox::WorkDirSource::CurrentDir) => {
+                plan.work_dir.clear();
+                plan.work_dir_source = None;
+                Ok(plan)
+            }
+            Err(refused) => Err(refused),
+        }
+    }
+
     /// Das Backend eines Ziehens (HUM-439, HUM-500).
     ///
     /// Das gesetzte ([`SandboxPorts::backend`], nur die Escape-Suite und
     /// Tests), sonst das, das ein Start bekäme: mit `plan` dieselbe Auflösung
-    /// wie [`Inner::plan_sandbox`] samt `Plan.backend`, Untergrenze,
+    /// wie [`Inner::plan_sandbox`] samt `Plan.backend`, `Plan.cli_overrides`,
+    /// der gespeicherten Projektwahl `choice` (HUM-567), Untergrenze,
     /// Zulassung und der Anforderung des Sandbox-Profils; ohne Plan
     /// `sandbox.backend` der Konfiguration auf der Platte, wie vor HUM-500.
     /// Gesucht wird wie beim Start über [`Backend::detect`], ohne Rückfall:
@@ -1464,6 +1511,7 @@ impl Inner {
     fn pull_backend(
         &self,
         plan: Option<&v1::sandbox_request::Plan>,
+        choice: ChoiceLoad<'_>,
     ) -> Result<Backend, Diagnostic> {
         if let Some(given) = &self.backend {
             return Ok(given.clone());
@@ -1473,7 +1521,7 @@ impl Inner {
             // Ziehen auf wie den Start: Seine Anforderung an das Backend ist
             // unbekannt, und ein Ziehen mit einem anderen Backend träfe den
             // Start nicht.
-            Some(plan) => self.plan_sandbox_with(plan, ProfileRead::Strict)?,
+            Some(plan) => self.plan_sandbox_with(plan, ProfileRead::Strict, choice)?,
             // Wie eine Vorschau: die Konfiguration, wie sie jetzt auf der
             // Platte steht, damit ein eben gesetztes Abbild ohne Neustart
             // gilt.
@@ -1855,6 +1903,7 @@ impl Inner {
     /// publishes and its running facts after: a new sandbox id beside the old
     /// endpoint. At most [`SNAPSHOT_ATTEMPTS`] builds; a daemon that changes
     /// its session that often answers with the last one.
+    #[cfg(test)]
     fn consistent<T>(
         &self,
         plan: &v1::sandbox_request::Plan,
@@ -1995,10 +2044,81 @@ impl Inner {
         }
     }
 
+    /// `image_pull` (HUM-567): erst der Ordner des Plans
+    /// ([`Inner::pull_plan`], Dateien, also auf einem eigenen Faden), dann
+    /// die gespeicherte Projektwahl des Ordners wie beim Start
+    /// ([`Inner::plan_project_choice`]), dann das Ziehen auf einem eigenen
+    /// Faden ([`Inner::image_pull`]). Ein Ordner, den der Start ablehnt, ist
+    /// der Befund, und nichts wird gezogen.
+    fn spawn_image_pull(
+        inner: Arc<Self>,
+        mut request: v1::sandbox_request::ImagePull,
+        slot: crate::image_pulls::PullSlot,
+        tx: mpsc::Sender<v1::SandboxEvent>,
+    ) {
+        tokio::spawn(async move {
+            if let Some(plan) = request.plan.take() {
+                let folder_check = Arc::clone(&inner);
+                let Ok(checked) =
+                    tokio::task::spawn_blocking(move || folder_check.pull_plan(plan)).await
+                else {
+                    return;
+                };
+                match checked {
+                    Ok(plan) => request.plan = Some(plan),
+                    Err(refused) => {
+                        drop(slot);
+                        let _ = tx.send(diagnostic_event(&refused)).await;
+                        return;
+                    }
+                }
+            }
+            let loaded = match request.plan.as_ref() {
+                Some(plan) => inner.plan_project_choice(plan).await,
+                None => Ok(None),
+            };
+            let _ = tokio::task::spawn_blocking(move || {
+                let choice = loaded.as_ref().map(Option::as_ref);
+                inner.image_pull(&request, choice, slot, &tx);
+            })
+            .await;
+        });
+    }
+
+    /// `argv` und `argv_plan` (HUM-567): erst die gespeicherte Projektwahl
+    /// des Ordners wie für einen `Plan` ([`Inner::plan_project_choice`]),
+    /// dann die Kommandozeile auf einem eigenen Faden ([`Inner::argv`]).
+    fn spawn_argv(
+        inner: Arc<Self>,
+        plan: v1::sandbox_request::Plan,
+        tx: mpsc::Sender<v1::SandboxEvent>,
+    ) {
+        tokio::spawn(async move {
+            let loaded = inner.plan_project_choice(&plan).await;
+            let _ = tokio::task::spawn_blocking(move || {
+                let choice = loaded.as_ref().map(Option::as_ref);
+                inner.argv(&plan, choice, &tx);
+            })
+            .await;
+        });
+    }
+
     /// Die Kommandozeile, Argument für Argument, als eigene Ereignisse.
-    fn argv(&self, plan: &v1::sandbox_request::Plan, tx: &mpsc::Sender<v1::SandboxEvent>) {
-        match self.consistent(
+    ///
+    /// Aufgelöst wie ein `Plan` mit diesem Plan ([`Inner::consistent_with`]):
+    /// Ordner, Profil, `Plan.backend`, `Plan.cli_overrides` und die
+    /// gespeicherte Projektwahl `choice` (HUM-567). Eine Wahl, die nicht
+    /// lud, und ein Wert, den der Start ablehnt, sind der Befund statt einer
+    /// Zeile.
+    fn argv(
+        &self,
+        plan: &v1::sandbox_request::Plan,
+        choice: ChoiceLoad<'_>,
+        tx: &mpsc::Sender<v1::SandboxEvent>,
+    ) {
+        match self.consistent_with(
             plan,
+            choice,
             |config, refused| match refused {
                 Some(diagnostic) => Err(diagnostic.clone()),
                 None => self.prepare_keyed_with(
@@ -3440,7 +3560,8 @@ impl Inner {
     /// `Op::ImagePull`: zieht ein Abbild auf ausdrücklichen Wunsch (HUM-439).
     ///
     /// Das Backend ist das eines Starts mit `ImagePull.plan`
-    /// ([`Inner::pull_backend`], HUM-500): Vor der Zulassung der
+    /// ([`Inner::pull_backend`], HUM-500), samt der gespeicherten
+    /// Projektwahl `choice` des Ordners (HUM-567): Vor der Zulassung der
     /// Container-Engine lehnt das mit `SANDBOX_048` ab, und es wird nichts
     /// gezogen. Ein Start zieht nie;
     /// nur diese Operation tut es, und das Netz nutzt dabei die Engine
@@ -3452,10 +3573,11 @@ impl Inner {
     fn image_pull(
         &self,
         request: &v1::sandbox_request::ImagePull,
+        choice: ChoiceLoad<'_>,
         slot: crate::image_pulls::PullSlot,
         tx: &mpsc::Sender<v1::SandboxEvent>,
     ) {
-        let backend = self.pull_backend(request.plan.as_ref());
+        let backend = self.pull_backend(request.plan.as_ref(), choice);
         let pulled =
             backend.and_then(|backend| backend.pull_image(&request.reference, slot.cancel()));
         // Erst jetzt ist das Ziehen zu Ende; ein wartender Abbruch erfährt es

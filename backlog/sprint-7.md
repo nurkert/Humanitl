@@ -7788,6 +7788,86 @@ Werte der Sitzung.
 1. Vorschlag, Argv, Image-Pull und Start zeigen bei gleichen Eingaben
    dasselbe Backend und dieselbe Untergrenze.
 
+### Stand nach der Umsetzung (2026-11-20)
+
+**Vertrag 1.57** (1.56 nahm HUM-523). `ProjectsRequest.Proposal.cli_overrides` (Feld 4) trägt
+dieselben Werte wie `Start.cli_overrides`, die neue Operation
+`SandboxRequest.argv_plan` (Feld 15, ein `Plan`) die Kommandozeile eines
+Starts mit diesem Plan. `ImagePull.plan` trug `cli_overrides` schon seit 1.55
+mit, weil das Ziehen über `plan_config_with` auflöst; neu ist dort die
+Projektwahl.
+
+**Vorschlag.** `proposal::answer` prüft die Pfade gegen dieselbe
+Erlaubnisliste (`check_override_key`, sonst `CONFIG_003`) und löst in
+`resolve_with_session` auf: die Wahl geprüft wie beim Speichern
+(`check_for`, ohne die Werte), darüber die Werte auf der Ebene der
+Kommandozeile (`projects::resolve_at_with`). Die Untergrenze hebt also nur;
+ein Backend darunter nennt der Vorschlag mit `SANDBOX_035` wie der Start,
+ein Backend der Sitzung liegt über dem der Wahl. Die Server-Optionen lösen
+ebenso auf. `humanitl projects proposal` schickt ab 1.57 die Werte aus
+`run::client_overrides` und warnt nur noch gegen einen älteren Daemon
+(`CLI_004` mit der Minor 1.57). Gespeichert werden die Werte nie: Die Wahl
+der Vorgaben (`StartProposal.choice`) kommt mit Werten aus einem zweiten
+Durchgang ohne sie (Review); Felder, Befunde und Zeile der Vorgaben zeigen den
+Start mit ihnen.
+
+**Argv.** `argv` und `argv_plan` laufen über `Inner::spawn_argv`: erst
+`plan_project_choice` wie beim `Plan`, dann `argv` mit `consistent_with`.
+`argv` ohne Plan lädt die Wahl des eingestellten Ordners. Die App zeigt die
+Kommandozeile aus `Status.argv_preview` des `Plan`, nicht über `Argv`, und
+bleibt unverändert; `humanitl sandbox argv` baut weiter im eigenen Prozess
+(befristete Abweichung von ADR-018) und kennt die Projektwahl nicht. Das ist
+ein Kandidat für ein eigenes Issue.
+
+**Ziehen.** Der Arm von `Op::ImagePull` lädt vor dem Ziehen die Wahl des
+Ordners aus `ImagePull.plan`; `pull_backend` und `plan_sandbox_with` geben sie
+an `consistent_with` weiter, eine Wahl, die nicht lädt, ist `CONFIG_024`, und
+nichts wird gezogen. `humanitl sandbox image pull` schickt die Werte eines
+Starts dieses Aufrufs und den Ordner, in dem `humanitl run` startete.
+`Inner::pull_plan` prüft ihn auf einem eigenen Faden wie der Start: Ein
+genannter Ordner (`--work`, Variable, Datei, Anfrage ohne Herkunft), den der
+Start ablehnt, hält das Ziehen mit `SANDBOX_006` auf. Nur ein Ordner, der bloß
+das aktuelle Verzeichnis ist (`WorkDirSource::CurrentDir`, etwa das
+Heimatverzeichnis selbst), fällt aus dem Plan, und das Ziehen nimmt den
+eingestellten Ordner wie vorher (Review: vorher fiel jeder abgelehnte Ordner
+zurück, und ein Ziehen für ein abgelehntes Projekt mit Wahl `qemu` zog für das
+Backend eines anderen). Der Befehl schickt den Ordner auch einem älteren
+Daemon, damit dessen Projekt-Profil gilt (Codex-Delta), außer er ist nur das
+aktuelle Verzeichnis und der Start lehnt ihn ab (`sent_folder`, geprüft mit
+`work_dir::check_requested` wie im Daemon): Ein Daemon vor 1.57 lehnte das
+Ziehen aus dem Heimatverzeichnis sonst ab, das bisher ging. Vor 1.57 fragt der
+Befehl dazu `Projects.get` nach der Wahl des Ordners: Setzt sie einen Schlüssel
+`sandbox.*`, endet das Ziehen mit `CLI_004` (Minor 1.57), statt ohne sie zu
+ziehen; ein unbekannter Ordner (`CONFIG_003`) oder ein Daemon ohne Register
+halten nichts auf, jeder andere Befund schon. Gegen einen älteren Daemon lehnt der Befehl sonst nur Werte ab, die das
+Backend mitentscheiden: das Backend vor 1.40, Untergrenze und Laufzeit unter
+Podman vor 1.55 (`CLI_004` mit Werten und Minor); `llm.endpoint` und
+`hold.timeout_secs` halten das Ziehen nie auf.
+
+**Tests.** In `sandbox::project::tests`:
+`the_command_line_of_a_plan_resolves_like_the_start`,
+`the_command_line_without_a_plan_loads_the_choice_of_the_configured_folder`,
+`the_pull_takes_the_backend_of_the_start_with_choice_and_values` (ohne Netz:
+der Befund kommt vor jeder Suche),
+`only_a_current_directory_no_start_may_use_chooses_no_project_for_the_pull`
+(Heimatverzeichnis, außerhalb, fehlend, relativ, ohne Herkunft) und
+`a_named_folder_the_start_refuses_stops_the_pull`. In
+`projects::proposal::tests`: `the_session_floor_reaches_the_proposal_like_the_start`,
+`the_session_backend_lies_above_the_saved_choice`,
+`a_session_value_the_start_refuses_is_config_003`. In `cmd::projects::tests`:
+`the_proposal_sends_the_session_values_of_a_start` und die angepassten Tests
+der Warnung. In `cmd::image::tests`:
+`the_pull_sends_the_session_values_and_the_folder_of_a_start` und
+`an_older_daemon_is_refused_for_values_that_choose_the_backend` und
+`the_folder_goes_along_unless_it_is_a_refused_current_directory`.
+`the_session_backend_lies_above_the_saved_choice` prüft dazu, dass die Wahl
+zum Speichern die ohne Werte der Sitzung bleibt.
+Mutationsbeweise stehen an jedem Test.
+
+**Außerhalb des Umfangs (Kandidaten).** `SandboxBackends` mit Plan lädt die
+Projektwahl nicht; `humanitl sandbox argv` ohne Projektwahl (oben); der Fix von
+`sandbox image pull` nennt nur `--backend`, nicht die Untergrenze.
+
 ---
 
 ## HUM-568 · Durchreiche: Methode je Pfad statt einer Methodenliste für alle Pfade

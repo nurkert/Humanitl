@@ -1396,6 +1396,15 @@ impl FakeDaemon {
                 vec![v1::SandboxEvent { event: Some(event) }]
             }
             Some(Op::Argv(())) => argv_lines(&self.state.session().work_dir),
+            // Wie `argv`, mit dem Ordner des Plans, wenn er einen nennt
+            // (HUM-567); Backend und Werte der Sitzung kennt der Fake nicht.
+            Some(Op::ArgvPlan(plan)) => {
+                if plan.work_dir.trim().is_empty() {
+                    argv_lines(&self.state.session().work_dir)
+                } else {
+                    argv_lines(&plan.work_dir)
+                }
+            }
             Some(Op::Plan(plan)) => vec![self.sandbox_status_for(
                 self.state.sandbox().1,
                 Some(&plan.work_dir),

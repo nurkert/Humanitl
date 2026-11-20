@@ -740,4 +740,224 @@ mod tests {
             1
         );
     }
+
+    /// Die Szene aus HUM-559 für Kommandozeile und Ziehen (HUM-567): Die
+    /// gespeicherte Wahl hebt die Untergrenze auf `kernel` (mit dem
+    /// VM-Backend, so dass sie lädt), die Werte der Sitzung schicken
+    /// `policy` und `auto`. Der Start lehnt `auto` mit `SANDBOX_035` ab.
+    async fn kernel_choice_and_auto(
+        fixture: &Fixture,
+    ) -> (std::path::PathBuf, Vec<v1::sandbox_request::CliOverride>) {
+        let dir = known(
+            fixture,
+            "project",
+            &format!(
+                r#"{{"sandbox.min_isolation":"kernel","sandbox.backend":"{}"}}"#,
+                humanitl_sandbox::VM_BACKEND
+            ),
+        )
+        .await;
+        let overrides = vec![
+            v1::sandbox_request::CliOverride {
+                path: "sandbox.min_isolation".to_owned(),
+                value: "policy".to_owned(),
+            },
+            v1::sandbox_request::CliOverride {
+                path: "sandbox.backend".to_owned(),
+                value: humanitl_sandbox::AUTO_BACKEND.to_owned(),
+            },
+        ];
+        (dir, overrides)
+    }
+
+    /// Die Befunde und die Zahl der Zeilen der Kommandozeile einer Antwort.
+    async fn answer_of(
+        service: &SandboxService,
+        op: v1::sandbox_request::Op,
+    ) -> (Vec<String>, usize) {
+        let events: Vec<v1::SandboxEvent> = service
+            .stream(v1::SandboxRequest { op: Some(op) })
+            .collect()
+            .await;
+        let mut codes = Vec::new();
+        let mut lines = 0;
+        for event in events {
+            match event.event {
+                Some(v1::sandbox_event::Event::Diagnostic(found)) => codes.push(found.code),
+                Some(v1::sandbox_event::Event::ArgvLine(_)) => lines += 1,
+                _ => {}
+            }
+        }
+        (codes, lines)
+    }
+
+    /// `argv_plan` löst mit der gespeicherten Projektwahl und den Werten der
+    /// Sitzung auf wie Vorschau und Start (HUM-567): `SANDBOX_035` statt
+    /// einer Kommandozeile mit `auto` unter der Untergrenze der Wahl.
+    ///
+    /// Mutationsbeweis: `spawn_argv` ohne die geladene Wahl (`Ok(None)`)
+    /// baut die Zeile ohne `SANDBOX_035`, und der Test wird rot; ebenso
+    /// `argv` mit `consistent` statt `consistent_with`.
+    #[tokio::test(flavor = "multi_thread")]
+    async fn the_command_line_of_a_plan_resolves_like_the_start() {
+        let fixture = Fixture::new();
+        let service = fixture.live_service();
+        let (dir, overrides) = kernel_choice_and_auto(&fixture).await;
+        let (codes, lines) = answer_of(
+            &service,
+            v1::sandbox_request::Op::ArgvPlan(v1::sandbox_request::Plan {
+                cli_overrides: overrides,
+                ..plan_for(&dir)
+            }),
+        )
+        .await;
+        assert!(codes.contains(&"SANDBOX_035".to_owned()), "{codes:?}");
+        assert_eq!(lines, 0, "no command line below the floor");
+    }
+
+    /// `argv` ohne Plan lädt die Wahl des eingestellten Ordners wie ein
+    /// `Plan` ohne Ordner (HUM-567): Eine Wahl, die nicht mehr lädt, ist
+    /// `CONFIG_024` wie beim Start, statt einer Zeile ohne sie.
+    ///
+    /// Mutationsbeweis: Der Arm von `Op::Argv` ohne `plan_project_choice`
+    /// liefert keinen `CONFIG_024`, und der Test wird rot.
+    #[tokio::test(flavor = "multi_thread")]
+    async fn the_command_line_without_a_plan_loads_the_choice_of_the_configured_folder() {
+        let fixture = Fixture::new();
+        let dir = known(&fixture, "floor", r#"{"sandbox.min_isolation":"kernel"}"#).await;
+        let config = fixture.paths().config_path();
+        std::fs::create_dir_all(config.parent().unwrap()).unwrap();
+        std::fs::write(
+            &config,
+            format!("[sandbox]\nwork_dir = {:?}\n", dir.display().to_string()),
+        )
+        .unwrap();
+        let service = fixture.live_service();
+        let (codes, lines) = answer_of(&service, v1::sandbox_request::Op::Argv(())).await;
+        assert!(codes.contains(&"CONFIG_024".to_owned()), "{codes:?}");
+        assert_eq!(lines, 0);
+    }
+
+    /// Das Ziehen nimmt das Backend, das der Start mit derselben Wahl und
+    /// denselben Werten nähme (HUM-567): `SANDBOX_035`, bevor ein Backend
+    /// gesucht oder etwas gezogen wird. Eine Wahl, die nicht mehr lädt,
+    /// hält das Ziehen auf wie den Start (`CONFIG_024`).
+    ///
+    /// Mutationsbeweis: Der Arm von `Op::ImagePull` ohne
+    /// `plan_project_choice` (oder `pull_backend` mit `Ok(None)`) zieht für
+    /// `auto` und endet ohne `SANDBOX_035` und ohne `CONFIG_024`; der Test
+    /// wird rot. Ohne Netz: Ohne Wahl endet das Ziehen am Backend ohne
+    /// Abbilder oder ohne eingestelltes Abbild, nicht an einer Registry.
+    #[tokio::test(flavor = "multi_thread")]
+    async fn the_pull_takes_the_backend_of_the_start_with_choice_and_values() {
+        let fixture = Fixture::new();
+        let service = fixture.live_service();
+        let (dir, overrides) = kernel_choice_and_auto(&fixture).await;
+        let pull = |plan: v1::sandbox_request::Plan| {
+            v1::sandbox_request::Op::ImagePull(v1::sandbox_request::ImagePull {
+                plan: Some(plan),
+                ..v1::sandbox_request::ImagePull::default()
+            })
+        };
+        let (codes, _) = answer_of(
+            &service,
+            pull(v1::sandbox_request::Plan {
+                cli_overrides: overrides,
+                ..plan_for(&dir)
+            }),
+        )
+        .await;
+        assert_eq!(codes, ["SANDBOX_035"], "{codes:?}");
+
+        let broken = known(&fixture, "broken", r#"{"sandbox.min_isolation":"kernel"}"#).await;
+        let (codes, _) = answer_of(&service, pull(plan_for(&broken))).await;
+        assert_eq!(codes, ["CONFIG_024"], "{codes:?}");
+    }
+
+    /// Ein Plan des Ziehens für `dir` mit dieser Herkunft des Ordners.
+    fn pull_for(
+        dir: &std::path::Path,
+        from: &humanitl_sandbox::WorkDirSource,
+    ) -> v1::sandbox_request::Plan {
+        v1::sandbox_request::Plan {
+            work_dir_source: Some(crate::work_dir::source_to_proto(from)),
+            ..plan_for(dir)
+        }
+    }
+
+    /// Nur ein Ordner, der bloß das aktuelle Verzeichnis ist, wählt beim
+    /// Ziehen kein Projekt, wenn der Start ihn ablehnt (HUM-567): Das
+    /// Heimatverzeichnis als aktuelles Verzeichnis fällt aus dem Plan, ein
+    /// Projektordner bleibt. Ein genannter Ordner, den der Start ablehnt
+    /// (das Heimatverzeichnis selbst, ein Ordner außerhalb davon, ein
+    /// fehlender, ein relativer), ist `SANDBOX_006` wie beim Start.
+    ///
+    /// Mutationsbeweis: `pull_plan` ohne die Prüfung behält das
+    /// Heimatverzeichnis, und die erste Zusicherung wird rot; der Rückfall
+    /// für jede Herkunft (ohne `CurrentDir` im Muster) lässt die genannten
+    /// Ordner durch; `pull_plan`, das jeden Ordner leert, färbt die zweite
+    /// Zusicherung rot.
+    #[tokio::test]
+    async fn only_a_current_directory_no_start_may_use_chooses_no_project_for_the_pull() {
+        use humanitl_sandbox::WorkDirSource;
+
+        let fixture = Fixture::new();
+        let service = fixture.live_service();
+        let cwd = WorkDirSource::CurrentDir;
+        let home = service
+            .inner
+            .pull_plan(pull_for(fixture.home.path(), &cwd))
+            .unwrap();
+        assert_eq!(home.work_dir, "", "{home:?}");
+        let project = fixture.folder("project");
+        let kept = service.inner.pull_plan(pull_for(&project, &cwd)).unwrap();
+        assert_eq!(kept.work_dir, project.display().to_string());
+
+        let outside = tempfile::tempdir().unwrap();
+        let missing = fixture.home.path().join("missing");
+        for (dir, from) in [
+            (fixture.home.path().to_path_buf(), WorkDirSource::Flag),
+            (outside.path().to_path_buf(), WorkDirSource::Flag),
+            (
+                missing,
+                WorkDirSource::Env("HUMANITL_SANDBOX__WORK_DIR".to_owned()),
+            ),
+            (
+                std::path::PathBuf::from("relative/project"),
+                WorkDirSource::Flag,
+            ),
+            (fixture.home.path().to_path_buf(), WorkDirSource::Request),
+        ] {
+            let refused = service
+                .inner
+                .pull_plan(pull_for(&dir, &from))
+                .expect_err("a named folder the start refuses");
+            assert_eq!(refused.code.as_str(), "SANDBOX_006", "{dir:?} {from:?}");
+        }
+    }
+
+    /// Ein genannter Ordner, den der Start ablehnt, hält das Ziehen auf
+    /// (HUM-567): genau `SANDBOX_006`, kein Backend wird gesucht, nichts
+    /// gezogen.
+    ///
+    /// Mutationsbeweis: Der Arm von `Op::ImagePull`, der den Befund von
+    /// `pull_plan` verwirft und ohne Ordner weiterzieht, endet ohne
+    /// `SANDBOX_006`; der Test wird rot.
+    #[tokio::test(flavor = "multi_thread")]
+    async fn a_named_folder_the_start_refuses_stops_the_pull() {
+        let fixture = Fixture::new();
+        let service = fixture.live_service();
+        let (codes, _) = answer_of(
+            &service,
+            v1::sandbox_request::Op::ImagePull(v1::sandbox_request::ImagePull {
+                plan: Some(pull_for(
+                    fixture.home.path(),
+                    &humanitl_sandbox::WorkDirSource::Flag,
+                )),
+                ..v1::sandbox_request::ImagePull::default()
+            }),
+        )
+        .await;
+        assert_eq!(codes, ["SANDBOX_006"], "{codes:?}");
+    }
 }
