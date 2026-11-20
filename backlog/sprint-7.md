@@ -5623,6 +5623,101 @@ Anleitung für Nutzer.
    Prompt von Claude Code in einer Wegwerf-Sitzung, und die zweite Sitzung
    fragt nicht erneut nach der Anmeldung.
 
+### Stand nach der Umsetzung (2026-11-20)
+
+Gebaut: der Ende-zu-Ende-Test
+`claude_code_from_the_depot_runs_two_sessions_without_a_login_and_leaves_nothing`
+in `daemon/crates/ipc/tests/depot_maintenance.rs`, auf dem Gerüst von HUM-563
+(echte Sandbox, echter Proxy-Stapel, Stellvertreter-Egress, nichts verlässt
+den Rechner), und die Anleitung `docs/guides/agent-depot.md` (en, de), dazu
+`docs/cli.md` (en, de) und die Zeile im Docs-Index. Kein Produktionscode
+geändert, kein CI-Schritt neu: der Test läuft im Job `rust-test` mit
+`cargo test --workspace`, unter `CI` rot statt übersprungen, wenn Sandbox,
+`curl`, Shim oder `gpg` fehlen.
+
+Was der Test belegt, der Reihe nach:
+1. `agents source claude depot` über die Antwort des RPC (`agents::answer`,
+   `SetSource`) in die `config.toml`; der Dienst löst wie der Daemon bei
+   jedem Start neu von der Platte auf (`SessionResolver::new`, nicht
+   `for_config`), der Status zeigt vorher `host`, danach `depot`.
+2. `agents install claude --version 2.1.90` mit dem echten Rezept des Daemons
+   für Claude Code (`recipe::known("claude")`, Skript, Host, Plattformnamen,
+   Zeiger ins Manifest unverändert); nur der feste Fingerabdruck ist der
+   eines Schlüssels, den der Test mit dem `gpg` des Hosts erzeugt. Der
+   Stellvertreter antwortet unter `downloads.claude.ai` mit `latest` (eine
+   andere Version), dem signierten `manifest.json` samt `.sig`, dem
+   Schlüssel und einem Stellvertreter-Programm. Belegt: angeheftet (kein
+   Abruf von `latest`), Signatur vom Daemon geprüft (`verified`,
+   `signed_by` = Fingerabdruck des Tests), außerhalb des Depots keine Datei
+   namens `claude` unter dem gefälschten Home, auch nicht in `~/.local/bin`
+   (dort legt der Installer des Herstellers seinen Starter ab, und dieser
+   Ordner steht jetzt im `PATH` der Fixture).
+3. Anmeldung: Das Format der Zugangsdatei von Claude Code ist nicht erklärt
+   (HUM-520, HUM-553 Punkt 3), also prüft der Test, dass `agents login
+   claude` mit `AGENT_014` antwortet, und der Zugang kommt von Humanitl:
+   `agent.adapter = "claude"`, `llm.endpoint` auf einen
+   Stellvertreter-Endpunkt, der Schlüssel im Schlüsselspeicher des Tests
+   (Datei `0600`, `with_secret_tool(None)`, nie der echte Schlüsselbund).
+   Zwei Wegwerf-Sitzungen (`sandbox_mode = "disposable"`, wie `humanitl go`)
+   nacheinander starten das Programm des Depots hinter dem Starter von
+   HUM-514; jede bekommt `ANTHROPIC_BASE_URL`, `ANTHROPIC_AUTH_TOKEN` und
+   `ANTHROPIC_MODEL`, erreicht den Endpunkt mit dem Schlüssel über die
+   Durchreiche ohne Halt (der Stellvertreter antwortet nur mit dem richtigen
+   `Authorization` mit 200), landet nie in der Anmeldeabfrage des
+   Stellvertreters (die er ohne Schlüssel und Token zeigt) und sieht eine
+   frische Kopie der Konfiguration. Nur der erste Start trägt die Bestätigung
+   des Cloud-Hinweises (HUM-516); der zweite fragt nichts.
+4. `agents remove claude`: Depot weg, Status ohne Version, keine Datei namens
+   `claude` mehr unter dem gefälschten Home, die Ordner des `PATH` wie vorher.
+
+Nicht belegt, wartet auf HUM-553: ein echtes Release von Claude Code (kein
+Download zur Testzeit; ein zwischengespeichertes Release mitzuliefern wäre
+ein Vertrieb des Programms des Herstellers), seine echte Signatur, eine echte
+Abo-Anmeldung samt Rückschrift, und was ein echtes Claude Code beim ersten
+Start mit API-Schlüssel und leerem Konfigurationsordner zeigt. Akzeptanzkriterium
+1 ist damit für den Weg mit API-Schlüssel oder Gateway mit Stellvertreter
+belegt, für die Abo-Anmeldung nicht. Der CLI-Weg mit laufendem Daemon bleibt
+wie in HUM-563 ohne Ende-zu-Ende-Test (der Test ruft dieselben Funktionen,
+die der Server für `Agents` und `Sandbox.Start` ruft).
+
+Anpassungen am Gerüst: `Fixture::with_config` (eigene `config.toml`),
+`~/.local/bin` des gefälschten Homes im `PATH`, Stellvertreter-Server mit
+Antworttabelle und Endpunkt `llm.standin.test`, `follow_up_with` mit Modus und
+Bestätigung. `Signer` steht als Kopie im Test, weil der aus dem Kern
+(`maintenance/tests.rs`) crate-intern ist. Kopplungs-Grundlinie unverändert.
+
+Docs: Anleitung mit wann, wie umschalten, was geschützt ist und was nicht
+(gleicher Nutzer auf dem Host, Seitenkanal über die Zugangsdatei, Konto eines
+Anmeldelaufs, rotierende Token, Klartext bis HUM-523, absichtliche Kopie,
+Inferenz), Firmenvorgabe (Mechanismus da, Vorgabedatei noch nicht,
+BACKLOG Abschnitt 9 Punkt 21) und heutige Grenzen (Anmeldung Claude Code
+HUM-553, Codex ohne Installationsrezept HUM-566, `agy` nur mit Gemini-API-Schlüssel,
+`agents login agy` `AGENT_014`, ohne Installationsrezept HUM-566, Konfigurationslauf
+`AGENT_015`; nach der Landung von HUM-517 nachgezogen,
+Kernel-Stufe und Seatbelt `AGENT_015`). `docs/cli.md`: `source` mit `AGENT_010`,
+`remove` mit Umfang und `AGENT_018`, `--json` von `status`, Absatz zum
+heutigen Stand je Agent mit Verweis auf die Anleitung. Die deutsche
+`cli.md` und der deutsche Docs-Index waren schon vor diesem Issue älter als
+ihr Original; ihr `source-sha256` bleibt deshalb stehen.
+
+Mutationsbeweise, jeder rot: `Depot::remove`, das nur `config/` entfernt
+(Depot bleibt), `with_launcher`, das das Kommando ohne Starter zurückgibt
+(Sitzung 1 landet in der Anmeldeabfrage), der Stellvertreter gibt seine
+Umgebung ohne Filter samt Schlüsselvariablen aus (Schlüssel in der Ausgabe;
+belegt, dass die Prüfung „Schlüssel in keiner anderen Variablen" greifen
+kann).
+
+Review: Codex zwei major, beide übernommen: Die Anleitung versprach eine
+zweite Sitzung ohne Anmeldung für ein echtes Claude Code, das nicht gemessen
+ist (jetzt eingeschränkt auf den belegten Weg mit Stellvertreter, API-Schlüssel
+und Gateway), und „aus einer Sitzung bleibt nichts" galt nur fürs Depot
+(jetzt so gesagt, `/work` unter „was das Depot nicht schützt"). Ersatzprüfer
+fünf minor, übernommen: `agy` mit „beim Stand von HUM-522", Satz zum heutigen
+Zugangsweg am Anfang und Herkunft des Schlüssels (Anthropic Console),
+`PATH`-Aussage genauer, leere Schlüssel-Prüfung im Test widerlegbar gemacht,
+deutsche Wortwahl. Nicht übernommen: deutsche Anker (die Website löst sie
+auf, bestehende Konvention), Abschnitt „Was die CI belegt" verschieben.
+
 ---
 
 ## HUM-523 · Agent-Depot: Zugangsdateien verschlüsselt mit Schlüssel aus dem Schlüsselbund

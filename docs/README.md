@@ -12,6 +12,7 @@ fails when they are stale.
 | [`guides/install.md`](guides/install.md) | prerequisites, `.deb`, AppImage, the user service, checks, removal |
 | [`guides/first-session.md`](guides/first-session.md) | from the setup screen to the first held request, a rule and the audit check |
 | [`guides/agent-profiles.md`](guides/agent-profiles.md) | session profiles, the OpenCode adapter, writing an adapter, phone-home hosts |
+| [`guides/agent-depot.md`](guides/agent-depot.md) | the agent depot: when to use it, Claude Code from the depot step by step, what it protects and what not, the company lock, current limits |
 | [`guides/verify-download.md`](guides/verify-download.md) | checking a download against `SHA256SUMS`, and what that proves |
 | [`guides/decision-proxy-mitmproxy.md`](guides/decision-proxy-mitmproxy.md) | mitmproxy behind Humanitl: the two CAs, `egress.proxy`, ask mode `upstream`, deciding in mitmproxy |
 | [`guides/decision-proxy-burp.md`](guides/decision-proxy-burp.md) | Burp Suite behind Humanitl, tried by the AI with Burp Community 2026.11.2 under Xvfb: the settings file Burp needs, exporting the CA, intercepting, what the agent sees on Drop, why `proxy_resolve = proxy`, what is open for the owner |
