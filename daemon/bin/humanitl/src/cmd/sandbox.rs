@@ -1784,7 +1784,7 @@ mod tests {
         let words = |command: &[&str]| -> Vec<std::ffi::OsString> {
             command.iter().map(std::ffi::OsString::from).collect()
         };
-        for command in [&["/usr/local/bin/claude"][..], &["codex"][..]] {
+        for command in [&["/usr/local/bin/claude"][..], &["agy"][..]] {
             let setup =
                 super::prepare(&ctx, &resolved, super::Wiring::Preview, &words(command)).unwrap();
             let refused =

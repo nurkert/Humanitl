@@ -94,7 +94,7 @@ use humanitl_core::{Diagnostic, FixAction, FlowEvent, SandboxNoticeSink, Severit
 use humanitl_proxy::rules_store::RulesStore;
 use humanitl_proxy::session::{SessionSettings, SessionState};
 use humanitl_recorder::Recorder;
-use humanitl_sandbox::agent::{claude, opencode, pi};
+use humanitl_sandbox::agent::{claude, codex, opencode, pi};
 use humanitl_sandbox::summary::SessionSummary;
 use humanitl_sandbox::{
     AdapterRegistry, AgentContext, AgentKey, Backend, CheckResult, DisposableLayer, IsolationCheck,
@@ -254,6 +254,10 @@ pub static VISIBLE_ENV: &[&str] = &[
     claude::ENV_DISABLE_UPDATES,
     claude::ENV_BASE_URL,
     claude::ENV_MODEL,
+    // The Codex adapter (HUM-515), by name for the same reason; its key
+    // variable `OPENAI_API_KEY` is never in the plan.
+    codex::ENV_CODEX_HOME,
+    codex::ENV_CA_CERTIFICATE,
 ];
 
 /// Die Variable, die allein die Sitzung kennt.
@@ -6519,6 +6523,87 @@ mod tests {
         );
     }
 
+    /// With `agent.adapter = "codex"` and no `llm.endpoint` the key travels
+    /// as a sandbox file, the launcher in front of the agent moves it into
+    /// `OPENAI_API_KEY` inside the sandbox, and its mask names
+    /// `Authorization` at `api.openai.com:443`, where Codex's own provider
+    /// sends it (HUM-515): in no `argv`, in no variable of the plan.
+    ///
+    /// Mutation proofs: the key in the adapter's `env` turns the `argv`
+    /// assert red; `resolved_base` that ignores the key reference (the
+    /// `ChatGPT` backend) turns the mask assert red.
+    #[tokio::test]
+    async fn the_key_reaches_codex_through_a_file_and_its_launcher_only() {
+        const KEY: &str = "sk-proj-sandbox-0123456789abcdef";
+        let home = tempfile::TempDir::new().unwrap();
+        let paths = humanitl_config::Paths::new(humanitl_config::Env::from_pairs([(
+            "XDG_DATA_HOME",
+            home.path().join("data").display().to_string(),
+        )]));
+        let keys =
+            KeyStore::for_paths(&paths).with_secret_tool(Some(fake_secret_tool(home.path())));
+        let stored = keys
+            .store(&humanitl_config::secret::ApiKey::new(KEY).unwrap())
+            .unwrap();
+        let recorder = Recorder::open(
+            &home.path().join("data/humanitl.db"),
+            &home.path().join("data/blobs"),
+            humanitl_recorder::RecorderSettings::default(),
+        )
+        .unwrap();
+        let key_ref = stored.key_ref.to_string();
+        let service = service_configured(
+            &home,
+            "codex",
+            Some(&key_ref),
+            SandboxPorts::none()
+                .with_keys(keys)
+                .with_recorder(recorder.clone()),
+            |config| config.llm.endpoint = None,
+        );
+        let prepared = service
+            .inner
+            .prepare_keyed(&v1::sandbox_request::Plan::default(), &[], KeyNeed::Start)
+            .expect("the session is prepared");
+
+        let secret = prepared
+            .session
+            .files
+            .iter()
+            .find(|file| file.secret)
+            .expect("the key travels as a file");
+        assert_eq!(secret.dst, Path::new(codex::API_KEY_DST));
+        assert_eq!(secret.content, KEY.as_bytes());
+        assert_eq!(
+            prepared
+                .session
+                .command
+                .get(2)
+                .map(|word| word.to_string_lossy().into_owned()),
+            Some(codex::KEY_START.to_owned()),
+            "the launcher stands in front of the agent"
+        );
+        let argv = shell_line(&prepared.argv());
+        assert!(!argv.contains(KEY), "the key reached argv: {argv}");
+        for (name, value) in &prepared.session.session_env {
+            assert!(
+                !value.contains(KEY),
+                "the key reached the environment as {name}"
+            );
+            assert_ne!(name, codex::ENV_API_KEY, "the plan sets the key variable");
+        }
+        let hash = humanitl_core::http::sha256(KEY.as_bytes());
+        let masks = recorder.masks();
+        assert!(masks.expected_at(&hash, "api.openai.com:443"));
+        assert!(!masks.expected_at(&hash, "chatgpt.com:443"));
+        let config = (*service.inner.config()).clone();
+        let rule = crate::session::session_passthrough(&config).expect("a passthrough");
+        assert_eq!(
+            rule.matcher.path_prefixes,
+            ["/v1/responses?", "/v1/models?"]
+        );
+    }
+
     /// Zeichnet eine Anfrage mit `Authorization: Bearer <key>` auf und liest
     /// ihre Kopfzeilen aus der Aufzeichnung zurück.
     async fn recorded_authorization(recorder: &Recorder, key: &str) -> Vec<(String, String)> {
@@ -9357,7 +9442,7 @@ mod tests {
                 "agent.command: {}",
                 found.why
             );
-            for caller in [&["/usr/local/bin/claude"][..], &["codex"][..]] {
+            for caller in [&["/usr/local/bin/claude"][..], &["agy"][..]] {
                 let found = start_path(&home, lock.clone(), None, caller, tweak).unwrap_err();
                 assert_eq!(
                     found.code.as_str(),

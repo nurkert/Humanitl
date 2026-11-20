@@ -1051,8 +1051,9 @@ URL-encoded in every header, in the query (raw and decoded) and in the decoded b
 request, to any host. Every occurrence is a finding `api_key:llm` of level `checksum`. It is not
 a finding in exactly one place: the header its adapter names, `Authorization`, or `X-Api-Key` in
 which Claude Code sends its key to the Anthropic API (HUM-514), of a request to host and port of
-the agent's inference endpoint, which is `llm.endpoint`, and `api.anthropic.com:443` for Claude
-Code without a gateway. Header and target travel with the key's mask, so another agent's key in
+the agent's inference endpoint, which is `llm.endpoint`, `api.anthropic.com:443` for Claude
+Code without a gateway, and `api.openai.com:443` for Codex with a key and without
+`llm.endpoint` (HUM-515). Header and target travel with the key's mask, so another agent's key in
 `X-Api-Key` stays a finding. A finding does not hold a request by itself; it is held anyway when no rule
 allows its host, and with `hold.hard_block_checksum_secrets` on the finding holds it because of
 its level. In the path before `?` and in the host no detector searches; there only the recording

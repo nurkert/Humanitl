@@ -267,7 +267,8 @@ fn every_named_host_program_is_agent_017() {
         for command in [
             vec!["/usr/local/bin/claude"],
             vec![link.as_str()],
-            vec!["codex"],
+            // An agent without a depot recipe (`codex` has one since HUM-515).
+            vec!["agy"],
             vec!["/home/u/.local/bin/claude", "-p"],
         ] {
             let (command, depot) = depot_session(&fx, &config, &lock, &command, true);

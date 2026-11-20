@@ -35,6 +35,9 @@ const FORMAT: CredentialFormat = CredentialFormat {
         unit: TimeUnit::Seconds,
     }),
     account: Some("/account"),
+    one_of: &[],
+    requires: &[],
+    fixed: &[],
     evidence: "stand-in of the tests",
 };
 

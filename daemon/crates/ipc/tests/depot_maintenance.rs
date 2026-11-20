@@ -679,6 +679,9 @@ static STAND_IN_LOGIN: [KnownAgent; 1] = [KnownAgent {
                 unit: TimeUnit::Seconds,
             }),
             account: Some("/account"),
+            one_of: &[],
+            requires: &[],
+            fixed: &[],
             evidence: "the stand-in of this test",
         }),
         login_run: Some(LoginRecipe {

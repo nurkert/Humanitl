@@ -2003,5 +2003,6 @@
   "settingsAgentsCallbackHint": "http://localhost:…",
   "settingsAgentsLastWritebackRaw": "Zuletzt zurückgeschrieben {when}",
   "settingsAgentsDoneDiscard": "Änderungen verworfen; die Konfiguration bleibt, wie sie war.",
-  "settingsAgentsNoRecipeDepot": "Für diesen Agenten gibt es noch kein Rezept fürs Depot: Sitzungen mit der Quelle Depot brechen mit AGENT_015 ab, bis es eines gibt."
+  "settingsAgentsNoRecipeDepot": "Für diesen Agenten gibt es noch kein Rezept fürs Depot: Sitzungen mit der Quelle Depot brechen mit AGENT_015 ab, bis es eines gibt.",
+  "settingsAgentCodex": "Codex"
 }

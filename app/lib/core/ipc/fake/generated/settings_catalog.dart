@@ -192,6 +192,10 @@ const String fakeSettingsCatalogJson = r'''
           {
             "title": "Claude Code",
             "value": "claude"
+          },
+          {
+            "title": "Codex",
+            "value": "codex"
           }
         ],
         "client": "",
@@ -207,6 +211,8 @@ const String fakeSettingsCatalogJson = r'''
           "pi",
           "Claude Code",
           "claude",
+          "Codex",
+          "codex",
           "programmieren",
           "Assistent"
         ],
@@ -958,6 +964,10 @@ const String fakeSettingsCatalogJson = r'''
           {
             "title": "Claude Code",
             "value": "claude"
+          },
+          {
+            "title": "Codex",
+            "value": "codex"
           }
         ],
         "client": "",
@@ -973,6 +983,8 @@ const String fakeSettingsCatalogJson = r'''
           "pi",
           "Claude Code",
           "claude",
+          "Codex",
+          "codex",
           "coding",
           "assistant"
         ],
