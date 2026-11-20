@@ -8,7 +8,9 @@
 // Reiter und Kopf ihr Backend mit seiner Stufe.
 
 import 'dart:async';
+import 'dart:ui' show Tristate;
 
+import 'package:flutter/semantics.dart';
 import 'package:flutter/services.dart';
 import 'package:flutter/widgets.dart';
 import 'package:flutter_test/flutter_test.dart';
@@ -152,12 +154,56 @@ HSegment<String>? focusedSegment() {
   return focused.findAncestorWidgetOfExactType<HSegment<String>>();
 }
 
+/// Das Bedienelement, auf das Tab (oder mit [backward] Umschalt-Tab) vom
+/// Segment [from] aus führt, solange die Wahl bedienbar ist.
+Future<FocusNode?> neighbourOf(
+  WidgetTester tester,
+  String from, {
+  bool backward = false,
+}) async {
+  Focus.of(
+    tester.element(
+      find.descendant(
+        of: find.byWidgetPredicate(
+          (Widget w) => w is HSegment<String> && w.option.value == from,
+        ),
+        matching: find.byType(Text),
+      ),
+    ),
+  ).requestFocus();
+  await tester.pump();
+  expect(focusedSegment()?.option.value, from);
+  await _tab(tester, backward: backward);
+  expect(focusedSegment(), isNull);
+  return FocusManager.instance.primaryFocus;
+}
+
+/// Rollt [target] in die Mitte seiner Ansicht.
+Future<void> _centre(WidgetTester tester, Finder target) async {
+  unawaited(Scrollable.ensureVisible(tester.element(target), alignment: 0.5));
+  await tester.pumpAndSettle();
+}
+
+/// Drückt Tab, mit [backward] Umschalt-Tab.
+Future<void> _tab(WidgetTester tester, {bool backward = false}) async {
+  if (backward) {
+    await tester.sendKeyDownEvent(LogicalKeyboardKey.shiftLeft);
+  }
+  await tester.sendKeyEvent(LogicalKeyboardKey.tab);
+  if (backward) {
+    await tester.sendKeyUpEvent(LogicalKeyboardKey.shiftLeft);
+  }
+  await tester.pump();
+}
+
 /// Wählt Container per Enter, mit zurückgehaltener Liste für Container,
 /// und prüft, dass die Sperre den Fokus aus der Wahl nimmt (HUM-560).
+/// [beforeChoice] läuft, wenn die Wahl sichtbar und noch bedienbar ist.
 Future<Completer<SandboxBackendList>> _chooseContainerByKeyboard(
   WidgetTester tester,
-  _HeldBackendsClient client,
-) async {
+  _HeldBackendsClient client, {
+  Future<void> Function()? beforeChoice,
+}) async {
   await openIsolation(tester, client);
   final Finder target = find.descendant(
     of: choice,
@@ -165,6 +211,14 @@ Future<Completer<SandboxBackendList>> _chooseContainerByKeyboard(
   );
   await tester.ensureVisible(target);
   await tester.pumpAndSettle();
+  if (beforeChoice != null) {
+    // Die Wahl in der Mitte der Ansicht, nicht halb unter den Reitern: Dort
+    // fiele sie für die Leserichtung in die Zeile der Reiter.
+    await _centre(tester, target);
+    await beforeChoice();
+    // Tab rollt zum Ziel; die Wahl steht danach wieder, wo sie stand.
+    await _centre(tester, target);
+  }
   Focus.of(tester.element(target)).requestFocus();
   await tester.pump();
   expect(focusedSegment()?.option.value, 'container');
@@ -876,7 +930,9 @@ void main() {
     )..requestFocus();
     await tester.pump();
     expect(FocusManager.instance.primaryFocus, same(other));
-    other.unfocus();
+    // Zurück auf den Knoten, auf den die Sperre den Fokus schob.
+    expect(fallback, isNotNull);
+    fallback!.requestFocus();
     await tester.pump();
     expect(FocusManager.instance.primaryFocus, same(fallback));
 
@@ -909,6 +965,197 @@ void main() {
     await settle(tester);
     expect(tester.takeException(), isNull);
     expect(FocusManager.instance.primaryFocus, same(before));
+  }, variant: linuxAndMac);
+
+  // HUM-570: Während der Sperre steht der Fokus unter den `Shortcuts` der
+  // App, und Tab führt zum nächsten Bedienelement nach der Wahl, Umschalt-Tab
+  // zum vorigen, wie von einem bedienbaren Segment aus. Das Entsperren holt
+  // ihn danach nicht zurück. Mutationsbeweis: ohne das Auffangen in
+  // `SandboxBackendSegments` liegt der Fokus auf dem Wurzelbereich der
+  // Ansicht, Tab bewegt ihn nicht, und dieser Test ist rot.
+  for (final bool backward in <bool>[false, true]) {
+    testWidgets('${backward ? 'Shift+Tab' : 'Tab'} moves on while the choice '
+        'is locked, and the reload leaves the focus there', (
+      WidgetTester tester,
+    ) async {
+      final _HeldBackendsClient client = _HeldBackendsClient()
+        ..sandboxBackendList = listWith(availableContainer);
+      FocusNode? expected;
+      final Completer<SandboxBackendList> held =
+          await _chooseContainerByKeyboard(
+            tester,
+            client,
+            // Wohin Tab von der bedienbaren Wahl aus führt: vom letzten
+            // Segment vorwärts, vom ersten rückwärts.
+            beforeChoice: () async {
+              expected = await neighbourOf(
+                tester,
+                backward ? FormKeys.sandboxBackendAuto : 'container',
+                backward: backward,
+              );
+            },
+          );
+      expect(expected, isNotNull);
+      final FocusNode? locked = FocusManager.instance.primaryFocus;
+      await _tab(tester, backward: backward);
+      expect(FocusManager.instance.primaryFocus, isNot(same(locked)));
+      expect(FocusManager.instance.primaryFocus, same(expected));
+      expect(tester.widget<HSegmented<String>>(choice).enabled, isFalse);
+
+      held.complete(listWith(availableContainer));
+      await settle(tester);
+      expect(tester.widget<HSegmented<String>>(choice).enabled, isTrue);
+      expect(FocusManager.instance.primaryFocus, same(expected));
+      expect(focusedSegment(), isNull);
+    }, variant: linuxAndMac);
+  }
+
+  // HUM-570: Auch die zweite Wahl per Tastatur fängt den Fokus auf. Diesmal
+  // fiele er über den Verlauf des Bereichs auf das zuvor gewählte, ebenfalls
+  // gesperrte Segment, also in der Wahl, und kein Wechsel des Fokus meldete
+  // die Sperre. Tab geht weiter, und das Entsperren holt ihn nicht zurück.
+  // Mutationsbeweis: ohne das Anfordern von `_choice` beim Sperren ist
+  // dieser Test rot.
+  testWidgets('a second keyboard choice is caught again, and Tab moves on', (
+    WidgetTester tester,
+  ) async {
+    final _HeldBackendsClient client = _HeldBackendsClient()
+      ..sandboxBackendList = listWith(availableContainer);
+    final Completer<SandboxBackendList> first =
+        await _chooseContainerByKeyboard(tester, client);
+    first.complete(listWith(availableContainer));
+    await settle(tester);
+    expect(focusedSegment()?.option.value, 'container');
+
+    final String other = DoctorCheckId.sandboxTool;
+    Focus.of(
+      tester.element(
+        find.descendant(
+          of: find.byWidgetPredicate(
+            (Widget w) => w is HSegment<String> && w.option.value == other,
+          ),
+          matching: find.byType(Text),
+        ),
+      ),
+    ).requestFocus();
+    await tester.pump();
+    expect(focusedSegment()?.option.value, other);
+    final Completer<SandboxBackendList> second =
+        Completer<SandboxBackendList>();
+    client.held[other] = second;
+    await tester.sendKeyEvent(LogicalKeyboardKey.enter);
+    await settle(tester);
+    expect(tester.widget<HSegmented<String>>(choice).enabled, isFalse);
+    final FocusNode? locked = FocusManager.instance.primaryFocus;
+    expect(locked?.debugLabel, 'sandbox-backend-choice');
+
+    await _tab(tester);
+    final FocusNode? next = FocusManager.instance.primaryFocus;
+    expect(next, isNot(same(locked)));
+    expect(focusedSegment(), isNull);
+
+    second.complete(listWith(availableContainer));
+    await settle(tester);
+    expect(tester.widget<HSegmented<String>>(choice).enabled, isTrue);
+    expect(FocusManager.instance.primaryFocus, same(next));
+  }, variant: linuxAndMac);
+
+  // HUM-570, Review: Nimmt im selben Bild wie die Sperre ein anderes
+  // Bedienelement den Fokus (Klick auf ein Feld) oder ein Dialog, bleibt er
+  // dort: Die Anforderung der Sperre unterliegt der späteren, und das
+  // Entsperren holt ihn nicht in die Wahl. Mutationsbeweis: ein erneutes
+  // Anfordern, wenn der Fokus `_choice` nicht erreicht, macht diese Tests
+  // rot.
+  for (final bool dialog in <bool>[false, true]) {
+    testWidgets('${dialog ? 'a dialog' : 'another control'} taking the focus '
+        'in the locking frame keeps it', (WidgetTester tester) async {
+      final _HeldBackendsClient client = _HeldBackendsClient()
+        ..sandboxBackendList = listWith(availableContainer);
+      await openIsolation(tester, client);
+      final Finder target = find.descendant(
+        of: choice,
+        matching: find.text('container'),
+      );
+      await tester.ensureVisible(target);
+      await tester.pumpAndSettle();
+      Focus.of(tester.element(target)).requestFocus();
+      await tester.pump();
+      expect(focusedSegment()?.option.value, 'container');
+
+      final Completer<SandboxBackendList> held =
+          Completer<SandboxBackendList>();
+      client.held['container'] = held;
+      await tester.sendKeyEvent(LogicalKeyboardKey.enter);
+      expect(tester.widget<HSegmented<String>>(choice).enabled, isTrue);
+      final FocusNode other = FocusNode(debugLabel: 'hum-570-other');
+      addTearDown(other.dispose);
+      FocusNode wanted = other;
+      if (dialog) {
+        // Wie ein Dialog: ein eigener Fokusbereich über der Ansicht, der
+        // sich den Fokus nimmt.
+        final OverlayEntry entry = OverlayEntry(
+          builder: (_) => FocusScope(
+            autofocus: true,
+            child: Focus(
+              focusNode: other,
+              autofocus: true,
+              child: const SizedBox.shrink(),
+            ),
+          ),
+        );
+        addTearDown(
+          () => entry
+            ..remove()
+            ..dispose(),
+        );
+        Overlay.of(tester.element(choice)).insert(entry);
+      } else {
+        // Etwas fordert im Bild der Sperre den Fokus für den Startknopf an.
+        final FocusNode start = Focus.of(
+          tester.element(
+            find
+                .descendant(
+                  of: find.byKey(const Key('sandbox-start')),
+                  matching: find.byType(Text),
+                )
+                .first,
+          ),
+        );
+        wanted = start;
+        WidgetsBinding.instance.addPostFrameCallback(
+          (_) => start.requestFocus(),
+        );
+      }
+      await tester.pump();
+      // Die Sperre baut im selben Bild.
+      expect(tester.widget<HSegmented<String>>(choice).enabled, isFalse);
+      await settle(tester);
+      expect(FocusManager.instance.primaryFocus, same(wanted));
+      expect(focusedSegment(), isNull);
+
+      held.complete(listWith(availableContainer));
+      await settle(tester);
+      expect(tester.widget<HSegmented<String>>(choice).enabled, isTrue);
+      expect(FocusManager.instance.primaryFocus, same(wanted));
+      expect(focusedSegment(), isNull);
+    }, variant: linuxAndMac);
+  }
+
+  // HUM-570, Review: Der Knoten um die Segmente hält nur den Fokus während
+  // der Sperre; Bildschirmleser sehen ihn nicht. Mit Semantik ginge sein
+  // Merkmal „fokussierbar“ in den nächsten Semantikknoten über der Wahl auf,
+  // hier die rollbare Ansicht. Mutationsbeweis: `includeSemantics` auf true
+  // macht diesen Test rot.
+  testWidgets('the node around the segments adds no focusable semantics', (
+    WidgetTester tester,
+  ) async {
+    final SemanticsHandle semantics = tester.ensureSemantics();
+    final _HeldBackendsClient client = _HeldBackendsClient()
+      ..sandboxBackendList = listWith(availableContainer);
+    await openIsolation(tester, client);
+    final SemanticsNode node = tester.getSemantics(choice);
+    expect(node.getSemanticsData().flagsCollection.isFocused, Tristate.none);
+    semantics.dispose();
   }, variant: linuxAndMac);
 
   // HUM-560: Wer nicht in der Wahl war, als sie gesperrt wurde, bekommt

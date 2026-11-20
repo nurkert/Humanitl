@@ -70,10 +70,12 @@ bool offersBackendChoice(SandboxBackendList list) => list.offered.length > 1;
 ///
 /// While the answer for a new plan is on its way the segments are locked
 /// ([enabled] false, HUM-504, HUM-510), and a locked segment loses the
-/// focus. Whoever had just chosen with the keyboard gets it back on the
-/// selected segment once the segments are enabled again; focus that was
-/// elsewhere when they were locked, or that someone moved while they were
-/// locked, is never pulled in.
+/// focus. It then rests on the node around the segments, inside the app's
+/// shortcuts, so Tab and Shift+Tab still move on from there (HUM-570).
+/// Whoever had just chosen with the keyboard gets it back on the selected
+/// segment once the segments are enabled again; focus that was elsewhere
+/// when they were locked, or that someone moved while they were locked, is
+/// never pulled in.
 class SandboxBackendSegments extends StatefulWidget {
   /// Creates the segments for [list]. [segmentsKey] is the key of the
   /// [HSegmented] inside.
@@ -107,27 +109,25 @@ class SandboxBackendSegments extends StatefulWidget {
 
 class _SandboxBackendSegmentsState extends State<SandboxBackendSegments> {
   /// Umschließt die Segmente: Hat einer von ihnen den Fokus, hat ihn auch
-  /// dieser Knoten.
+  /// dieser Knoten. Nimmt die Sperre den Segmenten den Fokus, hält ihn
+  /// dieser Knoten selbst, damit er unter den `Shortcuts` der App bleibt und
+  /// Tab von hier weitergeht (HUM-570). Die Tab-Reihenfolge überspringt ihn,
+  /// und von sich aus fordert ihn sonst niemand an.
   final FocusNode _choice = FocusNode(
     debugLabel: 'sandbox-backend-choice',
-    canRequestFocus: false,
     skipTraversal: true,
   );
 
-  /// Ob die Segmente den Fokus hatten, als sie gesperrt wurden.
+  /// Ob die Wahl den Fokus hatte, als die Segmente gesperrt wurden.
   bool _refocusOnUnlock = false;
 
-  /// Ob die Sperre den Fokus schon fortgenommen hat; dann steht in
-  /// [_fallback], wohin er fiel.
-  bool _lost = false;
+  /// Ob [_choice] selbst den Fokus hält, seit die Sperre ihn den Segmenten
+  /// nahm.
+  bool _caught = false;
 
-  /// Der Knoten, auf den der Fokus fiel, als die Sperre ihn den Segmenten
-  /// nahm, oder null.
-  FocusNode? _fallback;
-
-  /// Ob der Fokus während der Sperre [_fallback] verlassen hat. Dann hat
-  /// ihn jemand bewegt, und die Rückgabe entfällt, auch wenn er bis zum
-  /// Entsperren wieder dort steht.
+  /// Ob der Fokus während der Sperre [_choice] verlassen hat. Dann hat ihn
+  /// jemand bewegt (Tab, Klick), und die Rückgabe entfällt, auch wenn er bis
+  /// zum Entsperren wieder dort steht.
   bool _moved = false;
 
   /// Ob [_onPrimaryFocusChange] am Fokus-Manager hängt.
@@ -139,21 +139,45 @@ class _SandboxBackendSegmentsState extends State<SandboxBackendSegments> {
     _choice.addListener(_onFocusChange);
   }
 
-  /// Hält fest, wohin der Fokus fiel, als die Sperre ihn nahm. Der Aufruf
-  /// kommt, nachdem der Fokus-Manager den neuen Fokus gesetzt hat.
+  /// Fängt den Fokus auf, wenn die Sperre ihn den Segmenten nimmt: Die
+  /// Sperre hat ihn für [_choice] angefordert. Kommt er dort an, hängt sich
+  /// der Baustein an den Fokus-Manager; dessen Meldung folgt im selben
+  /// Durchgang, und vorher stünde der Fokus noch auf dem Segment und zählte
+  /// als bewegt. Kommt er nicht an, hat ihn im selben Bild jemand anderes
+  /// genommen, ein Klick auf ein Feld oder ein Dialog; dann bleibt er dort,
+  /// und die Rückgabe entfällt.
   void _onFocusChange() {
-    if (_refocusOnUnlock && !_lost && !_choice.hasFocus) {
-      _lost = true;
-      _fallback = FocusManager.instance.primaryFocus;
-      _watching = true;
-      FocusManager.instance.addListener(_onPrimaryFocusChange);
+    if (!_refocusOnUnlock || _caught || _moved) {
+      return;
+    }
+    if (_choice.hasPrimaryFocus) {
+      _catch();
+    } else if (!_choice.hasFocus) {
+      _moved = true;
+      _refocusOnUnlock = false;
     }
   }
 
-  /// Jede Bewegung des Fokus weg von [_fallback] während der Sperre hebt
-  /// die Rückgabe endgültig auf.
+  /// Ob der Fokus, den der Bereich der Wahl als nächsten vergibt, in der
+  /// Wahl liegt. Eine Anforderung, die der Fokus-Manager noch nicht
+  /// vollzogen hat, steht schon als `focusedChild` im Bereich.
+  bool _nextFocusInChoice() {
+    final FocusNode? next = _choice.enclosingScope?.focusedChild;
+    return next != null &&
+        (identical(next, _choice) || next.ancestors.contains(_choice));
+  }
+
+  /// Ab jetzt hält [_choice] den Fokus; jede Bewegung von dort fort zählt.
+  void _catch() {
+    _caught = true;
+    _watching = true;
+    FocusManager.instance.addListener(_onPrimaryFocusChange);
+  }
+
+  /// Jede Bewegung des Fokus weg von [_choice] während der Sperre hebt die
+  /// Rückgabe endgültig auf.
   void _onPrimaryFocusChange() {
-    if (FocusManager.instance.primaryFocus != _fallback) {
+    if (FocusManager.instance.primaryFocus != _choice) {
       _moved = true;
       _stopWatching();
     }
@@ -171,25 +195,39 @@ class _SandboxBackendSegmentsState extends State<SandboxBackendSegments> {
     super.didUpdateWidget(oldWidget);
     if (oldWidget.enabled && !widget.enabled) {
       // Die Segmente bauen erst nach diesem Aufruf gesperrt; bis dahin hält
-      // eines von ihnen den Fokus noch, wenn die Wahl ihn hatte.
+      // eines von ihnen den Fokus noch, wenn die Wahl ihn hatte. Steht er
+      // noch auf [_choice] selbst, von einer früheren Sperre, gilt er als
+      // schon aufgefangen.
       _stopWatching();
       _refocusOnUnlock = _choice.hasFocus;
-      _lost = false;
-      _fallback = null;
+      _caught = false;
       _moved = false;
+      if (_refocusOnUnlock && !_nextFocusInChoice()) {
+        // Jemand hat den Fokus schon anderswohin angefordert, und der
+        // Fokus-Manager hat den Wechsel nur noch nicht vollzogen: Er bleibt
+        // dort, und die Rückgabe entfällt.
+        _refocusOnUnlock = false;
+        _moved = true;
+      } else if (_choice.hasPrimaryFocus) {
+        _catch();
+      } else if (_refocusOnUnlock) {
+        // Die gesperrten Segmente geben den Fokus erst im Aufbau nach diesem
+        // Aufruf ab, an das zuletzt fokussierte Kind ihres Bereichs. Ohne
+        // diese Anforderung wäre das der Wurzelbereich der Ansicht oberhalb
+        // der `Shortcuts` der App, wo Tab nichts bewegt (HUM-570), oder ein
+        // früher gewähltes, ebenfalls gesperrtes Segment. Mit ihr ist es
+        // [_choice]. Nimmt sich im selben Bild etwas anderes den Fokus, gilt
+        // dessen spätere Anforderung.
+        _choice.requestFocus();
+      }
     } else if (!oldWidget.enabled && widget.enabled && _refocusOnUnlock) {
       _refocusOnUnlock = false;
       _stopWatching();
       // Erst nach dem Bild sind die Segmente wieder fokussierbar.
       WidgetsBinding.instance.addPostFrameCallback((_) {
-        // Hat jemand den Fokus während der Sperre bewegt (Tab, Klick), bleibt
-        // er, wo er ist, auch wenn er inzwischen dorthin zurückkam, wohin die
-        // Sperre ihn schob.
-        final bool untouched =
-            !_moved &&
-            (!_lost || FocusManager.instance.primaryFocus == _fallback);
-        _fallback = null;
-        if (mounted && untouched) {
+        // Hat jemand den Fokus während der Sperre bewegt, bleibt er, wo er
+        // ist, auch wenn er inzwischen auf [_choice] zurückkam.
+        if (mounted && !_moved && _choice.hasFocus) {
           _restoreFocus();
         }
       });
@@ -226,6 +264,9 @@ class _SandboxBackendSegmentsState extends State<SandboxBackendSegments> {
   @override
   Widget build(BuildContext context) => Focus(
     focusNode: _choice,
+    // Ein Halteplatz für den Fokus während der Sperre, kein Bedienelement:
+    // Bildschirmleser sehen nur die Segmente.
+    includeSemantics: false,
     child: HSegmented<String>(
       key: widget.segmentsKey,
       options: sandboxBackendOptions(context.l10n, widget.list),
