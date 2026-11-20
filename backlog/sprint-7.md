@@ -7353,6 +7353,44 @@ die danach weiterlaufen; deren späterer Status oder Befunde fehlen dann.
 ### Akzeptanzkriterien
 1. Jeder Verlust von Flow-Ereignissen im Audit-Zweig steht im Audit-Log.
 
+### Stand nach der Umsetzung (2026-11-20)
+
+- **Neue Art `audit.events_dropped`** (`humanitl_audit::kinds::AuditEventsDropped`,
+  `{ "dropped", "open_flows" }`, nur Zahlen). `Tally::lagged` schreibt sie bei
+  jedem `RecvError::Lagged(n)`, auch beim Leeren des Stroms in
+  `AuditSink::finish`, unter der Sitzung und ungefähr dort in der Kette, wo
+  die Lücke entstand; ein `flow.received` eines schon offenen Flows kann ihm
+  folgen (Befund aus dem Review). Eingetragen in `kinds.rs`
+  (`NAMES` jetzt 28), im Modulkommentar von `audit_sink.rs`, in
+  `backlog/CONVENTIONS.md` 4.58, in `docs/SECURITY.md` 8 (Punkt 2 von „was die
+  Kette nicht beweist") und in K-38, jeweils englisch und deutsch. Die App
+  zeigt die Art im Audit-Bildschirm unter ihrem Namen und im Filter `audit.`;
+  eine eigene Zusammenfassung bekommt sie nicht.
+- **Gezielter abschließen.** Statt alle offenen Flows bei jedem Rückstand
+  abzuschließen, trägt jeder Eintrag der Tabelle ein Zeichen `stale`: Ein
+  Rückstand schließt die Einträge, die es schon trugen, und setzt es bei den
+  übrigen; jedes Ereignis des Flows löscht es. Ein Flow, der weiterläuft,
+  behält Entscheidung, Status, Bytes und Dauer. Grenze der Tabelle: die
+  offenen Flows zweier Lücken. Die Registry des Proxys zu fragen, hätte
+  `humanitl_proxy` in den Sink gezogen (Kopplungszahl) und wäre trotzdem
+  nicht genau gewesen, denn ihr Stand liegt vor der Lage des Stroms. Was
+  bleibt, nennt K-38: Ein Flow ohne Ereignis über zwei Lücken gilt als
+  verloren; endet er doch, fehlt sein `flow.responded`, und eine Zurücknahme
+  danach zählt in `session.ended` noch einmal.
+- **Tests:** `a_forced_lag_leaves_exactly_one_record_with_the_number_of_lost_events`
+  (20 Ereignisse in einen Rundfunk für 8 über den echten Sink, genau ein
+  Record mit `dropped = 12`, nur zwei Felder, kein Pfad);
+  `a_lagging_sink_closes_only_flows_it_no_longer_hears_from` (ersetzt
+  `a_lagging_sink_keeps_no_flow_whose_end_it_missed`: 20 Lücken, Tabelle nie
+  über 51, ein laufender Flow behält Status 200, 60 Bytes und 1 250 ms, 20
+  Records der Lücke); `a_dropped_record_carries_only_its_numbers` (`kinds.rs`).
+  Mutationsbeweise, jeweils rot: ohne den Record, mit `dropped: 0`, mit dem
+  alten Abschließen aller Flows, ohne Entfernen der schweigenden Flows, ohne
+  Löschen des Zeichens bei einem Ereignis.
+- **Kandidat für ein eigenes Issue:** Die deutsche Übersetzung von
+  `docs/THREAT-MODEL.md` hatte weder K-38 noch die Tabellenzeile zu K-37; K-38
+  ist jetzt nachgetragen, die Zeile zu K-37 fehlt weiter.
+
 ---
 
 ## HUM-565 · Audit: ein gescheiterter Flow hat keinen Eintrag im HMAC-Audit-Log

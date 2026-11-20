@@ -1986,7 +1986,11 @@ It does **not** prove:
 
 1. that the daemon wrote honestly. A manipulated daemon logs what it wants;
 2. that no events are missing that were never written. A daemon killed hard can write half a last
-   line; the next start puts it aside (`AUDIT_002`);
+   line; the next start puts it aside (`AUDIT_002`). Flow events the audit sink loses because it
+   fell behind the event broadcast are not in the log either; at about the point where they went
+   missing the chain holds an `audit.events_dropped` record with their number, so the gap itself
+   is signed (HUM-564,
+   `docs/THREAT-MODEL.md` K-38);
 3. that the last up to `anchor_every` records after the last anchor were not truncated. A cut
    exactly on an anchor leaves a valid, shorter chain; `verify` warns only about unanchored records
    behind it (`UnanchoredTail`). A daemon that stops in order anchors its last record;

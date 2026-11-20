@@ -29,6 +29,9 @@
 //! Obergrenze abgewiesen. `agent.credential_writeback` kommt aus HUM-520
 //! dazu: Die Zugangsdatei eines Depot-Agenten ging zurück ins Depot oder
 //! wurde abgelehnt, mit den SHA-256 alt und neu, nie mit dem Inhalt.
+//! `audit.events_dropped` kommt aus HUM-564 dazu: Der Sink des Ereignisstroms
+//! ist hinter den Rundfunk zurückgefallen und hat Flow-Ereignisse verloren;
+//! der Record nennt nur ihre Zahl und markiert so die Lücke in der Kette.
 
 use std::time::SystemTime;
 
@@ -750,6 +753,32 @@ impl InterceptResumed {
     }
 }
 
+/// `audit.events_dropped`: Der Sink des Audit-Logs ist hinter den Rundfunk
+/// der Flow-Ereignisse zurückgefallen und hat Ereignisse verloren (HUM-564).
+///
+/// Der Record steht ungefähr dort in der Kette, wo die Lücke entstand: Der
+/// Sink schreibt ihn, sobald er den Rückstand bemerkt. Ein `flow.received`
+/// eines Flows, der davor schon offen war, kann ihm noch folgen. Welche Flows
+/// betroffen sind, sagt der Rundfunk nicht; der Record nennt deshalb nur
+/// Zahlen und nie einen Flow, einen Host oder einen Pfad.
+#[derive(Debug, Clone, Copy, Default, PartialEq, Eq)]
+pub struct AuditEventsDropped {
+    /// Wie viele Flow-Ereignisse der Sink verloren hat.
+    pub dropped: u64,
+    /// Wie viele Flows der Sink in diesem Moment offen hielt, also höchstens
+    /// so viele, deren `flow.decided` oder `flow.responded` jetzt fehlen
+    /// kann. Flows, deren `Received` selbst verloren ging, zählt das nicht.
+    pub open_flows: u64,
+}
+
+impl AuditEventsDropped {
+    /// `data` dieses Records.
+    #[must_use]
+    pub fn data(&self) -> Value {
+        json!({ "dropped": self.dropped, "open_flows": self.open_flows })
+    }
+}
+
 /// Eine Art von Record samt ihren Daten.
 #[derive(Debug, Clone, PartialEq, Eq)]
 pub enum RecordKind {
@@ -813,6 +842,8 @@ pub enum RecordKind {
     /// Die Zugangsdatei eines Depot-Agenten ging zurück oder wurde abgelehnt
     /// (HUM-520).
     AgentCredentialWriteback(AgentCredentialWriteback),
+    /// Der Sink des Audit-Logs hat Flow-Ereignisse verloren (HUM-564).
+    AuditEventsDropped(AuditEventsDropped),
 }
 
 impl RecordKind {
@@ -847,11 +878,12 @@ impl RecordKind {
             Self::ProjectsCleaned(_) => "projects.cleaned",
             Self::SandboxDoorCapped(_) => "sandbox.door_capped",
             Self::AgentCredentialWriteback(_) => "agent.credential_writeback",
+            Self::AuditEventsDropped(_) => "audit.events_dropped",
         }
     }
 
     /// Alle Namen, in der Reihenfolge der Tabelle.
-    pub const NAMES: [&'static str; 27] = [
+    pub const NAMES: [&'static str; 28] = [
         "daemon.started",
         "daemon.stopped",
         "session.started",
@@ -879,6 +911,7 @@ impl RecordKind {
         "projects.cleaned",
         "sandbox.door_capped",
         "agent.credential_writeback",
+        "audit.events_dropped",
     ];
 
     /// `data` dieser Art.
@@ -981,6 +1014,7 @@ impl RecordKind {
             Self::ProjectsCleaned(d) => d.data(),
             Self::SandboxDoorCapped(d) => json!({ "cap": d.cap }),
             Self::AgentCredentialWriteback(d) => d.data(),
+            Self::AuditEventsDropped(d) => d.data(),
         }
     }
 }
@@ -1000,7 +1034,9 @@ mod tests {
         Method, RuleId, Scheme,
     };
 
-    use super::{DecisionKind, FlowBlockedReason, FlowDecided, FlowReceived, RecordKind};
+    use super::{
+        AuditEventsDropped, DecisionKind, FlowBlockedReason, FlowDecided, FlowReceived, RecordKind,
+    };
     use crate::canonical::canonical_json;
 
     fn request(path: &str) -> HttpRequest {
@@ -1016,7 +1052,7 @@ mod tests {
 
     #[test]
     fn every_kind_has_the_name_of_the_table_and_canonical_data() {
-        assert_eq!(RecordKind::NAMES.len(), 27);
+        assert_eq!(RecordKind::NAMES.len(), 28);
         for name in RecordKind::NAMES {
             let (area, verb) = name.split_once('.').unwrap();
             assert!(!area.is_empty() && !verb.is_empty(), "{name}");
@@ -1028,6 +1064,19 @@ mod tests {
         ));
         assert!(RecordKind::NAMES.contains(&received.name()));
         assert!(canonical_json(&received.data()).is_ok());
+    }
+
+    /// HUM-564: Die Lücke nennt nur Zahlen, unter dem Namen der Tabelle.
+    #[test]
+    fn a_dropped_record_carries_only_its_numbers() {
+        let kind = RecordKind::AuditEventsDropped(AuditEventsDropped {
+            dropped: 12,
+            open_flows: 3,
+        });
+        assert_eq!(kind.name(), "audit.events_dropped");
+        assert!(RecordKind::NAMES.contains(&kind.name()));
+        let text = String::from_utf8(canonical_json(&kind.data()).unwrap()).unwrap();
+        assert_eq!(text, r#"{"dropped":12,"open_flows":3}"#);
     }
 
     #[test]
