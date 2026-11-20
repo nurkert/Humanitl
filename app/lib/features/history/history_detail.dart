@@ -21,6 +21,7 @@ import '../../core/ipc/daemon_client.dart';
 import '../../core/ui/edited_badge.dart';
 import '../../core/ui/h_diagnostic_card.dart';
 import '../../core/ui/ui.dart';
+import '../../core/ui/untranslated_wording.dart';
 import '../../l10n/l10n.dart';
 import 'history_filter_bar.dart';
 import 'history_metrics.dart';
@@ -928,7 +929,8 @@ class _Failure extends StatelessWidget {
       severityLabel: historySeverityLabel(l10n, diagnostic.severity),
       color: historySeverityColor(tokens, diagnostic.severity),
       title: l10n.historyDetailFailedTitle,
-      why: diagnostic.why,
+      why: DiagnosticL10n.resolve(diagnostic, l10n).cause,
+      original: UntranslatedWording.forDiagnostic(diagnostic, l10n),
       docsUrl: diagnostic.docsUrl,
       width: double.infinity,
     );

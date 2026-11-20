@@ -386,6 +386,7 @@ Today the same text stands there for every flow, centred between Block and Allow
 Every error path delivers a `Diagnostic`, never a bare string.
 
 - The `why` slot carries the daemon's sentence. The generic text of the app is the title, not the reason. Today the real reason stands in the mono detail line and a constant in `why`; that breaks both halves of principle 7 at once.
+- The daemon writes its sentence in English. In an interface in any other language the `why` slot carries the translated generic cause of the code, and the daemon's sentence stays one click away, folded under "Original message (untranslated)". A code the app does not know keeps the daemon's sentence in the slot, behind the words "Untranslated message:". No English sentence stands in a German interface without that hint (HUM-569).
 - `fix` is always passed on when the `Diagnostic` carries a `FixAction`. A `Diagnostic` with a `FixAction` and without a visible action is a defect.
 - It is anchored at the place of the failure: inline below the control for a single decision, as a banner above the list with `Reload` for a data error, in the place of the skeleton for a failed waiting operation (2.11), full-screen only when nothing at all can be displayed. Distance between error and cause is the reason why people repeat the failed action instead of fixing it.
 - A documentation link is accent if it is clickable. A URL that nobody can open is `fg1` mono with a copy button next to it.

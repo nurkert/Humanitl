@@ -29,6 +29,7 @@ import '../../../core/ui/fix_control.dart';
 import '../../../core/ui/h_diagnostic_card.dart';
 import '../../../core/ui/diagnostic_severity.dart';
 import '../../../core/ui/ui.dart';
+import '../../../core/ui/untranslated_wording.dart';
 import '../../../l10n/l10n.dart';
 import '../sandbox_text.dart';
 import 'backend_section.dart';
@@ -253,6 +254,7 @@ class _CheckLine extends StatelessWidget {
                 // The daemon's own sentence: it names the guarantee, not the
                 // check that produced it (`docs/UX.md` 4.4).
                 why: text.cause,
+                original: UntranslatedWording.of(text),
                 docsUrl: diagnostic.docsUrl,
                 fix: FixControl(fix: diagnostic.fix),
                 width: double.infinity,
@@ -384,6 +386,7 @@ class _ExceptionLine extends StatelessWidget {
               color: tokens.state.error,
               title: text.title,
               why: text.cause,
+              original: UntranslatedWording.of(text),
               docsUrl: diagnostic.docsUrl,
               fix: FixControl(fix: diagnostic.fix),
               width: double.infinity,

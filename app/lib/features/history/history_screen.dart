@@ -31,6 +31,7 @@ import '../../core/shortcuts/shortcut_catalog.dart';
 import '../../core/ui/fix_control.dart';
 import '../../core/ui/h_diagnostic_card.dart';
 import '../../core/ui/ui.dart';
+import '../../core/ui/untranslated_wording.dart';
 import '../../l10n/l10n.dart';
 import 'history_detail.dart';
 import 'history_export_menu.dart';
@@ -533,7 +534,14 @@ class _HistoryScreenState extends ConsumerState<HistoryScreen> {
                             revealFailure.severity,
                           ),
                           title: l10n.historyRevealFailedTitle,
-                          why: revealFailure.why,
+                          why: DiagnosticL10n.resolve(
+                            revealFailure,
+                            l10n,
+                          ).cause,
+                          original: UntranslatedWording.forDiagnostic(
+                            revealFailure,
+                            l10n,
+                          ),
                           docsUrl: revealFailure.docsUrl,
                           width: double.infinity,
                           fix: _revealActions(tokens, l10n, revealFailure),
@@ -550,7 +558,11 @@ class _HistoryScreenState extends ConsumerState<HistoryScreen> {
                           ),
                           color: historySeverityColor(tokens, failure.severity),
                           title: l10n.historyLoadFailedTitle,
-                          why: failure.why,
+                          why: DiagnosticL10n.resolve(failure, l10n).cause,
+                          original: UntranslatedWording.forDiagnostic(
+                            failure,
+                            l10n,
+                          ),
                           docsUrl: failure.docsUrl,
                           width: double.infinity,
                           fix: HButton(

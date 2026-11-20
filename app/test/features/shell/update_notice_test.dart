@@ -62,7 +62,10 @@ Future<void> _pump(
   _Log log, {
   int minor = updateMinor,
   String appimage = '',
+  ValueNotifier<Locale>? locale,
 }) async {
+  final ValueNotifier<Locale> language =
+      locale ?? ValueNotifier<Locale>(const Locale('en'));
   await tester.pumpWidget(
     ProviderScope(
       key: UniqueKey(),
@@ -77,14 +80,17 @@ Future<void> _pump(
         daemonRestartRunnerProvider.overrideWithValue(log.restart),
         daemonCliProvider.overrideWithValue(_cli),
       ],
-      child: WidgetsApp(
-        color: HColors.bg0,
-        locale: const Locale('en'),
-        localizationsDelegates: AppLocalizations.localizationsDelegates,
-        supportedLocales: AppLocalizations.supportedLocales,
-        builder: (BuildContext context, Widget? _) => HTheme(
-          tokens: HTokens.dark,
-          child: Center(child: UpdateNotice(daemonMinor: minor)),
+      child: ValueListenableBuilder<Locale>(
+        valueListenable: language,
+        builder: (BuildContext context, Locale value, Widget? _) => WidgetsApp(
+          color: HColors.bg0,
+          locale: value,
+          localizationsDelegates: AppLocalizations.localizationsDelegates,
+          supportedLocales: AppLocalizations.supportedLocales,
+          builder: (BuildContext context, Widget? _) => HTheme(
+            tokens: HTokens.dark,
+            child: Center(child: UpdateNotice(daemonMinor: minor)),
+          ),
         ),
       ),
     ),
@@ -436,4 +442,35 @@ void main() {
     }
     expect(listEquals(aptUpgradeCommand, dnfUpgradeCommand), isFalse);
   });
+
+  // HUM-569: Der Grund wird beim Zeichnen übersetzt, nicht beim Scheitern
+  // festgehalten; ein Wechsel der Sprache danach erreicht auch ihn.
+  testWidgets('a failed update follows a later change of the language', (
+    WidgetTester tester,
+  ) async {
+    const String sentence = 'the download of 0.0.42 broke off';
+    final FakeDaemonClient client = FakeDaemonClient.empty()
+      ..updateStatus = _available(UpdateMethod.appBundle)
+      ..applyFailure = const Diagnostic(
+        code: 'UPDATE_002',
+        severity: Severity.error,
+        why: sentence,
+      );
+    final ValueNotifier<Locale> locale = ValueNotifier<Locale>(
+      const Locale('en'),
+    );
+    addTearDown(locale.dispose);
+    await _pump(tester, client, _Log(), locale: locale);
+    await tester.tap(_button);
+    await tester.pumpAndSettle();
+    final Finder failed = find.byKey(const Key('status-update-failed'));
+    expect(tester.widget<Text>(failed).data, contains(sentence));
+
+    locale.value = const Locale('de');
+    await tester.pumpAndSettle();
+
+    final AppLocalizations de = lookupAppLocalizations(const Locale('de'));
+    expect(tester.widget<Text>(failed).data, contains(de.diagUPDATE002Why));
+    expect(tester.widget<Text>(failed).data, isNot(contains(sentence)));
+  }, variant: TargetPlatformVariant.only(TargetPlatform.macOS));
 }

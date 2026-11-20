@@ -32,6 +32,7 @@ import '../../../core/ui/h_diagnostic_card.dart';
 import '../../../core/ui/h_notice_layer.dart';
 import '../../../core/ui/hover_label.dart';
 import '../../../core/ui/ui.dart';
+import '../../../core/ui/untranslated_wording.dart';
 import '../../../l10n/l10n.dart';
 import '../providers/terminal_provider.dart';
 import '../providers/terminal_tabs_provider.dart';
@@ -345,6 +346,7 @@ class TerminalTabNotices extends ConsumerWidget {
               // The daemon's own sentence; the application writes the title,
               // never the reason (`docs/UX.md` 4.4).
               why: text.cause,
+              original: UntranslatedWording.of(text),
               docsUrl: refusal.docsUrl,
               width: double.infinity,
               dense: true,

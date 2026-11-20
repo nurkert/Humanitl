@@ -31,6 +31,7 @@ import 'package:flutter/widgets.dart';
 import '../../../core/domain/domain.dart';
 import '../../../core/ui/fix_control.dart';
 import '../../../core/ui/ui.dart';
+import '../../../core/ui/untranslated_wording.dart';
 import '../../../l10n/l10n.dart';
 import '../providers/setup_provider.dart';
 import '../setup_text.dart';
@@ -428,7 +429,11 @@ class SetupFinding extends StatelessWidget {
     // zu diesem Code keinen übersetzten Satz, ist der übersetzte der rohe,
     // und eine zweite Kopie darunter entfällt.
     final (String title, String why) = setupDiagnosticText(l10n, diagnostic);
-    final String? detail = why == diagnostic.why ? null : diagnostic.why;
+    // In einer anderen Sprache als der des Daemons steht der rohe Satz
+    // zugeklappt und mit Hinweis statt als Detail (HUM-569).
+    final (String? detail, Widget? original) = why.contains(diagnostic.why)
+        ? (null, null)
+        : UntranslatedWording.split(l10n, diagnostic.why);
     final String? docsUrl = diagnostic.docsUrl;
     final Widget? fix = this.fix;
     return Semantics(
@@ -466,6 +471,10 @@ class SetupFinding extends StatelessWidget {
             ),
             SizedBox(height: tokens.spacing.x1),
             Text(why, style: tokens.typography.ui13.tinted(tokens.colors.fg1)),
+            if (original != null) ...<Widget>[
+              SizedBox(height: tokens.spacing.x1),
+              original,
+            ],
             if (detail != null && detail.isNotEmpty) ...<Widget>[
               SizedBox(height: tokens.spacing.x1),
               Text(

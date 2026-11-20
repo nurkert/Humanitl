@@ -17,6 +17,7 @@ import '../../../core/recorder/recorder_health.dart';
 import '../../../core/text/format.dart';
 import '../../../core/ui/flow_visual_state.dart';
 import '../../../core/ui/ui.dart';
+import '../../../core/ui/untranslated_wording.dart';
 import '../../../core/ui/websocket_notice.dart';
 import '../../../l10n/l10n.dart';
 import '../providers/decision.dart';
@@ -315,12 +316,18 @@ class _TimeoutRule extends ConsumerWidget {
           ),
           if (saving.failureFor(flow.id) case final Diagnostic diagnostic)
             Text(
-              l10n.interceptTimedOutRuleFailed(diagnostic.why),
+              l10n.interceptTimedOutRuleFailed(
+                DiagnosticL10n.resolve(diagnostic, l10n).cause,
+              ),
               key: const Key('intercept-timeout-rule-failed'),
               style: tokens.typography.ui12.tinted(
                 tokens.stateTextColor(HFlowState.error),
               ),
             ),
+          if (saving.failureFor(flow.id) case final Diagnostic diagnostic)
+            if (UntranslatedWording.forDiagnostic(diagnostic, l10n)
+                case final Widget original)
+              original,
         ],
       ),
     );

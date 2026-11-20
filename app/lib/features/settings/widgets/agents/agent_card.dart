@@ -16,6 +16,7 @@ import 'package:flutter_riverpod/flutter_riverpod.dart';
 import '../../../../core/domain/domain.dart';
 import '../../../../core/text/format.dart';
 import '../../../../core/ui/ui.dart';
+import '../../../../core/ui/untranslated_wording.dart';
 import '../../../../l10n/l10n.dart';
 import '../../providers/agents_provider.dart';
 import '../../settings_scope.dart';
@@ -206,9 +207,9 @@ class _AgentCardState extends ConsumerState<AgentCard> {
             ],
             if (refusal != null) ...<Widget>[
               SizedBox(height: tokens.spacing.x2),
-              Text(
-                DiagnosticL10n.resolve(refusal, l10n).cause,
-                key: ValueKey<String>('agent-refusal-${entry.agent}'),
+              DiagnosticCause(
+                diagnostic: refusal,
+                textKey: ValueKey<String>('agent-refusal-${entry.agent}'),
                 style: tokens.typography.ui12.tinted(tokens.stateText.error),
               ),
             ],

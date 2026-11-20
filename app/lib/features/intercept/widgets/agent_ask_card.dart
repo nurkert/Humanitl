@@ -33,6 +33,7 @@ import '../../../core/ipc/client_providers.dart';
 import '../../../core/ipc/daemon_client.dart';
 import '../../../core/ui/h_notice_layer.dart';
 import '../../../core/ui/ui.dart';
+import '../../../core/ui/untranslated_wording.dart';
 import '../../../l10n/l10n.dart';
 import '../providers/agent_asks.dart';
 
@@ -313,8 +314,10 @@ class AgentAskRuleDraft {
   /// True while the daemon is writing it.
   final bool saving;
 
-  /// What the daemon said when it refused, or null.
-  final String? failure;
+  /// What the daemon said when it refused, or null. A failure that is not
+  /// the daemon's carries no code and its text as the sentence; the card
+  /// resolves it into the person's language when it draws (HUM-569).
+  final Diagnostic? failure;
 
   /// True when the rule would cover every path of [host].
   bool get coversWholeHost => path.trim().isEmpty;
@@ -332,7 +335,7 @@ class AgentAskRuleDraft {
     RuleAction? action,
     bool? forever,
     bool? saving,
-    String? failure,
+    Diagnostic? failure,
   }) => AgentAskRuleDraft(
     askId: askId,
     host: host ?? this.host,
@@ -417,10 +420,16 @@ class AgentAskRuleDraftNotifier extends Notifier<AgentAskRuleDraft?> {
             ),
           );
     } on DaemonException catch (error) {
-      state = draft.copyWith(failure: error.diagnostic.why);
+      state = draft.copyWith(failure: error.diagnostic);
       return;
     } on Object catch (error) {
-      state = draft.copyWith(failure: error.toString());
+      state = draft.copyWith(
+        failure: Diagnostic(
+          code: '',
+          severity: Severity.error,
+          why: error.toString(),
+        ),
+      );
       return;
     }
     ref.read(agentAsksProvider.notifier).dismiss(draft.askId);
@@ -564,13 +573,18 @@ class _AgentAskRuleSheetState extends ConsumerState<AgentAskRuleSheet> {
               color: tokens.colors.fg2,
             ),
           ],
-          if (draft.failure != null) ...<Widget>[
+          if (draft.failure case final Diagnostic failure) ...<Widget>[
             SizedBox(height: tokens.spacing.x3),
             _Note(
               key: const Key('intercept-agent-ask-rule-failure'),
-              text: l10n.interceptAgentAskRuleFailed(draft.failure ?? ''),
+              text: l10n.interceptAgentAskRuleFailed(
+                DiagnosticL10n.resolve(failure, l10n).cause,
+              ),
               color: tokens.stateTextColor(HFlowState.blocked),
             ),
+            if (UntranslatedWording.forDiagnostic(failure, l10n)
+                case final Widget original)
+              original,
           ],
           SizedBox(height: tokens.spacing.x3),
           Row(

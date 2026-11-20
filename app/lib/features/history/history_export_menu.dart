@@ -17,6 +17,7 @@ import 'package:flutter_riverpod/flutter_riverpod.dart';
 import '../../core/domain/domain.dart';
 import '../../core/ui/h_diagnostic_card.dart';
 import '../../core/ui/ui.dart';
+import '../../core/ui/untranslated_wording.dart';
 import '../../l10n/l10n.dart';
 import 'export/curl.dart';
 import 'export/history_export.dart';
@@ -261,7 +262,8 @@ class _Progress extends StatelessWidget {
             // would claim a register entry that does not exist.
             : failure.code.isEmpty
             ? Text(
-                '${l10n.historyExportFailedTitle} · ${failure.why}',
+                '${l10n.historyExportFailedTitle} · '
+                '${untranslatedSentence(l10n, failure.why)}',
                 style: tokens.typography.ui13.tinted(
                   tokens.stateTextColor(HFlowState.error),
                 ),
@@ -271,7 +273,8 @@ class _Progress extends StatelessWidget {
                 severityLabel: historySeverityLabel(l10n, failure.severity),
                 color: historySeverityColor(tokens, failure.severity),
                 title: l10n.historyExportFailedTitle,
-                why: failure.why,
+                why: DiagnosticL10n.resolve(failure, l10n).cause,
+                original: UntranslatedWording.forDiagnostic(failure, l10n),
                 docsUrl: failure.docsUrl,
                 width: double.infinity,
               ),

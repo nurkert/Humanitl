@@ -9,6 +9,7 @@ import '../../../../core/ui/diagnostic_severity.dart';
 import '../../../../core/ui/fix_control.dart';
 import '../../../../core/ui/h_diagnostic_card.dart';
 import '../../../../core/ui/ui.dart';
+import '../../../../core/ui/untranslated_wording.dart';
 import '../../../../l10n/l10n.dart';
 
 /// A recessed panel inside a card: the version choice, the question before
@@ -96,6 +97,7 @@ class AgentFinding extends StatelessWidget {
       color: severityColor(tokens, diagnostic.severity),
       title: text.title,
       why: text.cause,
+      original: UntranslatedWording.of(text),
       docsUrl: diagnostic.docsUrl,
       width: double.infinity,
       dense: true,

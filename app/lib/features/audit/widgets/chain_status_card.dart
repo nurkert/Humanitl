@@ -34,6 +34,7 @@ import '../../../core/ui/fix_control.dart';
 import '../../../core/ui/h_diagnostic_card.dart';
 import '../../../core/ui/middle_ellipsis.dart';
 import '../../../core/ui/ui.dart';
+import '../../../core/ui/untranslated_wording.dart';
 import '../../../l10n/l10n.dart';
 import '../providers/audit_provider.dart';
 
@@ -92,7 +93,11 @@ class ChainStatusCard extends ConsumerWidget {
                       severityLabel: l10n.auditSeverityError,
                       color: tokens.state.blocked,
                       title: l10n.auditBrokenTitle,
-                      why: diagnostic.why,
+                      why: DiagnosticL10n.resolve(diagnostic, l10n).cause,
+                      original: UntranslatedWording.forDiagnostic(
+                        diagnostic,
+                        l10n,
+                      ),
                       docsUrl: diagnostic.docsUrl,
                       width: double.infinity,
                       fix: FixControl(
@@ -444,7 +449,8 @@ class _FailureCard extends StatelessWidget {
       severityLabel: context.l10n.auditSeverityError,
       color: tokens.state.error,
       title: title,
-      why: diagnostic.why,
+      why: DiagnosticL10n.resolve(diagnostic, context.l10n).cause,
+      original: UntranslatedWording.forDiagnostic(diagnostic, context.l10n),
       docsUrl: diagnostic.docsUrl,
       width: double.infinity,
       fix: FixControl(fix: diagnostic.fix, copyKey: keyValue),

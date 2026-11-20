@@ -73,7 +73,9 @@ class _CompactDiagnostic extends StatelessWidget {
     final Color color = historySeverityColor(tokens, diagnostic.severity);
     return Semantics(
       container: true,
-      label: '${diagnostic.code} ${text.title}. ${text.cause}',
+      // Mit dem Satz des Daemons, wo der Grund übersetzt ist (HUM-569).
+      label:
+          '${diagnostic.code} ${text.title}. ${text.causeWithOriginal(l10n)}',
       // `Wrap` und nicht `Row`: Bei doppelter Textskalierung passen Code,
       // Titel und Fix nicht nebeneinander, und eine Zeile schnitte sie ab
       // (`docs/UX.md` 6).

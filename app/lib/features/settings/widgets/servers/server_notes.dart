@@ -9,6 +9,7 @@ import '../../../../core/ui/diagnostic_severity.dart';
 import '../../../../core/ui/fix_control.dart';
 import '../../../../core/ui/h_diagnostic_card.dart';
 import '../../../../core/ui/ui.dart';
+import '../../../../core/ui/untranslated_wording.dart';
 import '../../../../l10n/l10n.dart';
 import '../setting_row.dart';
 
@@ -99,6 +100,7 @@ class ProbeFinding extends StatelessWidget {
         color: severityColor(tokens, diagnostic.severity),
         title: text.title,
         why: text.cause,
+        original: UntranslatedWording.of(text),
         fix: FixControl(fix: diagnostic.fix),
         docsUrl: diagnostic.docsUrl,
         width: 480,

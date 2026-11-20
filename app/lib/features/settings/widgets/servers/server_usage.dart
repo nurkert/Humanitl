@@ -16,6 +16,7 @@ import '../../../../core/domain/domain.dart';
 import '../../../../core/ipc/config_providers.dart';
 import '../../../../core/ipc/daemon_client.dart';
 import '../../../../core/ui/ui.dart';
+import '../../../../core/ui/untranslated_wording.dart';
 import '../../../../l10n/l10n.dart';
 import 'server_picker.dart';
 
@@ -202,9 +203,9 @@ class _ServerUsageState extends ConsumerState<ServerUsage> {
         ),
         if (_refusal case final Diagnostic refused) ...<Widget>[
           SizedBox(height: tokens.spacing.x2),
-          Text(
-            DiagnosticL10n.resolve(refused, l10n).cause,
-            key: const Key('settings-usage-refusal'),
+          DiagnosticCause(
+            diagnostic: refused,
+            textKey: const Key('settings-usage-refusal'),
             style: tokens.typography.ui12.tinted(tokens.stateText.error),
           ),
         ],

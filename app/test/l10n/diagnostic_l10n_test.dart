@@ -29,11 +29,16 @@ void main() {
       title: 'Etwas ist schiefgegangen',
       why: 'the thing did not work',
     );
+    final DiagnosticText english = DiagnosticL10n.resolve(unknown, en);
     final DiagnosticText text = DiagnosticL10n.resolve(unknown, de);
 
+    expect(english.cause, 'the thing did not work');
     expect(text.title, 'Etwas ist schiefgegangen');
     expect(text.why, 'the thing did not work');
-    expect(text.cause, 'the thing did not work');
+    // In der deutschen Oberfläche nicht ohne Hinweis (HUM-569).
+    expect(text.cause, de.diagnosticUntranslated('the thing did not work'));
+    expect(text.cause, startsWith('Unübersetzte Meldung: '));
+    expect(text.original, isNull);
   });
 
   test('an unknown code without a title shows the code', () {
@@ -60,9 +65,14 @@ void main() {
     expect(english.title, isNot(german.title));
     expect(english.why, en.diagCONFIG001Why);
     expect(german.why, de.diagCONFIG001Why);
-    // Der gemessene Satz des Daemons bleibt der Grund (docs/UX.md 4.4).
+    // Der gemessene Satz des Daemons bleibt in der Sprache des Daemons der
+    // Grund (docs/UX.md 4.4).
     expect(english.cause, 'config.toml is not valid TOML');
-    expect(german.cause, 'config.toml is not valid TOML');
+    expect(english.original, isNull);
+    // In jeder anderen steht der übersetzte Grundsatz dort, und der Satz des
+    // Daemons nur aufklappbar (HUM-569).
+    expect(german.cause, de.diagCONFIG001Why);
+    expect(german.original, 'config.toml is not valid TOML');
   });
 
   test('without a sentence of the daemon the cause is the ARB one', () {
@@ -95,5 +105,47 @@ void main() {
           if (diagnosticTexts(l10n, code) == null) '$code/${l10n.localeName}',
     ];
     expect(missing, isEmpty);
+  });
+
+  test('no code of the register shows a sentence of the daemon bare in de', () {
+    // Akzeptanzkriterium von HUM-569: In der deutschen Oberfläche steht kein
+    // englischer Satz ohne Hinweis. Der Satz des Daemons darf im Grund-Platz
+    // nur hinter dem Hinweis stehen, sonst nur zugeklappt (`original`).
+    const String sentence = 'the daemon wrote this in English';
+    final List<String> bare = <String>[
+      for (final String code in registerCodes())
+        for (final TargetPlatform platform in <TargetPlatform>[
+          TargetPlatform.linux,
+          TargetPlatform.macOS,
+        ])
+          if (DiagnosticL10n.resolve(
+                Diagnostic(code: code, severity: Severity.error, why: sentence),
+                de,
+                platform: platform,
+              )
+              case final DiagnosticText text
+              when text.cause.contains(sentence) || text.original != sentence)
+            '$code/${platform.name}',
+    ];
+    expect(bare, isEmpty);
+  });
+
+  test('a diagnostic without a sentence of its own has nothing to fold', () {
+    const Diagnostic diagnostic = Diagnostic(
+      code: 'AGENT_009',
+      severity: Severity.warning,
+    );
+    final DiagnosticText text = DiagnosticL10n.resolve(diagnostic, de);
+    expect(text.cause, de.diagAGENT009Why);
+    expect(text.original, isNull);
+  });
+
+  test('untranslatedSentence marks only outside the daemon language', () {
+    expect(untranslatedSentence(en, 'no route to host'), 'no route to host');
+    expect(
+      untranslatedSentence(de, 'no route to host'),
+      de.diagnosticUntranslated('no route to host'),
+    );
+    expect(untranslatedSentence(de, ''), '');
   });
 }

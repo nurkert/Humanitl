@@ -19,9 +19,11 @@ import 'package:flutter/services.dart';
 import 'package:flutter/widgets.dart';
 import 'package:flutter_riverpod/flutter_riverpod.dart';
 
+import '../../core/domain/domain.dart';
 import '../../core/ipc/daemon_client.dart';
 import '../../core/ui/h_diagnostic_card.dart';
 import '../../core/ui/ui.dart';
+import '../../core/ui/untranslated_wording.dart';
 import '../../l10n/l10n.dart';
 import 'providers/audit_provider.dart';
 import 'widgets/audit_table.dart';
@@ -150,7 +152,20 @@ class _ExportNotice extends ConsumerWidget {
         severityLabel: l10n.auditSeverityError,
         color: tokens.state.error,
         title: l10n.auditExportFailedTitle,
-        why: job.failure?.why ?? '',
+        why: switch (job.failure) {
+          final Diagnostic failure => DiagnosticL10n.resolve(
+            failure,
+            l10n,
+          ).cause,
+          null => '',
+        },
+        original: switch (job.failure) {
+          final Diagnostic failure => UntranslatedWording.forDiagnostic(
+            failure,
+            l10n,
+          ),
+          null => null,
+        },
         docsUrl: job.failure?.docsUrl,
         width: double.infinity,
       ),

@@ -11,12 +11,20 @@
 /// - Die Überschrift kommt aus ARB, sobald es den Schlüssel gibt. Sie ist der
 ///   feste Teil der Meldung und verliert beim Übersetzen nichts.
 /// - Der Grund ist der gemessene Satz des Daemons, wo er einen mitschickt
-///   (`docs/UX.md` 4.4): Er nennt Pfad, Host und Fehlertext, und ein
-///   übersetzter Satz ohne diese Angaben wäre ärmer. Der übersetzte
-///   Grundsatz steht nur dort, wo der Befund keinen eigenen Satz trägt,
-///   etwa bei einem Befund, den der Client selbst baut.
+///   und die Oberfläche Englisch spricht (`docs/UX.md` 4.4): Er nennt Pfad,
+///   Host und Fehlertext, und ein übersetzter Satz ohne diese Angaben wäre
+///   ärmer. Der übersetzte Grundsatz steht dort, wo der Befund keinen
+///   eigenen Satz trägt, etwa bei einem Befund, den der Client selbst baut.
+/// - In jeder anderen Sprache der Oberfläche steht im Grund-Platz der
+///   übersetzte Grundsatz, und der Satz des Daemons ist nur aufklappbar
+///   erreichbar, als [DiagnosticText.original] mit dem Hinweis, dass er
+///   unübersetzt ist (HUM-569). Der Daemon schreibt seine Sätze Englisch
+///   ([daemonLanguage]); ein englischer Satz ohne Hinweis in einer deutschen
+///   Oberfläche liest sich wie ein Fehler der Übersetzung.
 ///
-/// Ein Code, den diese Fassung noch nicht kennt, behält die Worte des Daemons.
+/// Ein Code, den diese Fassung noch nicht kennt, behält die Worte des Daemons;
+/// in einer anderen Sprache als Englisch mit dem Hinweis davor
+/// (`diagnosticUntranslated`).
 ///
 /// Ein eigenes Fix-Label je Code gibt es nicht: Den Knopf beschriftet
 /// `FixControl` nach der Art der `FixAction`, und diese Beschriftungen stehen
@@ -41,6 +49,7 @@ class DiagnosticText {
     required this.title,
     required this.why,
     required this.cause,
+    this.original,
   });
 
   /// The fixed part of the message: `diag<CODE>Title`, else the daemon's
@@ -50,10 +59,45 @@ class DiagnosticText {
   /// The generic cause: `diag<CODE>Why`, else the daemon's own sentence.
   final String why;
 
-  /// What stands in the cause slot of a card: the daemon's own sentence
-  /// when there is one, else [why] (`docs/UX.md` 4.4).
+  /// What stands in the cause slot of a card.
+  ///
+  /// In an English interface the daemon's own sentence when there is one,
+  /// else [why] (`docs/UX.md` 4.4). In any other language [why] when this
+  /// build knows the code, else the daemon's sentence behind the hint that
+  /// it is untranslated (HUM-569).
   final String cause;
+
+  /// The daemon's own sentence when it stands nowhere in [cause]: the
+  /// interface speaks another language than the daemon, and [cause] is the
+  /// translated generic one. Shown folded behind the hint that it is
+  /// untranslated (`UntranslatedWording`), never as a bare line.
+  final String? original;
+
+  /// [cause] for a place that holds one string only (a tooltip, a
+  /// screen-reader label): with [original] after it, behind the hint that
+  /// it is untranslated, so the daemon's words are not lost there either.
+  String causeWithOriginal(AppLocalizations l10n) {
+    final String? original = this.original;
+    return original == null
+        ? cause
+        : '$cause ${l10n.diagnosticUntranslated(original)}';
+  }
 }
+
+/// The language the daemon writes the sentence of a finding (`why`) in.
+const String daemonLanguage = 'en';
+
+/// Whether [l10n] speaks [daemonLanguage].
+bool speaksDaemonLanguage(AppLocalizations l10n) =>
+    l10n.localeName.split(RegExp('[_-]')).first == daemonLanguage;
+
+/// [sentence] as it came, from the daemon or the platform: bare in an
+/// interface that speaks [daemonLanguage], behind the hint that it is
+/// untranslated in any other (HUM-569).
+String untranslatedSentence(AppLocalizations l10n, String sentence) =>
+    sentence.isEmpty || speaksDaemonLanguage(l10n)
+    ? sentence
+    : l10n.diagnosticUntranslated(sentence);
 
 /// Resolves the texts of a [Diagnostic] from the ARB files.
 abstract final class DiagnosticL10n {
@@ -70,12 +114,31 @@ abstract final class DiagnosticL10n {
       platform: platform,
     );
     final String why = own?.$2 ?? diagnostic.why;
+    final String title =
+        own?.$1 ??
+        (diagnostic.title.isEmpty ? diagnostic.code : diagnostic.title);
+    final String sentence = diagnostic.why;
+    if (sentence.isEmpty || speaksDaemonLanguage(l10n)) {
+      return DiagnosticText(
+        title: title,
+        why: why,
+        cause: sentence.isEmpty ? why : sentence,
+      );
+    }
+    // Eine andere Sprache als die des Daemons: Der übersetzte Grundsatz steht
+    // im Grund-Platz, der Satz des Daemons nur aufgeklappt (HUM-569).
+    if (own != null) {
+      return DiagnosticText(
+        title: title,
+        why: why,
+        cause: why,
+        original: sentence == why ? null : sentence,
+      );
+    }
     return DiagnosticText(
-      title:
-          own?.$1 ??
-          (diagnostic.title.isEmpty ? diagnostic.code : diagnostic.title),
+      title: title,
       why: why,
-      cause: diagnostic.why.isEmpty ? why : diagnostic.why,
+      cause: untranslatedSentence(l10n, sentence),
     );
   }
 }

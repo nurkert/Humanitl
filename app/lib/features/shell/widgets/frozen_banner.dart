@@ -103,7 +103,7 @@ class FrozenBanner extends StatelessWidget {
                     ),
                     if (!settling && diagnostic.why.isNotEmpty)
                       Text(
-                        diagnostic.why,
+                        untranslatedSentence(l10n, diagnostic.why),
                         key: const Key('shell-frozen-why'),
                         maxLines: 2,
                         overflow: TextOverflow.ellipsis,

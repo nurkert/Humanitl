@@ -19,6 +19,7 @@ import '../../../core/ipc/client_providers.dart';
 import '../../../core/ipc/config_providers.dart';
 import '../../../core/ipc/daemon_client.dart';
 import '../../../core/ui/ui.dart';
+import '../../../core/ui/untranslated_wording.dart';
 import '../../../l10n/l10n.dart';
 import '../registry/setting_entry.dart';
 import '../settings_scope.dart';
@@ -405,13 +406,18 @@ class _EgressCheckRowState extends ConsumerState<EgressCheckRow> {
             style: tokens.typography.ui12.tinted(tokens.stateText.allowed),
           ),
         if (result != null && !result.reachable)
-          Text(
-            failure == null
-                ? l10n.settingsEgressCheckFailedPlain
-                : DiagnosticL10n.resolve(failure, l10n).cause,
-            key: const Key('settings-egress-check-result'),
-            style: tokens.typography.ui12.tinted(tokens.stateText.error),
-          ),
+          if (failure == null)
+            Text(
+              l10n.settingsEgressCheckFailedPlain,
+              key: const Key('settings-egress-check-result'),
+              style: tokens.typography.ui12.tinted(tokens.stateText.error),
+            )
+          else
+            DiagnosticCause(
+              diagnostic: failure,
+              textKey: const Key('settings-egress-check-result'),
+              style: tokens.typography.ui12.tinted(tokens.stateText.error),
+            ),
       ],
       child: HButton(
         key: const Key('settings-egress-check-now'),

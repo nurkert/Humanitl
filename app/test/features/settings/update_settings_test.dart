@@ -3,10 +3,13 @@
 
 import 'package:flutter/services.dart';
 import 'package:flutter/widgets.dart';
+import 'package:flutter_riverpod/flutter_riverpod.dart';
 import 'package:flutter_test/flutter_test.dart';
 import 'package:humanitl/core/domain/domain.dart';
 import 'package:humanitl/core/ipc/fake_daemon_client.dart';
 import 'package:humanitl/features/settings/widgets/setting_controls.dart';
+import 'package:humanitl/features/shell/providers/language.dart';
+import 'package:humanitl/l10n/l10n.dart';
 
 import '../../harness/app_harness.dart';
 import '../../harness/settings_harness.dart';
@@ -87,5 +90,40 @@ void main() {
       'The check failed: the signature of update-macos.json does not match '
       'the key',
     );
+  }, variant: TargetPlatformVariant.only(TargetPlatform.linux));
+
+  // HUM-569: Der Grund wird beim Zeichnen übersetzt, nicht beim Scheitern
+  // festgehalten; ein Wechsel der Sprache danach erreicht auch ihn.
+  testWidgets('a failed check follows a later change of the language', (
+    WidgetTester tester,
+  ) async {
+    const String sentence =
+        'the signature of update-macos.json does not match the key';
+    final FakeDaemonClient client = FakeDaemonClient.empty();
+    await _open(tester, client);
+    client.updateCheckFailure = const Diagnostic(
+      code: 'UPDATE_002',
+      severity: Severity.error,
+      why: sentence,
+    );
+    await tester.ensureVisible(_checkNow);
+    await tester.pumpAndSettle();
+    await tester.tap(_checkNow);
+    await tester.pumpAndSettle();
+    expect(_resultText(tester), contains(sentence));
+
+    ProviderScope.containerOf(tester.element(_result))
+        .read(languageProvider.notifier)
+        .set(AppLanguage.de);
+    await tester.pumpAndSettle();
+
+    // Die Einstellungen bauen ihre Zeilen beim Sprachwechsel neu auf (der
+    // Katalog hängt an der Sprache); die Zeile darf danach fehlen, aber nie
+    // den englischen Satz ohne Hinweis zeigen.
+    final AppLocalizations de = lookupAppLocalizations(const Locale('de'));
+    expect(find.textContaining(sentence), findsNothing);
+    if (_result.evaluate().isNotEmpty) {
+      expect(_resultText(tester), contains(de.diagUPDATE002Why));
+    }
   }, variant: TargetPlatformVariant.only(TargetPlatform.linux));
 }
