@@ -170,6 +170,36 @@ impl Fixture {
         last.expect("a plan answers with a status")
     }
 
+    /// Die Ereignisse eines Plans in diesem Projekt mit diesen Werten der
+    /// Sitzung (`Plan.cli_overrides`, HUM-559), wie `humanitl sandbox plan`
+    /// sie schickt.
+    async fn plan_events(&self, overrides: &[(&str, &str)]) -> Vec<v1::SandboxEvent> {
+        self.plan_request(v1::sandbox_request::Plan {
+            work_dir: self.work.clone(),
+            cli_overrides: overrides
+                .iter()
+                .map(|(path, value)| v1::sandbox_request::CliOverride {
+                    path: (*path).to_owned(),
+                    value: (*value).to_owned(),
+                })
+                .collect(),
+            ..v1::sandbox_request::Plan::default()
+        })
+        .await
+    }
+
+    /// Die Ereignisse genau dieses Plans.
+    async fn plan_request(&self, plan: v1::sandbox_request::Plan) -> Vec<v1::SandboxEvent> {
+        let mut stream = self.service.stream(v1::SandboxRequest {
+            op: Some(v1::sandbox_request::Op::Plan(plan)),
+        });
+        let mut events = Vec::new();
+        while let Some(event) = stream.next().await {
+            events.push(event);
+        }
+        events
+    }
+
     /// Ein Auftrag an `LlmServers`, wie die App ihn schickt.
     fn servers(&self, op: v1::llm_servers_request::Op) -> v1::LlmServerList {
         let keys = humanitl_config::secret::KeyStore::for_paths(&self.paths).with_secret_tool(None);
@@ -1332,6 +1362,94 @@ async fn a_floor_from_the_start_raises_the_floor_of_the_session() {
         codes(&seen)
     );
     assert!(failed(&seen), "{seen:?}");
+}
+
+/// Die Vorschau sieht die Werte der Sitzung wie der Start (HUM-559): Ein
+/// Plan mit `sandbox.min_isolation = kernel` in `Plan.cli_overrides` nennt
+/// bei `auto` `SANDBOX_035` wie der Start mit denselben Werten; ohne sie
+/// nicht. Ein schwächerer Wert senkt eine Untergrenze des Projekts auch im
+/// Plan nicht, und ein Pfad, den eine Sitzung nicht setzen darf, ist im Plan
+/// `CONFIG_003` wie beim Start.
+///
+/// Mutation proof: without the overrides in `SessionResolver::resolve_plan`
+/// (or without `Plan.cli_overrides` in `Inner::plan_config`) the first plan
+/// shows `auto` without `SANDBOX_035`; without `check_override_key` there
+/// the last plan carries no `CONFIG_003`.
+#[tokio::test(flavor = "multi_thread")]
+async fn the_preview_sees_the_floor_of_the_session_like_the_start() {
+    let fixture = Fixture::live();
+    let kernel = [("sandbox.min_isolation", "kernel")];
+
+    let plan = codes(&fixture.plan_events(&kernel).await);
+    let start = codes(&fixture.run(with_overrides(&kernel)).await);
+    assert!(plan.contains(&"SANDBOX_035".to_owned()), "{plan:?}");
+    assert!(start.contains(&"SANDBOX_035".to_owned()), "{start:?}");
+    assert!(!plan.contains(&"CONFIG_003".to_owned()), "{plan:?}");
+
+    // Gegenprobe: derselbe Plan ohne die Werte der Sitzung.
+    let without = codes(&fixture.plan_events(&[]).await);
+    assert!(!without.contains(&"SANDBOX_035".to_owned()), "{without:?}");
+
+    // Nur heben, nie senken, im Plan wie beim Start (HUM-489).
+    fixture.project_profile("[config.sandbox]\nmin_isolation = \"kernel\"\n");
+    let lowered = codes(
+        &fixture
+            .plan_events(&[("sandbox.min_isolation", "policy")])
+            .await,
+    );
+    assert!(lowered.contains(&"SANDBOX_035".to_owned()), "{lowered:?}");
+
+    let refused = codes(&fixture.plan_events(&[("sandbox.work_dir", "/")]).await);
+    assert!(refused.contains(&"CONFIG_003".to_owned()), "{refused:?}");
+}
+
+/// Steht `sandbox.backend` in `Plan.cli_overrides` und in `Plan.backend`,
+/// gilt `Plan.backend` (HUM-559): Ein unbekannter Name in den Werten fällt
+/// dann weg, statt `CONFIG_003` zu werden, und der Plan nennt das Backend aus
+/// `Plan.backend`. Allein in den Werten ist derselbe Name `CONFIG_003`.
+///
+/// Mutation proof: without the filter on `SANDBOX_BACKEND_KEY` in
+/// `SessionResolver::resolve_plan` the unknown name reaches the resolution
+/// and the plan is `CONFIG_003`.
+#[tokio::test(flavor = "multi_thread")]
+async fn the_backend_of_the_plan_wins_over_the_backend_in_its_values() {
+    let fixture = Fixture::live();
+    let plan = |backend: &str| v1::sandbox_request::Plan {
+        work_dir: fixture.work.clone(),
+        backend: backend.to_owned(),
+        cli_overrides: vec![v1::sandbox_request::CliOverride {
+            path: "sandbox.backend".to_owned(),
+            value: "nonsense".to_owned(),
+        }],
+        ..v1::sandbox_request::Plan::default()
+    };
+    let events = fixture
+        .plan_request(plan(humanitl_sandbox::PLATFORM_BACKEND_NAME))
+        .await;
+    assert!(
+        !codes(&events).contains(&"CONFIG_003".to_owned()),
+        "{:?}",
+        codes(&events)
+    );
+    let status = events
+        .iter()
+        .find_map(|event| match &event.event {
+            Some(v1::sandbox_event::Event::Status(status)) => Some(status.clone()),
+            _ => None,
+        })
+        .expect("a plan answers with a status");
+    assert_eq!(
+        status.backend,
+        humanitl_sandbox::PLATFORM_BACKEND_NAME,
+        "{status:?}"
+    );
+
+    let alone = fixture.plan_request(plan("")).await;
+    assert!(
+        codes(&alone).contains(&"CONFIG_003".to_owned()),
+        "{:?}",
+        codes(&alone)
+    );
 }
 
 /// Ein Projekt wählt das Backend nicht: `sandbox.backend` im Projekt-Profil

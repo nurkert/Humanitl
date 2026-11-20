@@ -345,10 +345,21 @@ impl SessionResolver {
     /// Paar `sandbox.backend` auf der Ebene der Kommandozeile, genau wie der
     /// Eintrag in `Start.cli_overrides`, mit derselben Prüfung des Werts.
     ///
+    /// `overrides` sind die Werte der Sitzung (`Plan.cli_overrides`,
+    /// HUM-559), geprüft und gemischt wie [`SessionRequest::overrides`] beim
+    /// Start: nur Pfade aus [`SESSION_OVERRIDE_KEYS`], auf der Ebene der
+    /// Kommandozeile, die Untergrenze also nur hebend. Ein `sandbox.backend`
+    /// darunter weicht `backend`, wenn beide dastehen.
+    ///
+    /// `choice` ist die gespeicherte Projektwahl des Ordners (HUM-559), die
+    /// Ebene über dem Projekt-Profil und unter den Werten der Sitzung, wie
+    /// [`SessionRequest::project_choice`] beim Start.
+    ///
     /// # Errors
     ///
     /// `CONFIG_001`, wenn es das Profil nicht gibt, `CONFIG_003` für ein
-    /// Backend, das das Schema nicht kennt, und die Befunde des Ladens; nie
+    /// Backend, das das Schema nicht kennt, und für einen Pfad außerhalb von
+    /// [`SESSION_OVERRIDE_KEYS`], und die Befunde des Ladens; nie
     /// `CONFIG_021`.
     pub fn resolve_plan(
         &self,
@@ -356,14 +367,18 @@ impl SessionResolver {
         project: Option<&Path>,
         llm_server: Option<String>,
         backend: Option<String>,
+        overrides: &[(String, String)],
+        choice: Option<&humanitl_config::ProjectChoice>,
     ) -> Result<Resolved, Diagnostic> {
+        // Geprüft wird vor der Abkürzung eines festen Grundstands: Ein Pfad,
+        // den der Start ablehnt, lehnt auch der Plan ab.
+        for (path, _) in overrides {
+            check_override_key(path)?;
+        }
         if !self.live {
             return Ok(self.base.clone());
         }
-        let stored = self.current().map_or_else(
-            |_| self.base.config.sandbox.work_dir.clone(),
-            |now| now.config.sandbox.work_dir,
-        );
+        let stored = self.stored_work_dir();
         let selection = ProfileSelection { name: profile };
         let mut pairs: Vec<(String, String)> = Vec::new();
         if let Some(dir) = project {
@@ -372,12 +387,23 @@ impl SessionResolver {
         if let Some(server) = llm_server {
             pairs.push((humanitl_config::servers::SERVER.to_owned(), server));
         }
+        pairs.extend(
+            overrides
+                .iter()
+                .filter(|(path, _)| backend.is_none() || path != SANDBOX_BACKEND_KEY)
+                .cloned(),
+        );
         if let Some(backend) = backend {
             pairs.push((SANDBOX_BACKEND_KEY.to_owned(), backend));
         }
         let cwd = project.map(Path::to_path_buf).or_else(|| stored.clone());
-        let mut resolved =
-            humanitl_config::resolve(&selection, cwd.as_deref(), self.env(), &pairs)?;
+        let mut resolved = humanitl_config::resolve_with_choice(
+            &selection,
+            cwd.as_deref(),
+            self.env(),
+            &pairs,
+            choice,
+        )?;
         // Nur ein Ordner, den diese Anfrage selbst hineingelegt hat, wird
         // zurückgesetzt. Setzt das Profil der Sitzung `sandbox.work_dir`,
         // gilt dieser Wert, wie beim Start.
@@ -385,6 +411,18 @@ impl SessionResolver {
             resolved.config.sandbox.work_dir = stored;
         }
         Ok(resolved)
+    }
+
+    /// `sandbox.work_dir` der Konfiguration, wie sie jetzt auf der Platte
+    /// steht ([`SessionResolver::current`]), sonst der des Grundstands: der
+    /// Ordner eines `Plan` ohne eigenen (HUM-559), derselbe für die
+    /// Auflösung und für die Projektwahl, die dazu geladen wird.
+    #[must_use]
+    pub fn stored_work_dir(&self) -> Option<PathBuf> {
+        self.current().map_or_else(
+            |_| self.base.config.sandbox.work_dir.clone(),
+            |now| now.config.sandbox.work_dir,
+        )
     }
 
     /// [`SessionResolver::resolve`] ohne die Ablehnung eines unbekannten

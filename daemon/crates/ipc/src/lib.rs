@@ -51,7 +51,13 @@ pub const PROTO_MAJOR: u32 = 1;
 /// Minor-Version des Vertrags. Steigt bei jeder additiven Änderung
 /// (`Info.proto_minor`).
 ///
-/// `54` seit dem Abschnitt „Agenten" der App (HUM-521): `AgentDepot.versions`
+/// `55` seit der Vorschau mit den Werten der Sitzung (HUM-559):
+/// `SandboxRequest.Plan.cli_overrides` trägt dieselben Werte wie
+/// `Start.cli_overrides`, mit derselben Erlaubnisliste; vor allem die
+/// Untergrenze `sandbox.min_isolation` der Kommandozeile gilt so auch für den
+/// Plan, und eine Vorschau mit `kernel` und `auto` nennt `SANDBOX_035` wie
+/// der Start.
+/// `54` war der Abschnitt „Agenten" der App (HUM-521): `AgentDepot.versions`
 /// nennt die Versionen im Depot für ein Zurück, `AgentDepot.actions`
 /// (`AgentActions`) die Operationen, die ein Client jetzt anbieten darf; der
 /// Daemon entscheidet sie aus Rezept, Prüfung des Depots, Sperre, laufendem
@@ -302,7 +308,7 @@ pub const PROTO_MAJOR: u32 = 1;
 /// Spiegelung in `app/lib/core/ipc/proto_version.dart` darf nachziehen: eine
 /// abweichende Minor ist verabredetermaßen kein Grund, die Verbindung
 /// abzulehnen (`docs/PROTOCOL.md`).
-pub const PROTO_MINOR: u32 = 54;
+pub const PROTO_MINOR: u32 = 55;
 
 /// Metadata-Schlüssel für das Session-Token aus
 /// `$XDG_RUNTIME_DIR/humanitl/token` (CONVENTIONS.md 3.6).

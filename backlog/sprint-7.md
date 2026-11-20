@@ -6329,6 +6329,82 @@ schwächeren Untergrenze des Daemons, der Start danach scheitert mit
 ### Akzeptanzkriterien
 1. Vorschau und Start zeigen bei gleichen Eingaben dieselbe Untergrenze.
 
+### Stand nach der Umsetzung (2026-11-20)
+
+**Neues Feld statt eigener Logik.** `SandboxRequest.Plan` trägt
+`cli_overrides` (Feld 8, Vertrag 1.55), dieselben Werte der Sitzung wie
+`Start.cli_overrides`. `humanitl sandbox plan` füllt es aus derselben
+Funktion wie der Start (`run::client_overrides`, also `start_overrides` aus
+HUM-489: Flags, Umgebung, Datei aus `--config`, die Untergrenze als
+aufgelöster strengster Wert). Der Daemon mischt die Werte in
+`SessionResolver::resolve_plan` auf der Ebene der Kommandozeile, nach
+`check_override_key` wie beim Start; die Untergrenze hebt also nur, ein Pfad
+außerhalb der Erlaubnisliste ist `CONFIG_003`. Steht `sandbox.backend` in den
+Werten und in `Plan.backend`, gilt `Plan.backend`. `plan_of` im Start lässt
+das Feld leer, weil der Start seine Werte über `apply_session` anwendet.
+
+**Projektwahl wie beim Start** (Review). Der Start löst mit der
+gespeicherten Projektwahl des Ordners auf (HUM-532), die Ebene unter den
+Werten der Sitzung. Der Plan tat das nicht: Eine Wahl `kernel` mit `qemu` und
+`--sandbox-min-isolation policy --sandbox-backend auto` zeigte `policy`,
+der Start blieb bei `kernel` und lehnte mit `SANDBOX_035` ab. Jetzt lädt der
+Arm von `Op::Plan` die Wahl vorher wie der Start (`plan_project_choice`, über
+`project_in`, das `start_project` mit dem Ordner der Anfrage teilt), und
+`resolve_plan` löst mit `resolve_with_choice` auf. Ohne Ordner in der
+Anfrage kommt der Ordner der Wahl aus derselben frischen Auflösung wie der
+Plan (`SessionResolver::stored_work_dir`), nicht aus dem Zwischenstand des
+Daemons; sonst bekäme nach einem Wechsel von `sandbox.work_dir` der neue
+Ordner die Wahl des alten. Scheitert das Laden (`CONFIG_024`), scheitert der
+Plan damit wie der Start, statt ohne die Wahl eine schwächere Untergrenze zu
+zeigen (Delta-Review). `Argv` und das Ziehen eines Abbilds laden die Wahl nicht; das
+blieb außerhalb des Umfangs.
+
+**Ältere Daemons.** Ein Daemon vor 1.55 kennt `Plan.cli_overrides` nicht.
+Das Backend des Aufrufs reist deshalb zusätzlich in `Plan.backend` (seit
+1.38); jeder andere Wert (Untergrenze, `llm.endpoint`, Haltefrist,
+Laufzeit) endet gegen einen solchen Daemon mit `CLI_004`, vor 1.38 auch das
+Backend (`plan::preview_values`); der Befund nennt die Minor, die der
+abgelehnte Wert braucht. Ohne Werte geht die Vorschau wie bisher.
+`humanitl sessions` nutzt dieselbe Momentaufnahme, schickt aber keine Werte
+der Sitzung (`SessionValues::Without`) und trifft die Sperre nie.
+
+**Weitere Wege.** Die App schickt als Wert der Sitzung nur das Backend, und
+das trägt ihr Plan schon in `Plan.backend` (HUM-440); Vorschau und Start der
+App sehen dieselbe Untergrenze, keine Änderung. `Projects.proposal` (HUM-536)
+rechnet mit Konfiguration, Projekt-Profil und Projektwahl, ohne Werte der
+Kommandozeile; seine Anfrage hat dafür kein Feld. `humanitl projects
+proposal` warnt deshalb mit `CLI_004` und nennt die Werte, die der
+Vorschlag nicht kennt, statt sie still fallen zu lassen. Den Vorschlag
+selbst um die Werte zu erweitern, ist ein Kandidat für ein eigenes Issue.
+Nebenbei sieht die Vorschau jetzt auch `--sandbox-backend`, `--llm URL` und
+die Variablen des Backends, die sie vorher still überging.
+
+**Tests.** In `cmd::plan::tests`: `the_preview_raises_the_floor_like_the_start`
+(Flag und Variable, Plan gleich den Werten des Starts, Auflösung des Plans im
+Daemon `kernel`, `auto` mit `SANDBOX_035`; Gegenprobe ohne Untergrenze),
+`an_old_daemon_gets_no_preview_without_the_floor`,
+`the_sessions_snapshot_sends_no_session_values` und
+`an_older_daemon_previews_the_backend_and_refuses_what_it_cannot_see`. In
+`cmd::projects::tests`: `the_proposal_names_the_session_values_it_does_not_see`
+und `the_proposal_command_warns_about_a_floor_of_the_command_line`. In
+`sandbox::project::tests`:
+`the_preview_resolves_with_the_saved_choice_like_the_start` (genau das
+Szenario oben, Plan und Start beide `SANDBOX_035`),
+`a_choice_that_no_longer_loads_stops_the_preview_like_the_start` und
+`the_preview_loads_the_choice_of_the_folder_configured_now` (Wechsel A nach
+B). In `session_config.rs`:
+`the_preview_sees_the_floor_of_the_session_like_the_start` und
+`the_backend_of_the_plan_wins_over_the_backend_in_its_values`.
+Mutationsbeweise: `cli_overrides` in `plan_request` leer, die Werte in
+`resolve_plan` nicht gemischt, `plan_config` ohne die Werte,
+`check_override_key` im Plan weg, die Schwelle 1.49 statt 1.55, die Wahl in
+`resolve_plan` oder im Arm von `Op::Plan` weggelassen, `sessions` mit den
+Werten, `Plan.backend` leer, die Sperre nur für die Untergrenze,
+`proposal_request` ohne Warnung, der Filter auf `sandbox.backend` weg, der
+Befund des Ladens verworfen, der Ordner der Wahl aus dem Zwischenstand, die
+Minor 1.55 statt der des Werts im Befund; jede
+färbt mindestens einen Test rot.
+
 ---
 
 ## HUM-560 · App: im Reiter Isolation verliert eine Wahl des Backends per Tastatur den Fokus

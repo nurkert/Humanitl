@@ -1256,11 +1256,22 @@ fn session_overrides(
     resolved: &Resolved,
     minor: u32,
 ) -> Result<Vec<v1::sandbox_request::CliOverride>, Failure> {
-    let named_config = ctx.config_file.is_some();
-    floor_reaches_the_daemon(
-        start_overrides(ctx.cli_pairs(), resolved, named_config),
-        minor,
-    )
+    floor_reaches_the_daemon(client_overrides(ctx, resolved), minor)
+}
+
+/// Die Werte der Sitzung, die dieser Aufruf einem Start schicken würde, ohne
+/// die Prüfung der Minor: [`start_overrides`] mit den Paaren und der Datei
+/// aus `--config` dieses Aufrufs.
+///
+/// Gemeinsam mit der Vorschau (`humanitl sandbox plan`, HUM-559), damit Plan
+/// und Start dieselben Werte und vor allem dieselbe Untergrenze sehen, und
+/// mit `humanitl projects proposal`, das sagt, welche davon der Vorschlag
+/// nicht kennt.
+pub(crate) fn client_overrides(
+    ctx: &Context,
+    resolved: &Resolved,
+) -> Vec<v1::sandbox_request::CliOverride> {
+    start_overrides(ctx.cli_pairs(), resolved, ctx.config_file.is_some())
 }
 
 /// [`session_overrides`] ohne den Kontext und ohne die Prüfung der Minor:
