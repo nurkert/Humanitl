@@ -41,6 +41,7 @@ import '../../../core/ui/shell_glyph.dart';
 import '../../../core/ui/terminal_placement.dart';
 import '../../../core/ui/terminal_zoom.dart';
 import '../../../core/ui/ui.dart';
+import '../../../l10n/diagnostic_l10n.dart';
 import '../../../l10n/generated/app_localizations.dart';
 import '../providers/terminal_provider.dart';
 
@@ -650,7 +651,10 @@ class _TerminalPaneState extends ConsumerState<TerminalPane> {
           : null;
     }
     return _FindingStrip(
-      text: l10n.sandboxTerminalFinding(diagnostic.code, diagnostic.why),
+      text: l10n.sandboxTerminalFinding(
+        diagnostic.code,
+        DiagnosticL10n.resolve(diagnostic, l10n).cause,
+      ),
     );
   }
 

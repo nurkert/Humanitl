@@ -92,7 +92,10 @@ void main() {
 
   goldenVariants(
     'sandbox_backend_choice',
-    constraints: const BoxConstraints.tightFor(width: 560, height: 500),
+    // 540 statt 500: In Deutsch steht der Grund eines Backends mit dem
+    // Hinweis „Unübersetzte Meldung:" davor und braucht eine Zeile mehr
+    // (HUM-569). Die Sektion scrollt im Panel.
+    constraints: const BoxConstraints.tightFor(width: 560, height: 540),
     builder: (GoldenVariant variant) => goldenFrame(
       variant: variant,
       padding: const EdgeInsets.all(12),

@@ -7992,6 +7992,69 @@ so auch in der deutschen Oberfläche (etwa `AGENT_009` an der Agentenkarte).
 ### Akzeptanzkriterien
 1. In der deutschen Oberfläche steht kein englischer Satz ohne Hinweis.
 
+### Stand nach der Umsetzung (2026-11-20)
+
+Entschieden: der zweite Weg der Spezifikation, ohne Änderung am Daemon.
+Schlüssel plus Argumente für jeden Satz hätten jede Stelle berührt, die im
+Daemon einen Befund baut. `DiagnosticL10n.resolve` entscheidet jetzt nach
+der Sprache der Oberfläche: In Englisch (`daemonLanguage`) bleibt der Satz
+des Daemons der Grund wie bisher. In jeder anderen steht im Grund-Platz der
+übersetzte Grundsatz des Codes (`diag<CODE>Why`), und der Satz des Daemons
+liegt in `DiagnosticText.original`. Die Oberfläche zeigt ihn zugeklappt
+unter „Originalmeldung (unübersetzt)" (`UntranslatedWording`, ein
+`HCollapsible`). Ein Code ohne ARB-Text behält den Satz des Daemons im
+Grund-Platz, aber hinter „Unübersetzte Meldung:" (`untranslatedSentence`).
+`HDiagnosticCard` hat dafür den Platz `original` unter dem Grund. Für die
+Zeilen unter einem Bedienelement gibt es `DiagnosticCause` (Grund plus
+Klappe). Wo bisher ein roher Satz als Mono-Detail stand (Setup-Karte,
+Hinweis des Trays, Modellsuche, gescheiterter Ordnerdialog), steht er
+außerhalb des Englischen zugeklappt (`UntranslatedWording.split`).
+Umgestellt sind alle Stellen, die `diagnostic.why` oder
+`DiagnosticL10n.resolve(...).cause` zeigen. Wo nur eine Zeichenkette Platz
+hat (Hover am gesperrten Senden, Kopf der Sandbox, Tooltip des
+Update-Hinweises, Bildschirmleser-Label der Befundzeile im Verlauf), hängt
+`DiagnosticText.causeWithOriginal` den Satz des Daemons mit dem Hinweis an.
+Die Liste der Sandbox-Backends (`SandboxBackendChoice`) nimmt
+`DiagnosticCause(compact: true)`: Ihr Grund je Backend ist ein kurzer
+gemessener Satz („podman was not found on PATH."), der Grundsatz des Codes
+ist eine Erklärung für eine Karte und dort länger und ungenauer. Die Zeile
+zeigt deshalb den Satz des Daemons hinter „Unübersetzte Meldung:", den
+übersetzten Grundsatz im Hover-Text. Das Golden `sandbox_backend_choice`
+ist dafür 540 statt 500 px hoch (auch en neu erzeugt, nur der Rand).
+Zwei Stellen zeigen in Deutsch nur den übersetzten Grund, aus Platzgründen
+bewusst: der Streifen im Terminal (zwei Zeilen, abgeschnitten) und die
+Fehlerzeile des Updates in der Statusleiste (eine Zeile). Ein gescheitertes
+Ziehen eines Abbilds, eine gescheiterte Update-Prüfung und ein
+gescheitertes Update halten den Befund im Zustand und übersetzen beim
+Zeichnen, damit ein späterer Sprachwechsel sie erreicht (aus dem Review).
+`docs/UX.md` 4.4 nennt die Regel.
+
+Nicht angepasst: Die ARB-Beschreibungen der `diag<CODE>Why` sagen noch,
+der Satz stehe nur ohne eigenen Satz des Daemons. Das gilt jetzt nur noch
+für Englisch.
+
+Kandidat für ein eigenes Issue, nicht gebaut: Die App baut selbst
+englische Fehlerteile ohne Übersetzung, in `daemon_restart_control.dart`
+(Zeile 193), `update.dart` (Zeile 122) und `daemon_restart.dart` (Zeilen 290
+und 297).
+
+Tests: `test/l10n/diagnostic_l10n_test.dart`, darin neu: Für jeden Code des
+Registers, unter Linux und macOS, steht in Deutsch der Satz des Daemons nicht
+im Grund und liegt in `original`. Dazu ein Befund ohne eigenen Satz und
+`untranslatedSentence`. `test/core/ui/untranslated_wording_test.dart`: Die
+Karte von `AGENT_009` in Deutsch zeigt den übersetzten Grund, und der Satz
+ist erst nach dem Aufklappen zu sehen. In Englisch steht der Satz wie bisher.
+Geprüft sind außerdem die Grund-Zeile unter einem Bedienelement, die kompakte
+Zeile, der unbekannte Code mit Hinweis und `split`. Sprachwechsel nach
+einem Fehler: `image_pull_test.dart`, `update_notice_test.dart` und
+`update_settings_test.dart` (die Einstellungen bauen ihre Zeilen beim
+Wechsel neu auf; geprüft wird, dass kein englischer Satz stehen bleibt).
+Mutationsbeweise, jeder rot: Sprachprüfung in `resolve` immer wahr (6
+Tests), `original` in `HDiagnosticCard` nicht gezeichnet, unbekannter Code
+ohne Hinweis, Grund beim Scheitern statt beim Zeichnen aufgelöst (Abbild
+ziehen, Update). Goldens: 16 Paare in Deutsch erneuert, dazu
+`sandbox_backend_choice` in Englisch.
+
 ---
 
 ## HUM-570 · App: Tab bewegt den Fokus nicht, solange die Wahl des Backends gesperrt ist

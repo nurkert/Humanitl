@@ -11,6 +11,7 @@ import 'package:flutter_riverpod/flutter_riverpod.dart';
 
 import '../../../core/domain/domain.dart';
 import '../../../core/ui/ui.dart';
+import '../../../core/ui/untranslated_wording.dart';
 import '../../../l10n/l10n.dart';
 import '../registry/settings_registry.dart';
 import '../settings_scope.dart';
@@ -194,9 +195,9 @@ class _SettingRowState extends ConsumerState<SettingRow> {
         if (refused != null)
           Padding(
             padding: EdgeInsets.only(top: tokens.spacing.x1),
-            child: Text(
-              DiagnosticL10n.resolve(refused, l10n).cause,
-              key: widget.refusalKey,
+            child: DiagnosticCause(
+              diagnostic: refused,
+              textKey: widget.refusalKey,
               style: tokens.typography.ui12.tinted(tokens.stateText.error),
             ),
           ),

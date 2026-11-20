@@ -2016,5 +2016,7 @@
   "rulesBannerFewer": "Weniger zeigen",
   "settingsAgentCodex": "Codex",
   "settingsAgentCodex": "Codex",
-  "settingsAgentAntigravity": "Antigravity"
+  "settingsAgentAntigravity": "Antigravity",
+  "diagnosticUntranslated": "Unübersetzte Meldung: {sentence}",
+  "diagnosticOriginalWording": "Originalmeldung (unübersetzt)"
 }

@@ -36,6 +36,7 @@ import '../../../core/ipc/client_providers.dart';
 import '../../../core/ipc/connection.dart';
 import '../../../core/ipc/daemon_client.dart';
 import '../../../core/ui/ui.dart';
+import '../../../core/ui/untranslated_wording.dart';
 import '../../../l10n/l10n.dart';
 import '../providers/backend_choice.dart';
 
@@ -114,8 +115,13 @@ class _ImagePullActionState extends ConsumerState<ImagePullAction> {
     });
   }
 
-  /// The digest after a pull, the daemon's sentence after a failure.
+  /// The digest after a pull.
   String _answer = '';
+
+  /// The finding of a failed pull, resolved into the interface language
+  /// when the line is drawn, so a later change of language reaches it
+  /// (HUM-569).
+  Diagnostic? _failure;
 
   /// The id of the running pull, empty when it cannot be cancelled.
   String _pullId = '';
@@ -192,7 +198,7 @@ class _ImagePullActionState extends ConsumerState<ImagePullAction> {
           _stillRunning = answer?.stillRunning ?? 0;
         } else {
           _stage = _Stage.failed;
-          _answer = error.diagnostic.why;
+          _failure = error.diagnostic;
         }
       });
     }
@@ -354,10 +360,20 @@ class _ImagePullActionState extends ConsumerState<ImagePullAction> {
         mainAxisSize: MainAxisSize.min,
         children: <Widget>[
           Text(
-            l10n.sandboxImagePullFailed(_answer),
+            l10n.sandboxImagePullFailed(switch (_failure) {
+              final Diagnostic failure => DiagnosticL10n.resolve(
+                failure,
+                l10n,
+              ).cause,
+              null => '',
+            }),
             key: const Key('sandbox-image-pull-failed'),
             style: body,
           ),
+          if (_failure case final Diagnostic failure)
+            if (UntranslatedWording.forDiagnostic(failure, l10n)
+                case final Widget original)
+              original,
           SizedBox(height: tokens.spacing.x2),
           pullButton,
         ],

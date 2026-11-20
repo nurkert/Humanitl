@@ -53,6 +53,7 @@ import '../../../core/ui/fix_control.dart';
 import '../../../core/ui/h_diagnostic_card.dart';
 import '../../../core/ui/h_notice_layer.dart';
 import '../../../core/ui/ui.dart';
+import '../../../core/ui/untranslated_wording.dart';
 import '../../../l10n/l10n.dart';
 import '../providers/diagnostics.dart';
 
@@ -286,7 +287,8 @@ class DiagnosticCard extends ConsumerWidget {
         severityLabel: severityLabel(l10n, diagnostic.severity),
         color: severityColor(tokens, diagnostic.severity),
         title: l10n.interceptDiagnosticTitle,
-        why: diagnostic.why,
+        why: DiagnosticL10n.resolve(diagnostic, l10n).cause,
+        original: UntranslatedWording.forDiagnostic(diagnostic, l10n),
         // Kein leerer Slot: Ein Befund ohne Vorschlag und ohne Flow bekommt
         // keine Zeile, die aussieht, als fehlte dort etwas.
         fix: _actions(l10n, ref, entry, fix, flowId, tokens),

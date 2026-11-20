@@ -31,6 +31,7 @@ class HDiagnosticCard extends StatelessWidget {
     required this.color,
     required this.title,
     required this.why,
+    this.original,
     this.detail,
     this.fix,
     this.docsUrl,
@@ -55,6 +56,10 @@ class HDiagnosticCard extends StatelessWidget {
 
   /// The cause, in the person's language.
   final String why;
+
+  /// The daemon's own sentence, folded, when [why] is a translation of it
+  /// (`UntranslatedWording`, HUM-569); placed right under [why].
+  final Widget? original;
 
   /// The technical detail, shown in monospace when present.
   final String? detail;
@@ -84,6 +89,7 @@ class HDiagnosticCard extends StatelessWidget {
   Widget build(BuildContext context) {
     final HTokens tokens = HTheme.of(context);
     final String? detail = this.detail;
+    final Widget? original = this.original;
     final Widget? fix = this.fix;
     final String? docsUrl = this.docsUrl;
     final Widget? dismiss = this.dismiss;
@@ -209,6 +215,10 @@ class HDiagnosticCard extends StatelessWidget {
                                           : tokens.typography.ui13)
                                       .tinted(tokens.colors.fg1),
                             ),
+                            if (original != null) ...<Widget>[
+                              SizedBox(height: gap),
+                              original,
+                            ],
                             if (detail != null &&
                                 detail.isNotEmpty) ...<Widget>[
                               SizedBox(height: tokens.spacing.x3),

@@ -12,6 +12,7 @@ import 'package:flutter_riverpod/flutter_riverpod.dart';
 import '../../../core/domain/domain.dart';
 import '../../../core/ipc/daemon_client.dart';
 import '../../../core/ui/ui.dart';
+import '../../../core/ui/untranslated_wording.dart';
 import '../../../l10n/l10n.dart';
 import '../providers/agents_provider.dart';
 import '../registry/settings_registry.dart';
@@ -119,9 +120,9 @@ class _LoadFailed extends ConsumerWidget {
     final HTokens tokens = HTheme.of(context);
     final AppLocalizations l10n = context.l10n;
     final Object? error = this.error;
-    final String cause = error is DaemonException
-        ? DiagnosticL10n.resolve(error.diagnostic, l10n).cause
-        : '';
+    final Diagnostic? failure = error is DaemonException
+        ? error.diagnostic
+        : null;
     return Column(
       key: const Key('settings-agents-failed'),
       crossAxisAlignment: CrossAxisAlignment.start,
@@ -130,10 +131,10 @@ class _LoadFailed extends ConsumerWidget {
           l10n.settingsAgentsLoadFailed,
           style: tokens.typography.ui13.medium.tinted(tokens.colors.fg0),
         ),
-        if (cause.isNotEmpty) ...<Widget>[
+        if (failure != null) ...<Widget>[
           SizedBox(height: tokens.spacing.x1),
-          Text(
-            cause,
+          DiagnosticCause(
+            diagnostic: failure,
             style: tokens.typography.ui12.tinted(tokens.stateText.error),
           ),
         ],

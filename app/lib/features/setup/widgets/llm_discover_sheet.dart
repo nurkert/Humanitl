@@ -37,6 +37,7 @@ import '../../../core/domain/domain.dart';
 import '../../../core/ui/fix_control.dart';
 import '../../../core/ui/h_diagnostic_card.dart';
 import '../../../core/ui/ui.dart';
+import '../../../core/ui/untranslated_wording.dart';
 import '../../../l10n/l10n.dart';
 import '../providers/discover_provider.dart';
 import '../setup_text.dart';
@@ -189,6 +190,9 @@ class _Failure extends StatelessWidget {
     final HTokens tokens = HTheme.of(context);
     final AppLocalizations l10n = context.l10n;
     final (String, String) text = setupDiagnosticText(l10n, failure);
+    final (String? detail, Widget? original) = text.$2.contains(failure.why)
+        ? (null, null)
+        : UntranslatedWording.split(l10n, failure.why);
     return HDiagnosticCard(
       key: const Key('setup-discover-failure'),
       code: failure.code,
@@ -196,7 +200,8 @@ class _Failure extends StatelessWidget {
       color: setupSeverityColor(tokens, failure.severity),
       title: text.$1,
       why: text.$2,
-      detail: text.$2 == failure.why ? null : failure.why,
+      original: original,
+      detail: detail,
       fix: FixControl(
         fix: failure.fix,
         copyKey: const Key('setup-fix-copy-discover'),

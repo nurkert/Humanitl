@@ -16,6 +16,7 @@ import '../../../core/domain/domain.dart';
 import '../../../core/ipc/daemon_client.dart';
 import '../../../core/ui/h_diagnostic_card.dart';
 import '../../../core/ui/ui.dart';
+import '../../../core/ui/untranslated_wording.dart';
 import '../../../l10n/l10n.dart';
 import '../providers/editor.dart';
 import '../rule_text.dart';
@@ -163,7 +164,8 @@ class _DryRunFailed extends StatelessWidget {
       color: ruleSeverityColor(tokens, diagnostic.severity),
       title: l10n.rulesDryRunFailedTitle,
       // Der Satz des Daemons, nie ein umgeschriebener (`docs/UX.md` 4.4).
-      why: diagnostic.why,
+      why: DiagnosticL10n.resolve(diagnostic, l10n).cause,
+      original: UntranslatedWording.forDiagnostic(diagnostic, l10n),
       docsUrl: diagnostic.docsUrl,
       width: double.infinity,
     );

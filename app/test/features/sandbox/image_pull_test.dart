@@ -13,6 +13,7 @@ import 'package:humanitl/core/domain/domain.dart';
 import 'package:humanitl/core/ipc/fake_daemon_client.dart';
 import 'package:humanitl/features/sandbox/providers/backend_choice.dart';
 import 'package:humanitl/features/sandbox/widgets/image_pull.dart';
+import 'package:humanitl/l10n/l10n.dart';
 import 'package:humanitl_ui/humanitl_ui.dart';
 
 import 'harness.dart';
@@ -181,6 +182,46 @@ void main() {
       findsOneWidget,
     );
     expect(pull, findsOneWidget);
+  });
+
+  // HUM-569: Der Grund wird beim Zeichnen übersetzt, nicht beim Scheitern
+  // festgehalten; ein Wechsel der Sprache danach erreicht auch ihn.
+  testWidgets('a failed pull follows a later change of the language', (
+    WidgetTester tester,
+  ) async {
+    const String sentence = 'the backend is not admitted yet';
+    final SandboxTestClient client = refused(missingImage())
+      ..imagePullFailure = const Diagnostic(
+        code: 'SANDBOX_048',
+        severity: Severity.blocking,
+        why: sentence,
+      );
+    await tester.binding.setSurfaceSize(const Size(1280, 800));
+    addTearDown(() => tester.binding.setSurfaceSize(null));
+    await tester.pumpWidget(
+      sandboxUnderTest(client: client, locale: const Locale('en')),
+    );
+    await tester.pump();
+    await tester.pump();
+    await tester.pump(const Duration(milliseconds: 600));
+    await tester.ensureVisible(pull);
+    await tester.tap(pull);
+    await tester.pump();
+    await tester.ensureVisible(confirm);
+    await tester.tap(confirm);
+    await tester.pump();
+    await tester.pump();
+    final Finder failed = find.byKey(const Key('sandbox-image-pull-failed'));
+    expect(tester.widget<Text>(failed).data, contains(sentence));
+
+    await tester.pumpWidget(
+      sandboxUnderTest(client: client, locale: const Locale('de')),
+    );
+    await tester.pump();
+
+    final AppLocalizations de = lookupAppLocalizations(const Locale('de'));
+    expect(tester.widget<Text>(failed).data, contains(de.diagSANDBOX048Why));
+    expect(tester.widget<Text>(failed).data, isNot(contains(sentence)));
   });
 
   // HUM-457: Ein laufendes Ziehen lässt sich abbrechen, über die Kennung,

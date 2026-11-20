@@ -16,6 +16,7 @@ import '../domain/domain.dart';
 import '../../l10n/l10n.dart';
 import 'fix_control.dart';
 import 'ui.dart';
+import 'untranslated_wording.dart';
 
 /// The sentence for [level], as it follows the name of a backend.
 String isolationLevelText(AppLocalizations l10n, IsolationLevel? level) =>
@@ -403,7 +404,6 @@ class _Reason extends StatelessWidget {
   @override
   Widget build(BuildContext context) {
     final HTokens tokens = HTheme.of(context);
-    final AppLocalizations l10n = context.l10n;
     final FixAction? fix = reason.fix;
     return Padding(
       padding: EdgeInsetsDirectional.only(
@@ -415,9 +415,12 @@ class _Reason extends StatelessWidget {
         crossAxisAlignment: CrossAxisAlignment.start,
         mainAxisSize: MainAxisSize.min,
         children: <Widget>[
-          Text(
-            DiagnosticL10n.resolve(reason, l10n).cause,
-            key: ValueKey<String>('$keyPrefix-reason-$backend'),
+          DiagnosticCause(
+            diagnostic: reason,
+            textKey: ValueKey<String>('$keyPrefix-reason-$backend'),
+            // Eine Zeile je Backend; eine Klappe unter jeder schöbe die
+            // Liste auseinander (HUM-569).
+            compact: true,
             style: tokens.typography.ui12.tinted(color),
           ),
           if (fix != null)

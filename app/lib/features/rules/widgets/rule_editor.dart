@@ -17,6 +17,7 @@ import '../../../core/domain/domain.dart';
 import '../../../core/text/rule_sentence.dart';
 import '../../../core/ui/h_diagnostic_card.dart';
 import '../../../core/ui/ui.dart';
+import '../../../core/ui/untranslated_wording.dart';
 import '../../../l10n/l10n.dart';
 import '../providers/editor.dart';
 import '../providers/rules.dart';
@@ -741,7 +742,8 @@ class _SaveFailed extends StatelessWidget {
       // The daemon's sentence, with the field and the line it names, never a
       // rewritten one: the app's own text is the title, not the reason
       // (`docs/UX.md` 4.4).
-      why: diagnostic.why,
+      why: DiagnosticL10n.resolve(diagnostic, l10n).cause,
+      original: UntranslatedWording.forDiagnostic(diagnostic, l10n),
       docsUrl: diagnostic.docsUrl,
       width: double.infinity,
     );

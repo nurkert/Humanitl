@@ -24,6 +24,7 @@ import '../../../core/ui/fix_control.dart';
 import '../../../core/ui/h_diagnostic_card.dart';
 import '../../../core/ui/hover_label.dart';
 import '../../../core/ui/ui.dart';
+import '../../../core/ui/untranslated_wording.dart';
 import '../../../l10n/l10n.dart';
 import '../providers/disposable_review.dart';
 import 'arrive.dart';
@@ -464,6 +465,7 @@ class _Notice extends StatelessWidget {
       // Der Satz des Daemons; die App schreibt den Titel, nie den Grund
       // (`docs/UX.md` 4.4).
       why: text.cause,
+      original: UntranslatedWording.of(text),
       docsUrl: diagnostic.docsUrl,
       fix: FixControl(
         fix: diagnostic.fix,

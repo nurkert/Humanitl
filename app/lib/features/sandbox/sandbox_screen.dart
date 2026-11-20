@@ -26,6 +26,7 @@ import '../../core/ui/h_resizable_panes.dart';
 import '../../core/ui/pane_split.dart';
 import '../../core/ui/terminal_placement.dart';
 import '../../core/ui/ui.dart';
+import '../../core/ui/untranslated_wording.dart';
 import '../../core/ui/work_dir_picker.dart';
 import '../../l10n/l10n.dart';
 import 'providers/closed_failures.dart';
@@ -605,8 +606,15 @@ class _Diagnostics extends ConsumerWidget {
                       : waitingChangesRefusal(diagnostic)
                       ? l10n.sandboxChangesWaitingWhy
                       : text.cause,
+                  // Unter einer anderen Sprache als Englisch steht der rohe
+                  // Satz zugeklappt und mit Hinweis (HUM-569).
+                  original: identical(diagnostic, dialogFailure)
+                      ? UntranslatedWording.split(l10n, diagnostic.why).$2
+                      : waitingChangesRefusal(diagnostic)
+                      ? null
+                      : UntranslatedWording.of(text),
                   detail: identical(diagnostic, dialogFailure)
-                      ? diagnostic.why
+                      ? UntranslatedWording.split(l10n, diagnostic.why).$1
                       : null,
                   docsUrl: diagnostic.docsUrl,
                   fix: _withReview(
@@ -815,8 +823,11 @@ class _CannotRead extends ConsumerWidget {
     final HTokens tokens = HTheme.of(context);
     final AppLocalizations l10n = context.l10n;
     final String why = error is DaemonException
-        ? (error as DaemonException).diagnostic.why
-        : '$error';
+        ? DiagnosticL10n.resolve(
+            (error as DaemonException).diagnostic,
+            l10n,
+          ).cause
+        : untranslatedSentence(l10n, '$error');
     return Padding(
       padding: EdgeInsets.all(tokens.spacing.x3),
       child: Column(

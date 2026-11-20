@@ -16,6 +16,7 @@ import '../../../core/ipc/connection.dart';
 import '../../../core/ipc/sandbox_backends_feed.dart';
 import '../../../core/ui/sandbox_backend_choice.dart';
 import '../../../core/ui/ui.dart';
+import '../../../core/ui/untranslated_wording.dart';
 import '../../../l10n/l10n.dart';
 import '../settings_scope.dart';
 import 'setting_controls.dart';
@@ -82,6 +83,15 @@ class SandboxBackendRow extends ConsumerWidget {
               key: const Key('settings-sandbox-backend-failed'),
               style: tokens.typography.ui12.tinted(tokens.colors.warningText),
             ),
+          if (error != null)
+            if (UntranslatedWording.of(
+                  DiagnosticL10n.resolve(
+                    DaemonConnection.diagnosticOf(error),
+                    l10n,
+                  ),
+                )
+                case final Widget original)
+              original,
         ],
         child: const SizedBox.shrink(),
       );

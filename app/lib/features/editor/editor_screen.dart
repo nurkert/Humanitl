@@ -43,6 +43,7 @@ import '../../core/ui/h_resizable_panes.dart';
 import '../../core/ui/pane_split.dart';
 import '../../core/ui/recorder_pause.dart';
 import '../../core/ui/ui.dart';
+import '../../core/ui/untranslated_wording.dart';
 import '../../core/ui/websocket_notice.dart';
 import '../../l10n/l10n.dart';
 import 'editor_intents.dart';
@@ -898,7 +899,8 @@ class _ActionBar extends StatelessWidget {
                   severityLabel: severityLabel(l10n, failure!.severity),
                   color: severityColor(tokens, failure!.severity),
                   title: l10n.editorSendFailed,
-                  why: failure!.why,
+                  why: DiagnosticL10n.resolve(failure!, l10n).cause,
+                  original: UntranslatedWording.forDiagnostic(failure!, l10n),
                   fix: FixControl(fix: failure!.fix),
                   docsUrl: failure!.docsUrl,
                 ),

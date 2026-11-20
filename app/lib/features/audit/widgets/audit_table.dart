@@ -22,6 +22,7 @@ import '../../../core/ipc/daemon_client.dart';
 import '../../../core/ui/focus_ring.dart';
 import '../../../core/ui/h_diagnostic_card.dart';
 import '../../../core/ui/ui.dart';
+import '../../../core/ui/untranslated_wording.dart';
 import '../../../l10n/l10n.dart';
 import '../providers/audit_provider.dart';
 
@@ -477,7 +478,8 @@ class AuditTableState extends ConsumerState<AuditTable> {
           severityLabel: l10n.auditSeverityError,
           color: tokens.state.error,
           title: l10n.auditLoadFailedTitle,
-          why: failure.why,
+          why: DiagnosticL10n.resolve(failure, l10n).cause,
+          original: UntranslatedWording.forDiagnostic(failure, l10n),
           docsUrl: failure.docsUrl,
           width: double.infinity,
           fix: HButton(

@@ -556,7 +556,7 @@ class DisposableSwitch extends ConsumerWidget {
         label: fellBack == null
             ? l10n.sandboxDisposableHint
             : l10n.sandboxDisposableFellBack(
-                DiagnosticL10n.resolve(fellBack, l10n).cause,
+                DiagnosticL10n.resolve(fellBack, l10n).causeWithOriginal(l10n),
               ),
         // Die Zeile des Kopfs gibt keine Breite vor; das Kästchen streckt
         // seine Beschriftung, also misst es sich an ihr.

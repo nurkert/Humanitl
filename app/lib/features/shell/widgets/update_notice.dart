@@ -48,8 +48,10 @@ class _UpdateNoticeState extends ConsumerState<UpdateNotice> {
   /// The installed version, after the daemon put it in place.
   String? _installed;
 
-  /// The line that says why the update failed, until the next click.
-  String? _failure;
+  /// Why the update failed, until the next click: the daemon's finding,
+  /// put into words in [build] so a change of the interface language
+  /// reaches it (HUM-569), or a line of this app.
+  Object? _failure;
 
   /// True when the update is in place but the daemon restart failed.
   bool _restartFailed = false;
@@ -92,7 +94,7 @@ class _UpdateNoticeState extends ConsumerState<UpdateNotice> {
       _installed = null;
     });
     try {
-      final String? failure = appliedByDaemon(status.method)
+      final Object? failure = appliedByDaemon(status.method)
           ? await _apply(status)
           : await _package(status);
       if (mounted && failure != null) {
@@ -106,9 +108,8 @@ class _UpdateNoticeState extends ConsumerState<UpdateNotice> {
   }
 
   /// The daemon downloads, checks and swaps; then the restart and relaunch.
-  Future<String?> _apply(UpdateStatus status) async {
+  Future<Object?> _apply(UpdateStatus status) async {
     final DaemonClient client = ref.read(daemonClientProvider);
-    final AppLocalizations l10n = context.l10n;
     String? appPath;
     try {
       await for (final UpdateEvent event in client.applyUpdate(
@@ -132,7 +133,7 @@ class _UpdateNoticeState extends ConsumerState<UpdateNotice> {
         }
       }
     } on DaemonException catch (error) {
-      return DiagnosticL10n.resolve(error.diagnostic, l10n).cause;
+      return error.diagnostic;
     }
     if (appPath == null) {
       return null;
@@ -197,7 +198,14 @@ class _UpdateNoticeState extends ConsumerState<UpdateNotice> {
     final TextStyle style = tokens.typography.ui11.tinted(tokens.colors.fg1);
     final UpdateStatus? status = ref.watch(updateStatusProvider);
     final String? installed = _installed;
-    final String? failure = _failure;
+    final String? failure = switch (_failure) {
+      final Diagnostic diagnostic => DiagnosticL10n.resolve(
+        diagnostic,
+        l10n,
+      ).cause,
+      final String line => line,
+      _ => null,
+    };
     if (installed != null && failure != null && _restartFailed) {
       return Text(
         l10n.shellUpdateRestartFailed(installed, failure),
@@ -241,7 +249,7 @@ class _UpdateNoticeState extends ConsumerState<UpdateNotice> {
           child: Semantics(
             tooltip: notice == null
                 ? null
-                : DiagnosticL10n.resolve(notice, l10n).cause,
+                : DiagnosticL10n.resolve(notice, l10n).causeWithOriginal(l10n),
             child: Text(
               l10n.shellUpdateAvailable(status.latestVersion),
               key: const Key('status-update-available'),

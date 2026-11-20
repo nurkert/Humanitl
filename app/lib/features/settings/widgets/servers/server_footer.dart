@@ -8,6 +8,7 @@ import 'package:flutter/widgets.dart';
 
 import '../../../../core/domain/domain.dart';
 import '../../../../core/ui/ui.dart';
+import '../../../../core/ui/untranslated_wording.dart';
 import '../../../../l10n/l10n.dart';
 import '../setting_row.dart';
 import 'server_form.dart';
@@ -90,6 +91,13 @@ class ServerFooter extends StatelessWidget {
               style: tokens.typography.ui12.tinted(tokens.stateText.error),
             ),
           ),
+        if (refused != null)
+          if (UntranslatedWording.forDiagnostic(refused, l10n)
+              case final Widget original)
+            Padding(
+              padding: EdgeInsets.only(bottom: tokens.spacing.x2),
+              child: original,
+            ),
         if (mode == ServerFooterMode.leaving)
           Padding(
             padding: EdgeInsets.only(bottom: tokens.spacing.x2),

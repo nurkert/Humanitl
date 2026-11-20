@@ -33,6 +33,7 @@ import '../../../core/ui/h_diagnostic_card.dart';
 import '../../../core/ui/hover_label.dart';
 import '../../../core/ui/recorder_pause.dart';
 import '../../../core/ui/ui.dart';
+import '../../../core/ui/untranslated_wording.dart';
 import '../../../l10n/l10n.dart';
 import '../providers/decision.dart';
 import '../providers/findings_pause.dart';
@@ -689,7 +690,11 @@ class _ActionBarState extends ConsumerState<ActionBar> {
                   // The `why` slot carries the daemon's sentence; the generic
                   // text of the app is the title, not the cause
                   // (`docs/UX.md` 4.4).
-                  why: progress.diagnostic.why,
+                  why: DiagnosticL10n.resolve(progress.diagnostic, l10n).cause,
+                  original: UntranslatedWording.forDiagnostic(
+                    progress.diagnostic,
+                    l10n,
+                  ),
                   fix: FixControl(fix: progress.diagnostic.fix),
                   docsUrl: progress.diagnostic.docsUrl,
                 ),
@@ -717,10 +722,12 @@ class _ActionBarState extends ConsumerState<ActionBar> {
     }
     // Der Satz kommt vom Daemon und trägt Material von außen; bereinigt wird
     // er hier, an der einen Stelle, die ihn zeigt.
+    // Mit dem Satz des Daemons, wo der Grund übersetzt ist: Er nennt Art
+    // und Ort des Geheimnisses (HUM-569).
     final String why = DiagnosticL10n.resolve(
       sanitizeDiagnostic(refusal),
       l10n,
-    ).cause;
+    ).causeWithOriginal(l10n);
     return HoverLabel(
       key: const Key('intercept-send-refused'),
       label: why,
@@ -1119,7 +1126,8 @@ class _SecondLine extends ConsumerWidget {
       severityLabel: severityLabel(l10n, diagnostic.severity),
       color: severityColor(tokens, diagnostic.severity),
       title: l10n.interceptUndoFailedTitle,
-      why: diagnostic.why,
+      why: DiagnosticL10n.resolve(diagnostic, l10n).cause,
+      original: UntranslatedWording.forDiagnostic(diagnostic, l10n),
       fix: FixControl(fix: diagnostic.fix),
       docsUrl: diagnostic.docsUrl,
     ),

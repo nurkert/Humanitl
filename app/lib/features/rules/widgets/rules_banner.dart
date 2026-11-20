@@ -13,6 +13,7 @@ import 'package:flutter_riverpod/flutter_riverpod.dart';
 import '../../../core/domain/domain.dart';
 import '../../../core/ui/h_diagnostic_card.dart';
 import '../../../core/ui/ui.dart';
+import '../../../core/ui/untranslated_wording.dart';
 import '../../../l10n/l10n.dart';
 import '../providers/rules.dart';
 import '../severity.dart';
@@ -78,7 +79,8 @@ class _RulesBannerViewState extends ConsumerState<RulesBannerView> {
                 // The daemon's own sentence, with the field and the line it
                 // names. The app writes the title, never the reason
                 // (`docs/UX.md` 4.4).
-                why: diagnostic.why,
+                why: DiagnosticL10n.resolve(diagnostic, l10n).cause,
+                original: UntranslatedWording.forDiagnostic(diagnostic, l10n),
                 docsUrl: diagnostic.docsUrl,
                 width: double.infinity,
               ),

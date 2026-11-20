@@ -4642,5 +4642,9 @@
   "settingsAgentsLoggedInEncrypted": "Logged in, encrypted",
   "@settingsAgentsLoggedInEncrypted": {"description": "Section Agents (HUM-523): the depot holds a login of the agent, and its credential file lies encrypted."},
   "settingsAgentAntigravity": "Antigravity",
-  "@settingsAgentAntigravity": {"description": "Option of agent.adapter: the Antigravity CLI (agy) of Google. A product name, not translated (HUM-517)."}
+  "@settingsAgentAntigravity": {"description": "Option of agent.adapter: the Antigravity CLI (agy) of Google. A product name, not translated (HUM-517)."},
+  "diagnosticUntranslated": "Untranslated message: {sentence}",
+  "@diagnosticUntranslated": {"description": "Cause slot of a diagnostic whose code this build does not know, or a raw error text of the platform, in an interface language other than the daemon's (HUM-569): the hint, then the sentence as it came, which is English.", "placeholders": {"sentence": {"type": "String", "example": "the thing did not work"}}},
+  "diagnosticOriginalWording": "Original message (untranslated)",
+  "@diagnosticOriginalWording": {"description": "Toggle under the translated cause of a diagnostic, in an interface language other than the daemon's (HUM-569): opens the daemon's own sentence (or the platform's error text), which names path, host or error and is English."}
 }

@@ -38,6 +38,7 @@ import 'hover_label.dart';
 import 'settings_opener.dart';
 import 'shell_command.dart';
 import 'ui.dart';
+import 'untranslated_wording.dart';
 
 /// Der Pfad, unter dem der Daemon das Zertifikat seiner CA in der Sandbox
 /// einhängt.
@@ -838,13 +839,16 @@ class _FixControlState extends ConsumerState<FixControl> {
           SizedBox(height: tokens.spacing.x2),
           Text(
             l10n.setupFixInstallServiceFailed(
-              '${failure.code}: ${failure.why}',
+              '${failure.code}: ${DiagnosticL10n.resolve(failure, l10n).cause}',
             ),
             key: const Key('setup-fix-install-failed'),
             style: tokens.typography.ui12.tinted(
               tokens.stateTextColor(HFlowState.error),
             ),
           ),
+          if (UntranslatedWording.forDiagnostic(failure, l10n)
+              case final Widget original)
+            original,
           SizedBox(height: tokens.spacing.x2),
           // Der Vorschlag des Befunds, nicht pauschal derselbe Befehl: Hat
           // `systemctl` den Dienst nicht angenommen, hilft
@@ -918,12 +922,17 @@ class _FixControlState extends ConsumerState<FixControl> {
           if (failure != null) ...<Widget>[
             SizedBox(height: tokens.spacing.x1),
             Text(
-              l10n.setupFixWriteEnvFailed(failure.why),
+              l10n.setupFixWriteEnvFailed(
+                DiagnosticL10n.resolve(failure, l10n).cause,
+              ),
               key: const Key('setup-fix-write-env-failed'),
               style: tokens.typography.ui12.tinted(
                 tokens.stateTextColor(HFlowState.error),
               ),
             ),
+            if (UntranslatedWording.forDiagnostic(failure, l10n)
+                case final Widget original)
+              original,
           ],
           SizedBox(height: tokens.spacing.x2),
         ],

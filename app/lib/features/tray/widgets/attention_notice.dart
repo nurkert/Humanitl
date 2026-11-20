@@ -20,6 +20,7 @@ import '../../../core/ui/fix_control.dart';
 import '../../../core/ui/h_diagnostic_card.dart';
 import '../../../core/ui/h_notice_layer.dart';
 import '../../../core/ui/ui.dart';
+import '../../../core/ui/untranslated_wording.dart';
 import '../../../l10n/l10n.dart';
 import '../tray_diagnostics.dart';
 
@@ -45,9 +46,11 @@ class AttentionNoticeBanner extends StatelessWidget {
     final (String title, String why) = _text(l10n, diagnostic);
     // Der Satz des Daemons nur dann als Detail, wenn er nicht schon im
     // Grund-Platz steht (`docs/UX.md` 4.4).
-    final String? detail = diagnostic.why.isEmpty || why == diagnostic.why
-        ? null
-        : diagnostic.why;
+    // In einer anderen Sprache als der des Daemons steht er zugeklappt und
+    // mit Hinweis statt als Detail (HUM-569).
+    final (String? detail, Widget? original) = why.contains(diagnostic.why)
+        ? (null, null)
+        : UntranslatedWording.split(l10n, diagnostic.why);
     return HDiagnosticCard(
       key: const Key('attention-notice'),
       code: diagnostic.code,
@@ -55,6 +58,7 @@ class AttentionNoticeBanner extends StatelessWidget {
       color: severityColor(tokens, diagnostic.severity),
       title: title,
       why: why,
+      original: original,
       detail: detail,
       detailMaxLines: 2,
       fix: diagnostic.fix == null ? null : FixControl(fix: diagnostic.fix),
@@ -84,7 +88,10 @@ class AttentionNoticeBanner extends StatelessWidget {
         // Keine Absage, sondern ein Fehler: Der Satz des Systems ist der Grund.
         DiagnosticCodes.noTray
             when diagnostic.title == TrayDiagnostics.notificationsFailedTitle =>
-          (l10n.trayNoticeNotificationsFailedTitle, diagnostic.why),
+          (
+            l10n.trayNoticeNotificationsFailedTitle,
+            untranslatedSentence(l10n, diagnostic.why),
+          ),
         DiagnosticCodes.noTray => (
           l10n.trayNoticeNoTrayTitle,
           l10n.trayNoticeNoTrayWhy,

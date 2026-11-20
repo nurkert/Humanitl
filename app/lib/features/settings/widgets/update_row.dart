@@ -10,6 +10,7 @@ import '../../../core/domain/domain.dart';
 import '../../../core/ipc/daemon_client.dart';
 import '../../../core/ipc/update_status.dart';
 import '../../../core/ui/ui.dart';
+import '../../../core/ui/untranslated_wording.dart';
 import '../../../l10n/l10n.dart';
 import 'setting_controls.dart';
 import 'setting_row.dart';
@@ -34,38 +35,32 @@ class UpdateRow extends ConsumerStatefulWidget {
 class _UpdateRowState extends ConsumerState<UpdateRow> {
   bool _checking = false;
 
-  /// The line under the button, after the last check.
-  String? _result;
+  /// The answer of the last check, or null.
+  UpdateStatus? _status;
 
-  /// True when [_result] reports a failure.
-  bool _failed = false;
+  /// The finding of the last check when it failed, or null. Kept as it came
+  /// and put into words in [build], so a change of the interface language
+  /// reaches the line too (HUM-569).
+  Diagnostic? _failure;
 
   Future<void> _checkNow() async {
-    final AppLocalizations l10n = context.l10n;
     setState(() {
       _checking = true;
-      _result = null;
+      _status = null;
+      _failure = null;
     });
-    String line;
-    bool failed = false;
+    UpdateStatus? status;
+    Diagnostic? failure;
     try {
-      final UpdateStatus status = await ref
-          .read(updateStatusProvider.notifier)
-          .check(force: true);
-      line = status.available
-          ? l10n.settingsUpdateAvailable(status.latestVersion)
-          : l10n.settingsUpdateUpToDate(status.currentVersion);
+      status = await ref.read(updateStatusProvider.notifier).check(force: true);
     } on DaemonException catch (error) {
-      line = l10n.settingsUpdateCheckFailed(
-        DiagnosticL10n.resolve(error.diagnostic, l10n).cause,
-      );
-      failed = true;
+      failure = error.diagnostic;
     }
     if (mounted) {
       setState(() {
         _checking = false;
-        _result = line;
-        _failed = failed;
+        _status = status;
+        _failure = failure;
       });
     }
   }
@@ -74,7 +69,17 @@ class _UpdateRowState extends ConsumerState<UpdateRow> {
   Widget build(BuildContext context) {
     final HTokens tokens = HTheme.of(context);
     final AppLocalizations l10n = context.l10n;
-    final String? result = _result;
+    final UpdateStatus? status = _status;
+    final Diagnostic? failure = _failure;
+    final String? result = failure != null
+        ? l10n.settingsUpdateCheckFailed(
+            DiagnosticL10n.resolve(failure, l10n).cause,
+          )
+        : status == null
+        ? null
+        : status.available
+        ? l10n.settingsUpdateAvailable(status.latestVersion)
+        : l10n.settingsUpdateUpToDate(status.currentVersion);
     return SettingRow(
       settingId: FormKeys.updateCheck,
       refusalKey: const Key('settings-update-check-refusal'),
@@ -89,9 +94,13 @@ class _UpdateRowState extends ConsumerState<UpdateRow> {
             result,
             key: const Key('settings-update-result'),
             style: tokens.typography.ui12.tinted(
-              _failed ? tokens.stateText.error : tokens.colors.fg1,
+              failure != null ? tokens.stateText.error : tokens.colors.fg1,
             ),
           ),
+        if (failure != null)
+          if (UntranslatedWording.forDiagnostic(failure, l10n)
+              case final Widget original)
+            original,
       ],
       // „Jetzt prüfen" vor dem Schalter, beide in einer Reihe an der rechten
       // Kante: Die Frage von Hand gehört zur Zeile, nicht unter sie.

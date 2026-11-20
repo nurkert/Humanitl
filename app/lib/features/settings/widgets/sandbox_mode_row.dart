@@ -16,6 +16,7 @@ import '../../../core/domain/domain.dart';
 import '../../../core/ipc/connection.dart';
 import '../../../core/ipc/sandbox_mode_feed.dart';
 import '../../../core/ui/ui.dart';
+import '../../../core/ui/untranslated_wording.dart';
 import '../../../l10n/l10n.dart';
 import 'setting_controls.dart';
 import 'setting_row.dart';
@@ -64,9 +65,9 @@ class SandboxModeRow extends ConsumerWidget {
         // `SANDBOX_033` für den Rückfall der Vorgabe, `SANDBOX_030` für ein
         // ausdrückliches `disposable`, das hier ablehnen wird (HUM-357).
         if (notice != null)
-          Text(
-            DiagnosticL10n.resolve(notice, l10n).cause,
-            key: const Key('settings-sandbox-mode-reason'),
+          DiagnosticCause(
+            diagnostic: notice,
+            textKey: const Key('settings-sandbox-mode-reason'),
             style: tokens.typography.ui12.tinted(tokens.colors.warningText),
           ),
       ],
