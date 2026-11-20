@@ -1408,3 +1408,227 @@ kennen. Das widerspricht „alles vorbelegt, nichts muss".
 ### Akzeptanzkriterien
 1. Der Erststart-Bildschirm kann die Quelle wählen, und die Vorgabe ist der
    Start, der mit der gespeicherten Wahl geschähe.
+
+---
+
+## Nachzügler aus Sprint 7
+
+Kandidaten, die beim Abschluss von Sprint 7 (2026-11-20) in den Abschnitten
+„Stand nach der Umsetzung" standen und dort nicht gebaut wurden. Sie gehören
+nicht zum Ziel dieses Sprints; der Eigentümer entscheidet, wann sie drankommen.
+Die Reihenfolge der Tabelle ist die Bearbeitungsreihenfolge, falls sie hier
+bleiben.
+
+| ID | Titel | Größe | Abhängigkeiten |
+|---|---|---|---|
+| HUM-572 | Durchreiche: soll Codex das WebSocket-Upgrade auf `/responses` bekommen? Entscheidung des Eigentümers | S | HUM-568 |
+| HUM-573 | Agent-Depot: Vorgaben eines Adapters in die Konfigurationskopie einer Depot-Sitzung (Codex `sandbox_mode`) | M | HUM-515, HUM-566 |
+| HUM-574 | Agent-Depot: der Daemon bindet den ausgepackten Baum selbst an das geprüfte Archiv | M | HUM-566 |
+| HUM-575 | Verschlüsselte Zugangsdateien: Herabstufung ohne Spur, Rotation des Schlüssels, stummes `secret-tool` | M | HUM-523 |
+| HUM-576 | `SandboxBackends` und `humanitl sandbox argv` laden die Projektwahl nicht | M | HUM-567 |
+| HUM-577 | `config set resolver.test_ca` prüft die Datei nicht (`CONFIG_010` erst beim Start) | S | HUM-562 |
+| HUM-578 | `agy`: welche weiteren Endpunkte braucht die Durchreiche? Messen | S | HUM-568 |
+| HUM-579 | App: eigene englische Fehlerteile und rohe Regel-Titel in nicht-englischer Oberfläche | S | HUM-569 |
+| HUM-580 | `session.ended` zählt gescheiterte Flows nicht eigens | S | HUM-565 |
+| HUM-581 | Fix von `sandbox image pull` nennt nur `--backend`, nicht die Untergrenze | S | HUM-567 |
+| HUM-582 | Agent-Depot: Wartungsläufe unter macOS brauchen `shasum` statt `sha256sum` | S | HUM-566 |
+| HUM-583 | Bedrohungsmodell: Tabellenzeile zu K-37 fehlt (en und de) | S | HUM-564 |
+
+---
+
+## HUM-572 · Durchreiche: soll Codex das WebSocket-Upgrade auf `/responses` bekommen? Entscheidung des Eigentümers
+
+### Kontext
+HUM-568 hat gemessen, dass eine Regel ohne `upgrade` nie ein Upgrade trifft.
+Das WebSocket, das Codex beim eingebauten Anbieter auf `/responses` öffnet,
+wird also angehalten, vor HUM-568 wie danach. Wie sich ein echter
+Codex-Lauf dann verhält (Rückfall auf HTTP oder Warten), ist nicht gemessen;
+das gehört in den Probedurchgang von HUM-553.
+
+### Spezifikation
+1. Dem Eigentümer vorlegen: Ein erlaubtes Upgrade auf genau `<basis>/responses`
+   würde die Sicherheitsaussage in `docs/SECURITY.md` 5.1 erweitern, weil
+   Nachrichten im offenen WebSocket keine einzelne Entscheidung mehr bekommen.
+2. Nur nach Zustimmung: eine Route mit `upgrade` für Codex, Doku in
+   SECURITY und THREAT-MODEL (K-02) im selben Commit, en und de.
+
+### Akzeptanzkriterien
+1. Die Entscheidung steht mit Datum in diesem Issue; ohne Zustimmung bleibt
+   das Upgrade angehalten und der Grund steht in der Codex-Anleitung.
+
+## HUM-573 · Agent-Depot: Vorgaben eines Adapters in die Konfigurationskopie einer Depot-Sitzung (Codex `sandbox_mode`)
+
+### Kontext
+Eine Depot-Sitzung von Codex hat kein `sandbox_mode = "danger-full-access"`
+(offen seit HUM-515); Codex versucht dann seine eigene Sandbox, die in
+unserer nicht startet. Seit HUM-566 installiert das Depot Codex, damit
+trifft das jeden Depot-Nutzer. Heute hilft nur `humanitl agents config codex`.
+
+### Spezifikation
+1. Ein Adapter nennt Vorgaben, die der Daemon in die Konfigurationskopie
+   der Sitzung schreibt, ohne die Datei im Depot zu ändern.
+2. Ein Wert, den die Person selbst gesetzt hat, gewinnt; die Anleitung sagt das.
+
+### Akzeptanzkriterien
+1. Eine frische Depot-Sitzung von Codex startet ohne Handgriff mit der
+   Vorgabe; die Datei im Depot ist danach unverändert.
+
+## HUM-574 · Agent-Depot: der Daemon bindet den ausgepackten Baum selbst an das geprüfte Archiv
+
+### Kontext
+HUM-566 prüft die Kette Release, Prüfsummenliste, Archiv im Daemon. Dass der
+ausgepackte Baum aus genau diesem Archiv stammt, sichert nur der
+Wartungslauf (`curl`, `sha256sum`, `tar` des Hosts). SECURITY und K-36
+nennen das als Restrisiko.
+
+### Spezifikation
+1. Der Daemon liest das Archiv selbst (Crate `tar` plus `flate2`, zentral in
+   `daemon/Cargo.toml`, nur vom Hauptstrang eingetragen) und vergleicht jede
+   Datei des Baums mit ihrem Eintrag: Pfad, Art, Größe, Inhalt.
+2. Ein Eintrag zu viel oder zu wenig ist eine Ablehnung mit Schritt `tree`.
+
+### Akzeptanzkriterien
+1. Ein Lauf, der eine Datei nach dem Auspacken ändert oder hinzufügt, wird
+   abgelehnt; das Restrisiko entfällt in SECURITY und K-36 (en, de).
+
+## HUM-575 · Verschlüsselte Zugangsdateien: Herabstufung ohne Spur, Rotation des Schlüssels, stummes `secret-tool`
+
+### Kontext
+Aus dem Stand von HUM-523: (a) Wer Schreibrecht auf das Depot hat, kann eine
+Klartextdatei ablegen, während es nicht versiegelt ist, ohne dass eine Spur
+bleibt. (b) Der Schlüssel lässt sich nicht wechseln. (c) Ein
+`secret-tool lookup`, das stumm mit 1 endet, obwohl ein Eintrag besteht,
+ist nicht getestet.
+
+### Spezifikation
+1. (a) Eine Datei, die abgelegt wird, solange das Depot nicht versiegelt
+   ist, hinterlässt heute keine Spur. Festlegen und bauen, wie das sichtbar
+   wird: etwa ein Verzeichnis der Zugangsdateien mit Prüfsummen, das beim
+   Umschalten und beim Start mit dem Depot verglichen wird, und ein Befund
+   für jede Datei, die nicht darin steht. (Klartext in einem versiegelten
+   Depot lehnt HUM-523 schon mit `AGENT_020` ab.)
+2. (b) `humanitl agents encryption rotate` als RPC: neuer Schlüssel, alle
+   Dateien in einer Transaktion wie `seal::switch`.
+3. (c) Test mit einem Stellvertreter für `secret-tool`.
+
+### Akzeptanzkriterien
+1. Alle drei Punkte mit Test und Mutationsbeweis.
+
+## HUM-576 · `SandboxBackends` und `humanitl sandbox argv` laden die Projektwahl nicht
+
+### Kontext
+HUM-567 lässt `argv`, `argv_plan` und `image_pull` die Projektwahl laden.
+`SandboxBackends` mit Plan tut es nicht, und `humanitl sandbox argv` rechnet
+im eigenen Prozess (Abweichung von ADR-018) ohne Projektwahl.
+
+### Spezifikation
+1. `SandboxBackends` mit Plan lädt die Projektwahl wie die Vorschau.
+2. `humanitl sandbox argv` fragt `argv_plan` des Daemons statt selbst zu rechnen.
+
+### Akzeptanzkriterien
+1. Für einen Ordner mit gespeicherter Wahl zeigen beide dasselbe Backend wie der Start.
+
+## HUM-577 · `config set resolver.test_ca` prüft die Datei nicht (`CONFIG_010` erst beim Start)
+
+### Kontext
+HUM-562 prüft beim Setzen nur, dass der Pfad absolut ist. Ob die Datei da
+ist und ein Zertifikat enthält, prüft erst der Start (`CONFIG_010`). Das ist
+Zustand der Datei, nicht des Werts; sie kann nach dem Setzen erscheinen.
+
+### Spezifikation
+1. `config set` und `SetConfig` lesen die Datei, wenn sie da ist, und
+   warnen bei fehlender Datei oder fehlendem Zertifikat, ohne abzulehnen.
+
+### Akzeptanzkriterien
+1. Eine fehlende oder leere Datei ergibt beim Setzen einen Hinweis mit
+   `CONFIG_010`; der Wert wird trotzdem geschrieben.
+
+## HUM-578 · `agy`: welche weiteren Endpunkte braucht die Durchreiche? Messen
+
+### Kontext
+Seit HUM-568 lässt die Durchreiche für `agy` nur `generateContent`,
+`streamGenerateContent` und die Modellliste durch. `countTokens`,
+`GET models/{model}` und `embedContent` werden angehalten; ob `agy` sie
+schickt, ist nicht gemessen.
+
+### Spezifikation
+1. Eine echte `agy`-Sitzung mit Schlüssel durch Humanitl, gehaltene
+   Anfragen zählen (Handprüfung, in die Liste von HUM-553).
+2. Nur Gemessenes in die Route aufnehmen, mit Test.
+
+### Akzeptanzkriterien
+1. Die Messung steht mit Datum und Version im Issue.
+
+## HUM-579 · App: eigene englische Fehlerteile und rohe Regel-Titel in nicht-englischer Oberfläche
+
+### Kontext
+HUM-569 übersetzt die Gründe der Befunde des Daemons. Die App baut aber
+selbst englische Fehlerteile ohne Übersetzung
+(`daemon_restart_control.dart`, `update.dart`, `daemon_restart.dart`), und
+die Titel im Regel-Banner kommen roh vom Daemon.
+
+### Spezifikation
+1. Die Fehlerteile der App gehen über ARB (en, de).
+2. Regel-Titel: wie in HUM-569 über den Code übersetzt, der Satz des Daemons zugeklappt.
+
+### Akzeptanzkriterien
+1. In deutscher Oberfläche steht an diesen Stellen kein englischer Satz ohne Hinweis.
+
+## HUM-580 · `session.ended` zählt gescheiterte Flows nicht eigens
+
+### Kontext
+Seit HUM-565 steht ein gescheiterter Flow als `flow.failed` im Audit-Log,
+außer sein Ereignis `Failed` fällt in eine Lücke des Audit-Zweigs (K-38;
+die Lücke selbst steht als `audit.events_dropped` da). `session.ended`
+zählt gescheiterte Flows nicht eigens.
+
+### Spezifikation
+1. Feld `failed` in `session.ended`: die Zahl der `flow.failed`, die der
+   Audit-Zweig geschrieben hat; in einer Lücke verlorene zählen nicht, die
+   Doku sagt das. Schema, Verify- und Export-Werkzeuge, Anzeige in der App;
+   alte Einträge ohne das Feld bleiben gültig.
+
+### Akzeptanzkriterien
+1. Eine Sitzung mit zwei gescheiterten Flows endet mit `failed = 2`.
+
+## HUM-581 · Fix von `sandbox image pull` nennt nur `--backend`, nicht die Untergrenze
+
+### Kontext
+Lehnt ein älterer Daemon das Ziehen wegen Werten ab, die das Backend
+mitentscheiden, nennt der Fix nur `--backend`, nicht
+`sandbox.min_isolation` (HUM-567).
+
+### Spezifikation
+1. Der Fix nennt den Wert, der das Ziehen tatsächlich aufhält.
+
+### Akzeptanzkriterien
+1. Test für beide Fälle.
+
+## HUM-582 · Agent-Depot: Wartungsläufe unter macOS brauchen `shasum` statt `sha256sum`
+
+### Kontext
+Das Codex-Rezept aus HUM-566 nimmt `sha256sum`, das macOS nicht mitbringt.
+Heute verweigert Seatbelt Wartungsläufe ohnehin; sobald sie dort laufen,
+scheitert das Rezept.
+
+### Spezifikation
+1. Das Skript nimmt `sha256sum` oder, falls nicht da, `shasum -a 256`.
+
+### Akzeptanzkriterien
+1. Test mit einem PATH, der nur `shasum` kennt.
+
+## HUM-583 · Bedrohungsmodell: Tabellenzeile zu K-37 fehlt (en und de)
+
+### Kontext
+Beim Nachtragen von K-38 in HUM-564 fiel auf, dass die Übersichtstabelle
+von `docs/THREAT-MODEL.md` keine Zeile zu K-37 hat, im Original wie in der
+deutschen Übersetzung.
+
+### Spezifikation
+1. Zeile zu K-37 in beiden Tabellen nachtragen, passend zum Abschnitt K-37.
+
+### Akzeptanzkriterien
+1. Jede Kennung K-NN, die einen Abschnitt hat, hat in beiden Sprachen eine
+   Tabellenzeile; ein kleiner Test oder eine Prüfung in `lint-docs` hält das
+   fest (`check-translations` vergleicht keine Tabellenzeilen).
+
