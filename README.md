@@ -408,8 +408,9 @@ opens the command palette, `Ctrl+,` the settings.
   Linux and in the login Keychain on macOS, otherwise in a `0600` file, never in the
   configuration. The passthrough is logged, never
   held.
-- The agents OpenCode, pi and Claude Code (an API key from the keyring, inference to Anthropic
-  or your gateway), the profiles `default` and `llm-only`, and your own adapter
+- The agents OpenCode, pi, Claude Code (an API key from the keyring, inference to Anthropic
+  or your gateway) and Codex (an API key from the keyring or a ChatGPT login inside the sandbox,
+  inference to OpenAI or your gateway), the profiles `default` and `llm-only`, and your own adapter
   ([`docs/guides/agent-profiles.md`](docs/guides/agent-profiles.md)).
 - A session summary with the touched files and a secret scan over the diff
   (`humanitl sessions summary`).

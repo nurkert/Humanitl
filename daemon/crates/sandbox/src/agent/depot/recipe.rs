@@ -30,7 +30,7 @@
 //! inside the configuration copy, the config crate's lists in step), so a new
 //! entry is checked without a new test.
 
-use super::credential::{CredentialFormat, NamedFields};
+use super::credential::{CredentialField, CredentialFormat, NamedFields, Requires, ValueForm};
 
 /// How an agent logs in inside a maintenance run (HUM-520 builds the run).
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
@@ -315,10 +315,18 @@ pub const KNOWN: &[KnownAgent] = &[
             ],
         }),
     },
-    // github.com/openai/codex README (2026-11-17): `npm install -g
-    // @openai/codex`, `brew install --cask codex`, or the standalone
-    // installer and release binaries renamed to `codex`. HUM-515 sources the
-    // recipe.
+    // github.com/openai/codex README (2026-11-17, re-read 2026-11-20 for
+    // HUM-515): `npm install -g @openai/codex`, `brew install --cask codex`,
+    // or the standalone installer (`https://chatgpt.com/codex/install.sh`),
+    // which puts `codex` under `~/.local/bin` and the package under
+    // `CODEX_HOME/packages/standalone` (learn.chatgpt.com/docs/config-file/
+    // environment-variables, "Installer variables"), both in the host's home,
+    // never mounted. A global npm install lies under `{prefix}/lib/
+    // node_modules` with its command in `{prefix}/bin`, and `prefix` defaults
+    // to where node is installed, `/usr/local` or, for a distribution's node,
+    // `/usr` (docs.npmjs.com/cli/v11/configuring-npm/folders, "prefix
+    // Configuration", "Node Modules"); Homebrew's cask links
+    // `/opt/homebrew/bin/codex`.
     KnownAgent {
         id: "codex",
         display_name: "Codex",
@@ -330,7 +338,7 @@ pub const KNOWN: &[KnownAgent] = &[
             "/usr/local/lib/node_modules/@openai/codex",
             "/opt/homebrew/bin/codex",
         ],
-        recipe: None,
+        recipe: Some(CODEX_RECIPE),
     },
     // antigravity.google/docs/getting-started (2026-11-17): `curl -fsSL
     // https://antigravity.google/cli/install.sh | bash` puts `agy` at
@@ -349,6 +357,218 @@ pub const KNOWN: &[KnownAgent] = &[
         recipe: None,
     },
 ];
+
+/// Codex from the depot (HUM-515). Sources, read 2026-11-20: the vendor's
+/// documentation at learn.chatgpt.com and the repository
+/// `github.com/openai/codex` at commit
+/// `a0a30c40e8dbcc44af52e2df64dcce64368d4422` (paths below relative to it).
+///
+/// - `CODEX_HOME` is the root of config, auth, logs and sessions
+///   (learn.chatgpt.com/docs/config-file/environment-variables).
+/// - No variable turns the update check off; `check_for_update_on_startup`
+///   does, and under Linux the adapter enforces it through
+///   `/etc/codex/requirements.toml`, which holds for the depot's copy too
+///   (`super::super::codex`). Hence no [`DepotRecipe::update_off`].
+/// - `auth.json` under `CODEX_HOME` with `cli_auth_credentials_store =
+///   "file"` (learn.chatgpt.com/docs/auth, "Credential storage"), enforced
+///   by the same requirements file.
+/// - **No install recipe.** The vendor's package (`codex-package-<target>.
+///   tar.gz`, `scripts/install/install.sh`) holds `bin/codex` beside
+///   `bin/codex-code-mode-host`, `codex-path/rg` and
+///   `codex-resources/bwrap`, and the vendor's installer starts the program
+///   through a link `codex -> bin/codex`; the depot starts
+///   `program/<version>/<program>` and takes only a regular file there
+///   (`super::maintenance`). Whether `codex` runs from another place than
+///   `bin/` beside its helpers is not documented and not measured; its
+///   integrity is a SHA-256 list from the same release, not a signature.
+///   Until the owner walkthrough (HUM-553) measures it, `agents install
+///   codex` answers `AGENT_015`.
+pub const CODEX_RECIPE: DepotRecipe = DepotRecipe {
+    program: "codex",
+    config_env: "CODEX_HOME",
+    update_off: &[],
+    credential_file: Some("auth.json"),
+    install: None,
+    login: LoginFlow::DeviceCode,
+    credential_format: Some(CODEX_AUTH_JSON),
+    login_run: Some(LoginRecipe {
+        // learn.chatgpt.com/docs/auth, "Login on headless devices":
+        // `codex login --device-auth`; "Open the link in your browser, sign
+        // in, then enter the one-time code".
+        args: &["login", "--device-auth"],
+        hosts: &[InstallHost {
+            host: "auth.openai.com",
+            evidence: concat!(
+                "https://github.com/openai/codex/blob/a0a30c40e8dbcc44af52e2df64dcce64368d4422/",
+                "codex-rs/login/src/server.rs (DEFAULT_ISSUER https://auth.openai.com) and ",
+                "codex-rs/login/src/device_code_auth.rs (deviceauth/usercode, deviceauth/token, ",
+                "verification URL <issuer>/codex/device), read 2026-11-20"
+            ),
+        }],
+        // The device flow opens no listener: the browser flow's callback
+        // server (`codex-rs/login/src/server.rs`, port 1455, redirect
+        // `http://127.0.0.1:<port>/auth/callback`) is not part of this run,
+        // so there is nothing to deliver a pasted URL to.
+        callback: None,
+        named: None,
+        device_flow_setting: Some(
+            "turn on device code login in your ChatGPT security settings (personal account) \
+             or in the ChatGPT workspace permissions (workspace admin); \
+             https://learn.chatgpt.com/docs/auth",
+        ),
+    }),
+    // learn.chatgpt.com/docs/config-file/config-reference (2026-11-20): keys
+    // of `config.toml` that run a command (`notify`, `mcp_servers.<id>.
+    // command` and `.http_headers_helper`, `model_providers.<id>.auth.
+    // command`, `hooks`, `desktop.custom_file_handlers.<id>.command`),
+    // `shell_environment_policy`, which changes what commands see, and
+    // `profiles`, which can carry every one of them.
+    command_keys: &[
+        "notify",
+        "mcp_servers",
+        "model_providers",
+        "hooks",
+        "desktop",
+        "shell_environment_policy",
+        "profiles",
+    ],
+};
+
+/// The values of `auth_mode` the format takes: the two modes Codex's own
+/// logins store, `ApiKey` (`login_with_api_key`) and `Chatgpt`
+/// (`persist_tokens_async`), as `AuthMode` serialises them
+/// (`#[serde(rename_all = "lowercase")]`, `codex-rs/protocol/src/auth.rs`).
+/// Every other mode (`chatgptAuthTokens`, `headers`, `agentIdentity`,
+/// `personalAccessToken`, `bedrockApiKey`, `bedrockAccessKeys`) belongs to
+/// another source of credentials, and `headers` the loader refuses outright
+/// ("externally provided auth cannot be loaded from auth storage",
+/// `codex-rs/login/src/auth/manager.rs`).
+pub const CODEX_AUTH_MODES: &[&str] = &["apikey", "chatgpt"];
+
+/// The format of Codex's `auth.json`, from the struct that writes it:
+/// `AuthDotJson` in `codex-rs/login/src/auth/storage.rs` and `TokenData` in
+/// `codex-rs/login/src/token_data.rs` (commit
+/// `a0a30c40e8dbcc44af52e2df64dcce64368d4422`, read 2026-11-20).
+///
+/// - `OPENAI_API_KEY` is an `Option<String>` without `skip_serializing_if`:
+///   always written, `null` after a `ChatGPT` login without an exchanged key;
+///   `tokens.account_id` likewise.
+/// - `tokens.id_token` is written as the raw JWT (`serialize_id_token`);
+///   `access_token` is a JWT, `refresh_token` a string.
+/// - `last_refresh` is an RFC 3339 time, not a count; the token's expiry
+///   lies inside the JWT, so the format declares no [`Expiry`](super::credential::Expiry) and the guard
+///   takes a file back only from a session that started on the stored one.
+/// - The account is `tokens.account_id`, which the login copies from the
+///   `chatgpt_account_id` claim of the `id_token`
+///   (`codex-rs/login/src/server.rs`, `persist_tokens_async`); the JWT itself
+///   is read by nobody here. The source leaves it `null` when the claim is
+///   missing; the guard then refuses the file whenever it carries `tokens`
+///   (`CredentialFormat::account`): tokens without a named account could be
+///   any account's.
+/// - At least one of `OPENAI_API_KEY` and `tokens` holds a value
+///   ([`CredentialFormat::one_of`]): `{"OPENAI_API_KEY": null}` is no login.
+/// - `auth_mode` is one of [`CODEX_AUTH_MODES`]; `chatgpt` needs `tokens`,
+///   `apikey` needs `OPENAI_API_KEY` ([`CredentialFormat::requires`]), and a
+///   later write-back keeps the stored mode ([`CredentialFormat::fixed`]):
+///   a session that wrote `"headers"` would leave a file the loader refuses
+///   (HUM-515, review).
+/// - Left out on purpose, so refused: `agent_identity` (a string or an
+///   object, `AgentIdentityStorage`), `personal_access_token`,
+///   `bedrock_api_key`, `bedrock_access_keys`. They belong to other login
+///   modes than the device flow of the login run.
+pub const CODEX_AUTH_JSON: CredentialFormat = CredentialFormat {
+    fields: &[
+        CredentialField {
+            pointer: "/auth_mode",
+            form: ValueForm::OneOf(CODEX_AUTH_MODES),
+            required: false,
+        },
+        CredentialField {
+            pointer: "/OPENAI_API_KEY",
+            form: ValueForm::TokenOrNull,
+            required: true,
+        },
+        CredentialField {
+            pointer: "/tokens",
+            form: ValueForm::Object,
+            required: false,
+        },
+        CredentialField {
+            pointer: "/tokens/id_token",
+            form: ValueForm::Token,
+            required: true,
+        },
+        CredentialField {
+            pointer: "/tokens/access_token",
+            form: ValueForm::Token,
+            required: true,
+        },
+        CredentialField {
+            pointer: "/tokens/refresh_token",
+            form: ValueForm::Token,
+            required: true,
+        },
+        CredentialField {
+            pointer: "/tokens/oauth_provenance",
+            form: ValueForm::Object,
+            required: false,
+        },
+        CredentialField {
+            pointer: "/tokens/oauth_provenance/issuer",
+            form: ValueForm::Text,
+            required: true,
+        },
+        CredentialField {
+            pointer: "/tokens/oauth_provenance/client_id",
+            form: ValueForm::Text,
+            required: true,
+        },
+        CredentialField {
+            pointer: "/tokens/login_owner_id",
+            form: ValueForm::Text,
+            required: false,
+        },
+        CredentialField {
+            pointer: "/tokens/account_id",
+            form: ValueForm::TextOrNull,
+            required: true,
+        },
+        CredentialField {
+            pointer: "/last_refresh",
+            form: ValueForm::Text,
+            required: false,
+        },
+    ],
+    expiry: None,
+    account: Some("/tokens/account_id"),
+    // An API-key login writes `OPENAI_API_KEY` without `tokens`, a ChatGPT
+    // login `tokens` (and, when a key was exchanged, the key too): a file
+    // with neither is no login (HUM-515, review).
+    one_of: &["/OPENAI_API_KEY", "/tokens"],
+    // `CodexAuth::from_auth_dot_json` (`codex-rs/login/src/auth/manager.rs`)
+    // refuses an API-key mode without a key ("API key auth is missing a
+    // key.") and builds a ChatGPT login from `tokens`.
+    requires: &[
+        Requires {
+            pointer: "/auth_mode",
+            equals: "chatgpt",
+            present: &["/tokens"],
+        },
+        Requires {
+            pointer: "/auth_mode",
+            equals: "apikey",
+            present: &["/OPENAI_API_KEY"],
+        },
+    ],
+    // The refresh (`persist_tokens` in the same file) refuses any mode but
+    // `chatgpt` and keeps `auth_mode`; only a login changes it.
+    fixed: &["/auth_mode"],
+    evidence: concat!(
+        "https://github.com/openai/codex/blob/a0a30c40e8dbcc44af52e2df64dcce64368d4422/",
+        "codex-rs/login/src/auth/storage.rs (AuthDotJson) and codex-rs/login/src/token_data.rs ",
+        "(TokenData), read 2026-11-20"
+    ),
+};
 
 /// Claude Code from the vendor's release bucket, verified against its signed
 /// manifest (HUM-519).
@@ -481,6 +701,73 @@ mod tests {
             let notices = super::super::load_notices(&config);
             assert_eq!(notices.is_empty(), agent.recipe.is_some(), "{}", agent.id);
         }
+    }
+
+    /// Codex's `auth.json` as `AuthDotJson` writes it after a device login
+    /// (`codex-rs/login/src/server.rs`, `persist_tokens_async`) or an API-key
+    /// login: the declared format takes both, and refuses tokens without a
+    /// named account, a file with neither key nor tokens, keys of other login
+    /// modes, a key the struct does not have, a missing token and a wrong
+    /// type. The tokens are made up; no real file is read (HUM-520,
+    /// "Fallstricke").
+    ///
+    /// Mutation proofs: `TokenOrNull` checked like `Token` turns the first
+    /// assert red; `check_document` without the `one_of` rule turns the
+    /// `{"OPENAI_API_KEY":null}` assert red; without the account rule the
+    /// `null` account assert; `OneOf` that takes any string the `headers`
+    /// assert; without the `requires` rule the `chatgpt` without tokens
+    /// assert.
+    #[test]
+    fn the_codex_format_takes_the_file_its_login_writes() {
+        use super::super::credential::check_document;
+
+        let login = |api_key: &str, account: &str| {
+            serde_json::from_str::<serde_json::Value>(&format!(
+                r#"{{"auth_mode":"chatgpt","OPENAI_API_KEY":{api_key},"tokens":{{"id_token":"eyJh.eyJi.c2ln","access_token":"eyJh.eyJj.c2ln","refresh_token":"rt_0123456789","oauth_provenance":{{"issuer":"https://auth.openai.com","client_id":"app_test"}},"login_owner_id":"owner-1","account_id":{account}}},"last_refresh":"2026-11-20T03:00:00Z"}}"#
+            ))
+            .unwrap()
+        };
+        let format = &CODEX_AUTH_JSON;
+        check_document(&login("null", r#""acc-1""#), format).unwrap();
+        check_document(&login(r#""sk-exchanged""#, r#""acc-1""#), format).unwrap();
+        let api_key: serde_json::Value =
+            serde_json::from_str(r#"{"auth_mode":"apikey","OPENAI_API_KEY":"sk-test"}"#).unwrap();
+        check_document(&api_key, format).unwrap();
+
+        // Tokens without a named account could be any account's.
+        assert!(check_document(&login("null", "null"), format).is_err());
+        assert!(check_document(&login("null", r#""""#), format).is_err());
+
+        let refused = |text: &str| {
+            let value: serde_json::Value = serde_json::from_str(text).unwrap();
+            assert!(check_document(&value, format).is_err(), "taken: {text}");
+        };
+        // Neither key nor tokens: no login.
+        refused(r#"{"OPENAI_API_KEY":null}"#);
+        refused(r#"{"auth_mode":"chatgpt","OPENAI_API_KEY":null,"last_refresh":"x"}"#);
+        // Another login mode, a key the struct does not know.
+        refused(r#"{"OPENAI_API_KEY":"sk-test","agent_identity":"eyJh.eyJi.c2ln"}"#);
+        refused(r#"{"OPENAI_API_KEY":"sk-test","hooks":{}}"#);
+        // The key Codex always writes is missing, a token is missing.
+        refused(r#"{"auth_mode":"chatgpt"}"#);
+        refused(
+            r#"{"OPENAI_API_KEY":null,"tokens":{"id_token":"a.b.c","access_token":"a.b.c","account_id":"acc-1"}}"#,
+        );
+        // A wrong type.
+        refused(r#"{"OPENAI_API_KEY":42}"#);
+        // A mode the loader refuses or that is no login of Codex's own.
+        refused(r#"{"auth_mode":"headers","OPENAI_API_KEY":"sk-test"}"#);
+        refused(r#"{"auth_mode":"agentIdentity","OPENAI_API_KEY":"sk-test"}"#);
+        // A mode without its material.
+        refused(r#"{"auth_mode":"chatgpt","OPENAI_API_KEY":"sk-test"}"#);
+        let mut no_key = login("null", r#""acc-1""#);
+        no_key["auth_mode"] = serde_json::Value::from("apikey");
+        assert!(
+            check_document(&no_key, format).is_err(),
+            "apikey without a key"
+        );
+        assert_eq!(CODEX_AUTH_JSON.account, Some("/tokens/account_id"));
+        assert_eq!(CODEX_AUTH_JSON.expiry, None, "the expiry lies in the JWT");
     }
 
     /// Every registered recipe, present and future, keeps these.

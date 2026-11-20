@@ -41,6 +41,9 @@ const FORMAT: CredentialFormat = CredentialFormat {
         unit: TimeUnit::Milliseconds,
     }),
     account: Some("/oauth/account"),
+    one_of: &[],
+    requires: &[],
+    fixed: &[],
     evidence: "stand-in of the tests",
 };
 
@@ -750,5 +753,141 @@ fn a_sync_failure_after_the_rename_is_a_warning() {
     assert_eq!(
         setup.depot.last_writeback().unwrap().sha256,
         sha256_hex(&canonical(&renewed))
+    );
+}
+
+/// The stand-in format with an account that the vendor may leave `null`, as
+/// Codex's `tokens.account_id` (HUM-515), without an expiry.
+const NULLABLE_FIELDS: &[CredentialField] = &[
+    field("/oauth", ValueForm::Object, true),
+    field("/oauth/accessToken", ValueForm::Token, true),
+    field("/oauth/refreshToken", ValueForm::Token, true),
+    field("/oauth/expiresAt", ValueForm::Count, true),
+    field("/oauth/account", ValueForm::TextOrNull, true),
+];
+
+const NULLABLE: CredentialFormat = CredentialFormat {
+    fields: NULLABLE_FIELDS,
+    expiry: None,
+    account: Some("/oauth/account"),
+    one_of: &[],
+    requires: &[],
+    fixed: &[],
+    evidence: "stand-in of the tests",
+};
+
+fn nullable_doc(token: &str, account: &str) -> String {
+    format!(
+        r#"{{"oauth":{{"accessToken":"{token}","refreshToken":"r-{token}","expiresAt":1,"account":{account}}}}}"#
+    )
+}
+
+/// Tokens without a named account are refused already at the login: `null`
+/// names nobody (HUM-515, review).
+///
+/// Mutation proof: `check_document` without the account rule turns the
+/// first assert red.
+#[test]
+fn a_login_without_a_named_account_is_refused() {
+    let setup = Setup::new();
+    let copy = setup.session_copy("login-null");
+    std::fs::write(copy.join(FILE), nullable_doc("t1", "null")).unwrap();
+    let refused = take_back(&copy, &setup.request(Origin::Login, None, &NULLABLE)).unwrap_err();
+    assert_eq!(refused.found.code, AGENT_012, "{:?}", refused.found);
+    assert!(setup.stored().is_none(), "the depot keeps no file");
+    std::fs::write(copy.join(FILE), nullable_doc("t1", "\"acc-1\"")).unwrap();
+    take_back(&copy, &setup.request(Origin::Login, None, &NULLABLE)).unwrap();
+}
+
+/// The stand-in of a file whose account lives in an optional object, as
+/// Codex's API-key `auth.json` without `tokens` (HUM-515).
+const KEY_OR_TOKENS: CredentialFormat = CredentialFormat {
+    fields: &[
+        field("/key", ValueForm::TokenOrNull, true),
+        field("/oauth", ValueForm::Object, false),
+        field("/oauth/accessToken", ValueForm::Token, true),
+        field("/oauth/account", ValueForm::TextOrNull, true),
+    ],
+    expiry: None,
+    account: Some("/oauth/account"),
+    one_of: &["/key", "/oauth"],
+    requires: &[],
+    fixed: &[],
+    evidence: "stand-in of the tests",
+};
+
+/// Two files that name no account are never the same account: a session
+/// that started on the stored file cannot replace it with another one that
+/// names none either, such as another key (HUM-515, review: `null` equal to
+/// `null`).
+///
+/// Mutation proof: the comparison `name(stored) != name(value)` (`None`
+/// equal to `None`) turns the assert red.
+#[test]
+fn files_without_an_account_are_never_the_same_account() {
+    let setup = Setup::new();
+    let copy = setup.session_copy("login-key");
+    std::fs::write(copy.join(FILE), r#"{"key":"sk-first"}"#).unwrap();
+    let Taken::Stored { new: base, .. } =
+        take_back(&copy, &setup.request(Origin::Login, None, &KEY_OR_TOKENS)).unwrap()
+    else {
+        panic!("the login was not stored");
+    };
+    let session = setup.session_copy("swap");
+    std::fs::write(session.join(FILE), r#"{"key":"sk-other"}"#).unwrap();
+    let refused = take_back(
+        &session,
+        &setup.request(Origin::Session, Some(&base), &KEY_OR_TOKENS),
+    )
+    .unwrap_err();
+    assert_eq!(refused.found.code, AGENT_016, "{:?}", refused.found);
+    assert_eq!(setup.stored().unwrap(), canonical(r#"{"key":"sk-first"}"#));
+    // Neither key nor tokens is no login at all.
+    let empty = setup.session_copy("empty");
+    std::fs::write(empty.join(FILE), r#"{"key":null}"#).unwrap();
+    let refused =
+        take_back(&empty, &setup.request(Origin::Login, None, &KEY_OR_TOKENS)).unwrap_err();
+    assert_eq!(refused.found.code, AGENT_012);
+}
+
+/// A later write-back keeps the stored `auth_mode` of Codex's `auth.json`
+/// (HUM-515, review): a session that turns its `ChatGPT` login into another
+/// mode, even one with all its material, writes nothing back.
+///
+/// Mutation proof: the `fixed` loop in `compare` removed turns the assert
+/// red.
+#[test]
+fn a_session_cannot_change_the_codex_auth_mode() {
+    use crate::agent::depot::recipe::CODEX_AUTH_JSON;
+
+    let codex = |mode: &str, key: &str| {
+        format!(
+            r#"{{"auth_mode":"{mode}","OPENAI_API_KEY":{key},"tokens":{{"id_token":"eyJh.eyJi.c2ln","access_token":"eyJh.eyJj.c2ln","refresh_token":"rt_0123456789","account_id":"acc-1"}},"last_refresh":"2026-11-20T03:00:00Z"}}"#
+        )
+    };
+    let setup = Setup::new();
+    let copy = setup.session_copy("login-codex");
+    std::fs::write(copy.join(FILE), codex("chatgpt", r#""sk-exchanged""#)).unwrap();
+    let Taken::Stored { new: base, .. } =
+        take_back(&copy, &setup.request(Origin::Login, None, &CODEX_AUTH_JSON)).unwrap()
+    else {
+        panic!("the login was not stored");
+    };
+    let session = setup.session_copy("mode");
+    std::fs::write(session.join(FILE), codex("apikey", r#""sk-exchanged""#)).unwrap();
+    let refused = take_back(
+        &session,
+        &setup.request(Origin::Session, Some(&base), &CODEX_AUTH_JSON),
+    )
+    .unwrap_err();
+    assert_eq!(refused.found.code, AGENT_012, "{:?}", refused.found);
+    assert!(
+        refused.found.why.contains("/auth_mode"),
+        "{}",
+        refused.found.why
+    );
+    assert_eq!(
+        setup.stored().unwrap(),
+        canonical(&codex("chatgpt", r#""sk-exchanged""#))
     );
 }

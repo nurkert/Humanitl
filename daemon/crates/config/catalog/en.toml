@@ -47,7 +47,7 @@ keywords = ["assign", "project", "profile", "uses", "assignment"]
 title = "Coding agent"
 help = "The agent a new session starts in the sandbox."
 details = "The agent the next session starts in the sandbox. Humanitl writes its configuration, endpoint, models and key for it."
-keywords = ["agent", "OpenCode", "pi", "Claude Code", "claude", "coding", "assistant"]
+keywords = ["agent", "OpenCode", "pi", "Claude Code", "claude", "Codex", "codex", "coding", "assistant"]
 
 [entries."agents.depot"]
 title = "Agent depot"
@@ -163,6 +163,7 @@ keywords = ["config.toml", "file", "edit", "path", "TOML", "advanced"]
 opencode = "OpenCode"
 pi = "pi"
 claude = "Claude Code"
+codex = "Codex"
 
 [choices."sandbox.mode"]
 auto = "Automatic"

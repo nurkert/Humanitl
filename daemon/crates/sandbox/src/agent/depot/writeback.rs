@@ -222,6 +222,9 @@ mod tests {
             unit: TimeUnit::Seconds,
         }),
         account: None,
+        one_of: &[],
+        requires: &[],
+        fixed: &[],
         evidence: "stand-in of the tests",
     };
 

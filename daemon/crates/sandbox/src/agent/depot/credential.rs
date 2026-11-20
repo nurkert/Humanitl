@@ -103,6 +103,27 @@ pub enum ValueForm {
     Flag,
     /// An array of at most 64 texts.
     TextList,
+    /// A [`ValueForm::Token`] or `null`: a key the vendor always writes,
+    /// empty as `null` (Codex's `OPENAI_API_KEY` in `auth.json`, HUM-515).
+    TokenOrNull,
+    /// A [`ValueForm::Text`] or `null` (Codex's `tokens.account_id`).
+    TextOrNull,
+    /// One of these strings exactly, as an enumeration of the vendor's
+    /// (Codex's `auth_mode`, HUM-515).
+    OneOf(&'static [&'static str]),
+}
+
+/// Material a file must carry when one of its keys holds a given value
+/// ([`CredentialFormat::requires`]): Codex's `auth_mode = "chatgpt"` needs
+/// `tokens`, `"apikey"` needs `OPENAI_API_KEY` (HUM-515).
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+pub struct Requires {
+    /// The pointer of the deciding key.
+    pub pointer: &'static str,
+    /// The value that brings the requirement.
+    pub equals: &'static str,
+    /// The pointers that must then hold a value other than `null`.
+    pub present: &'static [&'static str],
 }
 
 /// One key of a credential file, by its JSON pointer (RFC 6901).
@@ -145,9 +166,24 @@ pub struct CredentialFormat {
     /// be older than the stored file.
     pub expiry: Option<Expiry>,
     /// The pointer of a [`ValueForm::Text`] or [`ValueForm::Token`] field
-    /// that names the account, where the format names one: a later
-    /// write-back must name the same.
+    /// (or one of their forms with `null`) that names the account, where the
+    /// format names one. Wherever the object holding it is present, the
+    /// account must be a non-empty string, never `null` or missing; a later
+    /// write-back must name the same account, and a file without one never
+    /// counts as the same (HUM-515, review: `null` equal to `null` would let
+    /// a session swap in another account's tokens).
     pub account: Option<&'static str>,
+    /// Pointers of which at least one must hold a value other than `null`
+    /// (Codex: `OPENAI_API_KEY` or `tokens`): a file that holds none of them
+    /// is no login. Empty for no such rule.
+    pub one_of: &'static [&'static str],
+    /// What a file must carry for the value of one of its keys
+    /// ([`Requires`]). Empty for no such rule.
+    pub requires: &'static [Requires],
+    /// Pointers whose value a later write-back must keep as the stored file
+    /// has it, present or absent (Codex's `auth_mode`: its refresh keeps the
+    /// mode). Empty for none.
+    pub fixed: &'static [&'static str],
     /// Where the vendor documents the format, or the measurement it comes
     /// from.
     pub evidence: &'static str,
@@ -335,8 +371,7 @@ fn take_back_with(
         return Ok(Taken::Nothing);
     }
     let value = parse(&raw).map_err(|what| refuse(what, Some(raw_sum.clone())))?;
-    check_format(&value, request.format.fields)
-        .map_err(|what| refuse(what, Some(raw_sum.clone())))?;
+    check_document(&value, request.format).map_err(|what| refuse(what, Some(raw_sum.clone())))?;
     check_horizon(&value, request.format, std::time::SystemTime::now())
         .map_err(|what| refuse(what, Some(raw_sum.clone())))?;
     let bytes = serialise(&value).map_err(|what| refuse(what, Some(raw_sum.clone())))?;
@@ -446,6 +481,14 @@ fn compare(
             ));
         }
     }
+    for pointer in request.format.fixed {
+        if stored.pointer(pointer) != value.pointer(pointer) {
+            return Err(refused(
+                agent,
+                &format!("{pointer} differs from the stored file; only a login run changes it"),
+            ));
+        }
+    }
     if let Some(expiry) = request.format.expiry {
         let at = |doc: &Value| doc.pointer(expiry.pointer).and_then(Value::as_u64);
         if let (Some(then), Some(now)) = (at(stored), at(value))
@@ -485,9 +528,13 @@ fn compare(
         let name = |doc: &Value| {
             doc.pointer(pointer)
                 .and_then(Value::as_str)
+                .filter(|name| !name.is_empty())
                 .map(str::to_owned)
         };
-        if name(stored) != name(value) {
+        // Never the same account on `null` or a missing one: only two named
+        // and equal accounts are (HUM-515, review).
+        let same = matches!((name(stored), name(value)), (Some(old), Some(new)) if old == new);
+        if !same {
             return Err(other(
                 agent,
                 "the file names another account than the login; only a login run changes the \
@@ -591,6 +638,56 @@ fn serialise(value: &Value) -> Result<Vec<u8>, String> {
     serde_json::to_vec(value).map_err(|err| format!("the file cannot be written ({err})"))
 }
 
+/// Checks a document against the whole format: the declared fields
+/// ([`check_format`]), at least one of [`CredentialFormat::one_of`] not
+/// `null`, and a named account wherever the object holding it is present
+/// ([`CredentialFormat::account`]).
+///
+/// # Errors
+///
+/// What is wrong, naming the pointer, never a value.
+pub(crate) fn check_document(value: &Value, format: &CredentialFormat) -> Result<(), String> {
+    check_format(value, format.fields)?;
+    if !format.one_of.is_empty()
+        && !format
+            .one_of
+            .iter()
+            .any(|pointer| value.pointer(pointer).is_some_and(|found| !found.is_null()))
+    {
+        return Err(format!(
+            "none of {:?} holds a value; the file is no login",
+            format.one_of
+        ));
+    }
+    for rule in format.requires {
+        if value.pointer(rule.pointer).and_then(Value::as_str) == Some(rule.equals) {
+            for needed in rule.present {
+                if value.pointer(needed).is_none_or(Value::is_null) {
+                    return Err(format!(
+                        "{} is {:?}, and {needed} holds no value",
+                        rule.pointer, rule.equals
+                    ));
+                }
+            }
+        }
+    }
+    if let Some(pointer) = format.account {
+        let parent = parent_of(pointer);
+        let parent_there = parent.is_empty() || value.pointer(parent).is_some();
+        let named = value
+            .pointer(pointer)
+            .and_then(Value::as_str)
+            .is_some_and(|name| !name.is_empty());
+        if parent_there && !named {
+            return Err(format!(
+                "{pointer} names no account; a file with tokens must name the account they \
+                 belong to"
+            ));
+        }
+    }
+    Ok(())
+}
+
 /// Checks a document against the declared fields: every key declared, every
 /// value of its form, every required key present where its object is.
 ///
@@ -636,6 +733,9 @@ fn check_value(value: &Value, pointer: &str, form: ValueForm) -> Result<(), Stri
         ValueForm::Text => value.as_str().is_some_and(text_ok),
         ValueForm::Count => value.as_u64().is_some_and(|n| n <= COUNT_CAP),
         ValueForm::Flag => value.is_boolean(),
+        ValueForm::TokenOrNull => value.is_null() || value.as_str().is_some_and(token_ok),
+        ValueForm::TextOrNull => value.is_null() || value.as_str().is_some_and(text_ok),
+        ValueForm::OneOf(allowed) => value.as_str().is_some_and(|text| allowed.contains(&text)),
         ValueForm::TextList => value.as_array().is_some_and(|items| {
             items.len() <= LIST_CAP && items.iter().all(|item| item.as_str().is_some_and(text_ok))
         }),
