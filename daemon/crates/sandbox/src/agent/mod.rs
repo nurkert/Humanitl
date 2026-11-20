@@ -36,6 +36,7 @@ pub mod depot;
 pub mod locate;
 pub mod opencode;
 pub mod opencode_models;
+pub mod passthrough;
 pub mod pi;
 pub mod pi_config;
 pub mod skill;
@@ -765,12 +766,14 @@ pub trait AgentAdapter: Send + Sync {
     /// das Ergebnis vor die Regeln des Nutzers.
     fn default_rules(&self) -> &'static str;
 
-    /// Die Passthrough-Regel für den LLM-Endpunkt des Nutzers (HUM-039).
+    /// Die Passthrough-Regeln für den LLM-Endpunkt des Nutzers (HUM-039),
+    /// je Satz von Methoden eine, jede nur auf den Pfaden, auf denen der
+    /// Agent genau diese Methoden braucht (HUM-568, [`passthrough`]).
     ///
-    /// `None`, wenn `llm.endpoint` nicht gesetzt oder sein Host unlesbar ist:
+    /// Leer, wenn `llm.endpoint` nicht gesetzt oder sein Host unlesbar ist:
     /// ohne Endpunkt gibt es nichts durchzulassen, und eine Regel auf einen
     /// erfundenen Host wäre schlimmer als keine.
-    fn llm_passthrough(&self, llm: &LlmConfig) -> Option<Rule>;
+    fn llm_passthrough(&self, llm: &LlmConfig) -> Vec<Rule>;
 
     /// Der Endpunkt, an den der Agent seine Inferenz schickt (HUM-516).
     ///

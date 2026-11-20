@@ -892,8 +892,10 @@ Rules screen.
 
 ### The LLM passthrough
 
-Built by the agent adapter from `llm.endpoint`, with the fixed id
-`01920000-0000-7000-8000-0000000000ff`. It has no file of its own. For an
+Built by the agent adapter from `llm.endpoint`, as one rule per set of
+methods with fixed ids (HUM-568): `01920000-0000-7000-8000-0000000000ff` for
+`POST`, `…00fe` for `GET`, and `…00fd` for `POST` and `GET` on the paths you
+write into `llm.passthrough_paths` yourself. It has no file of its own. For an
 endpoint like `http://192.168.1.20:11434/v1` it is equivalent to:
 
 ```yaml
@@ -903,19 +905,30 @@ rules:
     action: allow
     match:
       host: "192.168.1.20"
-      method: [POST, GET]
+      method: [POST]
       path_prefixes:
         - "/v1/chat/completions?"
         - "/v1/completions?"
         - "/v1/responses?"
         - "/v1/embeddings?"
-        - "/v1/models?"
         - "/api/chat?"
         - "/api/generate?"
         - "/api/embed?"
         - "/api/embeddings?"
-        - "/api/tags?"
         - "/api/show?"
+      scheme: http
+      port: 11434
+    allow_private: true
+    passthrough_llm: true
+    note: "LLM passthrough for http://192.168.1.20:11434/v1. Logged, never held."
+  - id: 01920000-0000-7000-8000-0000000000fe
+    action: allow
+    match:
+      host: "192.168.1.20"
+      method: [GET]
+      path_prefixes:
+        - "/v1/models?"
+        - "/api/tags?"
         - "/api/ps?"
         - "/api/version?"
       scheme: http
@@ -925,6 +938,8 @@ rules:
     note: "LLM passthrough for http://192.168.1.20:11434/v1. Logged, never held."
 # humanitl rules test http://192.168.1.20:11434/v1/chat/completions --method POST
 # verdict: allow
+# humanitl rules test http://192.168.1.20:11434/v1/chat/completions --method GET
+# verdict: ask
 # humanitl rules test http://192.168.1.20:11434/api/pull --method POST
 # verdict: ask
 # humanitl rules test http://192.168.1.20:11434/v1/files --method POST
@@ -932,7 +947,9 @@ rules:
 ```
 
 Reasons: exactly one host, scheme and port, because it is the one request
-type that is not held; only the inference endpoints as exact paths, so that
+type that is not held; each endpoint only with the method it needs, `POST` to
+compute and `GET` to give information, because a rule holds one list of
+methods for all of its paths; only the inference endpoints as exact paths, so that
 endpoints which change the server (file uploads, fine-tuning, model pulls and
 deletes) still go through the queue; `allow_private`, because a local model
 lives in your network. The paths come from `llm.passthrough_paths`, default

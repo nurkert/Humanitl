@@ -89,17 +89,17 @@
 //! **What is let through.** Codex posts to `<base>/responses` and lists
 //! models with `GET <base>/models` (`codex-rs/codex-api/src/lib.rs`
 //! `RESPONSES_PATH`, `codex-rs/codex-api/src/endpoint/models.rs`). The
-//! passthrough covers exactly these two paths below the resolved base;
-//! everything else (sign-in, plugin sync, analytics a depot session did not
-//! turn off) is held like any request. It is one rule with both methods on
-//! both paths: an adapter gives one passthrough rule
-//! ([`AgentAdapter::llm_passthrough`], one fixed id), whose matcher pairs no
-//! method with a path, and the built-in provider of a `ChatGPT` login needs
-//! `GET <base>/responses` as well, its WebSocket upgrade
-//! (`supports_websockets`, `codex-rs/codex-api/src/endpoint/responses_websocket/connector.rs`,
-//! `api.path = "/responses"`). `POST <base>/models` and, for an own
-//! provider, `GET <base>/responses` thus pass too; both go to the same
-//! origin as the inference and nowhere else.
+//! passthrough is two rules below the resolved base (HUM-568,
+//! [`passthrough`]): `POST` on exactly [`RESPONSES_PATH`] and `GET` on
+//! exactly [`MODELS_PATH`]; everything else (sign-in, plugin sync, analytics
+//! a depot session did not turn off) is held like any request. The built-in
+//! provider of a `ChatGPT` login also opens a WebSocket with
+//! `GET <base>/responses` (`supports_websockets`,
+//! `codex-rs/codex-api/src/endpoint/responses_websocket/connector.rs`,
+//! `api.path = "/responses"`). A rule without an `upgrade` never matches an
+//! upgrade, so neither the rule before HUM-568, which had `GET` on that
+//! path, nor these two pass that WebSocket: it is held like any request, and
+//! a plain `GET <base>/responses`, which no provider sends, is held too.
 //!
 //! **The briefing.** Under Linux it goes to the managed requirement
 //! `additional_developer_instructions` ("Managed developer instructions added
@@ -115,13 +115,13 @@ use std::ffi::OsString;
 use std::path::{Path, PathBuf};
 
 use humanitl_config::{Language, LlmConfig, llm_endpoint};
-use humanitl_core::rule::{Action, HostPattern, Matcher, Rule};
-use humanitl_core::{Diagnostic, HostName, Method, RuleId, Scheme};
+use humanitl_core::rule::Rule;
+use humanitl_core::{Diagnostic, HostName, Method, Scheme};
 use url::Url;
-use uuid::Uuid;
 
-use crate::agent::opencode::{PASSTHROUGH_RULE_ID, command_preflight};
+use crate::agent::opencode::command_preflight;
 use crate::agent::opencode_models::{DEFAULT_RULES, broken};
+use crate::agent::passthrough::{self, Route, Target};
 use crate::agent::{AgentAdapter, AgentContext, SandboxFile, briefing, skill};
 
 /// The id of the adapter as it stands in `agent.adapter`.
@@ -179,10 +179,14 @@ pub const OPENAI_API_BASE: &str = "https://api.openai.com/v1";
 /// (`codex-rs/model-provider-info/src/lib.rs`, `CHATGPT_CODEX_BASE_URL`).
 pub const CHATGPT_CODEX_BASE_URL: &str = "https://chatgpt.com/backend-api/codex";
 
-/// The paths below the base Codex reaches for inference and its model list
-/// (`codex-rs/codex-api/src/lib.rs` `RESPONSES_PATH`,
-/// `codex-rs/codex-api/src/endpoint/models.rs`).
-pub const INFERENCE_PATHS: &[&str] = &["/responses", "/models"];
+/// The path below the base Codex posts its inference to
+/// (`codex-rs/codex-api/src/lib.rs` `RESPONSES_PATH`); passed for `POST`
+/// only.
+pub const RESPONSES_PATH: &str = "/responses";
+
+/// The path below the base of Codex's model list
+/// (`codex-rs/codex-api/src/endpoint/models.rs`); passed for `GET` only.
+pub const MODELS_PATH: &str = "/models";
 
 /// The value of `sandbox_mode`: Codex's own sandbox cannot start inside
 /// Humanitl's (module documentation).
@@ -326,42 +330,41 @@ pub fn passthrough_authority(llm: &LlmConfig) -> Option<String> {
     ))
 }
 
-/// The passthrough rule of Codex: `POST` and `GET` on exactly
-/// [`INFERENCE_PATHS`] below [`resolved_base`], one rule for both pairs the
-/// agent needs (module documentation, "What is let through").
+/// The passthrough rules of Codex below [`resolved_base`]: `POST` on
+/// exactly [`RESPONSES_PATH`] and `GET` on exactly [`MODELS_PATH`], one rule
+/// each (module documentation, "What is let through").
 #[must_use]
-pub fn passthrough_rule(llm: &LlmConfig) -> Option<Rule> {
-    let base = resolved_base(llm)?;
-    let host = HostName::parse(base.host_str()?).ok()?;
-    let scheme = Scheme::parse(base.scheme())?;
-    let port = base.port_or_known_default()?;
+pub fn passthrough_rules(llm: &LlmConfig) -> Vec<Rule> {
+    let Some(base) = resolved_base(llm) else {
+        return Vec::new();
+    };
+    let Some(target) = passthrough_target(llm, &base) else {
+        return Vec::new();
+    };
     let prefix = base.path().trim_end_matches('/').to_owned();
-    let paths = INFERENCE_PATHS
-        .iter()
-        .map(|path| humanitl_core::exact_path_entry(&format!("{prefix}{path}")))
-        .collect();
-    let matcher = Matcher::host(HostPattern::Exact(host))
-        // `GET` for the model list; inference is `POST`.
-        .with_methods(vec![Method::POST, Method::GET])
-        .with_path_prefixes(paths)
-        .with_scheme(scheme)
-        .with_port(port);
-    Some(
-        Rule::new(
-            RuleId::from_uuid(Uuid::from_u128(PASSTHROUGH_RULE_ID)),
-            Action::Allow,
-            matcher,
-        )
-        // An own endpoint usually stands in the own network; the vendor's
-        // APIs never do.
-        .with_allow_private(llm.endpoint.is_some())
-        .bundled(true)
-        .passthrough_llm(true)
-        .with_note(format!(
-            "LLM passthrough for Codex to {}. Logged, never held.",
-            llm_endpoint::display(&base)
-        )),
+    let exact = |path: &str| vec![humanitl_core::exact_path_entry(&format!("{prefix}{path}"))];
+    passthrough::rules(
+        &target,
+        vec![
+            Route::new(&[Method::POST], exact(RESPONSES_PATH)),
+            Route::new(&[Method::GET], exact(MODELS_PATH)),
+        ],
     )
+}
+
+/// Host, scheme, port and note of the passthrough to `base`. An own endpoint
+/// usually stands in the own network; the vendor's APIs never do.
+fn passthrough_target(llm: &LlmConfig, base: &Url) -> Option<Target> {
+    Some(Target {
+        host: HostName::parse(base.host_str()?).ok()?,
+        scheme: Scheme::parse(base.scheme())?,
+        port: base.port_or_known_default()?,
+        allow_private: llm.endpoint.is_some(),
+        note: format!(
+            "LLM passthrough for Codex to {}. Logged, never held.",
+            llm_endpoint::display(base)
+        ),
+    })
 }
 
 /// The table `config.toml` under `CODEX_HOME` holds (module documentation).
@@ -558,8 +561,8 @@ impl AgentAdapter for CodexAdapter {
         DEFAULT_RULES
     }
 
-    fn llm_passthrough(&self, llm: &LlmConfig) -> Option<Rule> {
-        passthrough_rule(llm)
+    fn llm_passthrough(&self, llm: &LlmConfig) -> Vec<Rule> {
+        passthrough_rules(llm)
     }
 
     fn inference_endpoint(&self, llm: &LlmConfig) -> Option<Url> {

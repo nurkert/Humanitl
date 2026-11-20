@@ -71,9 +71,12 @@
 //! /v1beta/models/{model}:generateContent` and `:streamGenerateContent`,
 //! `GET /v1beta/models` (<https://aistudio.google.com/api-reference>). The
 //! documentation does not say which API version `agy` uses, so the
-//! passthrough covers `/v1beta/models` and `/v1/models` with everything
-//! below them, for `POST` and `GET`, at that one origin; files, cached
-//! contents and every other path are held. [`ENV_BASE_URL`] "sends model
+//! passthrough covers both, `/v1beta` and `/v1`, at that one origin, as two
+//! rules (HUM-568, [`passthrough`]): `POST` only on
+//! `models/{model}:generateContent` and `:streamGenerateContent`
+//! ([`GENERATE_METHODS`], a model id of letters, digits, `.`, `_` and `-`),
+//! `GET` only on the model list `models` itself. Getting one model, counting
+//! tokens, embedding, files, cached contents and every other path are held. [`ENV_BASE_URL`] "sends model
 //! requests to a custom Gemini-compatible endpoint" (install page); the
 //! adapter sets it for `llm.endpoint` and keeps the same paths below the
 //! endpoint's prefix. The sign-in with a Google account reaches
@@ -101,13 +104,13 @@ use std::ffi::OsString;
 use std::path::{Path, PathBuf};
 
 use humanitl_config::{Language, LlmConfig, llm_endpoint};
-use humanitl_core::rule::{Action, HostPattern, Matcher, Rule};
-use humanitl_core::{Diagnostic, HostName, Method, RuleId, Scheme};
+use humanitl_core::rule::{PathPattern, Rule};
+use humanitl_core::{Diagnostic, HostName, Method, Scheme};
 use url::Url;
-use uuid::Uuid;
 
-use crate::agent::opencode::{PASSTHROUGH_RULE_ID, command_preflight};
+use crate::agent::opencode::command_preflight;
 use crate::agent::opencode_models::{DEFAULT_RULES, broken};
+use crate::agent::passthrough::{self, Route, Target};
 use crate::agent::{AgentAdapter, AgentContext, SandboxFile, briefing, skill};
 
 /// The id of the adapter as it stands in `agent.adapter`.
@@ -174,10 +177,17 @@ pub const ACCOUNT_ENDPOINT: &str = "https://cloudcode-pa.googleapis.com";
 /// The header that carries the key (aistudio.google.com/api-reference).
 pub const KEY_HEADER: &str = "x-goog-api-key";
 
-/// The model resources below the base the passthrough covers: the list
-/// exactly and everything below it, in both API versions
-/// (module documentation, "Models and hosts").
+/// The model list below the base in both API versions, passed for `GET`
+/// exactly (module documentation, "Models and hosts").
 pub const MODEL_PATHS: &[&str] = &["/v1beta/models", "/v1/models"];
+
+/// The methods on a model (`models/{model}:<method>`) the passthrough passes
+/// for `POST` (aistudio.google.com/api-reference).
+pub const GENERATE_METHODS: &[&str] = &["generateContent", "streamGenerateContent"];
+
+/// A model id in the path of a generate call; anything else, an encoded
+/// `/` among it, is held.
+const MODEL_ID: &str = "[A-Za-z0-9._-]+";
 
 /// The launcher: writes the settings seed into the agent's settings, moves
 /// the key, if there is one, from its file into [`ENV_API_KEY`] with the
@@ -324,54 +334,64 @@ pub fn path_prefix(endpoint: &Url) -> String {
     path.trim_end_matches('/').to_owned()
 }
 
-/// The passthrough rule of `agy`: `POST` and `GET` on the model resources
-/// ([`MODEL_PATHS`]) of the Gemini API or the gateway, only with a key.
+/// The passthrough rules of `agy`, only with a key, at the Gemini API or the
+/// gateway: `POST` on the generate calls of a model ([`GENERATE_METHODS`])
+/// and `GET` on exactly the model list ([`MODEL_PATHS`]), in both API
+/// versions (module documentation, "Models and hosts").
 #[must_use]
-pub fn passthrough_rule(llm: &LlmConfig) -> Option<Rule> {
+pub fn passthrough_rules(llm: &LlmConfig) -> Vec<Rule> {
     if !uses_api_key(llm) {
-        return None;
+        return Vec::new();
     }
     let gateway = uses_gateway(llm);
-    let endpoint = resolved_endpoint(llm)?;
-    let host = HostName::parse(endpoint.host_str()?).ok()?;
-    let scheme = Scheme::parse(endpoint.scheme())?;
-    let port = endpoint.port_or_known_default()?;
+    let Some(endpoint) = resolved_endpoint(llm) else {
+        return Vec::new();
+    };
+    let Some(target) = passthrough_target(&endpoint, gateway) else {
+        return Vec::new();
+    };
     let prefix = if gateway {
         path_prefix(&endpoint)
     } else {
         String::new()
     };
-    let paths = MODEL_PATHS
+    let list = MODEL_PATHS
         .iter()
-        .flat_map(|path| {
-            [
-                humanitl_core::exact_path_entry(&format!("{prefix}{path}")),
-                format!("{prefix}{path}/"),
-            ]
-        })
+        .map(|path| humanitl_core::exact_path_entry(&format!("{prefix}{path}")))
         .collect();
-    let matcher = Matcher::host(HostPattern::Exact(host))
-        // `GET` for the model list; inference is `POST`.
-        .with_methods(vec![Method::POST, Method::GET])
-        .with_path_prefixes(paths)
-        .with_scheme(scheme)
-        .with_port(port);
-    Some(
-        Rule::new(
-            RuleId::from_uuid(Uuid::from_u128(PASSTHROUGH_RULE_ID)),
-            Action::Allow,
-            matcher,
-        )
-        // A gateway usually stands in the own network; the Gemini API never
-        // does.
-        .with_allow_private(gateway)
-        .bundled(true)
-        .passthrough_llm(true)
-        .with_note(format!(
-            "LLM passthrough for the Antigravity CLI to {}. Logged, never held.",
-            llm_endpoint::display(&endpoint)
-        )),
+    // The prefixes name the two model trees; the pattern narrows them to a
+    // generate call on one model. Both must hold.
+    let models = MODEL_PATHS
+        .iter()
+        .map(|path| format!("{prefix}{path}/"))
+        .collect();
+    let generate = PathPattern::Regex(format!(
+        "^{}/v1(?:beta)?/models/{MODEL_ID}:(?:{})$",
+        passthrough::regex_literal(&prefix),
+        GENERATE_METHODS.join("|")
+    ));
+    passthrough::rules(
+        &target,
+        vec![
+            Route::new(&[Method::POST], models).with_pattern(generate),
+            Route::new(&[Method::GET], list),
+        ],
     )
+}
+
+/// Host, scheme, port and note of the passthrough to `endpoint`. A gateway
+/// usually stands in the own network; the Gemini API never does.
+fn passthrough_target(endpoint: &Url, gateway: bool) -> Option<Target> {
+    Some(Target {
+        host: HostName::parse(endpoint.host_str()?).ok()?,
+        scheme: Scheme::parse(endpoint.scheme())?,
+        port: endpoint.port_or_known_default()?,
+        allow_private: gateway,
+        note: format!(
+            "LLM passthrough for the Antigravity CLI to {}. Logged, never held.",
+            llm_endpoint::display(endpoint)
+        ),
+    })
 }
 
 /// The host of the passthrough as `host:port`, for the briefing; none
@@ -519,8 +539,8 @@ impl AgentAdapter for AntigravityAdapter {
         DEFAULT_RULES
     }
 
-    fn llm_passthrough(&self, llm: &LlmConfig) -> Option<Rule> {
-        passthrough_rule(llm)
+    fn llm_passthrough(&self, llm: &LlmConfig) -> Vec<Rule> {
+        passthrough_rules(llm)
     }
 
     fn inference_endpoint(&self, llm: &LlmConfig) -> Option<Url> {

@@ -338,7 +338,7 @@ async fn start(
     // zuletzt eingerichtet hat. Nie ein Agent für den einen Server und eine
     // Durchreiche zum anderen.
     let passthrough = daemon_passthrough(&mut client).await?;
-    session_server_gate(&resolved.config, passthrough.as_ref()).map_err(Failure::new)?;
+    session_server_gate(&resolved.config, &passthrough).map_err(Failure::new)?;
     // Dieselbe Bestätigung wie beim Start über den Daemon (HUM-405): Ein
     // Projekt wählt einen anderen Server als den Standard erst, wenn diese
     // Wahl für diesen Ordner bestätigt ist.
@@ -418,11 +418,11 @@ async fn start(
     ended
 }
 
-/// Die mitgelieferte Durchreiche, die der Daemon gerade hält, als Regel;
-/// `None` ohne eine (HUM-400).
+/// Die mitgelieferte Durchreiche, die der Daemon gerade hält, als Regeln,
+/// je Satz von Methoden eine (HUM-568); leer ohne eine (HUM-400).
 async fn daemon_passthrough(
     client: &mut humanitl_ipc::client::Client,
-) -> Result<Option<humanitl_core::rule::Rule>, Failure> {
+) -> Result<Vec<humanitl_core::rule::Rule>, Failure> {
     let response = client
         .rules(humanitl_ipc::v1::RulesRequest {
             op: Some(humanitl_ipc::v1::rules_request::Op::List(())),
@@ -430,11 +430,21 @@ async fn daemon_passthrough(
         .await
         .map_err(|status| Failure::new(status_diagnostic(&status, "Rules")))?
         .into_inner();
-    let Some(wire) = response.rules.iter().find(|rule| rule.passthrough_llm) else {
-        return Ok(None);
-    };
-    humanitl_ipc::convert::rule_from_proto(wire, SessionId::new())
-        .map(Some)
+    passthrough_of(&response.rules)
+}
+
+/// Die mitgelieferte Durchreiche unter den Regeln des Daemons (HUM-568).
+///
+/// Nur die mitgelieferten: Eine Regel aus der `rules.yaml` des Nutzers darf
+/// `passthrough_llm` tragen, ist aber nicht die Durchreiche der Sitzung.
+fn passthrough_of(
+    rules: &[humanitl_ipc::v1::Rule],
+) -> Result<Vec<humanitl_core::rule::Rule>, Failure> {
+    rules
+        .iter()
+        .filter(|rule| rule.passthrough_llm && rule.bundled)
+        .map(|wire| humanitl_ipc::convert::rule_from_proto(wire, SessionId::new()))
+        .collect::<Result<Vec<_>, _>>()
         .map_err(|error| {
             Failure::new(
                 Diagnostic::builder(codes::CONFIG_021, Severity::Error)
@@ -456,9 +466,10 @@ async fn daemon_passthrough(
 /// über den Daemon. Sonst wird die Durchreiche, die diese Konfiguration
 /// bekäme, mit derselben Funktion gebaut, mit der der Daemon sie baut
 /// ([`humanitl_ipc::session::session_passthrough`]), und als Bedingung mit
-/// der Regel verglichen, die der Daemon hält (`daemon`, aus
-/// [`daemon_passthrough`]): Schema, Host, Port, Methoden und die genauen
-/// Inferenzpfade, typisiert und nicht als Text. Das gilt für jede Wahl, auch
+/// den Regeln verglichen, die der Daemon hält (`daemon`, aus
+/// [`daemon_passthrough`]), Regel für Regel nach ihrer festen Id: Schema,
+/// Host, Port, Methoden und die genauen Inferenzpfade, typisiert und nicht
+/// als Text. Das gilt für jede Wahl, auch
 /// für `llm.active` aus einer anderen `--config` und für einen Endpunkt ohne
 /// gespeicherten Server: Dieser Befehl kann die Sitzung des Daemons nicht
 /// umstellen, und sonst spräche der Agent mit dem einen Server, während der
@@ -470,7 +481,7 @@ async fn daemon_passthrough(
 /// `CONFIG_021` in beiden Fällen.
 fn session_server_gate(
     config: &Config,
-    daemon: Option<&humanitl_core::rule::Rule>,
+    daemon: &[humanitl_core::rule::Rule],
 ) -> Result<(), Diagnostic> {
     if let Some(refused) = config
         .llm
@@ -481,13 +492,16 @@ fn session_server_gate(
         return Err(refused);
     }
     let wanted = humanitl_ipc::session::session_passthrough(config);
-    let same = match (&wanted, daemon) {
-        (None, None) => true,
-        (Some(wanted), Some(held)) => {
-            wanted.matcher == held.matcher && wanted.action == held.action
-        }
-        _ => false,
-    };
+    let same = wanted.len() == daemon.len()
+        && wanted.iter().all(|wanted| {
+            daemon.iter().any(|held| {
+                // Eine abgeschaltete Regel lässt nichts durch (HUM-568).
+                !held.disabled
+                    && held.id == wanted.id
+                    && held.matcher == wanted.matcher
+                    && held.action == wanted.action
+            })
+        });
     if same {
         return Ok(());
     }
@@ -502,7 +516,7 @@ fn session_server_gate(
              daemon's session another server, so the agent would talk to one server while the \
              proxy lets another through. Start the session with humanitl run, which resolves \
              its own server",
-            describe_passthrough(wanted.as_ref()),
+            describe_passthrough(&wanted),
             describe_passthrough(daemon)
         ))
         .fix(FixAction::CopyCommand("humanitl run".to_owned()))
@@ -511,11 +525,15 @@ fn session_server_gate(
 
 /// Eine Durchreiche für den Satz eines Befunds; verglichen wird nie dieser
 /// Text, sondern die Bedingung selbst.
-fn describe_passthrough(rule: Option<&humanitl_core::rule::Rule>) -> String {
-    let Some(rule) = rule else {
+fn describe_passthrough(rules: &[humanitl_core::rule::Rule]) -> String {
+    let Some(first) = rules.first() else {
         return "no server".to_owned();
     };
-    let matcher = &rule.matcher;
+    let matcher = &first.matcher;
+    let paths: Vec<&str> = rules
+        .iter()
+        .flat_map(|rule| rule.matcher.path_prefixes.iter().map(String::as_str))
+        .collect();
     format!(
         "{}://{}{} ({})",
         matcher
@@ -525,7 +543,7 @@ fn describe_passthrough(rule: Option<&humanitl_core::rule::Rule>) -> String {
         matcher
             .port
             .map_or_else(String::new, |port| format!(" port {port}")),
-        matcher.path_prefixes.join(", ")
+        paths.join(", ")
     )
 }
 
@@ -2034,16 +2052,20 @@ mod tests {
         };
         // The daemon's rule as `Rules(List)` carries it over the wire.
         let daemon_on = |endpoint: &str| {
-            let rule = humanitl_ipc::session::session_passthrough(&config(Some(endpoint), None))
-                .expect("a passthrough");
-            humanitl_ipc::convert::rule_from_proto(
-                &humanitl_ipc::convert::rule_to_proto(&rule),
-                humanitl_core::ids::SessionId::new(),
-            )
-            .expect("the rule crosses the wire")
+            humanitl_ipc::session::session_passthrough(&config(Some(endpoint), None))
+                .iter()
+                .map(|rule| {
+                    humanitl_ipc::convert::rule_from_proto(
+                        &humanitl_ipc::convert::rule_to_proto(rule),
+                        humanitl_core::ids::SessionId::new(),
+                    )
+                    .expect("the rule crosses the wire")
+                })
+                .collect::<Vec<_>>()
         };
-        let gate = |config: &humanitl_config::Config, held: Option<&humanitl_core::rule::Rule>| {
-            super::session_server_gate(config, held)
+        let gate = |config: &humanitl_config::Config,
+                    held: Option<&[humanitl_core::rule::Rule]>| {
+            super::session_server_gate(config, held.unwrap_or_default())
         };
 
         let unknown = gate(
@@ -2067,17 +2089,27 @@ mod tests {
                 Some("https://other.lan/v1"),
                 Some(saved("b", ServerSource::Default)),
             ),
-            Some(&a),
+            Some(a.as_slice()),
         )
         .expect_err("the active server of another config is refused");
         assert!(split.why.contains("humanitl run"), "{}", split.why);
         // Same host and port, other inference paths.
         assert!(
-            gate(&config(Some("https://model.lan/b/v1"), None), Some(&a)).is_err(),
+            gate(
+                &config(Some("https://model.lan/b/v1"), None),
+                Some(a.as_slice())
+            )
+            .is_err(),
             "another path on the same host is another server"
         );
         // Same host and path, other scheme.
-        assert!(gate(&config(Some("http://model.lan:443/a/v1"), None), Some(&a)).is_err());
+        assert!(
+            gate(
+                &config(Some("http://model.lan:443/a/v1"), None),
+                Some(a.as_slice())
+            )
+            .is_err()
+        );
         // An endpoint without any passthrough at the daemon.
         assert!(gate(&config(Some("https://model.lan/a/v1"), None), None).is_err());
         // IPv6, written two ways: the typed rule is the same.
@@ -2085,7 +2117,7 @@ mod tests {
         assert!(
             gate(
                 &config(Some("http://[0:0:0:0:0:0:0:1]:8080/v1"), None),
-                Some(&v6)
+                Some(v6.as_slice())
             )
             .is_ok()
         );
@@ -2096,12 +2128,85 @@ mod tests {
                     Some("https://model.lan/a/v1"),
                     Some(saved("a", ServerSource::Project("/p".into())))
                 ),
-                Some(&a)
+                Some(a.as_slice())
             )
             .is_ok(),
             "the daemon passes the chosen server: no mismatch"
         );
         assert!(gate(&config(None, None), None).is_ok(), "no model at all");
+    }
+
+    /// The daemon's passthrough is compared rule by rule (HUM-568): one rule
+    /// per set of methods, so a missing rule or a rule with other methods is
+    /// another passthrough, even for the same server.
+    #[test]
+    fn sandbox_run_compares_every_rule_of_the_passthrough() {
+        let mut config = humanitl_config::Config::default();
+        config.agent.adapter = "opencode".to_owned();
+        config.llm.endpoint = Some("https://model.lan/a/v1".parse().unwrap());
+        let held: Vec<_> = humanitl_ipc::session::session_passthrough(&config)
+            .iter()
+            .map(|rule| {
+                humanitl_ipc::convert::rule_from_proto(
+                    &humanitl_ipc::convert::rule_to_proto(rule),
+                    humanitl_core::ids::SessionId::new(),
+                )
+                .expect("the rule crosses the wire")
+            })
+            .collect();
+        assert!(held.len() > 1, "one rule per set of methods: {held:?}");
+        assert!(super::session_server_gate(&config, &held).is_ok());
+        assert!(
+            super::session_server_gate(&config, &held[..1]).is_err(),
+            "a rule is missing"
+        );
+        let mut widened = held.clone();
+        widened[0].matcher.methods = Some(vec![
+            humanitl_core::Method::POST,
+            humanitl_core::Method::GET,
+        ]);
+        assert!(
+            super::session_server_gate(&config, &widened).is_err(),
+            "other methods"
+        );
+        let mut off = held.clone();
+        off[1].disabled = true;
+        assert!(
+            super::session_server_gate(&config, &off).is_err(),
+            "a disabled rule passes nothing"
+        );
+    }
+
+    /// Only the bundled rules with `passthrough_llm` are the daemon's
+    /// passthrough; a user rule that carries the mark is not (HUM-568).
+    #[test]
+    fn a_user_rule_with_the_passthrough_mark_is_not_the_passthrough() {
+        let mut config = humanitl_config::Config::default();
+        config.agent.adapter = "opencode".to_owned();
+        config.llm.endpoint = Some("https://model.lan/a/v1".parse().unwrap());
+        let bundled: Vec<_> = humanitl_ipc::session::session_passthrough(&config)
+            .iter()
+            .map(|rule| {
+                let mut wire = humanitl_ipc::convert::rule_to_proto(rule);
+                wire.bundled = true;
+                wire
+            })
+            .collect();
+        let mut user = bundled[0].clone();
+        user.bundled = false;
+        user.rule_id = "01920000-0000-7000-8000-00000000abcd".to_owned();
+
+        let only_user = super::passthrough_of(std::slice::from_ref(&user)).expect("readable");
+        assert!(only_user.is_empty(), "{only_user:?}");
+        assert!(
+            super::session_server_gate(&config, &only_user).is_err(),
+            "a user rule does not stand in for the passthrough"
+        );
+        let mut all = vec![user];
+        all.extend(bundled.iter().cloned());
+        let held = super::passthrough_of(&all).expect("readable");
+        assert_eq!(held.len(), bundled.len());
+        assert!(super::session_server_gate(&config, &held).is_ok());
     }
 
     use std::ffi::OsString;

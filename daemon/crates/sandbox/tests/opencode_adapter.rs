@@ -19,9 +19,9 @@ use humanitl_core::rule::{Action, HostPattern};
 use humanitl_core::{HostName, Method, Scheme, SessionId, Severity};
 use humanitl_rules::{RequestKey, RuleSet, Verdict};
 use humanitl_sandbox::agent::opencode::{
-    CONFIG_DST, MANAGED_CONFIG_DST, MODELS_DST, OLLAMA_INFERENCE_PATHS, OPENAI_INFERENCE_PATHS,
-    PLACEHOLDER_MODEL, briefing_dst, config_dst, keep_dst, passthrough_authority, skill_dst,
-    tui_dst,
+    CONFIG_DST, MANAGED_CONFIG_DST, MODELS_DST, OLLAMA_GET_PATHS, OLLAMA_INFERENCE_PATHS,
+    OPENAI_GET_PATHS, OPENAI_INFERENCE_PATHS, PLACEHOLDER_MODEL, briefing_dst, config_dst,
+    keep_dst, passthrough_authority, skill_dst, tui_dst,
 };
 use humanitl_sandbox::agent::opencode_models::PROVIDER_ID;
 use humanitl_sandbox::agent::{briefing, skill};
@@ -225,9 +225,16 @@ fn opencode_writes_the_reserved_name_for_a_loopback_endpoint() {
         assert!(text.contains(briefed), "{endpoint}: {text}");
         // Die Durchreiche bleibt beim echten Ziel: Der Proxy setzt den Namen
         // um, bevor sie entscheidet.
-        let rule = adapter.llm_passthrough(&llm).unwrap();
+        let rules = adapter.llm_passthrough(&llm);
+        assert!(!rules.is_empty(), "{endpoint}");
         let (host, _, _) = humanitl_sandbox::agent::opencode::passthrough_target(&llm).unwrap();
-        assert_eq!(rule.matcher.host, HostPattern::Exact(host), "{endpoint}");
+        for rule in rules {
+            assert_eq!(
+                rule.matcher.host,
+                HostPattern::Exact(host.clone()),
+                "{endpoint}"
+            );
+        }
     }
 }
 
@@ -1064,13 +1071,13 @@ fn briefing_names_a_host_only_when_a_passthrough_rule_exists() {
         ))
         .expect("the briefing is UTF-8");
 
-        let rule = adapter.llm_passthrough(&llm);
+        let rules = adapter.llm_passthrough(&llm);
         assert_eq!(
-            rule.is_some(),
+            !rules.is_empty(),
             passthrough_authority(&llm).is_some(),
             "{endpoint}: rule and briefing disagree about the passthrough"
         );
-        if rule.is_none() {
+        if rules.is_empty() {
             without_a_rule += 1;
             assert!(
                 !text.contains("11434"),
@@ -1435,6 +1442,51 @@ fn opencode_default_rules_are_bundled() {
     }
 }
 
+/// Jeder erzeugte Endpunkt bekommt genau seine Methode, in einer Regel je
+/// Methode mit fester Id (HUM-568).
+#[test]
+fn opencode_passthrough_gives_each_endpoint_its_method() {
+    let llm = LlmConfig {
+        endpoint: Some(url::Url::parse("http://192.168.1.50:11434").unwrap()),
+        ..LlmConfig::default()
+    };
+    let rules = OpenCodeAdapter::new().llm_passthrough(&llm);
+    let [post, get] = rules.as_slice() else {
+        panic!("one rule for POST, one for GET: {rules:?}");
+    };
+    assert_eq!(
+        post.id.to_string(),
+        "01920000-0000-7000-8000-0000000000ff",
+        "the id is fixed so that every part of the system means the same rule"
+    );
+    assert_eq!(get.id.to_string(), "01920000-0000-7000-8000-0000000000fe");
+    let exact = |paths: &[&str]| {
+        paths
+            .iter()
+            .map(|path| humanitl_core::exact_path_entry(path))
+            .collect::<Vec<_>>()
+    };
+    let gets: Vec<&str> = OPENAI_GET_PATHS
+        .iter()
+        .chain(OLLAMA_GET_PATHS)
+        .copied()
+        .collect();
+    let posts: Vec<&str> = OPENAI_INFERENCE_PATHS
+        .iter()
+        .chain(OLLAMA_INFERENCE_PATHS)
+        .copied()
+        .filter(|path| !gets.contains(path))
+        .collect();
+    assert_eq!(post.matcher.methods, Some(vec![Method::POST]));
+    assert_eq!(
+        post.matcher.path_prefixes,
+        exact(&posts),
+        "both surface prefixes of llm.passthrough_paths are narrowed to exact inference endpoints"
+    );
+    assert_eq!(get.matcher.methods, Some(vec![Method::GET]));
+    assert_eq!(get.matcher.path_prefixes, exact(&gets));
+}
+
 #[test]
 fn opencode_passthrough_rule_matches_only_the_endpoint() {
     let adapter = OpenCodeAdapter::new();
@@ -1442,47 +1494,35 @@ fn opencode_passthrough_rule_matches_only_the_endpoint() {
         endpoint: Some(url::Url::parse("http://192.168.1.50:11434").unwrap()),
         ..LlmConfig::default()
     };
-    let rule = adapter
-        .llm_passthrough(&llm)
-        .expect("a rule for an endpoint");
+    let rules = adapter.llm_passthrough(&llm);
+    let [post, get] = rules.as_slice() else {
+        panic!("one rule for POST, one for GET: {rules:?}");
+    };
 
-    assert_eq!(rule.action, Action::Allow);
-    assert!(rule.bundled);
-    assert!(
-        rule.allow_private,
-        "the model usually lives on a private address; without this the proxy refuses it"
-    );
-    assert!(!rule.stream, "the request body is buffered, never streamed");
-    assert_eq!(
-        rule.id.to_string(),
-        "01920000-0000-7000-8000-0000000000ff",
-        "the id is fixed so that every part of the system means the same rule"
-    );
-    assert_eq!(
-        rule.matcher.host,
-        HostPattern::Exact(HostName::parse("192.168.1.50").unwrap())
-    );
-    assert_eq!(rule.matcher.port, Some(11434));
-    assert_eq!(rule.matcher.scheme, Some(Scheme::Http));
-    assert!(
-        rule.passthrough_llm,
-        "the proxy recognises the declared exception by this flag, not by the id"
-    );
-    assert_eq!(
-        rule.matcher.path, None,
-        "the boundary is the prefix list, not a regex"
-    );
-    assert_eq!(
-        rule.matcher.path_prefixes,
-        OPENAI_INFERENCE_PATHS
-            .iter()
-            .chain(OLLAMA_INFERENCE_PATHS)
-            .map(|path| humanitl_core::exact_path_entry(path))
-            .collect::<Vec<_>>(),
-        "both surface prefixes of llm.passthrough_paths are narrowed to exact inference endpoints"
-    );
-
-    let set = RuleSet::from_rules([rule]);
+    for rule in [post, get] {
+        assert_eq!(rule.action, Action::Allow);
+        assert!(rule.bundled);
+        assert!(
+            rule.allow_private,
+            "the model usually lives on a private address; without this the proxy refuses it"
+        );
+        assert!(!rule.stream, "the request body is buffered, never streamed");
+        assert_eq!(
+            rule.matcher.host,
+            HostPattern::Exact(HostName::parse("192.168.1.50").unwrap())
+        );
+        assert_eq!(rule.matcher.port, Some(11434));
+        assert_eq!(rule.matcher.scheme, Some(Scheme::Http));
+        assert!(
+            rule.passthrough_llm,
+            "the proxy recognises the declared exception by this flag, not by the id"
+        );
+        assert_eq!(
+            rule.matcher.path, None,
+            "the boundary is the prefix list, not a regex"
+        );
+    }
+    let set = RuleSet::from_rules(rules.clone());
     let now = jiff::Timestamp::now();
     let session = SessionId::nil();
     let endpoint = HostName::parse("192.168.1.50").unwrap();
@@ -1492,6 +1532,18 @@ fn opencode_passthrough_rule_matches_only_the_endpoint() {
         (&endpoint, Method::POST, "/v1/chat/completions", 11434, true),
         (&endpoint, Method::GET, "/v1/models", 11434, true),
         (&endpoint, Method::POST, "/api/chat", 11434, true),
+        (&endpoint, Method::POST, "/api/show", 11434, true),
+        (&endpoint, Method::GET, "/api/tags", 11434, true),
+        (&endpoint, Method::GET, "/api/ps", 11434, true),
+        (&endpoint, Method::GET, "/api/version", 11434, true),
+        // Jeder Endpunkt nur mit seiner Methode (HUM-568).
+        (&endpoint, Method::GET, "/v1/chat/completions", 11434, false),
+        (&endpoint, Method::GET, "/v1/responses", 11434, false),
+        (&endpoint, Method::POST, "/v1/models", 11434, false),
+        (&endpoint, Method::GET, "/api/chat", 11434, false),
+        (&endpoint, Method::GET, "/api/show", 11434, false),
+        (&endpoint, Method::POST, "/api/tags", 11434, false),
+        (&endpoint, Method::POST, "/api/version", 11434, false),
         (&endpoint, Method::POST, "/admin", 11434, false),
         // Modelle nachladen, anlegen und löschen ändern den Server. Sie
         // gehören nicht in die eine Regel, die nicht gehalten wird.
@@ -1570,13 +1622,13 @@ fn opencode_fixes_carry_no_credentials_and_quote_the_address() {
         endpoint: Some(url::Url::parse(endpoint).unwrap()),
         ..LlmConfig::default()
     };
-    let note = adapter
-        .llm_passthrough(&llm)
-        .expect("a rule for an endpoint")
-        .note
-        .unwrap_or_default();
-    assert!(note.contains("llm.example.net"), "{note}");
-    assert!(!note.contains("geheim") && !note.contains("user"), "{note}");
+    let rules = adapter.llm_passthrough(&llm);
+    assert!(!rules.is_empty(), "a rule for an endpoint");
+    for rule in rules {
+        let note = rule.note.unwrap_or_default();
+        assert!(note.contains("llm.example.net"), "{note}");
+        assert!(!note.contains("geheim") && !note.contains("user"), "{note}");
+    }
 }
 
 /// HUM-261: Die erzeugten Inferenz-Endpunkte gelten genau. Eine Query
@@ -1588,10 +1640,7 @@ fn opencode_passthrough_endpoints_match_exactly() {
         endpoint: Some(url::Url::parse("http://192.168.1.50:11434").unwrap()),
         ..LlmConfig::default()
     };
-    let rule = OpenCodeAdapter::new()
-        .llm_passthrough(&llm)
-        .expect("a rule for an endpoint");
-    let set = RuleSet::from_rules([rule]);
+    let set = RuleSet::from_rules(OpenCodeAdapter::new().llm_passthrough(&llm));
     let host = HostName::parse("192.168.1.50").unwrap();
     for (method, path, expected_allow) in [
         (Method::POST, "/v1/chat/completions?x=1", true),
@@ -1669,13 +1718,14 @@ fn opencode_passthrough_follows_the_path_prefix() {
         endpoint: Some(url::Url::parse("https://llm.example.net/api/v1/").unwrap()),
         ..LlmConfig::default()
     };
-    let rule = adapter
-        .llm_passthrough(&llm)
-        .expect("a rule for an endpoint");
-    assert_eq!(rule.matcher.port, Some(443));
-    assert_eq!(rule.matcher.scheme, Some(Scheme::Https));
+    let rules = adapter.llm_passthrough(&llm);
+    assert!(!rules.is_empty(), "a rule for an endpoint");
+    for rule in &rules {
+        assert_eq!(rule.matcher.port, Some(443));
+        assert_eq!(rule.matcher.scheme, Some(Scheme::Https));
+    }
 
-    let set = RuleSet::from_rules([rule]);
+    let set = RuleSet::from_rules(rules);
     let now = jiff::Timestamp::now();
     let host = HostName::parse("llm.example.net").unwrap();
     for (method, path, expected_allow) in [
@@ -1712,11 +1762,66 @@ fn opencode_passthrough_follows_the_path_prefix() {
     }
 }
 
+/// Ein Pfad, den der Mensch selbst in `llm.passthrough_paths` schreibt,
+/// bleibt ein Präfix mit `POST` und `GET` in einer eigenen dritten Regel:
+/// Welche Methode er dort braucht, weiß nur er (HUM-568). Die erzeugten
+/// Endpunkte behalten ihre eine Methode.
+#[test]
+fn opencode_passthrough_keeps_both_methods_on_own_paths_only() {
+    let llm = LlmConfig {
+        endpoint: Some(url::Url::parse("http://192.168.1.50:11434").unwrap()),
+        passthrough_paths: vec!["/v1/".to_owned(), "/api/pull".to_owned()],
+        ..LlmConfig::default()
+    };
+    let rules = OpenCodeAdapter::new().llm_passthrough(&llm);
+    let [post, get, own] = rules.as_slice() else {
+        panic!("three rules: {rules:?}");
+    };
+    assert_eq!(post.matcher.methods, Some(vec![Method::POST]));
+    assert_eq!(get.matcher.methods, Some(vec![Method::GET]));
+    assert_eq!(get.matcher.path_prefixes, ["/v1/models?"]);
+    assert_eq!(own.id.to_string(), "01920000-0000-7000-8000-0000000000fd");
+    assert_eq!(own.matcher.methods, Some(vec![Method::POST, Method::GET]));
+    assert_eq!(own.matcher.path_prefixes, ["/api/pull"]);
+    let set = RuleSet::from_rules(rules.clone());
+    let host = HostName::parse("192.168.1.50").unwrap();
+    for (method, path, expected_allow) in [
+        (Method::POST, "/api/pull", true),
+        (Method::GET, "/api/pull", true),
+        (Method::POST, "/v1/chat/completions", true),
+        (Method::GET, "/v1/chat/completions", false),
+        (Method::POST, "/v1/models", false),
+        // `/api/` steht nicht in der Liste: kein Ollama-Endpunkt.
+        (Method::POST, "/api/chat", false),
+    ] {
+        let key = RequestKey::new(&host, &method, path, Scheme::Http, 11434);
+        let allowed = matches!(
+            set.evaluate(&key, jiff::Timestamp::now(), SessionId::nil()),
+            Verdict::Matched {
+                action: Action::Allow,
+                ..
+            }
+        );
+        assert_eq!(allowed, expected_allow, "{method} {path}");
+    }
+
+    // Nur eigene Pfade: keine leere Regel für die erzeugten Endpunkte.
+    let only_own = LlmConfig {
+        passthrough_paths: vec!["/custom/infer".to_owned()],
+        ..llm
+    };
+    let rules = OpenCodeAdapter::new().llm_passthrough(&only_own);
+    let [own] = rules.as_slice() else {
+        panic!("one rule: {rules:?}");
+    };
+    assert_eq!(own.matcher.path_prefixes, ["/custom/infer"]);
+}
+
 #[test]
 fn opencode_passthrough_needs_an_endpoint() {
     let adapter = OpenCodeAdapter::new();
     assert!(
-        adapter.llm_passthrough(&LlmConfig::default()).is_none(),
+        adapter.llm_passthrough(&LlmConfig::default()).is_empty(),
         "without llm.endpoint there is nothing to let through"
     );
 }

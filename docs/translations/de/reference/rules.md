@@ -922,8 +922,10 @@ außer der Durchleitung, in Rang 4, lassen sich nicht löschen und tragen im Bil
 
 ### Die LLM-Durchleitung
 
-Vom Agenten-Adapter aus `llm.endpoint` gebaut, mit der festen ID
-`01920000-0000-7000-8000-0000000000ff`. Sie hat keine eigene Datei. Für einen
+Vom Agenten-Adapter aus `llm.endpoint` gebaut, je Satz von Methoden eine Regel
+mit fester ID (HUM-568): `01920000-0000-7000-8000-0000000000ff` für `POST`,
+`…00fe` für `GET` und `…00fd` für `POST` und `GET` an den Pfaden, die du selbst
+in `llm.passthrough_paths` schreibst. Sie hat keine eigene Datei. Für einen
 Endpunkt wie `http://192.168.1.20:11434/v1` entspricht sie:
 
 ```yaml
@@ -933,19 +935,30 @@ rules:
     action: allow
     match:
       host: "192.168.1.20"
-      method: [POST, GET]
+      method: [POST]
       path_prefixes:
         - "/v1/chat/completions?"
         - "/v1/completions?"
         - "/v1/responses?"
         - "/v1/embeddings?"
-        - "/v1/models?"
         - "/api/chat?"
         - "/api/generate?"
         - "/api/embed?"
         - "/api/embeddings?"
-        - "/api/tags?"
         - "/api/show?"
+      scheme: http
+      port: 11434
+    allow_private: true
+    passthrough_llm: true
+    note: "LLM passthrough for http://192.168.1.20:11434/v1. Logged, never held."
+  - id: 01920000-0000-7000-8000-0000000000fe
+    action: allow
+    match:
+      host: "192.168.1.20"
+      method: [GET]
+      path_prefixes:
+        - "/v1/models?"
+        - "/api/tags?"
         - "/api/ps?"
         - "/api/version?"
       scheme: http
@@ -955,6 +968,8 @@ rules:
     note: "LLM passthrough for http://192.168.1.20:11434/v1. Logged, never held."
 # humanitl rules test http://192.168.1.20:11434/v1/chat/completions --method POST
 # verdict: allow
+# humanitl rules test http://192.168.1.20:11434/v1/chat/completions --method GET
+# verdict: ask
 # humanitl rules test http://192.168.1.20:11434/api/pull --method POST
 # verdict: ask
 # humanitl rules test http://192.168.1.20:11434/v1/files --method POST
@@ -962,7 +977,9 @@ rules:
 ```
 
 Gründe: genau ein Host, ein Schema und ein Port, weil das die eine Art von Anfrage
-ist, die nicht angehalten wird; nur die Inferenz-Endpunkte als genaue Pfade, damit
+ist, die nicht angehalten wird; jeder Endpunkt nur mit der Methode, die er braucht,
+`POST` zum Rechnen und `GET` für Auskunft, weil eine Regel eine Liste von Methoden
+für alle ihre Pfade trägt; nur die Inferenz-Endpunkte als genaue Pfade, damit
 Endpunkte, die den Server verändern (Datei-Uploads, Fine-Tuning, Modelle laden und
 löschen), weiterhin durch die Warteschlange gehen; `allow_private`, weil ein lokales
 Modell in deinem Netz steht. Die Pfade kommen aus `llm.passthrough_paths`, Vorgabe

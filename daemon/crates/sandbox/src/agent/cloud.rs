@@ -136,7 +136,7 @@ mod tests {
             fn llm_passthrough(
                 &self,
                 llm: &humanitl_config::LlmConfig,
-            ) -> Option<humanitl_core::rule::Rule> {
+            ) -> Vec<humanitl_core::rule::Rule> {
                 self.0.llm_passthrough(llm)
             }
             fn inference_endpoint(&self, llm: &humanitl_config::LlmConfig) -> Option<url::Url> {

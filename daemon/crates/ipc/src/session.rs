@@ -513,7 +513,7 @@ pub fn bundled_rules(
     session: SessionId,
 ) -> (BundledRules, Vec<Diagnostic>) {
     let mut diagnostics = Vec::new();
-    let passthrough = llm_passthrough_rule(config, &mut diagnostics);
+    let passthrough = llm_passthrough_rules(config, &mut diagnostics);
     let mut rest = Vec::new();
 
     for profile in profiles {
@@ -544,7 +544,7 @@ pub fn bundled_rules(
 /// prüft eine Regel in Rang 1 — vor jeder Sitzungs-, Nutzer- und Profilregel
 /// —, wenn **beide** Vermerke stehen: `bundled` und `passthrough_llm`. Den
 /// ersten setzt der Regelspeicher auf jede Regel dieser Gruppe. Den zweiten
-/// darf deshalb nur tragen, was `llm_passthrough_rule` baut, also was aus
+/// darf deshalb nur tragen, was `llm_passthrough_rules` baut, also was aus
 /// `llm.endpoint` und dem Agent-Adapter.
 ///
 /// Ohne diese Trennung genügte ein globales Profil mit
@@ -563,9 +563,9 @@ pub fn bundled_rules(
 /// (`backlog/CONVENTIONS.md` 4.5, HUM-104).
 #[derive(Debug, Clone, Default)]
 pub struct BundledRules {
-    /// Die eine erklärte Durchreiche zum Sprachmodell, falls es einen
-    /// Endpunkt und einen Adapter gibt.
-    passthrough: Option<Rule>,
+    /// Die erklärte Durchreiche zum Sprachmodell, falls es einen Endpunkt
+    /// und einen Adapter gibt: je Satz von Methoden eine Regel (HUM-568).
+    passthrough: Vec<Rule>,
     /// Alles andere: die Regeln der beteiligten Profile und
     /// `rules/default.yaml`. Keine davon trägt `passthrough_llm`.
     rest: Vec<Rule>,
@@ -578,7 +578,7 @@ impl BundledRules {
     /// Zurück kommen die Befunde zu den Regeln, die ihn gesetzt hatten: Ein
     /// stiller Entzug ließe den Verfasser glauben, seine Regel gelte in Rang 1.
     #[must_use]
-    pub fn new(passthrough: Option<Rule>, rest: Vec<Rule>) -> (Self, Vec<Diagnostic>) {
+    pub fn new(passthrough: Vec<Rule>, rest: Vec<Rule>) -> (Self, Vec<Diagnostic>) {
         let mut refused = Vec::new();
         let rest = rest
             .into_iter()
@@ -609,8 +609,8 @@ impl BundledRules {
     /// Durchreiche an sich selbst und nicht an ihrem Platz.
     #[must_use]
     pub fn all(&self) -> Vec<Rule> {
-        let mut all = Vec::with_capacity(self.rest.len() + 1);
-        all.extend(self.passthrough.clone());
+        let mut all = Vec::with_capacity(self.len());
+        all.extend(self.passthrough.iter().cloned());
         all.extend(self.rest.iter().cloned());
         all
     }
@@ -618,7 +618,7 @@ impl BundledRules {
     /// Wie viele Regeln die Gruppe trägt.
     #[must_use]
     pub fn len(&self) -> usize {
-        self.rest.len() + usize::from(self.passthrough.is_some())
+        self.rest.len() + self.passthrough.len()
     }
 
     /// Ob die Gruppe leer ist.
@@ -627,42 +627,44 @@ impl BundledRules {
         self.len() == 0
     }
 
-    /// Die erklärte Durchreiche, falls es eine gibt.
+    /// Die Regeln der erklärten Durchreiche; leer, wenn es keine gibt.
     #[must_use]
-    pub const fn passthrough(&self) -> Option<&Rule> {
-        self.passthrough.as_ref()
+    pub fn passthrough(&self) -> &[Rule] {
+        &self.passthrough
     }
 }
 
-/// Die Durchreichregel zum Sprachmodell, falls es einen Endpunkt gibt.
+/// Die Durchreichregeln zum Sprachmodell, falls es einen Endpunkt gibt.
 ///
 /// Ohne sie hielte der Proxy jede Inferenz an, und `DecisionSource::Passthrough`
 /// wie `LLM_005` blieben toter Code (HUM-039). Sie entsteht im Agent-Adapter,
 /// weil nur er weiß, welche Pfade sein Agent für Inferenz braucht.
 ///
-/// `None` heißt in jedem Fall: es wird gefragt. Ohne `llm.endpoint` gibt es
+/// Keine Regel heißt in jedem Fall: es wird gefragt. Ohne `llm.endpoint` gibt es
 /// nichts durchzulassen, außer für einen Adapter mit eigenem Anbieter (Claude
 /// Code und `api.anthropic.com`, HUM-514), und ein unbekannter Adapter bekommt
 /// keine erfundene Regel — er bekommt einen Befund.
 /// Die erklärte Durchreiche, die eine Sitzung mit dieser Konfiguration
-/// bekäme: dieselbe Regel, die [`bundled_rules`] in den Speicher legt
-/// (HUM-400).
+/// bekäme: dieselben Regeln, die [`bundled_rules`] in den Speicher legt
+/// (HUM-400), je Satz von Methoden eine (HUM-568).
 ///
 /// Für `humanitl sandbox run`, das die Sandbox im eigenen Prozess startet
 /// und prüfen muss, ob der Proxy genau den Server durchlässt, für den der
 /// Agent eingerichtet wird. Befunde (ein unbekannter Adapter) fallen hier
-/// weg; ohne Regel ist das Ergebnis `None`, wie im Speicher.
+/// weg; ohne Regel ist das Ergebnis leer, wie im Speicher.
 #[must_use]
-pub fn session_passthrough(config: &Config) -> Option<Rule> {
-    llm_passthrough_rule(config, &mut Vec::new())
+pub fn session_passthrough(config: &Config) -> Vec<Rule> {
+    llm_passthrough_rules(config, &mut Vec::new())
 }
 
-fn llm_passthrough_rule(config: &Config, diagnostics: &mut Vec<Diagnostic>) -> Option<Rule> {
+fn llm_passthrough_rules(config: &Config, diagnostics: &mut Vec<Diagnostic>) -> Vec<Rule> {
     let registry = AdapterRegistry::builtin();
     let Some(adapter) = registry.get(&config.agent.adapter) else {
         // Without `llm.endpoint` there is nothing to let through for an
         // unknown adapter, and nothing to report either.
-        config.llm.endpoint.as_ref()?;
+        if config.llm.endpoint.is_none() {
+            return Vec::new();
+        }
         diagnostics.push(
             Diagnostic::builder(codes::CONFIG_003, Severity::Warning)
                 .why(format!(
@@ -681,7 +683,7 @@ fn llm_passthrough_rule(config: &Config, diagnostics: &mut Vec<Diagnostic>) -> O
                 )
                 .build(),
         );
-        return None;
+        return Vec::new();
     };
     adapter.llm_passthrough(&config.llm)
 }
@@ -951,7 +953,7 @@ mod tests {
         assert!(config.llm.endpoint.is_none());
         let (rules, _) = bundled_rules(&config, &[], SessionId::new());
         assert!(
-            rules.passthrough().is_none(),
+            rules.passthrough().is_empty(),
             "nothing to pass through without llm.endpoint"
         );
         assert!(
@@ -1012,7 +1014,7 @@ mod tests {
             Some("https://llm.example.net/api/v1/")
         );
         let (rules, _) = bundled_rules(&resolved.config, &resolved.profiles, SessionId::new());
-        let passthrough = rules.passthrough().expect("a passthrough rule");
+        let passthrough = rules.passthrough().first().expect("a passthrough rule");
         assert_eq!(passthrough.matcher.host.to_string(), "llm.example.net");
     }
 
@@ -1051,8 +1053,13 @@ mod tests {
             .resolve(&SessionRequest::default())
             .expect("resolves");
         let (rules, _) = bundled_rules(&resolved.config, &resolved.profiles, SessionId::new());
-        let passthrough = rules.passthrough().expect("a passthrough rule");
-        assert_eq!(passthrough.matcher.host.to_string(), "api.example.com");
+        assert!(!rules.passthrough().is_empty(), "a passthrough rule");
+        assert!(
+            rules
+                .passthrough()
+                .iter()
+                .all(|rule| rule.matcher.host.to_string() == "api.example.com")
+        );
     }
 
     /// A resolver built from a hand-made configuration keeps it: a fresh

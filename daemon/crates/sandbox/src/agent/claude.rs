@@ -89,13 +89,13 @@ use std::ffi::OsString;
 use std::path::{Path, PathBuf};
 
 use humanitl_config::{Language, LlmConfig, llm_endpoint};
-use humanitl_core::rule::{Action, HostPattern, Matcher, Rule};
-use humanitl_core::{Diagnostic, HostName, Method, RuleId, Scheme};
+use humanitl_core::rule::Rule;
+use humanitl_core::{Diagnostic, HostName, Method, Scheme};
 use url::Url;
-use uuid::Uuid;
 
-use crate::agent::opencode::{PASSTHROUGH_RULE_ID, command_preflight};
+use crate::agent::opencode::command_preflight;
 use crate::agent::opencode_models::DEFAULT_RULES;
+use crate::agent::passthrough::{self, Route, Target};
 use crate::agent::{AgentAdapter, AgentContext, SandboxFile, briefing, skill};
 
 /// The id of the adapter as it stands in `agent.adapter`.
@@ -320,18 +320,21 @@ pub fn base_url(endpoint: &Url) -> String {
     base.as_str().trim_end_matches('/').to_owned()
 }
 
-/// The passthrough rule of Claude Code: the Messages endpoints of the
-/// Anthropic API, or of the gateway in `llm.endpoint` below its path prefix.
+/// The passthrough rules of Claude Code: `POST`, the only method it uses
+/// there, on exactly the Messages endpoints ([`MESSAGES_PATHS`]) of the
+/// Anthropic API, or of the gateway in `llm.endpoint` below its path prefix;
+/// one rule (HUM-568, [`passthrough`]).
 #[must_use]
-pub fn passthrough_rule(llm: &LlmConfig) -> Option<Rule> {
+pub fn passthrough_rules(llm: &LlmConfig) -> Vec<Rule> {
     let gateway = uses_gateway(llm);
-    let resolved = resolved_endpoint(llm)?;
-    let endpoint = &resolved;
-    let host = HostName::parse(endpoint.host_str()?).ok()?;
-    let scheme = Scheme::parse(endpoint.scheme())?;
-    let port = endpoint.port_or_known_default()?;
+    let Some(endpoint) = resolved_endpoint(llm) else {
+        return Vec::new();
+    };
+    let Some(target) = passthrough_target(&endpoint, gateway) else {
+        return Vec::new();
+    };
     let prefix = if gateway {
-        llm_endpoint::path_prefix(endpoint)
+        llm_endpoint::path_prefix(&endpoint)
     } else {
         String::new()
     };
@@ -339,27 +342,23 @@ pub fn passthrough_rule(llm: &LlmConfig) -> Option<Rule> {
         .iter()
         .map(|path| humanitl_core::exact_path_entry(&format!("{prefix}{path}")))
         .collect();
-    let matcher = Matcher::host(HostPattern::Exact(host))
-        .with_methods(vec![Method::POST])
-        .with_path_prefixes(paths)
-        .with_scheme(scheme)
-        .with_port(port);
-    Some(
-        Rule::new(
-            RuleId::from_uuid(Uuid::from_u128(PASSTHROUGH_RULE_ID)),
-            Action::Allow,
-            matcher,
-        )
-        // A gateway usually stands in the own network; the Anthropic API
-        // never does, and gets no private address.
-        .with_allow_private(gateway)
-        .bundled(true)
-        .passthrough_llm(true)
-        .with_note(format!(
+    passthrough::rules(&target, vec![Route::new(&[Method::POST], paths)])
+}
+
+/// Host, scheme, port and note of the passthrough to `endpoint`. A gateway
+/// usually stands in the own network; the Anthropic API never does, and gets
+/// no private address.
+fn passthrough_target(endpoint: &Url, gateway: bool) -> Option<Target> {
+    Some(Target {
+        host: HostName::parse(endpoint.host_str()?).ok()?,
+        scheme: Scheme::parse(endpoint.scheme())?,
+        port: endpoint.port_or_known_default()?,
+        allow_private: gateway,
+        note: format!(
             "LLM passthrough for Claude Code to {}. Logged, never held.",
             llm_endpoint::display(endpoint)
-        )),
-    )
+        ),
+    })
 }
 
 /// The host of the passthrough as `host:port`, for the briefing.
@@ -493,8 +492,8 @@ impl AgentAdapter for ClaudeCodeAdapter {
         DEFAULT_RULES
     }
 
-    fn llm_passthrough(&self, llm: &LlmConfig) -> Option<Rule> {
-        passthrough_rule(llm)
+    fn llm_passthrough(&self, llm: &LlmConfig) -> Vec<Rule> {
+        passthrough_rules(llm)
     }
 
     fn inference_endpoint(&self, llm: &LlmConfig) -> Option<Url> {

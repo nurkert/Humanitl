@@ -793,8 +793,12 @@ inference were held, a human would have to confirm several times a minute; nobod
 and after two hours they click everything away blindly.
 
 *What Humanitl does.* The passthrough is a rule, not a hole in the filter: exactly one host, one
-port, one scheme, the methods `POST` and `GET` (the model list is a `GET`) and a list of
-endpoints. An entry names an endpoint and never a whole API surface. The default of
+port, one scheme and a list of endpoints, each with only the method it needs. A rule holds one
+list of methods for all of its paths, so the passthrough is one rule per set of methods
+(HUM-568): `POST` on the endpoints that compute, `GET` on those that give information (the
+model list, and Ollama's `tags`, `ps` and `version`), and `POST` with `GET` only on a path the
+human writes into `llm.passthrough_paths` themselves. A `GET` to an inference endpoint or a
+`POST` to the model list is held. An entry names an endpoint and never a whole API surface. The default of
 `llm.passthrough_paths` is `["/v1/", "/api/"]`, and Humanitl does not pass those two through as
 prefixes: both would cover calls that change the server (`POST /api/pull`, `POST /api/create`,
 `DELETE /api/delete`, `POST /v1/files`, `/v1/uploads`, `/v1/vector_stores`,
@@ -814,6 +818,13 @@ a rule an exact entry ends with `?` (`/v1/models?`). A path with a `..` segment 
 prefix, because only the server resolves it; the same holds for every rule that lets a request
 through (`allow`, `redact`) and carries a path pattern or prefixes, also when disguised as
 `%2e%2e` or `..;` (HUM-204). Every other request to the same host is held normally.
+
+The adapters of agents with a provider of their own pair method and path the same way: Claude
+Code `POST` on `/v1/messages` and `/v1/messages/count_tokens`; Codex `POST` on `/responses` and
+`GET` on `/models` below its base (its WebSocket on `/responses` is an upgrade, which no
+passthrough rule matches, and is held); the Antigravity CLI with a key `POST` only on
+`models/{model}:generateContent` and `:streamGenerateContent` and `GET` only on the model list
+`models`, in `/v1beta` and `/v1`.
 
 The traffic is fully recorded and runs through the findings detectors; a hit produces a warning
 (`LLM_005`, with host and counts and never with the value found) but does not hold. Every
