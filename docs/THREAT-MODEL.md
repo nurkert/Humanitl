@@ -30,7 +30,7 @@ applies while `hold.hard_block_checksum_secrets` is on.
 | Asset | Where it lives | Why it matters | Protected by |
 |---|---|---|---|
 | Project data | the project directory, mounted at `/work` | client code and data under confidentiality and GDPR obligations | the three guarantees; no egress except approved requests and the declared LLM host |
-| Credentials | the host's environment, `~/.ssh`, `~/.netrc`, keyrings, tokens in other processes | a stolen token opens systems far beyond the project | PID namespace, mount allowlist, clean environment (`--clearenv`), the LLM key only as a sandbox file |
+| Credentials | the host's environment, `~/.ssh`, `~/.netrc`, keyrings, tokens in other processes | a stolen token opens systems far beyond the project | PID namespace, mount allowlist, clean environment (`--clearenv`), the LLM key only as a sandbox file (for Claude Code moved into the agent's environment inside the sandbox, HUM-514) |
 | LLM prompts | in flight to the LLM host, in the recording | they carry whatever code the agent shows the model | declared side channel; full recording and findings scan; the user chooses the host |
 | Audit log | `$XDG_DATA_HOME/humanitl/audit/audit.jsonl`, anchors in `humanitl.db` | evidence of what an agent actually sent out | hash chain with HMAC, anchors in file and database |
 | CA key | `$XDG_DATA_HOME/humanitl/ca/ca.key`, `0600` | whoever has it can forge TLS for every connection that trusts the Humanitl CA | never in the sandbox, never in the host trust store; trusted only inside the sandbox |
@@ -186,9 +186,14 @@ repeats only for findings new in the run or last warned about 15 minutes or more
 or evicted fingerprint warns again, HUM-354), and with
 `hold.hard_block_checksum_secrets` a checksum-confirmed secret is blocked (`HOLD_004`). The access key of a provider (HUM-140) lives in
 the system keyring (on macOS the login Keychain, HUM-349; the Seatbelt profile reaches no
-`securityd` and no `~/Library/Keychains`, so the agent cannot ask for it) and reaches the agent
-only as a sandbox file; it is masked in the recording and a
-finding everywhere except in `Authorization` towards `llm.endpoint`. With several saved model
+`securityd` and no `~/Library/Keychains`, so the agent cannot ask for it) and reaches the sandbox
+only as a sandbox file. For Claude Code, which reads its key only from its environment, a shell
+inside the sandbox reads that file and exports `ANTHROPIC_API_KEY` (or `ANTHROPIC_AUTH_TOKEN`
+towards a gateway) before it starts the agent; the key never stands in the plan's environment or
+in an `argv` (HUM-514). It is masked in the recording and a
+finding everywhere except in `Authorization`, or `X-Api-Key` for Claude Code, towards the agent's
+inference endpoint (`llm.endpoint`, for Claude Code without it `api.anthropic.com:443`, whose
+passthrough covers only `/v1/messages` and `/v1/messages/count_tokens`). With several saved model
 servers (HUM-289) each has its own keyring item, and only the active server's origin gets a key and
 is the passthrough of the next session; a probe sends a saved server's key only to that server's own
 origin, never to another's; an endpoint from the environment or the command line above the active
@@ -1285,6 +1290,7 @@ These attackers are not defended against, and Humanitl does not claim to:
 | 2026-11-19 | K-33: each jail of the kernel level hides the unit's other programs behind `/dev/null`, allows no further user namespace (`--disable-userns`), remounts its root, `/dev` and the empty tmpfs of the guest root read-only, binds the masks over the project from tmpfs mounts of the unit with `noexec`, and lays on a seccomp filter that refuses `execveat` and, except for the emulator, `memfd_create` without `MFD_NOEXEC_SEAL`; residual: code a taken-over process runs in its own memory, and the unit's programs under the guest's `/usr` in the root daemon's jail | HUM-557 |
 | 2026-11-19 | K-36 second part: install and update as a maintenance run without a project, only the recipe's hosts without a hold as rules of the run, the takeover checked, verified and switched by the daemon, the version pinned | HUM-563 |
 | 2026-11-20 | K-36 complete (third part): login and configuration runs of the depot program; only the credential file goes back, through a guard against persistence, account swap and older tokens of parallel sessions, every outcome in the audit log as `agent.credential_writeback`; the covert channel through the credential file named; configuration only after confirmation; a pasted callback delivered inside the run, never a forwarded port | HUM-520 |
+| 2026-11-20 | K-02: Claude Code (HUM-514) gets the provider key from its sandbox file through a shell inside the sandbox that exports `ANTHROPIC_API_KEY` or `ANTHROPIC_AUTH_TOKEN`, never through the plan's environment or `argv`; the key is no finding in `X-Api-Key` towards the agent's inference endpoint, `api.anthropic.com:443` for Claude Code without `llm.endpoint`, whose passthrough covers only the Messages endpoints | HUM-514 |
 
 Every security-relevant change to the shim, the mount allowlist, the filter or the passthrough gets
 a line here. Vulnerabilities are reported as described in

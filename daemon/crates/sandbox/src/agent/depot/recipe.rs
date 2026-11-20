@@ -281,12 +281,38 @@ pub const KNOWN: &[KnownAgent] = &[
             // the vendor; they are to be measured in the owner walkthrough
             // (HUM-553) before a format is declared here. Until then nothing
             // is taken back and `agents login claude` answers `AGENT_014`.
+            // Re-read 2026-11-20 (HUM-514): code.claude.com/docs/en/
+            // authentication names only place and mode (`~/.claude/
+            // .credentials.json`, `0600`, under `CLAUDE_CONFIG_DIR` when set),
+            // `claude auth login`, the prompt `Paste code here if prompted`
+            // and the sign-in hosts (network-config: `claude.ai`,
+            // `claude.com`, `platform.claude.com`, `sso.claude.com`), no key
+            // of the file.
             credential_format: None,
             login_run: None,
-            // code.claude.com/docs/en/settings (2026-11-16, HUM-514): `hooks`,
-            // `apiKeyHelper`, `statusLine`, `mcpServers` and `env` make the
-            // agent run a command or change what it runs.
-            command_keys: &["hooks", "apiKeyHelper", "statusLine", "mcpServers", "env"],
+            // code.claude.com/docs/en/settings-reference, settings index
+            // (2026-11-20, HUM-514): every key of a settings file that runs
+            // a command (`apiKeyHelper`, `awsAuthRefresh`,
+            // `awsCredentialExport`, `gcpAuthRefresh`, `otelHeadersHelper`,
+            // `fileSuggestion`, `statusLine`, `hooks`, `processWrapper`,
+            // `policyHelper`, `sshHostCommands`), `env`, which changes what
+            // runs, and `mcpServers` of `.claude.json`, which starts servers
+            // (code.claude.com/docs/en/settings, "~/.claude.json").
+            command_keys: &[
+                "hooks",
+                "apiKeyHelper",
+                "statusLine",
+                "mcpServers",
+                "env",
+                "awsAuthRefresh",
+                "awsCredentialExport",
+                "gcpAuthRefresh",
+                "otelHeadersHelper",
+                "fileSuggestion",
+                "processWrapper",
+                "policyHelper",
+                "sshHostCommands",
+            ],
         }),
     },
     // github.com/openai/codex README (2026-11-17): `npm install -g

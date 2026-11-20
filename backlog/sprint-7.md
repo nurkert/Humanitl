@@ -4175,6 +4175,128 @@ Sitzung, die Anmeldung im Depot.
    Wegwerf-Sitzung, mit API-Schlüssel aus dem Schlüsselbund.
 2. Die Anmeldedaten des Hosts erreichen die Sandbox nicht.
 
+### Stand nach der Umsetzung (2026-11-20)
+
+Gebaut: `daemon/crates/sandbox/src/agent/claude.rs` (`ClaudeCodeAdapter`,
+dritter Eintrag im Register, `agent.adapter = "claude"`, auch in Katalog und
+App). Jede Angabe stammt aus der Doku des Herstellers, gelesen 2026-11-20,
+und steht mit Adresse im Code; nichts ist an einem echten `claude` gemessen.
+
+- Erkennung wie `OpenCode`: ein natives Programm (setup, „Install with npm":
+  das npm-Paket verlinkt dasselbe Binary, „does not itself invoke Node"),
+  also auch aus `~/.local/bin` des nativen Installers gebunden (HUM-278).
+  `AGENT_001` nennt den nativen Installer
+  `curl -fsSL https://claude.ai/install.sh | bash`.
+- Env-Kit: `CLAUDE_CONFIG_DIR=<home>/.claude` auf dem tmpfs-Home der Sitzung
+  (jede Sitzung frisch), `CLAUDE_CODE_DISABLE_NONESSENTIAL_TRAFFIC=1`,
+  `DISABLE_UPDATES=1` (auch vom Host), `NODE_EXTRA_CA_CERTS` auf die CA der
+  Sandbox (env-vars, network-config). `HTTPS_PROXY` kommt wie für jeden
+  Agenten aus dem Env-Kit des Profils. Im Depot setzt das Rezept
+  `CLAUDE_CONFIG_DIR` auf die Kopie der Sitzung, und dieser Wert gewinnt.
+- Schlüssel: aus `llm.api_key_ref` wie bei jedem Adapter, als Datei aus einem
+  memfd (`/etc/humanitl/claude/llm-api-key`). Claude Code liest ihn nur aus
+  der Umgebung; neue Methode `AgentAdapter::launcher` stellt deshalb
+  `/bin/sh -c <script> claude` vor das endgültige Kommando des Agenten (nicht
+  vor eine Shell des Aufrufers), das die Datei mit dem eingebauten `read`
+  liest, `ANTHROPIC_API_KEY` exportiert und den Agenten per `exec` startet.
+  Der Schlüssel steht so in keinem `argv` und in keiner Variable des Plans
+  (bwrap trägt `--setenv` in seiner eigenen Kommandozeile). Mit
+  `llm.endpoint` (außer `api.anthropic.com`) `ANTHROPIC_BASE_URL` (ohne
+  Zugangsdaten, Query und `/v1`, Loopback über den Alias-Namen),
+  `ANTHROPIC_AUTH_TOKEN` statt `ANTHROPIC_API_KEY` und das erste Modell aus
+  `llm.models` als `ANTHROPIC_MODEL`. Die Sitzungsliste zeigt das Programm
+  hinter dem Starter (`agent::shown_program`).
+- Durchreiche: `api.anthropic.com:443` ohne `llm.endpoint`, sonst das
+  Gateway, jeweils nur `POST` auf `/v1/messages` und
+  `/v1/messages/count_tokens` (llm-gateway-protocol, „API formats").
+  Maske und Fund: der Schlüssel gehört zum Inferenz-Endpunkt des Adapters
+  und zu der Kopfzeile, die der Adapter nennt (`AgentAdapter::key_header`,
+  Vorgabe `authorization`, Claude Code ohne Gateway `x-api-key`); beides
+  trägt die Maske (`SecretMasks::add_for_header`, `expected_in`,
+  `Recorder::mask_secret_in`). So bleibt etwa der Schlüssel von `OpenCode`
+  in `X-Api-Key` ein Fund. `session.rs` fragt den Adapter nach der
+  Durchreiche auch ohne `llm.endpoint`.
+- Direkt ist nur die Anthropic-API selbst (`is_direct_api`: `https`, Host
+  `api.anthropic.com`, Port 443, Pfad leer oder `/v1`, ohne Zugangsdaten,
+  Query, Fragment); jeder andere Endpunkt, auch derselbe Host mit anderem
+  Port oder Pfad, ist ein Gateway mit `ANTHROPIC_BASE_URL` und
+  `ANTHROPIC_AUTH_TOKEN`. Umgebung, Starter, Durchreiche, Briefing, Hinweis
+  und Maske lesen denselben aufgelösten Endpunkt (`resolved_endpoint`).
+- Briefing unter Linux als verwaltete `/etc/claude-code/CLAUDE.md`, Skill
+  `humanitl` als Enterprise-Skill `/etc/claude-code/.claude/skills/`
+  (memory, skills); beide gelten auch im Depot. Unter macOS
+  `~/.claude/CLAUDE.md` und ein persönlicher Skill. Dazu ein Satz, dass die
+  eigene Sandbox von Claude Code bleibt und die äußere Grenze Humanitl ist.
+- Hinweis HUM-516: `inference_endpoint` nennt `api.anthropic.com` ohne
+  `llm.endpoint`.
+- Depot: `command_keys` nach dem Index der settings-reference ergänzt
+  (`awsAuthRefresh`, `awsCredentialExport`, `gcpAuthRefresh`,
+  `otelHeadersHelper`, `fileSuggestion`, `processWrapper`, `policyHelper`,
+  `sshHostCommands`).
+- Docs: SECURITY (Fund), THREAT-MODEL K-02 und Gefahrenzeile Zugangsdaten
+  (en, de), README-Liste der Agenten.
+
+Tests: `daemon/crates/sandbox/tests/claude_adapter.rs` (Register, Kommando,
+Env-Kit, Gateway, Starter, Dateien, Durchreiche, Hinweis, Vorprüfung,
+Rezept, und im echten bwrap ein Stellvertreter hinter dem Starter neben
+einem gefälschten Host-Home mit `~/.claude/.credentials.json` und
+`~/.claude.json`: Schlüssel in der Umgebung, nicht in `argv` oder der
+Umgebung des Plans, CA lesbar, Briefing und Skill da, Konfigurationsordner
+leer und schreibbar, Markierung des Host-Logins nirgends unter `/home`,
+`/etc`, `/tmp`, `/work`, `/run`), Wächter des Depots mit dem Starter
+(`depot/tests.rs`), `ipc` (Schlüssel als Datei und über den Starter, Maske
+an `api.anthropic.com:443`; keine Shell des Aufrufers bekommt den Starter),
+`proxy::findings` (`X-Api-Key` nur am eigenen Ziel), Widget-Test der Wahl in
+den Einstellungen; Katalog (`catalog/*.toml`, erzeugter Katalog der App) mit
+dem Titel „Claude Code". Mutationsbeweise, jeder rot: Host-Login als Datei in den
+Konfigurationsordner kopiert, `NODE_EXTRA_CA_CERTS` entfernt, Schlüssel als
+`ANTHROPIC_API_KEY` in der Umgebung des Plans, Starter weggelassen,
+Maske nach `llm.endpoint` statt nach dem Inferenz-Endpunkt, Direktprüfung
+nur am Host (Sandbox- und ipc-Test rot), Maske ohne Vergleich der Kopfzeile
+(core- und proxy-Test rot), Fund nur in `authorization` freigestellt
+(proxy-Test rot).
+
+Abweichungen und offen:
+- **Nur die Messages-Endpunkte in der Durchreiche**, nicht der ganze Host
+  `api.anthropic.com`: so bleibt K-02 („genaue Inferenz-Endpunkte") wahr.
+  Feature-Flags und Telemetrie schaltet
+  `CLAUDE_CODE_DISABLE_NONESSENTIAL_TRAFFIC` ab; die Domain-Prüfung von
+  WebFetch und jeder andere Pfad werden gehalten wie jede Anfrage.
+  Mitgelieferte Regeln sind eine Datei für alle Adapter
+  (`rules/default.yaml`); eine Freigabe des ganzen Hosts dort gälte auch für
+  `OpenCode` und pi.
+- **Kein „persistent je Projekt" unter `$XDG_DATA_HOME/humanitl`** für den
+  Host-Fall (Punkt 4): Ein Adapter kann keine Einhängung des Hosts
+  beitragen (Zusage 1 des Moduls), und ein schreibbarer Ordner, der Sitzungen
+  überdauert, wäre ein Weg, `hooks` oder `apiKeyHelper` in die nächste
+  Sitzung zu tragen. Der Ordner ist je Sitzung frisch; wer Bestand will,
+  nimmt das Depot, dessen Konfigurationslauf Schlüssel mit Befehlen
+  hervorhebt. Kandidat für ein eigenes Issue, falls gewünscht.
+- **Zugangsdatei und Anmeldelauf nicht erklärt**: Die Doku nennt für
+  `.credentials.json` nur Ort und Modus `0600`, keinen Schlüssel; damit
+  bleiben `credential_format` und `login_run` `None`, und `agents login
+  claude` antwortet weiter `AGENT_014`. Was zu messen ist, steht in
+  HUM-553 Punkt 3.
+- **Kein Ende-zu-Ende-Lauf mit dem echten `claude` in der CI**: Es dürfte
+  hier nicht installiert und lokal nicht geprüft werden, ein ungeprüfter
+  CI-Job gegen ein schnell wechselndes Fremdprogramm mit einem
+  Stellvertreter, der die SSE-Antworten der Messages-API nachbaut, wäre ein
+  Tor, das ohne eigene Probe rot werden kann. Belegt ist der Weg mit dem
+  Stellvertreter-Programm im echten bwrap; der echte Lauf steht in HUM-553.
+  Kandidat für ein eigenes Issue: CI-Job `claude-e2e` mit `npm install -g
+  @anthropic-ai/claude-code` und `claude -p` gegen einen Stellvertreter
+  hinter `ANTHROPIC_BASE_URL`, ohne echten Schlüssel.
+- Ein Aufrufer, der in einer Shell (`humanitl run -- bash`) `claude` von Hand
+  startet, bekommt den Schlüssel nicht in die Umgebung (nur die Datei);
+  der Starter gilt nur dem Agenten selbst.
+- Mit Schlüssel startet der Shim `/bin/sh`, nicht `claude`: Fehlt das
+  Programm doch, endet die Shell mit 127 und ihrer eigenen Meldung, und
+  `AGENT_005` (HUM-137) erkennt den Fehlstart nicht; die Vorprüfung
+  (`AGENT_001`) fängt den Fall vor dem Start. Dasselbe gilt schon für den
+  Starter von `OpenCode` unter macOS.
+- Unter macOS nicht gegengeprüft (weder Lauf noch Übersetzung für
+  `aarch64-apple-darwin`): Briefing und Skill unter `~/.claude`.
+
 ---
 
 ## HUM-515 · Agent-Adapter Codex
@@ -5822,6 +5944,32 @@ Durchgang mit der KI über die ganze Liste.
    `hum-486-upstream-report.md`), danach den Platzhalter
    „Upstream-Bericht: (Link folgt nach Freigabe des Eigentümers)" unter
    HUM-486 durch den Link ersetzen.
+3. HUM-514, Claude Code im Depot: die Anmeldung einmal mit einem echten
+   Konto im Wartungslauf messen, damit `credential_format` und `login_run`
+   im Rezept (`daemon/crates/sandbox/src/agent/depot/recipe.rs`) belegt
+   werden können; die Doku (code.claude.com/docs/en/authentication, gelesen
+   2026-11-20) nennt nur Ort und Modus. Zu messen, ohne den Inhalt zu
+   übernehmen oder zu zeigen:
+   - die Schlüssel von `$CLAUDE_CONFIG_DIR/.credentials.json` nach
+     `claude auth login` mit Abo-Konto, je mit Form (Token, Text, Zahl,
+     Flag, Objekt), welche Pflicht sind, welcher den Ablauf trägt und in
+     welcher Einheit (Sekunden oder Millisekunden), welcher das Konto
+     nennt; ob die Datei nach einer Erneuerung dieselben Schlüssel trägt;
+   - ob mit gesetztem `CLAUDE_CONFIG_DIR` auch `.claude.json` unter diesem
+     Ordner liegt, und welche Felder darin eine zweite Sitzung braucht, um
+     angemeldet und ohne erneute Einrichtung zu starten (etwa
+     `oauthAccount`, die Felder der ersten Einrichtung);
+   - das Anmeldekommando (`claude auth login` laut Doku), die Hosts, die
+     der Lauf wirklich erreicht (die Doku nennt `claude.ai`, `claude.com`,
+     `platform.claude.com`, `sso.claude.com`), und ob die Anzeige
+     „Paste code here if prompted" ohne Rückruf auf den Loopback genügt;
+   - danach `humanitl go` mit Claude Code und einem echten API-Schlüssel
+     aus dem Schlüsselbund bis zum Prompt (Akzeptanzkriterium 1 von
+     HUM-514, bisher nur mit dem Stellvertreter belegt), mit der einmaligen
+     Frage, ob der Schlüssel das Abo ersetzt; dabei ansehen, ob die
+     Prüfung der Domain von WebFetch auf `api.anthropic.com` (nicht in der
+     Durchreiche) gehalten erscheint, und ob die Warnung „ignored all of
+     the NODE_EXTRA_CA_CERTS file" ausbleibt.
 
 Weitere Punkte hängen spätere Issues hier an.
 

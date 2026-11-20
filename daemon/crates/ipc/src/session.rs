@@ -603,8 +603,9 @@ impl BundledRules {
 /// weil nur er weiß, welche Pfade sein Agent für Inferenz braucht.
 ///
 /// `None` heißt in jedem Fall: es wird gefragt. Ohne `llm.endpoint` gibt es
-/// nichts durchzulassen, und ein unbekannter Adapter bekommt keine erfundene
-/// Regel — er bekommt einen Befund.
+/// nichts durchzulassen, außer für einen Adapter mit eigenem Anbieter (Claude
+/// Code und `api.anthropic.com`, HUM-514), und ein unbekannter Adapter bekommt
+/// keine erfundene Regel — er bekommt einen Befund.
 /// Die erklärte Durchreiche, die eine Sitzung mit dieser Konfiguration
 /// bekäme: dieselbe Regel, die [`bundled_rules`] in den Speicher legt
 /// (HUM-400).
@@ -619,9 +620,11 @@ pub fn session_passthrough(config: &Config) -> Option<Rule> {
 }
 
 fn llm_passthrough_rule(config: &Config, diagnostics: &mut Vec<Diagnostic>) -> Option<Rule> {
-    config.llm.endpoint.as_ref()?;
     let registry = AdapterRegistry::builtin();
     let Some(adapter) = registry.get(&config.agent.adapter) else {
+        // Without `llm.endpoint` there is nothing to let through for an
+        // unknown adapter, and nothing to report either.
+        config.llm.endpoint.as_ref()?;
         diagnostics.push(
             Diagnostic::builder(codes::CONFIG_003, Severity::Warning)
                 .why(format!(

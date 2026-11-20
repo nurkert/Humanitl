@@ -94,7 +94,7 @@ use humanitl_core::{Diagnostic, FixAction, FlowEvent, SandboxNoticeSink, Severit
 use humanitl_proxy::rules_store::RulesStore;
 use humanitl_proxy::session::{SessionSettings, SessionState};
 use humanitl_recorder::Recorder;
-use humanitl_sandbox::agent::{opencode, pi};
+use humanitl_sandbox::agent::{claude, opencode, pi};
 use humanitl_sandbox::summary::SessionSummary;
 use humanitl_sandbox::{
     AdapterRegistry, AgentContext, AgentKey, Backend, CheckResult, DisposableLayer, IsolationCheck,
@@ -246,6 +246,14 @@ pub static VISIBLE_ENV: &[&str] = &[
     pi::ENV_OFFLINE,
     pi::ENV_SKIP_VERSION_CHECK,
     pi::ENV_TELEMETRY,
+    // The Claude Code adapter (HUM-514), by name for the same reason. The key
+    // variables `ANTHROPIC_API_KEY` and `ANTHROPIC_AUTH_TOKEN` are not here:
+    // the plan never carries them, a shell inside the sandbox sets them.
+    claude::ENV_CONFIG_DIR,
+    claude::ENV_NONESSENTIAL_TRAFFIC,
+    claude::ENV_DISABLE_UPDATES,
+    claude::ENV_BASE_URL,
+    claude::ENV_MODEL,
 ];
 
 /// Die Variable, die allein die Sitzung kennt.
@@ -3213,7 +3221,7 @@ impl Inner {
             );
         }
         let agent = AgentFacts {
-            command: humanitl_sandbox::agent::opencode::shown_program(&prepared.session.command)
+            command: humanitl_sandbox::agent::shown_program(&prepared.session.command)
                 .map(|command| command.to_string_lossy().into_owned())
                 .unwrap_or_default(),
             path: sandbox_path_of(prepared),
@@ -4084,11 +4092,15 @@ impl Inner {
             // from the adapter, and the bind beside it serves `PATH` only.
             // The depot points a bare name of its agent at the program's
             // place in the sandbox (HUM-518), the caller's command included.
-            command: if agent.program.is_some() || agent.depot.mount.is_some() {
-                agent.command.clone()
-            } else {
-                Self::command(&config, command, &agent.command)
-            },
+            command: with_launcher(
+                &config,
+                &agent.launcher,
+                if agent.program.is_some() || agent.depot.mount.is_some() {
+                    agent.command.clone()
+                } else {
+                    Self::command(&config, command, &agent.command)
+                },
+            ),
             files: agent.files,
             agent_program: agent.program,
             agent_depot: agent.depot,
@@ -4313,6 +4325,7 @@ impl Inner {
             warnings,
             depot: depot.session,
             scratch: depot.scratch,
+            launcher: adapter.launcher(&ctx),
         })
     }
 
@@ -4381,7 +4394,8 @@ impl Inner {
         }
         let key = self.keys.lookup(&key_ref)?;
         if let Some(recorder) = &self.recorder {
-            recorder.mask_secret(key.expose(), endpoint_authority(config).as_deref());
+            let (authority, header) = key_target(config);
+            recorder.mask_secret_in(key.expose(), authority.as_deref(), header);
         }
         Ok(AgentKey::Key(key))
     }
@@ -4648,6 +4662,20 @@ struct AgentContribution {
     depot: humanitl_sandbox::agent::depot::DepotSession,
     /// The depot's scratch of a start, handed to the sandbox at its launch.
     scratch: Option<humanitl_sandbox::agent::depot::Scratch>,
+    /// The adapter's words in front of the agent's final command
+    /// ([`humanitl_sandbox::AgentAdapter::launcher`], HUM-514).
+    launcher: Vec<OsString>,
+}
+
+/// The final command with the adapter's launcher in front, when the command
+/// is the configured agent (HUM-514). A caller's shell or another program
+/// stays as it is: the launcher hands a secret to the agent and to nothing
+/// else.
+fn with_launcher(config: &Config, launcher: &[OsString], command: Vec<OsString>) -> Vec<OsString> {
+    if launcher.is_empty() || !humanitl_sandbox::agent::command_is_the_agent(config, &command) {
+        return command;
+    }
+    launcher.iter().cloned().chain(command).collect()
 }
 
 /// Was ein Sandbox-Profil, das sich nicht lesen lässt, beim Auflösen eines
@@ -5601,6 +5629,32 @@ fn endpoint_authority(config: &Config) -> Option<String> {
         .map(|authority| authority.to_string())
 }
 
+/// Host and port the agent of this configuration sends its key to, and the
+/// header it sends it in (HUM-514): both from its adapter, from the same
+/// endpoint its passthrough, briefing and cloud notice resolve to
+/// (`AgentAdapter::inference_endpoint`, `AgentAdapter::key_header`). That
+/// is `llm.endpoint` and `Authorization` for every adapter but Claude Code,
+/// which without a gateway says `api.anthropic.com:443` and `X-Api-Key`.
+/// There, and only there, the key is no finding. An unknown adapter keeps
+/// `llm.endpoint` and `Authorization`.
+fn key_target(config: &Config) -> (Option<String>, &'static str) {
+    let registry = AdapterRegistry::builtin();
+    let Some(adapter) = registry.get(&config.agent.adapter) else {
+        return (
+            endpoint_authority(config),
+            humanitl_core::secret_mask::KEY_HEADER_DEFAULT,
+        );
+    };
+    let authority = adapter
+        .inference_endpoint(&config.llm)
+        .and_then(|endpoint| {
+            let host = humanitl_core::HostName::parse(endpoint.host_str()?).ok()?;
+            let port = endpoint.port_or_known_default()?;
+            Some(humanitl_core::Authority::new(host, port).to_string())
+        });
+    (authority, adapter.key_header(&config.llm))
+}
+
 /// Ob eine Vorbereitung den Zugangsschlüssel des Modells braucht.
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
 enum KeyNeed {
@@ -6131,6 +6185,207 @@ mod tests {
                 "the key reached the environment as {name}"
             );
         }
+    }
+
+    /// With `agent.adapter = "claude"` and no `llm.endpoint` the key travels
+    /// as a sandbox file, and the launcher in front of the agent moves it
+    /// into `ANTHROPIC_API_KEY` inside the sandbox: it is in no `argv`, in no
+    /// variable of the plan, and no finding in `X-Api-Key` at
+    /// `api.anthropic.com:443` only (HUM-514).
+    ///
+    /// Mutation proofs: the key as a `--setenv` value (`ANTHROPIC_API_KEY`
+    /// in the adapter's `env`) turns the `argv` assert red; dropping the
+    /// launcher in `with_launcher` turns the command assert red;
+    /// `endpoint_authority` instead of `inference_authority` in `agent_key`
+    /// turns the mask assert red.
+    #[tokio::test]
+    async fn the_key_reaches_claude_code_through_a_file_and_its_launcher_only() {
+        const KEY: &str = "sk-ant-sandbox-0123456789abcdef";
+        let home = tempfile::TempDir::new().unwrap();
+        let paths = humanitl_config::Paths::new(humanitl_config::Env::from_pairs([(
+            "XDG_DATA_HOME",
+            home.path().join("data").display().to_string(),
+        )]));
+        let keys =
+            KeyStore::for_paths(&paths).with_secret_tool(Some(fake_secret_tool(home.path())));
+        let stored = keys
+            .store(&humanitl_config::secret::ApiKey::new(KEY).unwrap())
+            .unwrap();
+        let recorder = Recorder::open(
+            &home.path().join("data/humanitl.db"),
+            &home.path().join("data/blobs"),
+            humanitl_recorder::RecorderSettings::default(),
+        )
+        .unwrap();
+        let key_ref = stored.key_ref.to_string();
+        let service = service_configured(
+            &home,
+            "claude",
+            Some(&key_ref),
+            SandboxPorts::none()
+                .with_keys(keys)
+                .with_recorder(recorder.clone()),
+            |config| config.llm.endpoint = None,
+        );
+        let prepared = service
+            .inner
+            .prepare_keyed(&v1::sandbox_request::Plan::default(), &[], KeyNeed::Start)
+            .expect("the session is prepared");
+
+        let secret = prepared
+            .session
+            .files
+            .iter()
+            .find(|file| file.secret)
+            .expect("the key travels as a file");
+        assert_eq!(secret.dst, Path::new(claude::API_KEY_DST));
+        assert_eq!(secret.content, KEY.as_bytes());
+
+        let command: Vec<String> = prepared
+            .session
+            .command
+            .iter()
+            .map(|word| word.to_string_lossy().into_owned())
+            .collect();
+        assert_eq!(
+            command.get(..4),
+            Some(
+                &[
+                    "/bin/sh".to_owned(),
+                    "-c".to_owned(),
+                    claude::KEY_START_API_KEY.to_owned(),
+                    "claude".to_owned(),
+                ][..]
+            ),
+            "the launcher stands in front of the agent: {command:?}"
+        );
+        assert_eq!(
+            humanitl_sandbox::agent::shown_program(&prepared.session.command)
+                .map(|program| program.to_string_lossy().into_owned())
+                .as_deref()
+                .and_then(|program| Path::new(program).file_name())
+                .and_then(|name| name.to_str()),
+            Some("claude")
+        );
+
+        let argv = shell_line(&prepared.argv());
+        assert!(!argv.contains(KEY), "the key reached argv: {argv}");
+        for (name, value) in &prepared.session.session_env {
+            assert!(
+                !value.contains(KEY),
+                "the key reached the environment as {name}"
+            );
+            assert_ne!(name, claude::ENV_API_KEY, "the plan sets the key variable");
+        }
+        #[cfg(not(target_os = "macos"))]
+        assert!(
+            argv.contains(claude::ENV_NONESSENTIAL_TRAFFIC),
+            "the adapter contributed: {argv}"
+        );
+
+        let hash = humanitl_core::http::sha256(KEY.as_bytes());
+        let masks = recorder.masks();
+        assert!(masks.expected_in(&hash, "api.anthropic.com:443", "x-api-key"));
+        assert!(
+            !masks.expected_at(&hash, "api.anthropic.com:443"),
+            "the key goes in X-Api-Key, not in Authorization"
+        );
+        assert!(!masks.expected_in(&hash, "api.example.com:443", "x-api-key"));
+    }
+
+    /// `llm.endpoint` on the Anthropic host but another port and a path is a
+    /// gateway (HUM-514, review): the key goes as `ANTHROPIC_AUTH_TOKEN`
+    /// with `ANTHROPIC_BASE_URL`, and mask, header and passthrough name that
+    /// same target, never the default API on port 443.
+    ///
+    /// Mutation proof: `is_direct_api` that compares only the host turns the
+    /// launcher, environment and mask asserts red.
+    #[tokio::test]
+    async fn an_anthropic_host_on_another_port_is_a_gateway_for_claude_code() {
+        const KEY: &str = "sk-ant-gateway-0123456789abcdef";
+        const ENDPOINT: &str = "https://api.anthropic.com:8443/tenant/v1";
+        let home = tempfile::TempDir::new().unwrap();
+        let paths = humanitl_config::Paths::new(humanitl_config::Env::from_pairs([(
+            "XDG_DATA_HOME",
+            home.path().join("data").display().to_string(),
+        )]));
+        let keys =
+            KeyStore::for_paths(&paths).with_secret_tool(Some(fake_secret_tool(home.path())));
+        let stored = keys
+            .store(&humanitl_config::secret::ApiKey::new(KEY).unwrap())
+            .unwrap();
+        let recorder = Recorder::open(
+            &home.path().join("data/humanitl.db"),
+            &home.path().join("data/blobs"),
+            humanitl_recorder::RecorderSettings::default(),
+        )
+        .unwrap();
+        let key_ref = stored.key_ref.to_string();
+        let service = service_configured(
+            &home,
+            "claude",
+            Some(&key_ref),
+            SandboxPorts::none()
+                .with_keys(keys)
+                .with_recorder(recorder.clone()),
+            |config| config.llm.endpoint = Some(url::Url::parse(ENDPOINT).unwrap()),
+        );
+        let prepared = service
+            .inner
+            .prepare_keyed(&v1::sandbox_request::Plan::default(), &[], KeyNeed::Start)
+            .expect("the session is prepared");
+        assert_eq!(
+            prepared
+                .session
+                .command
+                .get(2)
+                .map(|word| word.to_string_lossy().into_owned()),
+            Some(claude::KEY_START_AUTH_TOKEN.to_owned())
+        );
+        assert!(
+            prepared
+                .session
+                .session_env
+                .iter()
+                .any(|(name, value)| name == claude::ENV_BASE_URL
+                    && value == "https://api.anthropic.com:8443/tenant"),
+            "{:?}",
+            prepared.session.session_env
+        );
+        let hash = humanitl_core::http::sha256(KEY.as_bytes());
+        let masks = recorder.masks();
+        assert!(masks.expected_at(&hash, "api.anthropic.com:8443"));
+        assert!(!masks.expected_in(&hash, "api.anthropic.com:443", "x-api-key"));
+        assert!(!masks.expected_at(&hash, "api.anthropic.com:443"));
+
+        let config = (*service.inner.config()).clone();
+        let rule = crate::session::session_passthrough(&config).expect("a passthrough");
+        assert_eq!(rule.matcher.port, Some(8443));
+        assert_eq!(
+            rule.matcher.path_prefixes,
+            ["/tenant/v1/messages?", "/tenant/v1/messages/count_tokens?"]
+        );
+    }
+
+    /// A caller's shell gets no launcher: the key goes to the agent, not to
+    /// any program the caller names (HUM-514).
+    #[test]
+    fn a_shell_of_the_caller_gets_no_claude_launcher() {
+        let mut config = humanitl_config::Config::default();
+        "claude".clone_into(&mut config.agent.adapter);
+        let launcher = vec![
+            OsString::from("/bin/sh"),
+            OsString::from("-c"),
+            OsString::from(claude::KEY_START_API_KEY),
+            OsString::from("claude"),
+        ];
+        let shell = vec![OsString::from("bash")];
+        assert_eq!(with_launcher(&config, &launcher, shell.clone()), shell);
+        let agent = vec![OsString::from("/run/humanitl/agent/claude")];
+        assert_eq!(
+            with_launcher(&config, &launcher, agent.clone()).len(),
+            launcher.len() + agent.len()
+        );
     }
 
     /// Zeichnet eine Anfrage mit `Authorization: Bearer <key>` auf und liest

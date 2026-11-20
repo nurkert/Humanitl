@@ -73,7 +73,7 @@ fn provider(ctx: &AgentContext) -> Value {
 #[test]
 fn the_registry_knows_pi_next_to_opencode() {
     let registry = AdapterRegistry::builtin();
-    assert_eq!(registry.ids(), vec!["opencode", "pi"]);
+    assert_eq!(registry.ids(), vec!["opencode", "pi", "claude"]);
     let adapter = registry.get("pi").expect("the pi adapter");
     assert_eq!(adapter.id(), "pi");
     assert_eq!(adapter.program(), "pi");

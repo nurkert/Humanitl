@@ -645,6 +645,38 @@ fn the_launcher_of_an_adapter_does_not_hide_or_block_the_agent_command() {
     assert_eq!(found.code, AGENT_017);
 }
 
+/// Claude Code's key launcher (HUM-514) in front of the depot program passes
+/// the guard; in front of a host program it does not.
+#[test]
+fn the_key_launcher_of_claude_code_keeps_the_guard() {
+    use crate::agent::AgentAdapter as _;
+
+    let fx = Fixture::new().with_claude();
+    let mut config = depot_for("claude");
+    "claude".clone_into(&mut config.agent.adapter);
+    config.agent.command = Some(vec!["claude".into()]);
+    let plan = fx
+        .plan(&config, &SourceLock::none(), &["claude"], false)
+        .unwrap();
+    assert!(plan.session.agent_command, "the agent's own command");
+    let ctx = crate::agent::AgentContext::new(
+        SessionId::nil(),
+        PathBuf::from("/work"),
+        humanitl_config::LlmConfig::default(),
+    )
+    .with_llm_key(crate::agent::AgentKey::Withheld);
+    let launcher = crate::agent::ClaudeCodeAdapter::new().launcher(&ctx);
+    assert!(!launcher.is_empty());
+    let wrapped: Vec<String> = strings(&[launcher.clone(), plan.command.clone()].concat());
+    assert_eq!(wrapped[0], "/bin/sh");
+    guard_of(&wrapped, plan.session.clone()).unwrap();
+
+    let other: Vec<String> =
+        strings(&[launcher, vec![OsString::from("/usr/local/bin/claude")]].concat());
+    let found = guard_of(&other, plan.session).unwrap_err();
+    assert_eq!(found.code, AGENT_017);
+}
+
 // ---- the maintenance run (HUM-563) ----
 
 /// A maintenance session whose work place is `home`.

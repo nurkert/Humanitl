@@ -55,13 +55,19 @@ pub struct SecretMasks {
     secrets: Arc<RwLock<Vec<Known>>>,
 }
 
-/// Ein bekanntes Geheimnis, die Prüfsumme, unter der ein Fund es nennt, und
-/// das Ziel (`host:port`), an das es gehört.
+/// Ein bekanntes Geheimnis, die Prüfsumme, unter der ein Fund es nennt, das
+/// Ziel (`host:port`), an das es gehört, und die Kopfzeile, in der es dort
+/// steht (klein geschrieben, Vorgabe [`KEY_HEADER_DEFAULT`]).
 struct Known {
     value: Zeroizing<String>,
     hash: [u8; 32],
     authority: Option<String>,
+    header: String,
 }
+
+/// Die Kopfzeile, in der ein Schlüssel ohne eigene Angabe an seinem Ziel
+/// steht: `Authorization` (HUM-140).
+pub const KEY_HEADER_DEFAULT: &str = "authorization";
 
 /// Der Wert einer Hex-Ziffer, groß oder klein geschrieben.
 fn hex_digit(byte: u8) -> Option<u8> {
@@ -157,22 +163,32 @@ impl SecretMasks {
     /// Steht es schon da, gilt das neue Ziel: Ein Schlüssel gehört zu einem
     /// Zeitpunkt zu genau einem Endpunkt.
     pub fn add_for(&self, secret: &str, authority: Option<&str>) {
+        self.add_for_header(secret, authority, KEY_HEADER_DEFAULT);
+    }
+
+    /// Wie [`SecretMasks::add_for`], mit der Kopfzeile, in der das
+    /// Geheimnis an `authority` steht (HUM-514: `x-api-key` für Claude Code
+    /// mit `ANTHROPIC_API_KEY`). Nur dort ist es kein Fund.
+    pub fn add_for_header(&self, secret: &str, authority: Option<&str>, header: &str) {
         if secret.is_empty() {
             return;
         }
         let authority = authority.map(str::to_ascii_lowercase);
+        let header = header.to_ascii_lowercase();
         let mut secrets = self.secrets.write().unwrap_or_else(PoisonError::into_inner);
         if let Some(known) = secrets
             .iter_mut()
             .find(|known| known.value.as_str() == secret)
         {
             known.authority = authority;
+            known.header = header;
             return;
         }
         secrets.push(Known {
             value: Zeroizing::new(secret.to_owned()),
             hash: sha256(secret.as_bytes()),
             authority,
+            header,
         });
     }
 
@@ -218,16 +234,26 @@ impl SecretMasks {
     /// Ob ein Fund mit dieser Prüfsumme ([`crate::Finding::value_hash`]) ein
     /// bekanntes Geheimnis an dem Ziel ist, dem es gehört.
     ///
-    /// Der Aufrufer prüft dazu, dass der Fund in der Kopfzeile `Authorization`
-    /// steht; hier steht nur der Vergleich von Wert und Ziel.
+    /// Gefragt ist die Kopfzeile [`KEY_HEADER_DEFAULT`]; siehe
+    /// [`SecretMasks::expected_in`].
     #[must_use]
     pub fn expected_at(&self, hash: &[u8; 32], authority: &str) -> bool {
+        self.expected_in(hash, authority, KEY_HEADER_DEFAULT)
+    }
+
+    /// Ob ein Fund mit dieser Prüfsumme ein bekanntes Geheimnis an dem Ziel
+    /// und in der Kopfzeile ist, die ihm gehören (HUM-514): Ziel und
+    /// Kopfzeile kommen mit der Maske, nicht aus einer festen Liste. Der
+    /// Schlüssel von `OpenCode` in `X-Api-Key` bleibt so ein Fund.
+    #[must_use]
+    pub fn expected_in(&self, hash: &[u8; 32], authority: &str, header: &str) -> bool {
         self.secrets
             .read()
             .unwrap_or_else(PoisonError::into_inner)
             .iter()
             .any(|known| {
                 &known.hash == hash
+                    && known.header.eq_ignore_ascii_case(header)
                     && known
                         .authority
                         .as_deref()
@@ -424,6 +450,29 @@ mod tests {
         assert!(masks.expected_at(&hash, "192.168.1.20:11434"));
         assert!(!masks.expected_at(&hash, "evil.example:443"));
         assert!(!masks.expected_at(&sha256(b"sk-live-other"), "192.168.1.20:11434"));
+    }
+
+    /// The header comes with the mask (HUM-514): a key registered for
+    /// `X-Api-Key` is expected there and not in `Authorization`, and one
+    /// registered without a header only in `Authorization`.
+    ///
+    /// Mutation proof: `expected_in` without the header comparison turns the
+    /// second and the last assert red.
+    #[test]
+    fn a_known_secret_is_expected_only_in_the_header_of_its_mask() {
+        let masks = SecretMasks::default();
+        let hash = sha256(b"sk-ant-0123456789abcdef");
+        masks.add_for_header(
+            "sk-ant-0123456789abcdef",
+            Some("api.anthropic.com:443"),
+            "X-Api-Key",
+        );
+        assert!(masks.expected_in(&hash, "api.anthropic.com:443", "x-api-key"));
+        assert!(!masks.expected_at(&hash, "api.anthropic.com:443"));
+        assert!(!masks.expected_in(&hash, "evil.example:443", "x-api-key"));
+        masks.add_for("sk-ant-0123456789abcdef", Some("api.anthropic.com:443"));
+        assert!(masks.expected_at(&hash, "api.anthropic.com:443"));
+        assert!(!masks.expected_in(&hash, "api.anthropic.com:443", "x-api-key"));
     }
 
     /// Ein Schlüssel in einem Text, roh, kodiert oder als Label in anderer

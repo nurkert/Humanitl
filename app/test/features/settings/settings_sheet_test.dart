@@ -480,6 +480,25 @@ void main() {
     expect(tester.widget<HSegmented<String>>(control).selected, 'opencode');
   }, variant: TargetPlatformVariant.only(TargetPlatform.linux));
 
+  testWidgets('the agent switch offers Claude Code and writes claude', (
+    WidgetTester tester,
+  ) async {
+    final FakeDaemonClient client = configured();
+    await openSettings(tester, client);
+    await showSettingsCategory(tester, SettingsCategory.agent);
+    final Finder control = find.byKey(const Key('settings-agent'));
+    final Finder claude = find.descendant(
+      of: control,
+      matching: find.text('Claude Code'),
+    );
+    await tester.ensureVisible(claude);
+    await tester.pumpAndSettle();
+    await tester.tap(claude);
+    await tester.pumpAndSettle();
+    expect(client.configWrites.last, ('agent.adapter', 'claude'));
+    expect(tester.widget<HSegmented<String>>(control).selected, 'claude');
+  }, variant: TargetPlatformVariant.only(TargetPlatform.linux));
+
   testWidgets('the agent switch shows OpenCode when agent.adapter is unset', (
     WidgetTester tester,
   ) async {
