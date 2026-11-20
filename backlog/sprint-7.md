@@ -153,6 +153,7 @@ Diagnose-Codes, hier nur geplant (registriert vom genannten Issue in `codes.rs` 
 | HUM-568 | Durchreiche: Methode je Pfad statt einer Methodenliste für alle Pfade | S | HUM-515 |
 | HUM-569 | App: Gründe der Befunde des Daemons in der Sprache der Oberfläche | M | HUM-521 |
 | HUM-570 | App: Tab bewegt den Fokus nicht, solange die Wahl des Backends gesperrt ist | S | HUM-560 |
+| HUM-571 | Test `hold::a_decision_after_the_deadline_is_refused` wackelt unter Last | S | HUM-526 |
 
 ## HUM-428 · Port neutral: `PlanRequest`, `LaunchOptions`, `IsolationLevel`, Enum `Backend` statt `PlatformBackend`
 
@@ -7374,4 +7375,31 @@ ihn nicht, bis die Sperre endet.
 
 ### Akzeptanzkriterien
 1. Tab wirkt auch während der Sperre.
+
+---
+
+## HUM-571 · Test `hold::a_decision_after_the_deadline_is_refused` wackelt unter Last
+
+### Kontext
+Beim Landen von HUM-523 fiel der Test zweimal in der CI um
+(`crates/proxy/tests/hold.rs:930`: die Entscheidung nach der Frist wurde
+angenommen). Ursache: Der Helfer `in_` rechnet die Frist mit der echten Uhr
+(`std::time::Instant::now()`), die Warteschlange prüft sie gegen Tokios Uhr
+(`still_open`), und die Tests laufen mit angehaltener Uhr (`start_paused`).
+Vergeht auf einem ausgelasteten Läufer zwischen Teststart und `in_` echte
+Zeit, liegt die Frist hinter dem vorgerückten Tokio-Zeitpunkt.
+
+### Spezifikation
+1. Fristen in den Tests auf Tokios Uhr rechnen.
+
+### Tests
+- Mit 150 ms künstlicher Verzögerung vor `hold` fällt die alte Fassung rot,
+  die neue bleibt grün (Mutationsbeweis).
+
+### Akzeptanzkriterien
+1. Der Test hängt nicht mehr von der echten Laufzeit ab.
+
+### Stand nach der Umsetzung (2026-11-20)
+`in_` nimmt `tokio::time::Instant::now().into_std()`; alle 30 Tests von
+`hold.rs` grün, der Beweis mit Verzögerung wie oben.
 

@@ -69,8 +69,12 @@ fn block(reason: BlockReason) -> Decision {
     Decision::Block { reason, note: None }
 }
 
+/// A deadline `duration` from now on tokio's clock, the clock the queue
+/// measures against (`still_open`). With a paused clock (`start_paused`) the
+/// real clock keeps running; a deadline from `std::time::Instant::now()` would
+/// drift past the paused one on a busy machine and the test would flake.
 fn in_(duration: Duration) -> Instant {
-    Instant::now() + duration
+    tokio::time::Instant::now().into_std() + duration
 }
 
 /// Alles, was schon im Kanal liegt, ohne zu warten.
