@@ -4718,6 +4718,186 @@ fn config_set_checks_against_the_real_file() {
     assert_eq!(code(&fits), 0, "{}", stderr(&fits));
 }
 
+/// Der Code in `error[CODE]: …` am Anfang eines Befunds auf `stderr`.
+#[track_caller]
+fn leading_code(text: &str) -> String {
+    text.strip_prefix("error[")
+        .and_then(|rest| rest.split_once(']'))
+        .map_or_else(|| panic!("no code: {text}"), |(code, _)| code.to_owned())
+}
+
+/// Der Code, mit dem die Ladung eine `config.toml` mit genau diesem Text
+/// ablehnt: dieselbe Ladung wie beim Start des Daemons
+/// (`humanitl_config::load`), hier über `config get`.
+#[track_caller]
+fn load_refusal_code(harness: &Harness, text: &str) -> String {
+    let file = config_file(harness);
+    let before = std::fs::read_to_string(&file).ok();
+    std::fs::create_dir_all(file.parent().expect("a parent")).expect("the directory");
+    std::fs::write(&file, text).expect("the file");
+    let get = harness.run(["config", "get", "hold.timeout_secs"]);
+    match before {
+        Some(before) => std::fs::write(&file, before).expect("the file back"),
+        None => std::fs::remove_file(&file).expect("the file away"),
+    }
+    assert_eq!(code(&get), 1, "{text} has to be refused: {}", stderr(&get));
+    let text = stderr(&get);
+    leading_code(&text)
+}
+
+/// Der Code am Anfang einer Ablehnung von `config set`.
+#[track_caller]
+fn refusal_code(output: &Output) -> String {
+    let text = stderr(output);
+    assert_eq!(code(output), 1, "{text}");
+    leading_code(&text)
+}
+
+/// HUM-562: Was der Start ablehnt, lehnt schon `config set` ab, mit dem Code
+/// des Starts, und die Datei bleibt, wie sie war.
+///
+/// Drei Fälle, die bis dahin erst der Start sah oder die nur gegen die
+/// wirkliche Datei falsch sind: eine Testwurzel mit relativem Pfad
+/// (`CONFIG_012`), ein Namensserver, der keine Adresse ist, und ein Cap über
+/// dem Höchstwert, der schon in der Datei steht (beide `CONFIG_003`).
+#[test]
+fn config_set_refuses_what_the_start_refuses_with_the_start_code() {
+    let harness = Harness::new();
+
+    let relative = config_set(&harness, &["resolver.test_ca", "ca.pem"]);
+    assert_eq!(refusal_code(&relative), "CONFIG_012");
+    assert!(
+        stderr(&relative).contains("not an absolute path"),
+        "{}",
+        stderr(&relative)
+    );
+    assert!(!config_file(&harness).exists(), "nothing is written");
+    assert_eq!(
+        load_refusal_code(&harness, "[resolver]\ntest_ca = \"ca.pem\"\n"),
+        "CONFIG_012"
+    );
+    let absolute = config_set(&harness, &["resolver.test_ca", "/etc/humanitl/test-ca.crt"]);
+    assert_eq!(code(&absolute), 0, "{}", stderr(&absolute));
+    let reset = config_set(&harness, &["resolver.test_ca", "-"]);
+    assert_eq!(code(&reset), 0, "{}", stderr(&reset));
+
+    let name = config_set(&harness, &["resolver.nameserver", "resolver.lan"]);
+    assert_eq!(refusal_code(&name), "CONFIG_003");
+    assert!(
+        stderr(&name).contains("resolver.nameserver"),
+        "{}",
+        stderr(&name)
+    );
+    assert_eq!(
+        load_refusal_code(&harness, "[resolver]\nnameserver = \"resolver.lan\"\n"),
+        "CONFIG_003"
+    );
+    let address = config_set(&harness, &["resolver.nameserver", "127.0.0.1:5353"]);
+    assert_eq!(code(&address), 0, "{}", stderr(&address));
+
+    let max = config_set(&harness, &["limits.hold_max_bytes", "64MiB"]);
+    assert_eq!(code(&max), 0, "{}", stderr(&max));
+    let before = std::fs::read_to_string(config_file(&harness)).expect("the file");
+    let cap = config_set(&harness, &["limits.hold_body_cap_bytes", "128MiB"]);
+    assert_eq!(refusal_code(&cap), "CONFIG_003");
+    assert_eq!(
+        std::fs::read_to_string(config_file(&harness)).expect("the file"),
+        before,
+        "the refused cap leaves the file as it was"
+    );
+    assert_eq!(
+        load_refusal_code(
+            &harness,
+            "[limits]\nhold_max_bytes = 67108864\nhold_body_cap_bytes = 134217728\n"
+        ),
+        "CONFIG_003"
+    );
+}
+
+/// HUM-562: Ein Wert, der den Start verhindert und schon in der Datei steht
+/// (etwa ein relativer `resolver.test_ca` aus der Zeit vor dieser Regel),
+/// sperrt jeden anderen Schlüssel mit seinem eigenen Befund; sein eigener
+/// Schlüssel lässt sich reparieren, mit einem absoluten Pfad oder mit `-`.
+#[test]
+fn config_set_refuses_another_key_while_the_file_cannot_start() {
+    let harness = Harness::new();
+    let file = config_file(&harness);
+    std::fs::create_dir_all(file.parent().expect("a directory")).expect("the config directory");
+    let before = "[resolver]\ntest_ca = \"ca.pem\"\n";
+    std::fs::write(&file, before).expect("an old relative test root");
+
+    let other = config_set(&harness, &["ui.theme", "dark"]);
+    assert_eq!(refusal_code(&other), "CONFIG_012");
+    let text = stderr(&other);
+    assert!(text.contains("resolver.test_ca is ca.pem"), "{text}");
+    assert!(text.contains("ui.theme is not written"), "{text}");
+    assert_eq!(
+        std::fs::read_to_string(&file).expect("the file"),
+        before,
+        "the file is untouched"
+    );
+
+    let absolute = config_set(&harness, &["resolver.test_ca", "/etc/humanitl/test-ca.crt"]);
+    assert_eq!(code(&absolute), 0, "{}", stderr(&absolute));
+    std::fs::write(&file, before).expect("the relative root again");
+    let reset = config_set(&harness, &["resolver.test_ca", "-"]);
+    assert_eq!(code(&reset), 0, "{}", stderr(&reset));
+    let theme = config_set(&harness, &["ui.theme", "dark"]);
+    assert_eq!(code(&theme), 0, "{}", stderr(&theme));
+}
+
+/// HUM-562, Delta: Ein Paar sperrt auch dann, wenn nur sein zweiter
+/// Schlüssel in der Datei steht und der erste aus der Umgebung kommt; der
+/// Schlüssel in der Datei lässt sich reparieren.
+#[test]
+fn config_set_refuses_another_key_while_the_file_holds_half_a_broken_pair() {
+    let harness = Harness::new();
+    let file = config_file(&harness);
+    std::fs::create_dir_all(file.parent().expect("a directory")).expect("the config directory");
+    let pair = "[limits]\nhold_body_cap_bytes = 67108864\n";
+    std::fs::write(&file, pair).expect("the cap in the file");
+    let set_with_env = |args: [&str; 2]| {
+        harness
+            .command()
+            .args(["config", "set", args[0], args[1]])
+            .env("HUMANITL_LIMITS__HOLD_MAX_BYTES", "50331648")
+            .output()
+            .expect("the binary runs")
+    };
+    let other = set_with_env(["ui.theme", "dark"]);
+    assert_eq!(refusal_code(&other), "CONFIG_003");
+    assert!(
+        stderr(&other).contains("limits.hold_body_cap_bytes"),
+        "{}",
+        stderr(&other)
+    );
+    assert_eq!(std::fs::read_to_string(&file).expect("the file"), pair);
+    let repair = set_with_env(["limits.hold_body_cap_bytes", "16MiB"]);
+    assert_eq!(code(&repair), 0, "{}", stderr(&repair));
+}
+
+/// HUM-562: Ein Platzhalter als Adresse wird geschrieben, denn der Start
+/// lehnt ihn nicht ab und ein Testaufbau braucht ihn; `config set` sagt aber,
+/// dass dort im Alltag niemand antwortet.
+#[test]
+fn config_set_writes_a_placeholder_host_with_a_note() {
+    let harness = Harness::new();
+    let placeholder = config_set(&harness, &["llm.endpoint", "https://api.example.com/v1"]);
+    assert_eq!(code(&placeholder), 0, "{}", stderr(&placeholder));
+    assert!(
+        stderr(&placeholder).contains("api.example.com, a name reserved for examples"),
+        "{}",
+        stderr(&placeholder)
+    );
+    let real = config_set(&harness, &["llm.endpoint", "http://127.0.0.1:11434/v1"]);
+    assert_eq!(code(&real), 0, "{}", stderr(&real));
+    assert!(
+        !stderr(&real).contains("reserved for examples"),
+        "{}",
+        stderr(&real)
+    );
+}
+
 /// Eine Tabelle wird als Tabelle geschrieben, `null` entfernt den Schlüssel.
 #[test]
 fn config_set_writes_a_table_and_null_removes_the_key() {
@@ -5509,24 +5689,48 @@ fn config_set_repairs_a_file_with_two_bad_keys_one_at_a_time() {
 
 /// Eine falsche Umgebungsvariable sperrt `config set` nicht für jeden
 /// Schlüssel.
+///
+/// Seit HUM-562 sperrt aber ein falscher Wert in der Datei selbst jeden
+/// Schlüssel außer seinem eigenen: Mit ihm startet der Daemon nicht, und ein
+/// Erfolg für einen anderen Schlüssel verdeckte das.
 #[test]
 fn config_set_is_not_locked_out_by_a_bad_environment_variable() {
     let harness = Harness::new();
-    // Dazu ein zweiter falscher Wert in der Datei, der nach dem der Umgebung
-    // geprüft wird: Das Zählen muss die Variable herausnehmen, um ihn zu
-    // sehen, und darf erst dann schreiben.
-    let file = config_file(&harness);
-    std::fs::create_dir_all(file.parent().expect("a directory")).expect("the config directory");
-    std::fs::write(&file, "[resolver]\ncache_ttl_secs = 999999999\n").expect("a later bad key");
-    let output = harness
-        .command()
-        .args(["config", "set", "ui.theme", "dark"])
-        .env("HUMANITL_HOLD__TIMEOUT_SECS", "0")
-        .output()
-        .expect("the binary runs");
+    let set_with_bad_env = |args: [&str; 2]| {
+        harness
+            .command()
+            .args(["config", "set", args[0], args[1]])
+            .env("HUMANITL_HOLD__TIMEOUT_SECS", "0")
+            .output()
+            .expect("the binary runs")
+    };
+    let output = set_with_bad_env(["ui.theme", "dark"]);
     assert_eq!(code(&output), 0, "{}", stderr(&output));
     let text = std::fs::read_to_string(config_file(&harness)).expect("the file");
     assert!(text.contains("theme = \"dark\""), "{text}");
+
+    // Dazu ein zweiter falscher Wert in der Datei, der nach dem der Umgebung
+    // geprüft wird: Das Zählen muss die Variable herausnehmen, um ihn zu
+    // sehen. Er sperrt einen anderen Schlüssel, aber nicht seine Reparatur.
+    let file = config_file(&harness);
+    std::fs::write(&file, "[resolver]\ncache_ttl_secs = 999999999\n").expect("a later bad key");
+    let other = set_with_bad_env(["ui.theme", "light"]);
+    assert_eq!(code(&other), 1, "{}", stderr(&other));
+    assert!(
+        stderr(&other).contains("resolver.cache_ttl_secs"),
+        "{}",
+        stderr(&other)
+    );
+    let repair = set_with_bad_env(["resolver.cache_ttl_secs", "300"]);
+    assert_eq!(code(&repair), 0, "{}", stderr(&repair));
+    let text = std::fs::read_to_string(&file).expect("the file");
+    assert!(text.contains("cache_ttl_secs = 300"), "{text}");
+
+    // Steht der Schlüssel der Variable auch in der Datei, mit einem guten
+    // Wert, kommt der Befund trotzdem aus der Umgebung und sperrt nicht.
+    std::fs::write(&file, "[hold]\ntimeout_secs = 300\n").expect("a good value");
+    let shadowed = set_with_bad_env(["ui.theme", "dark"]);
+    assert_eq!(code(&shadowed), 0, "{}", stderr(&shadowed));
 }
 
 // --- HUM-070, vierte Nachbesserung --------------------------------------------
@@ -5706,16 +5910,24 @@ fn config_set_is_not_refused_by_a_value_that_looks_like_a_key() {
     std::fs::write(&file, "[ui]\ntheme = \"hold.timeout_secs\"\n")
         .expect("a config with a value that looks like a key");
 
+    // Abgelehnt wird seit HUM-562 trotzdem, aber als alter Befund an
+    // `ui.theme`, der den Start verhindert, nicht als Befund, der den
+    // gesetzten Schlüssel nennt.
     let output = config_set(&harness, &["hold.timeout_secs", "300"]);
     let text = stderr(&output);
-    assert_eq!(code(&output), 0, "{text}");
-    assert!(text.contains("still does not load"), "{text}");
-    let written = std::fs::read_to_string(&file).expect("the file");
-    assert!(written.contains("timeout_secs = 300"), "{written}");
+    assert_eq!(code(&output), 1, "{text}");
     assert!(
-        written.contains("theme = \"hold.timeout_secs\""),
-        "{written}"
+        text.contains("the daemon does not start with this file"),
+        "{text}"
     );
+    assert!(text.contains("ui.theme"), "{text}");
+    let written = std::fs::read_to_string(&file).expect("the file");
+    assert!(!written.contains("timeout_secs = 300"), "{written}");
+
+    let repair = config_set(&harness, &["ui.theme", "dark"]);
+    assert_eq!(code(&repair), 0, "{}", stderr(&repair));
+    let output = config_set(&harness, &["hold.timeout_secs", "300"]);
+    assert_eq!(code(&output), 0, "{}", stderr(&output));
 }
 
 //

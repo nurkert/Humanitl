@@ -28,6 +28,15 @@ section here and list their commits instead.
 - `humanitl config paths` prints the directories that hold your data, the
   list `--purge` deletes from.
 
+### Changed
+
+- `resolver.test_ca` must be an absolute path whenever it is set, with or
+  without `--allow-test-ca`; a relative path now stops the daemon from
+  starting (`CONFIG_012`) instead of being ignored with a warning.
+  `humanitl config set` and the settings in the app refuse such a value, and
+  refuse any other key while the file holds a value the daemon cannot start
+  with, except the repair of that very key.
+
 ## [0.4.1] - 2026-11-17
 
 Sessions start again under the packaged user unit. A patch release: no

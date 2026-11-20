@@ -81,10 +81,11 @@ pub(crate) mod test_support;
 pub mod tier;
 mod validate;
 pub mod value;
+pub mod write_check;
 
 pub use crate::validate::{
     HostResources, image_names_registry, image_pinned_by_digest, loader_variable_refused,
-    resources_within_host,
+    nameserver_address, nameserver_refused, resources_within_host, test_ca_is_absolute,
 };
 
 pub use crate::agents::{

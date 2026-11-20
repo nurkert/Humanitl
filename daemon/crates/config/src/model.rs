@@ -410,9 +410,9 @@ pub struct ResolverConfig {
     pub prefer: IpPreference,
     /// Zusätzliche CA für Tests, als PEM und mit absolutem Pfad. Gilt nur, wenn
     /// der Daemon mit `--allow-test-ca` gestartet wurde; ohne das Flag wird der
-    /// Schlüssel nicht angenommen, und ein nicht absoluter Pfad beendet den
-    /// Start, statt gegen das Arbeitsverzeichnis aufgelöst zu werden. Nur in
-    /// Testläufen setzen, nie im Alltag.
+    /// Schlüssel nicht angenommen. Ein nicht absoluter Pfad wird schon beim
+    /// Laden abgelehnt, mit und ohne Flag, statt gegen das Arbeitsverzeichnis
+    /// aufgelöst zu werden. Nur in Testläufen setzen, nie im Alltag.
     #[schemars(extend("x-tier" = "expert", "x-project-scope" = "denied"))]
     pub test_ca: Option<PathBuf>,
 }

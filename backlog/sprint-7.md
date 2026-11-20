@@ -7151,6 +7151,112 @@ manches annimmt, was erst der Start des Daemons ablehnt:
 ### Akzeptanzkriterien
 1. Was `config set` annimmt, lehnt der Start nicht ab.
 
+### Stand nach der Umsetzung (2026-11-20)
+`config set` lud die Nebendatei schon vor diesem Issue mit allen Ebenen
+durch `humanitl_config::load` (`probe` in `cmd/config.rs`), also mit
+`Config::validate` und der wirklichen Datei; die Gegenprobe
+`limits.hold_body_cap_bytes` über `limits.hold_max_bytes` lehnte es deshalb
+schon mit `CONFIG_003` ab. Was fehlte, waren die Prüfungen, die der Start
+erst nach der Ladung fuhr. Eine Durchsicht des Starts (`run_daemon`) fand
+zwei: `resolver.test_ca` ohne absoluten Pfad (`CONFIG_012` in
+`test_ca_roots`) und `resolver.nameserver`, der weder `IP:Port` noch eine
+Adresse ist (`CONFIG_003` in `ResolverPort::from_config`). Beide Regeln
+stehen jetzt nur noch in `humanitl_config::validate`
+(`test_ca_is_absolute`, `nameserver_address`, öffentlich über die Crate),
+`Config::validate` ruft sie über `resolver_is_well_formed`, und der Start
+ruft dieselben Funktionen (`test_ca_roots` vor dem Lesen der Datei, der
+Resolver statt seines eigenen `parse_nameserver`, der entfällt). Damit
+lehnen `config set`, `SetConfig` der App, `check_setting` und der Start
+denselben Wert mit demselben Code und demselben Satz ab.
+
+Entscheidung zur Testwurzel: Der relative Pfad wird schon beim Laden
+abgelehnt, mit und ohne `--allow-test-ca`. Bisher gab ein relativer Pfad
+ohne Flag nur `CONFIG_011` (Warnung, Wurzel ignoriert); jetzt startet der
+Daemon damit nicht. Das ist strenger, nicht schwächer, und ein relativer
+Pfad war nie ein Wert, der irgendwann gilt. `docs/SECURITY.md` 5, die
+Beschreibung des Schlüssels (`docs/CONFIG.md`, Schema-Schnappschuss) und
+`CONFIG_012` in `codes.rs`/`docs/DIAGNOSTICS.md` sind nachgezogen.
+
+Entscheidung zu Platzhaltern: Kein Ablehnen, aber ein Hinweis. Eine
+Adresse, deren Host `example.com`, `example.net`, `example.org` (samt
+Unternamen) ist oder auf `.example`, `.test`, `.invalid` endet (RFC 2606,
+RFC 6761), schreibt `config set` und sagt auf `stderr`, dass dort niemand
+antwortet, außer `resolver.overrides` ordnet den Namen zu
+(`humanitl_config::value::placeholder_host`). Abgelehnt wird nicht, weil
+der Start sie nicht ablehnt und Testaufbauten genau solche Namen über
+`resolver.overrides` beantworten (HUM-024); `localhost` zählt nicht dazu.
+Nur die Kommandozeile zeigt den Hinweis; die App bekommt ihn nicht.
+
+Tests: `config_set_refuses_what_the_start_refuses_with_the_start_code`
+(`bin/humanitl/tests/cli.rs`): `resolver.test_ca ca.pem` mit `CONFIG_012`,
+`resolver.nameserver resolver.lan` und der Cap über dem Höchstwert der
+Datei mit `CONFIG_003`, jeweils ohne Änderung der Datei und mit demselben
+Code, den die Ladung (wie beim Start) für die Datei mit diesem Wert meldet;
+der absolute Pfad und eine Adresse mit Port gehen durch.
+`config_set_writes_a_placeholder_host_with_a_note`, dazu Unit-Tests in
+`validate.rs` und `value.rs`. Mutationen, jeweils rot: der Aufruf von
+`test_ca_is_absolute` aus `resolver_is_well_formed` entfernt (`config set`
+schreibt `ca.pem`), der Aufruf von `nameserver_address` dort entfernt
+(`config set` schreibt `resolver.lan`), `placeholder_host` in `config set`
+durch `None` ersetzt (kein Hinweis).
+
+Nach dem Review (Codex, blocking): `config set` schrieb einen fremden
+Schlüssel, solange ein Befund, der den Start verhindert, schon in der Datei
+stand (etwa ein alter relativer `resolver.test_ca`, seit diesem Issue
+`CONFIG_012`): Die Gegenprobe hielt ihn für alt und ließ das Schreiben zu,
+der Daemon startete danach nicht. Jetzt lehnt `probe` mit diesem Befund ab
+(`still_blocking`, `blocked_by` in `cmd/config.rs`), außer der gesetzte
+Schlüssel ist einer der Schlüssel eines Befunds von vorher (Reparatur, etwa
+`config set resolver.test_ca /abs` oder `-`, oder der Reihe nach bei zwei
+falschen Werten) oder es gibt nachher weniger Befunde. Ein Befund, dessen
+Schlüssel nicht in der geschriebenen Datei steht (Umgebung), sperrt nicht.
+Ob ein Befund aus der Datei kommt, entscheidet eine zweite Ladung ohne
+seinen Eintrag: Bleibt derselbe Befund (etwa weil eine Umgebungsvariable den
+Wert der Datei überschreibt), sperrt er nicht. Dieselbe Regel gilt für
+`SetConfig` der App (`probe` in `ipc/src/config_rpc.rs`, dort wird nur der
+erste Befund verglichen): Die gemeinsamen Teile stehen in
+`humanitl_config::write_check` (`keys_named_in`, `without_everywhere`,
+`without_key` aus `cmd/config.rs` verschoben, neu `blocking_key` und
+`blocked_write`). Test `an_old_error_in_the_file_blocks_another_key_but_not_its_repair`
+in `config_rpc.rs`.
+Damit kehrt sich das Verhalten von HUM-070 für fremde Schlüssel um:
+`config_set_is_not_locked_out_by_a_bad_environment_variable` und
+`config_set_is_not_refused_by_a_value_that_looks_like_a_key` sind
+angepasst, neu `config_set_refuses_another_key_while_the_file_cannot_start`.
+Mutationen, jeweils rot: `still_blocking` nie wirksam (drei Tests), die
+Ausnahme für die Reparatur entfernt
+(`config_set_repairs_a_file_with_two_bad_keys_one_at_a_time`), die Sperre
+in `SetConfig` nie wirksam (Test in `config_rpc.rs`), die zweite Ladung in
+`blocking_key` übergangen (Test in `config_rpc.rs` und
+`config_set_is_not_locked_out_by_a_bad_environment_variable`).
+`CHANGELOG.md` (Unreleased, Changed) nennt die strengere Regel.
+
+Codex-Delta (beide übernommen): `blocking_key` prüft jeden Schlüssel, den
+ein Befund nennt, nicht nur den ersten. Bei einem Paar kann der erste aus
+der Umgebung kommen (`HUMANITL_LIMITS__HOLD_MAX_BYTES`) und der zweite in
+der Datei stehen (`limits.hold_body_cap_bytes`); ohne ihn verschwände der
+Befund, also sperrt er. Und `SetConfig` sah nur den ersten Fehler der
+Ladung: Ein Befund ohne Schlüssel (`CONFIG_002`, unbekannter Schlüssel)
+ging durch, ein erster Fehler aus der Umgebung verdeckte einen späteren in
+der Datei. Darum steht die ganze Gegenprobe jetzt in
+`humanitl_config::write_check` (`check_write` mit `ProbeContext`, `Scope`,
+`Finding`, `findings`, `findings_in` und den Ebenen, aus `cmd/config.rs`
+verschoben); `config set` und `SetConfig` rufen genau diese Funktion, der
+Daemon ohne Projekt-Profil und ohne Profilwahl. `humanitl-config` hängt
+dafür im Bibliothekscode an `tempfile` (Nebendateien). Tests
+`set_config_sees_every_finding_and_every_key_of_a_pair` (`config_rpc.rs`),
+`config_set_refuses_another_key_while_the_file_holds_half_a_broken_pair`
+(`cli.rs`); der unbekannte Schlüssel in der Kommandozeile steht schon in
+`config_set_refuses_while_the_file_has_an_unknown_key`. Mutationen, jeweils
+rot: `blocking_key` nur mit dem ersten Schlüssel (beide Tests), die alte
+Gegenprobe mit dem ersten Fehler in `SetConfig` zurück (Test in
+`config_rpc.rs`).
+
+Kandidaten für eigene Issues: `config set resolver.test_ca` prüft nicht, ob
+die Datei da ist und ein Zertifikat enthält (`CONFIG_010`); das ist Zustand
+der Datei, nicht des Werts, und sie kann nach dem Setzen erscheinen oder
+sich ändern.
+
 ---
 
 ## HUM-563 · Agent-Depot: Wartungssitzung im Daemon, RPC und CLI `agents install`/`update`

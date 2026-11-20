@@ -20,6 +20,9 @@ schemars.workspace = true
 serde = { workspace = true }
 serde_json.workspace = true
 toml.workspace = true
+# Die Gegenprobe vor dem Schreiben (`write_check`, HUM-562) lädt Nebendateien
+# aus einem eigenen Verzeichnis, für `humanitl config set` und `SetConfig`.
+tempfile.workspace = true
 toml_edit.workspace = true
 url = { workspace = true, features = ["serde"] }
 zeroize.workspace = true
@@ -31,4 +34,3 @@ zeroize.workspace = true
 # im Bibliothekscode bleibt `humanitl-config` bei `humanitl-core`.
 humanitl-rules.workspace = true
 jiff.workspace = true
-tempfile.workspace = true

@@ -1927,33 +1927,17 @@ fn test_ca_roots(allow: bool, resolver: &ResolverConfig) -> Result<TestCa, Diagn
     // freischaltet, käme aus dem Projekt. Bei der einen Funktion, deren Zweck
     // es ist, ein Loch in die eigene Sicherheitsaussage zu schlagen, ist das
     // der falsche Freiheitsgrad (`docs/SECURITY.md` 5).
-    if !path.is_absolute() {
-        return Err(not_absolute(path));
-    }
+    //
+    // Die Regel steht in der Prüfung der Konfiguration (HUM-562), damit
+    // schon `config set` einen solchen Wert ablehnt; hier läuft sie noch
+    // einmal, weil diese Funktion auch ohne Ladung gerufen werden kann.
+    humanitl_config::test_ca_is_absolute(path)?;
     let pem = fs::read(path).map_err(|err| unusable(path, &err.to_string()))?;
     let roots = humanitl_proxy::roots_from_pem(&pem);
     if roots.is_empty() {
         return Err(unusable(path, "no certificate in this file"));
     }
     Ok(TestCa { roots, note: None })
-}
-
-/// Der Befund für eine Testwurzel, deren Pfad nicht absolut ist.
-///
-/// Ein eigener Code und nicht [`CONFIG_010`](codes::CONFIG_010): Mit der Datei
-/// ist womöglich alles in Ordnung, sie steht nur an einer Stelle, die erst der
-/// Start festlegt. Auch der Weg hinaus ist ein anderer — hier hilft kein Blick
-/// in das Zertifikat, sondern ein absoluter Pfad in der Konfiguration.
-fn not_absolute(path: &Path) -> Diagnostic {
-    Diagnostic::builder(codes::CONFIG_012, Severity::Error)
-        .why(format!(
-            "resolver.test_ca is {}, which is not an absolute path; it would be resolved against \
-             the directory the daemon was started in, so that directory would decide which root \
-             is trusted; set an absolute path there, for example /etc/humanitl/test-ca.crt",
-            path.display()
-        ))
-        // Kein `ChangeSetting`: Der Wert wäre eine Anleitung (HUM-507).
-        .build()
 }
 
 /// Der Befund für eine Testwurzel, die sich nicht lesen lässt.

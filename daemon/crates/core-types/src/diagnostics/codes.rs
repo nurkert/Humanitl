@@ -429,9 +429,11 @@ registry! {
     /// `resolver.test_ca` trägt keinen absoluten Pfad. Ein relativer würde gegen
     /// das Arbeitsverzeichnis des Starts aufgelöst; damit entschiede das
     /// Verzeichnis mit, welcher Wurzel der Daemon vertraut. Abgelehnt wird vor
-    /// dem Lesen (Error, HUM-087).
+    /// dem Lesen (Error, HUM-087), seit HUM-562 schon beim Laden der
+    /// Konfiguration, mit und ohne `--allow-test-ca`, und damit auch von
+    /// `humanitl config set`.
     CONFIG_012 => "config", "Test-Wurzel ohne absoluten Pfad", "#config_012",
-        "`resolver.test_ca` ist kein absoluter Pfad und hinge damit am Startverzeichnis des Daemons.",
+        "`resolver.test_ca` ist kein absoluter Pfad und hinge damit am Startverzeichnis des Daemons; schon das Laden der Konfiguration und `humanitl config set` lehnen ihn ab.",
         "Kein Fix: Der Text verlangt einen absoluten Pfad und nennt ein Beispiel; den Pfad kennt nur der Mensch (HUM-507).";
     /// Es wurde kein Projektordner gewählt. Der Agent arbeitet in genau einem
     /// Ordner, und solange keiner benannt ist, gibt es nichts zu starten — kein
