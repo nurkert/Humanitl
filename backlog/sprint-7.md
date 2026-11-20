@@ -148,6 +148,11 @@ Diagnose-Codes, hier nur geplant (registriert vom genannten Issue in `codes.rs` 
 | HUM-562 | `config set` nimmt Werte an, die erst der Start des Daemons ablehnt | S | HUM-507 |
 | HUM-564 | Audit: ein Rückstand des Audit-Zweigs (`Lagged`) erscheint nicht im Audit-Log | S | HUM-556 |
 | HUM-565 | Audit: ein gescheiterter Flow hat keinen Eintrag im HMAC-Audit-Log | S | HUM-555 |
+| HUM-566 | Agent-Depot: Installation von Paketen aus mehreren Dateien (Codex) und mit Laufzeit-Host (agy) | M | HUM-515, HUM-517 |
+| HUM-567 | Werte der Sitzung auch für `Projects.proposal`, `Argv` und `sandbox image pull` | S | HUM-559 |
+| HUM-568 | Durchreiche: Methode je Pfad statt einer Methodenliste für alle Pfade | S | HUM-515 |
+| HUM-569 | App: Gründe der Befunde des Daemons in der Sprache der Oberfläche | M | HUM-521 |
+| HUM-570 | App: Tab bewegt den Fokus nicht, solange die Wahl des Backends gesperrt ist | S | HUM-560 |
 
 ## HUM-428 · Port neutral: `PlanRequest`, `LaunchOptions`, `IsolationLevel`, Enum `Backend` statt `PlatformBackend`
 
@@ -7097,4 +7102,109 @@ Burp und mitmproxy sagen das heute als Grenze.
 
 ### Akzeptanzkriterien
 1. Jeder gescheiterte Flow hat im HMAC-Audit-Log einen Eintrag mit Grund.
+
+---
+
+## HUM-566 · Agent-Depot: Installation von Paketen aus mehreren Dateien (Codex) und mit Laufzeit-Host (agy)
+
+### Kontext
+Aus HUM-515 und HUM-517. Das Depot übernimmt heute genau ein Programm als
+reguläre Datei. Codex liefert ein Paket aus mehreren Dateien
+(`bin/codex` neben `codex-code-mode-host` und `codex-path/rg`, nur
+`SHA256SUMS` als Integrität), `agy` nennt den Host des Programms erst im
+Manifest zur Laufzeit und signiert nicht (nur SHA-512 im selben Manifest).
+Beide antworten deshalb auf `agents install` mit `AGENT_015`.
+
+### Spezifikation
+1. Das Rezept kann einen Baum aus mehreren Dateien beschreiben (Liste der
+   erwarteten Pfade mit Prüfsumme), die Übernahme prüft den Baum wie
+   HUM-519 (reguläre Dateien, keine Links hinaus, Caps) und startet das
+   benannte Programm.
+2. Für Codex: Installationsrezept aus dem offiziellen Release-Artefakt,
+   Hosts vor dem Bau belegen, `SHA256SUMS` geprüft; ob `codex` außerhalb
+   von `bin/` startet, im Durchgang HUM-553 Punkt 4 messen.
+3. Für `agy`: entscheiden, ob ein Rezept ohne Signatur und mit
+   Laufzeit-Host zulässig ist (Host nur aus der erlaubten Liste, Prüfsumme
+   aus dem Manifest); sonst bleibt `AGENT_015` mit `why`.
+
+### Akzeptanzkriterien
+1. `humanitl agents install codex` installiert ins Depot, oder die
+   Ablehnung nennt den belegten Grund.
+
+---
+
+## HUM-567 · Werte der Sitzung auch für `Projects.proposal`, `Argv` und `sandbox image pull`
+
+### Kontext
+Aus HUM-559. Die Vorschau des Plans sieht seit 1.55 die Werte der Sitzung
+(Untergrenze, Backend, `--llm`), der Vorschlag für ein Projekt warnt nur mit
+`CLI_004`, `Argv` und `sandbox image pull` laden weder Projektwahl noch
+Werte der Sitzung.
+
+### Spezifikation
+1. `Projects.proposal` bekommt die Werte der Sitzung wie `Plan`.
+2. `Argv` und `sandbox image pull` lösen mit Projektwahl und Werten der
+   Sitzung auf wie Start und Vorschau.
+
+### Akzeptanzkriterien
+1. Vorschlag, Argv, Image-Pull und Start zeigen bei gleichen Eingaben
+   dasselbe Backend und dieselbe Untergrenze.
+
+---
+
+## HUM-568 · Durchreiche: Methode je Pfad statt einer Methodenliste für alle Pfade
+
+### Kontext
+Aus HUM-515. Ein Adapter hat genau eine Durchreichregel, und ihr Matcher
+kennt nur eine Liste von Methoden für alle Pfade. Für Codex passieren so
+auch `POST /models` und `GET /responses` (das zweite braucht der
+WebSocket-Upgrade des eingebauten Anbieters).
+
+### Spezifikation
+1. Der Matcher erlaubt Paare aus Methode und Pfad, oder ein Adapter darf
+   mehrere Durchreichregeln liefern.
+2. Codex, Claude Code und `agy` nutzen genau die Paare, die ihre Quelle
+   bzw. Doku belegt.
+
+### Akzeptanzkriterien
+1. Kein Adapter reicht eine Methode an einen Pfad durch, die er dort nicht
+   braucht.
+
+---
+
+## HUM-569 · App: Gründe der Befunde des Daemons in der Sprache der Oberfläche
+
+### Kontext
+Aus dem Review von HUM-521. Titel und allgemeiner Grund eines Befunds sind
+übersetzt (ARB), der Satz des Daemons im Feld `why` ist englisch und steht
+so auch in der deutschen Oberfläche (etwa `AGENT_009` an der Agentenkarte).
+
+### Spezifikation
+1. Entscheiden: Daemon liefert Satz und Werte getrennt (Schlüssel plus
+   Argumente), oder die App zeigt bei fremder Sprache den übersetzten
+   allgemeinen Grund und den Satz des Daemons nur aufklappbar.
+2. Umsetzen für die Befunde, die die App heute zeigt.
+
+### Akzeptanzkriterien
+1. In der deutschen Oberfläche steht kein englischer Satz ohne Hinweis.
+
+---
+
+## HUM-570 · App: Tab bewegt den Fokus nicht, solange die Wahl des Backends gesperrt ist
+
+### Kontext
+Aus HUM-560. Sperrt das Neuladen die Segmente, liegt der Fokus auf dem
+Wurzel-Scope der Ansicht, oberhalb der `Shortcuts` der App; dort bewegt Tab
+ihn nicht, bis die Sperre endet.
+
+### Spezifikation
+1. Während der Sperre bleibt der Fokus in einem Knoten, von dem aus Tab
+   und Umschalt-Tab weitergehen, ohne die Rückgabe aus HUM-560 zu brechen.
+
+### Tests
+- Wahl per Enter, Neuladen zurückgehalten, Tab: der Fokus geht zum
+  nächsten Bedienelement; Linux und macOS.
+
+### Akzeptanzkriterien
+1. Tab wirkt auch während der Sperre.
 
