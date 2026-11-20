@@ -67,6 +67,11 @@ shlex.workspace = true
 # groß sein wie die Grenze der Schicht, und `humanitl_core::http::sha256`
 # nimmt nur einen Puffer am Stück.
 sha2.workspace = true
+# Die Zugangsdateien des Agent-Depots, verschluesselt (HUM-523): ChaCha20-
+# Poly1305 aus `ring::aead`, mit einer Nonce je Schreiben aus
+# `ring::rand::SystemRandom`. `ring` steht ueber rustls schon im Baum; eine
+# eigene Kryptographie gibt es nicht.
+ring.workspace = true
 
 [dev-dependencies]
 tempfile.workspace = true

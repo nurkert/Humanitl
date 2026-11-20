@@ -445,6 +445,19 @@ impl IpcServer {
             .unwrap_or_else(|| KeyStore::for_paths(&self.doctor.paths))
     }
 
+    /// Der Schlüssel der verschlüsselten Zugangsdateien (HUM-523): der des
+    /// Sandbox-Dienstes, damit Start, Rückschrift und Umschalten denselben
+    /// Speicher teilen; ohne Dienst einer aus [`Self::key_store`].
+    fn credential_keys(&self) -> humanitl_sandbox::agent::depot::seal::CredentialKeys {
+        self.sandbox.as_ref().map_or_else(
+            || {
+                humanitl_sandbox::agent::depot::seal::CredentialKeys::new(self.key_store())
+                    .with_setting(crate::agents::setting(&self.doctor.paths))
+            },
+            SandboxService::credential_keys,
+        )
+    }
+
     /// Der Schlüssel, den eine Probe mitschickt (HUM-140).
     ///
     /// Ein Schlüssel im Auftrag geht an genau den Endpunkt des Auftrags: Der
@@ -2493,6 +2506,9 @@ impl v1::humanitl_server::Humanitl for IpcServer {
             Some(v1::agents_request::Op::SetSource(set)) => {
                 Some(format!("agents.{}.source", set.agent.trim()))
             }
+            Some(v1::agents_request::Op::SetEncryption(_)) => {
+                Some(humanitl_sandbox::agent::depot::seal::SETTING.to_owned())
+            }
             _ => None,
         };
         crate::policy_guard::refuse(
@@ -2543,6 +2559,7 @@ impl v1::humanitl_server::Humanitl for IpcServer {
         let paths = self.doctor.paths.clone();
         let lock = self.source_lock();
         let in_use = self.sandbox.as_ref().and_then(SandboxService::depot_in_use);
+        let keys = self.credential_keys();
         let asked = decided.as_ref().map(|(agent, _)| agent.clone());
         let (mut status, waited) = tokio::task::spawn_blocking(move || {
             // Ob vor der Entscheidung ein Vorschlag auf der Platte lag
@@ -2553,7 +2570,8 @@ impl v1::humanitl_server::Humanitl for IpcServer {
                 .is_some_and(|agent| {
                     humanitl_sandbox::agent::depot::account::pending_dir(&paths, agent.id).is_dir()
                 });
-            crate::agents::answer(&paths, &lock, in_use.as_deref(), op).map(|state| (state, waited))
+            crate::agents::answer(&paths, &lock, in_use.as_deref(), &keys, op)
+                .map(|state| (state, waited))
         })
         .await
         .map_err(|error| diagnostic_to_status(&unfinished("Agents", &error)))?

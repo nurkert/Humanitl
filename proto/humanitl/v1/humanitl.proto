@@ -3005,6 +3005,15 @@ message AgentsRequest {
     string agent = 1;
     string url = 2;
   }
+  // `agents.encrypt_credentials` umschalten (HUM-523). Der Daemon
+  // verschluesselt oder entschluesselt dabei jede vorhandene Zugangsdatei
+  // des Depots, alles oder nichts, und schreibt den Wert erst danach in
+  // `config.toml`. Ohne erreichbaren Schluesselbund lehnt er `true` mit
+  // `AGENT_020` ab, ebenso eine Datei, die sich mit dem Schluessel nicht
+  // oeffnen laesst; die Dateien bleiben dann, wie sie waren.
+  message SetEncryption {
+    bool enabled = 1;
+  }
   oneof op {
     Status status = 1;
     SetSource set_source = 2;
@@ -3032,6 +3041,9 @@ message AgentsRequest {
     // URL, ein Backend ohne eigenes Loopback oder kein laufender
     // Anmeldelauf ergeben `AGENT_014`.
     Callback deliver_callback = 11;
+    // Die Verschluesselung der Zugangsdateien ein- oder ausschalten
+    // (HUM-523). Ein Daemon vor Minor 56 antwortet mit `CONFIG_003`.
+    SetEncryption set_encryption = 12;
   }
 }
 
@@ -3148,6 +3160,10 @@ message AgentDepot {
   // Der wirksame Wert von `agents.<id>.credential_writeback` (HUM-521),
   // so wie der Daemon ihn liest; geschrieben wird er ueber `SetConfig`.
   bool credential_writeback = 18;
+  // Ob die Zugangsdatei im Depot verschluesselt liegt (HUM-523): wahr nur,
+  // wenn eine da ist und jede verschluesselt ist. So steht es auf der
+  // Platte, nicht in `config.toml`.
+  bool credentials_encrypted = 19;
 }
 
 // Die Operationen, die `Agents` fuer einen Agenten jetzt annimmt (HUM-521).
@@ -3183,6 +3199,30 @@ message AgentActions {
 // `agents.<id>`.
 message AgentsStatus {
   repeated AgentDepot agents = 1;
+  // Die Verschluesselung der Zugangsdateien (HUM-523). Fehlt bei einem
+  // Daemon vor Minor 56; ein Client zeigt dann keinen Schalter.
+  CredentialEncryption encryption = 2;
+}
+
+// Die Verschluesselung der Zugangsdateien des Depots (HUM-523,
+// `agents.encrypt_credentials`): ChaCha20-Poly1305, der Schluessel nur im
+// Schluesselbund des Systems.
+message CredentialEncryption {
+  // Ob die Dateien jetzt verschluesselt geschrieben werden, so wie das
+  // Depot es auf der Platte sagt.
+  bool enabled = 1;
+  // Der Wert von `agents.encrypt_credentials` in `config.toml`. Weicht er
+  // von `enabled` ab (eine Aenderung von Hand), zieht der naechste Start
+  // einer Sitzung aus dem Depot ihn nach, und `diagnostics` sagt es.
+  bool configured = 2;
+  // Ob dieses System einen Schluesselbund hat, den der Daemon fragen kann
+  // (`secret-tool` unter Linux, der Schluesselbund unter macOS). Ob er
+  // antwortet, zeigt erst das Umschalten. Ohne ist der Schalter aus, und
+  // `diagnostics` traegt `AGENT_020`.
+  bool keyring = 3;
+  // Befunde zur Verschluesselung: kein Schluesselbund, ein abweichender
+  // Wert in `config.toml`.
+  repeated Diagnostic diagnostics = 4;
 }
 
 // ---------- Projektregister (HUM-532) ----------

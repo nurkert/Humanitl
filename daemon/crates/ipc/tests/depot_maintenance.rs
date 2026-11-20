@@ -609,6 +609,7 @@ async fn an_install_runs_behind_the_proxy_and_the_next_session_starts_it() {
         &fixture.paths,
         &humanitl_config::agents::SourceLock::none(),
         service.depot_in_use().as_deref(),
+        &service.credential_keys(),
         Some(v1::agents_request::Op::Remove(v1::agents_request::Remove {
             agent: "claude".to_owned(),
         })),
@@ -1134,12 +1135,21 @@ fn claude_on_path(paths: &Paths) -> Vec<PathBuf> {
         .collect()
 }
 
+/// The key of the encrypted credential files (HUM-523) with a store that
+/// never reaches the keyring of the machine running the tests.
+fn keys_without_keyring(paths: &Paths) -> humanitl_sandbox::agent::depot::seal::CredentialKeys {
+    humanitl_sandbox::agent::depot::seal::CredentialKeys::new(
+        humanitl_config::secret::KeyStore::for_paths(paths).with_secret_tool(None),
+    )
+}
+
 /// The state of `claude` as `humanitl agents status claude` gets it.
 fn claude_status(paths: &Paths) -> v1::AgentDepot {
     humanitl_ipc::agents::answer(
         paths,
         &humanitl_config::agents::SourceLock::none(),
         None,
+        &keys_without_keyring(paths),
         Some(v1::agents_request::Op::Status(
             v1::agents_request::Status::default(),
         )),
@@ -1262,6 +1272,7 @@ async fn claude_code_from_the_depot_runs_two_sessions_without_a_login_and_leaves
         &fixture.paths,
         &humanitl_config::agents::SourceLock::none(),
         service.depot_in_use().as_deref(),
+        &service.credential_keys(),
         Some(v1::agents_request::Op::Remove(v1::agents_request::Remove {
             agent: "claude".to_owned(),
         })),
@@ -1301,6 +1312,7 @@ fn switch_to_depot(paths: &Paths) {
         paths,
         &humanitl_config::agents::SourceLock::none(),
         None,
+        &keys_without_keyring(paths),
         Some(v1::agents_request::Op::SetSource(
             v1::agents_request::SetSource {
                 agent: "claude".to_owned(),

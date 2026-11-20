@@ -127,6 +127,7 @@ impl Setup {
             session: SessionId::new(),
             base,
             origin,
+            keys: None,
         }
     }
 

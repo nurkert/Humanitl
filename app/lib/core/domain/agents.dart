@@ -86,6 +86,10 @@ enum AgentsOpKind {
 
   /// A pasted callback URL into the running login; [AgentsOp.value] is it.
   deliverCallback,
+
+  /// `agents.encrypt_credentials` (HUM-523): [AgentsOp.value] is `true` or
+  /// `false`.
+  setEncryption,
 }
 
 /// One request to `Agents`: the operation, the agent, and the one value
@@ -134,6 +138,13 @@ final class AgentsOp {
   /// Deliver the pasted [url] into the running login of [agent].
   const AgentsOp.deliverCallback(String agent, String url)
     : this._(AgentsOpKind.deliverCallback, agent: agent, value: url);
+
+  /// Switch the encryption of the credential files on or off (HUM-523).
+  const AgentsOp.setEncryption({required bool enabled})
+    : this._(AgentsOpKind.setEncryption, value: enabled ? 'true' : 'false');
+
+  /// For [AgentsOpKind.setEncryption]: whether it switches on.
+  bool get enabled => value == 'true';
 
   /// The operation.
   final AgentsOpKind kind;
@@ -311,6 +322,7 @@ final class AgentDepot {
     this.versions = const <String>[],
     this.actions = AgentActions.none,
     this.credentialWriteback = true,
+    this.credentialsEncrypted = false,
   });
 
   /// The id, as in `agents.<id>`.
@@ -369,6 +381,10 @@ final class AgentDepot {
   /// it.
   final bool credentialWriteback;
 
+  /// Whether the credential file lies encrypted in the depot (HUM-523), as
+  /// the depot says on disk.
+  final bool credentialsEncrypted;
+
   /// The time of [lastWriteback], or null when it names none the app can
   /// read; the daemon writes `<RFC 3339> session <id>`.
   DateTime? get lastWritebackAt =>
@@ -396,16 +412,44 @@ final class AgentDepot {
   ];
 }
 
+/// The encryption of the depot's credential files (HUM-523), mirror of
+/// `CredentialEncryption`.
+final class CredentialEncryption {
+  /// Creates the state.
+  const CredentialEncryption({
+    this.enabled = false,
+    this.configured = false,
+    this.keyring = false,
+    this.diagnostics = const <Diagnostic>[],
+  });
+
+  /// Whether the files are written encrypted now, as the depot says.
+  final bool enabled;
+
+  /// `agents.encrypt_credentials` in `config.toml`.
+  final bool configured;
+
+  /// Whether this system has a keyring the daemon can ask.
+  final bool keyring;
+
+  /// No keyring, or a hand edit of `config.toml` not yet followed.
+  final List<Diagnostic> diagnostics;
+}
+
 /// The state of every known agent, mirror of `AgentsStatus`.
 final class AgentsStatus {
   /// Creates the state.
-  const AgentsStatus({this.agents = const <AgentDepot>[]});
+  const AgentsStatus({this.agents = const <AgentDepot>[], this.encryption});
 
   /// No agent known.
   static const AgentsStatus none = AgentsStatus();
 
   /// In the order of `agents.<id>`.
   final List<AgentDepot> agents;
+
+  /// The encryption of the credential files; null from a daemon before
+  /// contract 1.56, and then no switch is shown.
+  final CredentialEncryption? encryption;
 
   /// The entry of [agent], or null.
   AgentDepot? of(String agent) {

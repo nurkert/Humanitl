@@ -698,6 +698,10 @@ struct Inner {
     /// Ein Start holt ihn hier, gibt ihn dem Adapter und nimmt ihn vorher in
     /// die Masken der Aufzeichnung auf; ein Plan liest ihn nie.
     keys: KeyStore,
+    /// Der Schlüssel der verschlüsselten Zugangsdateien des Depots
+    /// (HUM-523), aus demselben Schlüsselbund; einmal gelesen, bleibt er im
+    /// Speicher dieses Dienstes.
+    credential_keys: humanitl_sandbox::agent::depot::seal::CredentialKeys,
     /// Ob dieser Dienst seinen Abschied schon begonnen hat (HUM-142).
     ///
     /// Ab da startet nichts Neues mehr: Eine Sandbox, die nach dem Abschied
@@ -903,6 +907,9 @@ impl SandboxService {
         let paths = resolver.paths().clone();
         let config = Arc::new(resolver.base().config.clone());
         let keys = ports.keys.unwrap_or_else(|| KeyStore::for_paths(&paths));
+        let credential_keys =
+            humanitl_sandbox::agent::depot::seal::CredentialKeys::new(keys.clone())
+                .with_setting(crate::agents::setting(&paths));
         let egress = crate::egress::route(&config.egress);
         let source_lock = ports
             .source_lock
@@ -927,6 +934,7 @@ impl SandboxService {
                 notices: ports.notices,
                 sandbox_notices: ports.sandbox_notices,
                 recorder: ports.recorder,
+                credential_keys,
                 keys,
                 leaving: std::sync::atomic::AtomicBool::new(false),
                 retired: tokio::sync::watch::Sender::new(false),
@@ -974,6 +982,13 @@ impl SandboxService {
     #[must_use]
     pub fn can_start(&self) -> bool {
         !(lock(&self.inner.pending).claimed || self.inner.is_running() || self.inner.is_leaving())
+    }
+
+    /// Der Schlüssel der verschlüsselten Zugangsdateien (HUM-523), mit dem
+    /// Speicher dieses Dienstes; `Agents.set_encryption` schaltet mit ihm.
+    #[must_use]
+    pub fn credential_keys(&self) -> humanitl_sandbox::agent::depot::seal::CredentialKeys {
+        self.inner.credential_keys.clone()
     }
 
     /// Der Agent, dessen Depot die laufende Sitzung eingehängt hat
@@ -4508,8 +4523,24 @@ impl Inner {
         ctx: &AgentContext,
         need: KeyNeed,
     ) -> Result<humanitl_sandbox::agent::depot::DepotPlan, Diagnostic> {
-        use humanitl_sandbox::agent::depot::{DepotInput, Purpose, plan_session};
-        plan_session(&DepotInput {
+        use humanitl_sandbox::agent::depot::{DepotInput, Purpose, plan_session, seal};
+        let purpose = if need == KeyNeed::Start {
+            Purpose::Start
+        } else {
+            Purpose::Preview
+        };
+        let mut warnings = Vec::new();
+        // Ein `agents.encrypt_credentials`, das von Hand in `config.toml`
+        // kam, gilt ab dem nächsten Start (HUM-523). Scheitert das
+        // Nachziehen, startet die Sitzung mit dem Stand auf der Platte, und
+        // der Befund steht dabei.
+        if purpose == Purpose::Start
+            && let Err(mut found) = seal::reconcile(&self.paths, &self.credential_keys)
+        {
+            found.severity = Severity::Warning;
+            warnings.push(found);
+        }
+        let mut plan = plan_session(&DepotInput {
             config,
             lock: &self.source_lock,
             paths: &self.paths,
@@ -4517,12 +4548,11 @@ impl Inner {
             adapter: adapter.id(),
             command: &adapter.command(ctx),
             from_caller: ctx.agent_command_from_caller,
-            purpose: if need == KeyNeed::Start {
-                Purpose::Start
-            } else {
-                Purpose::Preview
-            },
-        })
+            purpose,
+            keys: Some(&self.credential_keys),
+        })?;
+        plan.warnings.extend(warnings);
+        Ok(plan)
     }
 
     /// Was der Adapter vom Zugangsschlüssel des Modells bekommt (HUM-140).

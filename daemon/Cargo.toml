@@ -80,6 +80,9 @@ hex = "0.4"
 getrandom = "0.4"
 rustix = { version = "1.1", default-features = false, features = ["std", "fs", "process"] }
 zeroize = "1"
+# Zugangsdateien im Depot verschluesselt (HUM-523): ChaCha20-Poly1305 aus
+# `ring`, das ueber rustls schon im Baum steht; keine neue Krypto-Crate.
+ring = "0.17"
 dashmap = "6.2"
 clap = { version = "4.6", features = ["derive", "env"] }
 aho-corasick = "1.1"

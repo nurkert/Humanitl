@@ -27,6 +27,11 @@
 //! - **Every outcome is reported** with agent, session and the SHA-256 of the
 //!   old and the new file, never their content; a refusal leaves the stored
 //!   file as it was and says `AGENT_012` (or `AGENT_016`).
+//! - **Sealed at rest** when the depot is (HUM-523, [`super::seal`]): the
+//!   stored file is opened for the comparison and the new one sealed before
+//!   it is written, under the same lock that a switch of the encryption
+//!   takes. Every SHA-256 here is one of the plain file, so a session's base
+//!   and the stored file compare alike in both forms.
 //!
 //! A format with an account field remembers the account through the stored
 //! file itself; [`Depot::last_writeback`] names the session that wrote last.
@@ -55,6 +60,7 @@ use serde::{Deserialize, Serialize};
 use serde_json::Value;
 
 use super::adopt;
+use super::seal::{self, CredentialKeys};
 use super::store::Depot;
 
 /// The largest credential file the guard reads, 64 KiB; also the largest
@@ -229,6 +235,9 @@ pub struct TakeBack<'a> {
     pub base: Option<&'a str>,
     /// Login run or session.
     pub origin: Origin,
+    /// The key of a sealed depot (HUM-523); `None` where the caller has no
+    /// keyring access, and then a sealed depot refuses (`AGENT_020`).
+    pub keys: Option<&'a CredentialKeys>,
 }
 
 /// What a write-back did.
@@ -397,12 +406,12 @@ fn take_back_with(
         old: None,
         new: Some(new.clone()),
     })?;
-    let stored = read_stored(depot, request.file).map_err(|what| Refused {
-        found: refused(agent, &what),
+    let stored = read_stored(depot, request.file, request.keys).map_err(|found| Refused {
+        found,
         old: None,
         new: Some(new.clone()),
     })?;
-    let old = stored.as_ref().map(|(bytes, _)| sha256_hex(bytes));
+    let old = stored.as_ref().map(|stored| sha256_hex(&stored.plain));
     let refuse_against = |found: Diagnostic| Refused {
         found,
         old: old.clone(),
@@ -412,8 +421,8 @@ fn take_back_with(
         return Ok(Taken::Nothing);
     }
     match (request.origin, &stored) {
-        (Origin::Session, Some((_, stored))) => {
-            compare(stored, &value, request, old.as_deref()).map_err(&refuse_against)?;
+        (Origin::Session, Some(stored)) => {
+            compare(&stored.value, &value, request, old.as_deref()).map_err(&refuse_against)?;
         }
         // Only a login run, which the person starts, stores the first file:
         // a session never chooses the account every later one works for.
@@ -426,7 +435,11 @@ fn take_back_with(
         }
         (Origin::Login, _) => {}
     }
-    let warning = store(depot, request.file, &bytes, interrupt)
+    // Sealed when the depot is; read under the lock, so a switch of the
+    // encryption that ran since this session started is followed.
+    let on_disk =
+        seal::for_disk(depot, request.file, &bytes, request.keys).map_err(&refuse_against)?;
+    let warning = store(depot, request.file, &on_disk, interrupt)
         .map_err(|what| refuse_against(refused(agent, &what)))?;
     let state = WritebackState {
         session: request.session.to_string(),
@@ -565,7 +578,7 @@ fn read_credential(
 }
 
 /// [`read_credential`] with another cap.
-fn read_capped(
+pub(crate) fn read_capped(
     dir: std::os::fd::BorrowedFd<'_>,
     file: &str,
     cap: u64,
@@ -603,24 +616,56 @@ fn read_capped(
     Ok(Some(bytes))
 }
 
-/// The stored credential file and its value; `None` before the first login.
-fn read_stored(depot: &Depot, file: &str) -> Result<Option<(Vec<u8>, Value)>, String> {
+/// The stored credential file: its bytes on disk, sealed or not, its plain
+/// bytes and its value.
+struct Stored {
+    raw: zeroize::Zeroizing<Vec<u8>>,
+    plain: zeroize::Zeroizing<Vec<u8>>,
+    value: Value,
+}
+
+/// The stored credential file; `None` before the first login. A sealed file
+/// is opened with the key (HUM-523).
+///
+/// # Errors
+///
+/// `AGENT_012` for a file that cannot be read or is no JSON object,
+/// `AGENT_020` for a sealed file without a key that opens it.
+fn read_stored(
+    depot: &Depot,
+    file: &str,
+    keys: Option<&CredentialKeys>,
+) -> Result<Option<Stored>, Diagnostic> {
+    let agent = depot.agent();
     let dir = match adopt::open_dir(&depot.credentials_dir()) {
         Ok(dir) => dir,
         Err(rustix::io::Errno::NOENT) => return Ok(None),
         Err(err) => {
-            return Err(format!(
-                "credentials/ of the depot cannot be opened ({err})"
+            return Err(refused(
+                agent,
+                &format!("credentials/ of the depot cannot be opened ({err})"),
             ));
         }
     };
-    let Some(bytes) =
-        read_credential(dir.as_fd(), file).map_err(|what| format!("the stored {file} {what}"))?
+    let Some(raw) = read_capped(dir.as_fd(), file, CREDENTIAL_CAP + seal::SEAL_OVERHEAD)
+        .map_err(|what| refused(agent, &format!("the stored {file} {what}")))?
+        .map(zeroize::Zeroizing::new)
     else {
         return Ok(None);
     };
-    let value = parse(&bytes).map_err(|what| format!("the stored file: {what}"))?;
-    Ok(Some((bytes, value)))
+    let plain = seal::from_disk(depot, file, &raw, keys)?;
+    if u64::try_from(plain.len()).unwrap_or(u64::MAX) > CREDENTIAL_CAP {
+        return Err(refused(
+            agent,
+            &format!(
+                "the stored {file} is larger than {} KiB",
+                CREDENTIAL_CAP / 1024
+            ),
+        ));
+    }
+    let value =
+        parse(&plain).map_err(|what| refused(agent, &format!("the stored file: {what}")))?;
+    Ok(Some(Stored { raw, plain, value }))
 }
 
 /// The JSON value of a credential file; the root must be an object.
@@ -792,6 +837,12 @@ fn shown(pointer: &str) -> &str {
     }
 }
 
+/// Puts `bytes` in place as the stored `file`, as they are: atomic, synced.
+/// For the switch of the encryption, which holds the lock ([`super::seal`]).
+pub(crate) fn put(depot: &Depot, file: &str, bytes: &[u8]) -> Result<(), String> {
+    store(depot, file, bytes, None).map(|_warning| ())
+}
+
 /// Writes the new credential file: a temporary file `0600` in the depot's
 /// root, `fsync`, `rename` into `credentials/`, `fsync` of both directories.
 ///
@@ -877,7 +928,7 @@ fn shown_key(text: &str) -> String {
 
 /// A new private file with `bytes`, synced. `create_new` is `O_CREAT |
 /// O_EXCL`, which never follows a link at the last component.
-fn write_new(path: &Path, bytes: &[u8], interrupt: Option<usize>) -> Result<(), String> {
+pub(crate) fn write_new(path: &Path, bytes: &[u8], interrupt: Option<usize>) -> Result<(), String> {
     let mut out = std::fs::OpenOptions::new()
         .write(true)
         .create_new(true)
@@ -1122,17 +1173,23 @@ pub fn lock(depot: &Depot) -> Result<CredentialLock, Diagnostic> {
 
 /// The stored credential file and the state of the last write-back as they
 /// are, so a login can put them back ([`restore`]).
+///
+/// The credential file is kept as it lies on disk, sealed or not, and is put
+/// back byte for byte; the lock held between both keeps a switch of the
+/// encryption out.
 #[derive(Debug, Clone, PartialEq, Eq)]
 pub struct Snapshot {
-    credential: Option<Vec<u8>>,
+    credential: Option<zeroize::Zeroizing<Vec<u8>>>,
+    /// The SHA-256 of the plain file.
+    sha256: Option<String>,
     state: Option<Vec<u8>>,
 }
 
 impl Snapshot {
-    /// The SHA-256 of the stored credential file; `None` without one.
+    /// The SHA-256 of the stored credential file, plain; `None` without one.
     #[must_use]
     pub fn sha256(&self) -> Option<String> {
-        self.credential.as_deref().map(sha256_hex)
+        self.sha256.clone()
     }
 }
 
@@ -1140,17 +1197,26 @@ impl Snapshot {
 ///
 /// # Errors
 ///
-/// `AGENT_012` when the stored file cannot be read.
-pub fn snapshot(depot: &Depot, file: &str, _held: &CredentialLock) -> Result<Snapshot, Diagnostic> {
-    let agent = depot.agent();
-    let credential = read_stored(depot, file)
-        .map_err(|what| refused(agent, &what))?
-        .map(|(bytes, _)| bytes);
+/// `AGENT_012` when the stored file cannot be read, `AGENT_020` when it is
+/// sealed and does not open.
+pub fn snapshot(
+    depot: &Depot,
+    file: &str,
+    keys: Option<&CredentialKeys>,
+    _held: &CredentialLock,
+) -> Result<Snapshot, Diagnostic> {
+    let stored = read_stored(depot, file, keys)?;
+    let sha256 = stored.as_ref().map(|stored| sha256_hex(&stored.plain));
+    let credential = stored.map(|stored| stored.raw);
     let state = adopt::open_dir(depot.root())
         .ok()
         .and_then(|dir| adopt::read_small(dir.as_fd(), Path::new(WRITEBACK_STATE), 4096).ok())
         .flatten();
-    Ok(Snapshot { credential, state })
+    Ok(Snapshot {
+        credential,
+        sha256,
+        state,
+    })
 }
 
 /// Puts the credential file and the state back as `snapshot` saw them: the

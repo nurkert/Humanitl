@@ -597,6 +597,7 @@ fn a_cloned_project_cannot_choose_where_an_agent_comes_from() {
     let mut lines = vec![
         "agents.source = \"host\"".to_owned(),
         "agents.source = \"depot\"".to_owned(),
+        "agents.encrypt_credentials = false".to_owned(),
     ];
     for agent in humanitl_config::agents::KNOWN_AGENTS {
         lines.push(format!("agents.{agent}.source = \"host\""));

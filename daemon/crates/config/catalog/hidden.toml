@@ -24,6 +24,7 @@ env_ca_only = "only the CA variable of a TLS_001 fix goes through SetConfig, nev
 "agents.claude.source" = "agent_source"
 "agents.codex.credential_writeback" = "agent_source"
 "agents.codex.source" = "agent_source"
+"agents.encrypt_credentials" = "agent_source"
 "agents.opencode.credential_writeback" = "agent_source"
 "agents.opencode.source" = "agent_source"
 "agents.pi.credential_writeback" = "agent_source"

@@ -1,6 +1,6 @@
 ---
 source: SECURITY.md
-source-sha256: ef83c66616b66b452e804fa3b482e9a604a17ddf9b3ed5ed77c8696302e992b2
+source-sha256: ed1fbcf3ec636e25646186e319ed0ba26c317a386343871a6f540f1fa00d4d11
 lang: de
 ---
 # Sicherheit
@@ -822,7 +822,7 @@ keines. Alle Kanäle unten werden in der Anwendung angezeigt, nicht versteckt.
 | Terminal-Ausgabe | der Mensch liest, was der Agent schreibt | der Daemon filtert jeden Bytestrom, bevor ein Client ihn sieht (Erlaubnisliste); Banner „Ausgabe des Agenten ist nicht vertrauenswürdig" | |
 | Host-Namen im Log | blockierte Anfragen bleiben sichtbar | dokumentiert; der Export enthält Hosts, Pfade, Header und Bodies im Klartext und sagt das vor dem Schreiben | optionales Pseudonymisieren der Hosts |
 | Paket-Caches | wiederholte Installationen | Caches pro Projekt, nie über Vertrauensstufen hinweg geteilt | schreibgeschützte Start-Caches |
-| die Zugangsdatei des Depots | eine erneuerte Anmeldung muss die Sitzung überdauern | nur die eine Datei, die der Adapter nennt, geht zurück, ohne einem Link zu folgen geöffnet, höchstens 64 KiB, gegen das Format des Adapters und die gespeicherte Datei geprüft, nie älter und nie von einem anderen Konto, atomar unter einer Sperre geschrieben, jedes Ergebnis im Audit-Log mit den SHA-256 beider Dateien; `agents.<id>.credential_writeback = false` schaltet es ab | ein verschlüsselter Speicher mit Schlüssel aus dem Schlüsselbund (HUM-523) |
+| die Zugangsdatei des Depots | eine erneuerte Anmeldung muss die Sitzung überdauern | nur die eine Datei, die der Adapter nennt, geht zurück, ohne einem Link zu folgen geöffnet, höchstens 64 KiB, gegen das Format des Adapters und die gespeicherte Datei geprüft, nie älter und nie von einem anderen Konto, atomar unter einer Sperre geschrieben, jedes Ergebnis im Audit-Log mit den SHA-256 beider Dateien; `agents.<id>.credential_writeback = false` schaltet es ab; mit `agents.encrypt_credentials = true` versiegelt auf der Platte mit einem Schlüssel aus dem Schlüsselbund (HUM-523) | der Daemon entschlüsselt für jede Sitzung; der Schlüssel wird nicht rotiert |
 
 ### 5.1 Die LLM-Durchleitung
 
@@ -1488,9 +1488,61 @@ Preis einer neuen Anmeldung, wann immer das Token abläuft. Zwei Sitzungen bei e
 seinen Refresh-Token rotiert, können einander das Token ungültig machen; dann ist eine neue
 Anmeldung nötig (`humanitl agents login <id>`). Andere Prozesse desselben Nutzers können das Depot
 ändern wie jede Datei unter dem Datenordner ([Abschnitt 5.6](#56-weitere-bekannte-grenzen),
-[außerhalb des Umfangs](#außerhalb-des-umfangs)). Die Zugangsdatei liegt unverschlüsselt im Depot,
-`0600`, wie die eigene Datei des Anbieters auf dem Host; Verschlüsselung mit einem Schlüssel aus
-dem Schlüsselbund ist HUM-523.
+[außerhalb des Umfangs](#außerhalb-des-umfangs)).
+
+*Verschlüsselt auf der Platte* (HUM-523, ADR-0023 Punkt 6). Ohne weiteres liegt die Zugangsdatei im
+Klartext im Depot, `0600` in einem Ordner `0700`, wie die eigene Datei des Anbieters auf dem Host.
+Mit `agents.encrypt_credentials = true` (Vorgabe aus, im Projekt-Profil gesperrt) wird jede
+Zugangsdatei unter `credentials/` mit ChaCha20-Poly1305 aus `ring` versiegelt, einer etablierten
+Crate, die über rustls schon im Baum steht: ein Kopf aus Magic-Bytes, Formatversion und einer
+frischen zufälligen 96-Bit-Nonce je Schreiben, dann Chiffrat und Tag; Kopf, Agent und Dateiname sind
+die zugehörigen Daten, eine zu einem anderen Agenten oder Namen verschobene Datei öffnet sich nicht.
+Der Schlüssel sind 32 zufällige Bytes im Schlüsselbund des Systems (Secret Service unter Linux, der
+Anmelde-Schlüsselbund unter macOS) unter `humanitl/agents-depot`, erreicht wie `llm.api_key_ref`,
+aber nur dort: Es gibt keine Rückfalldatei und nie eine Schlüsseldatei neben den Daten. Ohne
+Schlüsselbund, der antwortet, wird die Einstellung abgelehnt (`AGENT_020`), und ein Schlüsselbund,
+der nicht antwortet, gilt nie als leer, sodass kein neuer Schlüssel den ersetzt, mit dem die Dateien
+versiegelt sind; das Einschalten fragt den Schlüsselbund jedes Mal und lehnt einen Eintrag ab, der
+fehlt oder einen anderen Schlüssel hält als den zuvor gelesenen. Der Daemon schaltet mit
+`Agents.set_encryption` (`humanitl config set agents.encrypt_credentials`, der Schalter in der App)
+als eine Transaktion unter einer Sperre, die auch das Schreiben von `config.toml` umfasst: Er hält
+die Sperre der Zugangsdateien jedes Depots, prüft, dass jede versiegelte Datei sich öffnen lässt,
+schreibt ein Journal (Ziel und die umzuwandelnden Dateien), setzt beim Einschalten den Stand,
+ersetzt jede Datei atomar (beim Einschalten liegen nur versiegelte Bytes zwischen), nimmt beim
+Ausschalten den Stand weg und entfernt das Journal zuletzt; `config.toml` sagt beim Einschalten
+zuletzt `true` und beim Ausschalten zuerst `false`, synchronisiert, sodass es nie `true` sagt,
+während eine Klartextdatei im Depot liegt. Ein Absturz an
+jeder Stelle hinterlässt das Journal; bis das Umschalten fertig ist, liest sich eine gelistete Datei
+in beiden Formen, und nichts wird geschrieben, und der Daemon führt es vor einer Statusantwort,
+einem Sitzungsstart oder einem Anmeldelauf vorwärts zu Ende. Ein Schritt, der ohne Absturz
+scheitert, dreht das Umschalten unter einem neuen Journal zurück. Eine Änderung von Hand in
+`config.toml` wirkt beim nächsten Start einer Sitzung aus dem Depot, gelesen unter derselben
+Sperre, und solange `agents.encrypt_credentials` `true` sagt und das Depot noch nicht versiegelt
+ist, wird keine Zugangsdatei im Klartext geschrieben, und ein Anmelde- oder Konfigurationslauf
+startet nicht. In einem versiegelten Depot ist eine Datei ohne Kopf ein Befund, nie Klartext zum
+Annehmen oder Versiegeln. Vor dem Einschalten sind die Dateien per Definition Klartext, und
+`config.toml` sagt `true` erst, wenn jede Datei versiegelt ist. Das lokale `humanitl sandbox run`
+folgt der Einstellung wie ein Start im Daemon.
+Eine temporäre Datei der Rückschrift, die ein Absturz im Wurzelordner eines Depots ließ, geht vor
+einem Umschalten und seiner Wiederaufnahme; einem Journal wird nur gefolgt, wenn es die
+Formatversion dieses Daemons, registrierte Agenten und deren Zugangsdateien unter `agents/` nennt;
+der Stand vermerkt eine Kennung (ein SHA-256) des Schlüssels, sodass ein anderer Schlüssel im
+Schlüsselbund abgelehnt wird, und ein Schlüssel, den der Daemon einmal gelesen hat, wird nie still
+ersetzt. Das lokale `humanitl sandbox run` führt ein unterbrochenes Umschalten vor dem Start zu Ende,
+und die Kopie einer Sitzung wird unter der Sperre der Zugangsdateien des Agenten gelesen. Jeder
+Schreiber, der
+Wächter der Rückschrift wie ein Anmeldelauf, liest unter seiner Sperre, ob das Depot versiegelt
+ist; eine Sitzung, die vor einem Umschalten begann, schreibt so im Stand danach. Geöffnet wird eine
+versiegelte Datei nur in die Arbeitskopie der Sitzung und im Wächter; eine Datei, die sich mit dem
+Schlüssel nicht öffnen lässt (ein anderer Schlüssel, eine beschädigte Datei), ist ein Befund
+(`AGENT_020`), und die gespeicherte Datei bleibt, wie sie ist. Status, App und CLI zeigen je Agent
+„verschlüsselt". *Die Grenze:* Der Daemon hält den Schlüssel und entschlüsselt für jede Sitzung;
+ein Prozess desselben Nutzers, der den Schlüsselbund fragen oder den Speicher des Daemons lesen
+kann, liest die Anmeldung wie zuvor, und jede Sitzung bekommt die Klartextdatei in ihre Kopie. Die
+Verschlüsselung schützt die Dateien auf der Platte: eine Kopie des Datenordners, ein Backup, ein
+Abbild der Platte ohne den Schlüsselbund. Die benannten Felder einer Anmeldung (`NamedFields`, etwa
+die Kontofelder in Claude Codes `.claude.json`) liegen unter `config/` und sind nicht
+verschlüsselt; sie tragen kein Token. Der Schlüssel wird nicht rotiert.
 
 ### Außerhalb des Umfangs
 
@@ -2003,6 +2055,7 @@ der Durchleitung oder an der Audit-Kette bekommt hier eine Zeile und in der Änd
 | 0.1.x | Aufräumen und Vergessen nur über einen Plan, den der Daemon auflistet und ein Mensch bestätigt; sein Digest bindet Identität und Fassung jedes Eintrags und wird in der löschenden Transaktion erneut geprüft (`SANDBOX_054`); nie der Projektordner, die Audit-Kette oder die laufende Sitzung (HUM-533, [Abschnitt 5.2](#aufräumen-und-vergessen-hum-533), K-37). |
 | 0.1.x | Die Projektwahl: eine Ebene der Konfiguration je Projekt, die der Daemon auf dem Host in seinem Register hält, nur über `Projects.save_choice` geschrieben, nie aus dem Projektordner gelesen; eine feste Erlaubnisliste von Schlüsseln, die Untergrenze der Isolation steigt nur, Sperren einer Firmenvorgabe gewinnen, sonst `CONFIG_024`; ein Start ohne Projektordner wird mit `SANDBOX_053` abgelehnt, statt das Arbeitsverzeichnis des Daemons zu nehmen (HUM-532, [Abschnitt 5.2](#die-projektwahl-hum-532), K-37). |
 | 0.1.x | Eine Regel der `rules.yaml`, die sich nicht lesen lässt, kostet nur sich selbst statt aller Regeln der Datei; an ihrem Platz steht die Regel selbst (Aktion und Bedingung lesbar) oder `ask` für ihren Host oder für jeden Host und jede Adresse, nie nichts, außer bei einem `allow`; der Eintrag wird an seinem Platz zurückgeschrieben, und eine Datei, die sich als Ganzes nicht lesen lässt, wird nie überschrieben (HUM-561, [Abschnitt 7](#7-die-regel-engine)). |
+| 0.1.x | Die Zugangsdateien des Agent-Depots wahlweise verschlüsselt auf der Platte (`agents.encrypt_credentials`, Vorgabe aus, im Projekt-Profil gesperrt): ChaCha20-Poly1305 aus `ring` mit einer frischen zufälligen Nonce je Schreiben, der Schlüssel nur im Schlüsselbund des Systems und nie in einer Datei neben den Daten, ohne Schlüsselbund, der antwortet, wird die Einstellung abgelehnt (`AGENT_020`); das Umschalten wandelt jede Datei atomar unter den Sperren der Depots um, alles oder nichts; der Daemon entschlüsselt trotzdem für jede Sitzung (HUM-523, [Abschnitt 5.7](#57-die-zugangsdatei-des-depots), K-36). |
 
 ## 12. macOS: Seatbelt statt bubblewrap
 

@@ -39,6 +39,7 @@ use super::credential::{self, Origin, Refused, TakeBack, Taken};
 use super::maintenance::{self, MaintenanceTask};
 use super::recipe::{DepotRecipe, KnownAgent, LoginFlow, LoginRecipe};
 use super::scratch::{self, SCRATCH_CAP_BYTES, Scratch};
+use super::seal::CredentialKeys;
 use super::store::{Depot, Installed, Reservation};
 use super::{DEPOT_CONFIG_DST, DepotMount};
 
@@ -66,6 +67,8 @@ pub struct AgentRun {
     paths: Paths,
     work: PathBuf,
     copy: Scratch,
+    /// The key of a sealed depot (HUM-523), for the copy and the guard.
+    keys: Option<CredentialKeys>,
     /// One run or switch per agent at a time.
     _lock: Reservation,
 }
@@ -161,8 +164,16 @@ pub fn prepare(
     agent: &'static KnownAgent,
     task: MaintenanceTask,
     session: SessionId,
+    keys: Option<CredentialKeys>,
 ) -> Result<AgentRun, Diagnostic> {
-    prepare_in(paths, agent, task, session, Depot::of(paths, agent.id))
+    prepare_in(
+        paths,
+        agent,
+        task,
+        session,
+        Depot::of(paths, agent.id),
+        keys,
+    )
 }
 
 pub(crate) fn prepare_in(
@@ -171,6 +182,7 @@ pub(crate) fn prepare_in(
     task: MaintenanceTask,
     session: SessionId,
     depot: Depot,
+    keys: Option<CredentialKeys>,
 ) -> Result<AgentRun, Diagnostic> {
     let recipe = agent.recipe.ok_or_else(|| {
         Diagnostic::builder(AGENT_015, Severity::Error)
@@ -245,7 +257,7 @@ pub(crate) fn prepare_in(
                 .build()
         })?;
     }
-    let copy = scratch::create(paths, session, &depot, Some(reservation))?;
+    let copy = scratch::create(paths, session, &depot, Some(reservation), keys.as_ref())?;
     Ok(AgentRun {
         agent,
         recipe,
@@ -256,6 +268,7 @@ pub(crate) fn prepare_in(
         paths: paths.clone(),
         work,
         copy,
+        keys,
         _lock: lock,
     })
 }
@@ -463,12 +476,13 @@ impl AgentRun {
             session: self.session,
             base: self.copy.base(file),
             origin: Origin::Login,
+            keys: self.keys.as_ref(),
         };
         // One lock across storing, writing the named fields and, should the
         // latter fail, putting the earlier login back: all or nothing.
         let held = credential::lock(&self.depot).map_err(|found| failed(found.why))?;
-        let before =
-            credential::snapshot(&self.depot, file, &held).map_err(|found| failed(found.why))?;
+        let before = credential::snapshot(&self.depot, file, self.keys.as_ref(), &held)
+            .map_err(|found| failed(found.why))?;
         let taken = match credential::take_back_held(self.copy.path(), &request, &held) {
             Ok(Taken::Nothing) if !self.depot.logged_in() => {
                 return Err(failed(format!(
@@ -588,6 +602,7 @@ impl AgentRun {
                     session: self.session,
                     base: self.copy.base(file),
                     origin: Origin::Session,
+                    keys: self.keys.as_ref(),
                 };
                 match credential::take_back(self.copy.path(), &request) {
                     Ok(Taken::Nothing) => None,

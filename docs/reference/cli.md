@@ -129,6 +129,7 @@ below lists the flag names and their short aliases.
 | `--agents-claude-source` | - | `host`, `depot`, `null` | `agents.claude.source` |
 | `--agents-codex-credential-writeback` | - | `true`, `false` | `agents.codex.credential_writeback` |
 | `--agents-codex-source` | - | `host`, `depot`, `null` | `agents.codex.source` |
+| `--agents-encrypt-credentials` | - | `true`, `false` | `agents.encrypt_credentials` |
 | `--agents-opencode-credential-writeback` | - | `true`, `false` | `agents.opencode.credential_writeback` |
 | `--agents-opencode-source` | - | `host`, `depot`, `null` | `agents.opencode.source` |
 | `--agents-pi-credential-writeback` | - | `true`, `false` | `agents.pi.credential_writeback` |

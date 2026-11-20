@@ -151,7 +151,9 @@ Seitenkanäle sind erklärt, in der App sichtbar und nicht geschlossen
   Sitzung angemeldet startet. Nur diese eine Datei, geprüft gegen das Format des Agenten, nie älter
   und nie von einem anderen Konto; innerhalb ihres Formats kann eine Sitzung der nächsten trotzdem
   ein paar Bytes hinterlassen. Jede Rückschrift steht im Audit-Log;
-  `agents.<id>.credential_writeback = false` schaltet sie ab.
+  `agents.<id>.credential_writeback = false` schaltet sie ab. `agents.encrypt_credentials = true`
+  hält die Datei auf der Platte verschlüsselt, der Schlüssel nur im Schlüsselbund des Systems; der
+  Daemon entschlüsselt sie trotzdem für jede Sitzung.
 
 **Und du bist der Klassifikator:** Eine freigegebene Anfrage geht hinaus, also lies, was du
 freigibst. Antworten und WebSocket-Frames werden aufgezeichnet, aber nicht angehalten, es gibt kein HTTP/2

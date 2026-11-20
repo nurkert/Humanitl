@@ -776,7 +776,7 @@ channels below are shown in the application, not hidden.
 | terminal output | the human reads what the agent writes | the daemon filters every byte stream before a client sees it (allowlist); banner "agent output is not trustworthy" | |
 | host names in the log | blocked requests stay visible | documented; the export carries hosts, paths, headers and bodies in plain text and says so before writing | optional host redaction |
 | package caches | repeated installs | caches per project, never shared across trust levels | read-only seed caches |
-| the credential file of the depot | a renewed login has to outlive the session | only the one file the adapter names goes back, opened without following a link, at most 64 KiB, checked against the adapter's format and the stored file, never older and never another account, written atomically under a lock, every outcome in the audit log with the SHA-256 of both files; `agents.<id>.credential_writeback = false` turns it off | an encrypted store with a key from the keyring (HUM-523) |
+| the credential file of the depot | a renewed login has to outlive the session | only the one file the adapter names goes back, opened without following a link, at most 64 KiB, checked against the adapter's format and the stored file, never older and never another account, written atomically under a lock, every outcome in the audit log with the SHA-256 of both files; `agents.<id>.credential_writeback = false` turns it off; with `agents.encrypt_credentials = true` sealed at rest with a key from the keyring (HUM-523) | the daemon decrypts for every session; the key does not rotate |
 
 ### 5.1 The LLM passthrough
 
@@ -1474,8 +1474,53 @@ by `credential_writeback = false` at the price of a fresh login whenever the tok
 sessions with a vendor that rotates its refresh token can invalidate each other's token; then a new
 login is needed (`humanitl agents login <id>`). Other processes of the same user can change the
 depot as they can any file under the data directory ([section 5.6](#56-other-known-limits),
-[out of scope](#out-of-scope)). The credential file lies unencrypted in the depot, `0600`, like the
-vendor's own file on the host; encryption with a key from the keyring is HUM-523.
+[out of scope](#out-of-scope)).
+
+*Encrypted at rest* (HUM-523, ADR-0023 point 6). By default the credential file lies in the depot
+in plain text, `0600` in a `0700` directory, like the vendor's own file on the host. With
+`agents.encrypt_credentials = true` (off by default, closed to project profiles) every credential
+file under `credentials/` is sealed with ChaCha20-Poly1305 from `ring`, an established crate already
+in the tree through rustls: a header of magic bytes, a format version and a fresh 96-bit random
+nonce per write, then ciphertext and tag; header, agent and file name are the associated data, so
+a file moved to another agent or name does not open. The key is 32 random bytes in the system
+keyring (Secret Service on Linux, the login Keychain on macOS) under `humanitl/agents-depot`,
+reached like `llm.api_key_ref`, but only there: there is no fallback file and never a key file next
+to the data. Without a keyring that answers, the setting is refused (`AGENT_020`), and a keyring that
+does not answer is never taken for an empty one, so no new key replaces the one the files are
+sealed with; switching on asks the keyring every time and refuses an entry that is gone or holds
+another key than the one read before. The daemon switches with `Agents.set_encryption`
+(`humanitl config set agents.encrypt_credentials`, the switch in the app) as one transaction under
+one lock that also covers the write of `config.toml`: it holds the credential lock of every depot,
+checks that every sealed file opens, writes a journal (target and the files to convert), sets the
+state when switching on, replaces each file atomically (switching on stages only sealed bytes),
+removes the state when switching off, and removes the journal last; `config.toml` says `true` last
+when switching on and `false` first, synced, when switching off, so it never says `true` while a
+plain file lies in the depot. A crash
+at any point leaves the journal; until the switch is finished, a listed file reads in either form
+and nothing is written, and the daemon finishes it forward before a status answer, a session start
+or a login run. A step that fails without a crash turns the switch back under a new journal. A
+hand edit of `config.toml` takes effect at the next start of a depot session, read under the same
+lock, and while `agents.encrypt_credentials` says `true` and the depot is not sealed yet, no
+credential file is written in plain text and a login or configuration run does not start. In a
+sealed depot a file without the header is a finding, never plain text to accept or seal. Before a
+switch on the files are plain by definition, and `config.toml` says `true` only after every file is
+sealed. The local `humanitl sandbox run` follows the setting like a daemon start. A write-back temporary file that a crash left at a depot's root
+is removed before a switch and its recovery; a journal is followed only when it names this
+daemon's format version, registered agents and their credential files inside `agents/`; the state
+records an id (a SHA-256) of the key, so another key in the keyring is refused, and a key the
+daemon read once is never replaced silently. The local `humanitl sandbox run` finishes an
+interrupted switch before it starts, and a session's copy is read under the agent's credential
+lock. Every writer, the guard of the write-back and a login run, reads
+under its lock whether the depot is sealed, so a session that started before a switch writes in
+the state after it. A sealed file is opened only into the session's scratch copy and inside the
+guard; a file that does not open with the key (another key, a damaged file) is a finding
+(`AGENT_020`), and the stored file stays as it is. Status, app and CLI show "encrypted" per agent.
+*The limit:* the daemon holds the key and decrypts for every session, so a process of the same
+user that can ask the keyring or read the daemon's memory reads the login as before, and every
+session gets the plain file in its copy. The encryption protects the files at rest: a copy of the
+data directory, a backup or a disk image without the keyring. The named fields of a login
+(`NamedFields`, such as the account fields in Claude Code's `.claude.json`) lie under `config/` and
+are not encrypted; they carry no token. The key is not rotated.
 
 ### Out of scope
 
@@ -2127,6 +2172,7 @@ passthrough or the audit chain gets a line here and in the change history of
 | 0.1.x | Cleanup and forgetting only through a plan the daemon lists and a person confirms; its digest binds identity and version of every item and is checked again in the deleting transaction (`SANDBOX_054`); never the project folder, the audit chain or the running session (HUM-533, [section 5.2](#cleanup-and-forgetting-hum-533), K-37). |
 | 0.1.x | The project choice: a per-project configuration layer the daemon keeps on the host in its register, written only through `Projects.save_choice`, never read from the project folder; a fixed allow-list of keys, the isolation floor only raised, company locks win, `CONFIG_024` otherwise; a start without a project folder is refused with `SANDBOX_053` instead of taking the daemon's working directory (HUM-532, [section 5.2](#the-project-choice-hum-532), K-37). |
 | 0.1.x | A rule of `rules.yaml` that cannot be read costs only itself instead of every rule of the file; in its place stands the rule itself (action and match readable) or `ask` for its host or for every host and address, never nothing unless it is an `allow`; the entry is written back in its place, and a file that cannot be read as a whole is never overwritten (HUM-561, [section 7](#7-the-rules-engine)). |
+| 0.1.x | The credential files of the agent depot optionally encrypted at rest (`agents.encrypt_credentials`, off by default, closed to project profiles): ChaCha20-Poly1305 from `ring` with a fresh random nonce per write, the key only in the system keyring and never in a file next to the data, the setting refused without a keyring that answers (`AGENT_020`); the switch converts every file atomically under the depots' locks, all or nothing; the daemon still decrypts for every session (HUM-523, [section 5.7](#57-the-credential-file-of-the-depot), K-36). |
 
 ## 12. macOS: Seatbelt instead of bubblewrap
 

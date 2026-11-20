@@ -130,7 +130,7 @@ pub async fn run(ctx: &Context, cmd: &AgentsCmd) -> Result<u8, Failure> {
                 .build(),
         ));
     }
-    print(ctx, &shown);
+    print(ctx, &shown, status.encryption.as_ref());
     Ok(EXIT_OK)
 }
 
@@ -738,9 +738,18 @@ fn ask(ctx: &Context, question: &str, with_yes: &str, declined: &str) -> Result<
     ))
 }
 
-fn print(ctx: &Context, shown: &[&v1::AgentDepot]) {
+fn print(ctx: &Context, shown: &[&v1::AgentDepot], encryption: Option<&v1::CredentialEncryption>) {
     if ctx.render.is_json() {
         ctx.render.value(&json!({
+            "encryption": encryption.map(|state| json!({
+                "enabled": state.enabled,
+                "configured": state.configured,
+                "keyring": state.keyring,
+                "diagnostics": state.diagnostics.iter().map(|found| json!({
+                    "code": found.code,
+                    "why": found.why,
+                })).collect::<Vec<_>>(),
+            })),
             "agents": shown.iter().map(|entry| json!({
                 "agent": entry.agent,
                 "name": entry.display_name,
@@ -751,6 +760,7 @@ fn print(ctx: &Context, shown: &[&v1::AgentDepot]) {
                 "version": entry.version,
                 "signature": entry.signature,
                 "logged_in": entry.logged_in,
+                "credentials_encrypted": entry.credentials_encrypted,
                 "last_writeback": entry.last_writeback,
                 "size_bytes": entry.size_bytes,
                 "in_use": entry.in_use,
@@ -762,6 +772,13 @@ fn print(ctx: &Context, shown: &[&v1::AgentDepot]) {
             })).collect::<Vec<_>>(),
         }));
         return;
+    }
+    // Ein Daemon vor 1.56 schickt keinen Stand der Verschlüsselung (HUM-523).
+    if let Some(state) = encryption {
+        ctx.render.line(&encryption_line(state));
+        for diagnostic in state.diagnostics.iter().filter_map(from_proto) {
+            ctx.render.diagnostic(&diagnostic);
+        }
     }
     for entry in shown {
         ctx.render.line(&line(entry));
@@ -814,6 +831,18 @@ fn maintenance_line(run: &v1::AgentMaintenance) -> String {
     format!("  last {}: {what} ({sandbox})", run.task)
 }
 
+/// Die Zeile zur Verschlüsselung der Zugangsdateien (HUM-523), so wie das
+/// Depot sie auf der Platte sagt.
+fn encryption_line(state: &v1::CredentialEncryption) -> String {
+    if state.enabled {
+        "Credential files: encrypted, the key in the system keyring \
+         (agents.encrypt_credentials = true)"
+            .to_owned()
+    } else {
+        "Credential files: not encrypted (agents.encrypt_credentials = false)".to_owned()
+    }
+}
+
 /// Eine Zeile je Agent: Quelle mit Herkunft oder Sperre, dann das Depot.
 fn line(entry: &v1::AgentDepot) -> String {
     let origin = if entry.locked_by.is_empty() {
@@ -832,10 +861,10 @@ fn line(entry: &v1::AgentDepot) -> String {
             } else {
                 entry.signature.as_str()
             },
-            if entry.logged_in {
-                "logged in"
-            } else {
-                "not logged in"
+            match (entry.logged_in, entry.credentials_encrypted) {
+                (true, true) => "logged in, encrypted",
+                (true, false) => "logged in",
+                (false, _) => "not logged in",
             },
             if entry.in_use { ", in use" } else { "" }
         )
@@ -869,6 +898,34 @@ mod tests {
             "Claude Code (claude): source depot (fixed by your company: \
              /etc/humanitl/policy.toml); depot 2.1.0 (verified), not logged in; 0 bytes"
         );
+    }
+
+    /// HUM-523: the status says "encrypted" for the depot and per agent.
+    #[test]
+    fn the_status_says_encrypted() {
+        let entry = v1::AgentDepot {
+            agent: "claude".to_owned(),
+            display_name: "Claude Code".to_owned(),
+            source: "depot".to_owned(),
+            origin: "agent".to_owned(),
+            version: "2.1.0".to_owned(),
+            signature: "verified".to_owned(),
+            logged_in: true,
+            credentials_encrypted: true,
+            ..v1::AgentDepot::default()
+        };
+        assert_eq!(
+            line(&entry),
+            "Claude Code (claude): source depot (agent); depot 2.1.0 (verified), logged in, \
+             encrypted; 0 bytes"
+        );
+        let on = v1::CredentialEncryption {
+            enabled: true,
+            ..v1::CredentialEncryption::default()
+        };
+        assert!(encryption_line(&on).starts_with("Credential files: encrypted"));
+        let off = v1::CredentialEncryption::default();
+        assert!(encryption_line(&off).starts_with("Credential files: not encrypted"));
     }
 
     #[test]
@@ -934,6 +991,7 @@ mod tests {
                 agent: "claude".to_owned(),
                 ..v1::AgentDepot::default()
             }],
+            ..v1::AgentsStatus::default()
         };
         let failure = maintenance_of(&status, "claude").unwrap_err();
         assert_eq!(failure.diagnostic.code, codes::IPC_006);

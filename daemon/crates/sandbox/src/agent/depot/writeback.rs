@@ -22,6 +22,7 @@ use humanitl_core::ids::SessionId;
 use super::credential::{
     CredentialFormat, Origin, Refused, TakeBack, Taken, WRITEBACK_POLL, take_back,
 };
+use super::seal::CredentialKeys;
 use super::store::Depot;
 
 /// Where an outcome goes: the daemon's audit log and status.
@@ -45,6 +46,9 @@ pub struct Writeback {
     format: CredentialFormat,
     session: SessionId,
     report: Report,
+    /// The key of a sealed depot (HUM-523); every look decides from the
+    /// depot itself whether to seal.
+    keys: Option<CredentialKeys>,
 }
 
 impl std::fmt::Debug for Writeback {
@@ -66,6 +70,7 @@ impl Writeback {
         recipe: &super::DepotRecipe,
         session: SessionId,
         report: Report,
+        keys: Option<CredentialKeys>,
     ) -> Option<Self> {
         Some(Self {
             depot,
@@ -73,6 +78,7 @@ impl Writeback {
             format: recipe.credential_format?,
             session,
             report,
+            keys,
         })
     }
 
@@ -179,6 +185,7 @@ impl Watch {
             session: self.writeback.session,
             base: seen.base.as_deref(),
             origin: Origin::Session,
+            keys: self.writeback.keys.as_ref(),
         };
         let result = take_back(&self.copy, &request);
         seen.settled = result.is_ok();
@@ -237,6 +244,7 @@ mod tests {
                 format: FORMAT,
                 session: SessionId::new(),
                 report: Arc::new(move |outcome| seen.lock().unwrap().push(outcome.clone())),
+                keys: None,
             },
             state: Mutex::new(Seen::default()),
             stop: AtomicBool::new(false),
@@ -266,9 +274,14 @@ mod tests {
             std::fs::write(&stored, r#"{"expires":1,"token":"a"}"#).unwrap();
             std::fs::set_permissions(&stored, std::fs::Permissions::from_mode(0o600)).unwrap();
             let session = SessionId::new();
-            let scratch =
-                crate::agent::depot::scratch::create(&paths(base.path()), session, &depot, None)
-                    .unwrap();
+            let scratch = crate::agent::depot::scratch::create(
+                &paths(base.path()),
+                session,
+                &depot,
+                None,
+                None,
+            )
+            .unwrap();
             let copy = scratch.path().to_path_buf();
             let shared = Arc::new(crate::handle::Shared::default());
             let handle = crate::SandboxHandle::new(
@@ -287,6 +300,7 @@ mod tests {
                 report: Arc::new(move |outcome: &Outcome| {
                     report_to.lock().unwrap().push(outcome.clone());
                 }),
+                keys: None,
             });
             scratch.hand_to_with(&handle, writeback);
             std::fs::write(copy.join("cred.json"), r#"{"token":"b","expires":2}"#).unwrap();

@@ -1450,7 +1450,23 @@ fn plan_depot(
     command: &[OsString],
     from_caller: bool,
 ) -> Result<humanitl_sandbox::agent::depot::DepotPlan, Failure> {
-    use humanitl_sandbox::agent::depot::{DepotInput, Purpose, plan_session};
+    use humanitl_sandbox::agent::depot::{DepotInput, Purpose, plan_session, seal};
+    // Eine verschlüsselte Zugangsdatei öffnet der Start mit dem Schlüssel aus
+    // dem Schlüsselbund, gefragt erst, wenn eine da ist (HUM-523).
+    let keys = seal::CredentialKeys::new(humanitl_config::secret::KeyStore::for_paths(&ctx.paths))
+        .with_setting(humanitl_ipc::agents::setting(&ctx.paths));
+    let purpose = if matches!(wiring, Wiring::Preview) {
+        Purpose::Preview
+    } else {
+        Purpose::Start
+    };
+    // Wie der Start im Daemon: ein unterbrochenes Umschalten der
+    // Verschlüsselung wird zu Ende geführt, und das Depot folgt
+    // `agents.encrypt_credentials`, auch einer Änderung von Hand; gelingt das
+    // nicht, startet nichts (HUM-523, Review).
+    if purpose == Purpose::Start {
+        seal::reconcile(&ctx.paths, &keys).map_err(Failure::new)?;
+    }
     // Das Depot des Menschen, auch unter den Platzhaltern von `sandbox check`.
     plan_session(&DepotInput {
         config,
@@ -1460,11 +1476,8 @@ fn plan_depot(
         adapter: &config.agent.adapter,
         command,
         from_caller,
-        purpose: if matches!(wiring, Wiring::Preview) {
-            Purpose::Preview
-        } else {
-            Purpose::Start
-        },
+        purpose,
+        keys: Some(&keys),
     })
     .map_err(Failure::new)
 }
@@ -1802,6 +1815,197 @@ mod tests {
         assert_eq!(
             setup.session.command,
             words(&["/run/humanitl/agent/claude", "-p"])
+        );
+    }
+
+    /// HUM-523, review: the local start finishes an interrupted switch of
+    /// the encryption before it plans, like the daemon, and refuses when that
+    /// fails (here: no keyring, `PATH` empty, so the person's keyring is never
+    /// asked). The preview leaves it alone.
+    // Linux only: on macOS the keyring is `/usr/bin/security` by absolute
+    // path, so a stand-in in PATH would not replace it and the test would ask
+    // the runner's real keychain.
+    #[cfg(target_os = "linux")]
+    #[test]
+    fn the_local_start_finishes_an_interrupted_switch_or_refuses() {
+        use std::os::unix::fs::PermissionsExt as _;
+
+        let root = tempfile::tempdir().unwrap();
+        let home = root.path().join("home");
+        let env = humanitl_config::Env::from_pairs([
+            ("HOME", home.display().to_string()),
+            (
+                "XDG_CONFIG_HOME",
+                home.join(".config").display().to_string(),
+            ),
+            (
+                "XDG_DATA_HOME",
+                root.path().join("data").display().to_string(),
+            ),
+            (
+                "XDG_RUNTIME_DIR",
+                root.path().join("run").display().to_string(),
+            ),
+        ]);
+        let paths = humanitl_config::Paths::new(env.clone());
+        std::fs::create_dir_all(paths.config_path().parent().unwrap()).unwrap();
+        let credentials = paths.agents_dir().join("claude/credentials");
+        std::fs::create_dir_all(&credentials).unwrap();
+        for dir in [
+            paths.agents_dir(),
+            paths.agents_dir().join("claude"),
+            credentials.clone(),
+        ] {
+            std::fs::set_permissions(&dir, std::fs::Permissions::from_mode(0o700)).unwrap();
+        }
+        std::fs::write(credentials.join(".credentials.json"), b"{}").unwrap();
+        let journal = paths.agents_dir().join("credential-seal.journal");
+        std::fs::write(
+            &journal,
+            br#"{"version":1,"target":true,"files":[["claude",".credentials.json"]]}"#,
+        )
+        .unwrap();
+        let ctx = crate::cmd::Context {
+            paths,
+            env,
+            cwd: root.path().to_path_buf(),
+            cli_config: Vec::new(),
+            config_file: None,
+            profile: None,
+            profile_means: crate::cmd::ProfileMeaning::Sandbox,
+            render: crate::render::Renderer::new(false, 0, true),
+            source_lock: humanitl_config::agents::SourceLock::none(),
+        };
+        let config = humanitl_config::Config::default();
+        let command = [std::ffi::OsString::from("sh")];
+        let session = humanitl_core::ids::SessionId::new();
+        super::plan_depot(
+            &ctx,
+            &config,
+            &super::Wiring::Preview,
+            session,
+            &command,
+            true,
+        )
+        .unwrap();
+        let refused = super::plan_depot(
+            &ctx,
+            &config,
+            &super::Wiring::Daemon,
+            session,
+            &command,
+            true,
+        )
+        .unwrap_err();
+        assert_eq!(refused.diagnostic.code.as_str(), "AGENT_020");
+        assert!(journal.is_file(), "the journal waits for a keyring");
+    }
+
+    /// HUM-523, review: with `agents.encrypt_credentials = true` set by hand
+    /// and a plain login in the depot, the local start encrypts it before it
+    /// plans, like the daemon. The keyring is a stand-in of `secret-tool` in
+    /// the test's own `PATH`, never the person's.
+    // Linux only: on macOS the keyring is `/usr/bin/security` by absolute
+    // path, so a stand-in in PATH would not replace it and the test would ask
+    // the runner's real keychain.
+    #[cfg(target_os = "linux")]
+    #[test]
+    fn the_local_start_follows_a_hand_set_encryption() {
+        use std::os::unix::fs::PermissionsExt as _;
+
+        let root = tempfile::tempdir().unwrap();
+        let home = root.path().join("home");
+        let bin = root.path().join("bin");
+        let store = root.path().join("keyring");
+        std::fs::create_dir_all(&bin).unwrap();
+        std::fs::create_dir_all(&store).unwrap();
+        let source = root.path().join("secret-tool.source");
+        std::fs::write(
+            &source,
+            format!(
+                "#!/bin/sh\nPATH=/usr/bin:/bin\nstore='{}'\nfor last; do :; done\n\
+                 case \"$1\" in\n  store) cat > \"$store/$last\" ;;\n  \
+                 lookup) [ -f \"$store/$last\" ] || exit 1; cat \"$store/$last\" ;;\nesac\n",
+                store.display()
+            ),
+        )
+        .unwrap();
+        // Copied by `cp`, so no descriptor of this process holds the script
+        // open for writing when it runs (ETXTBSY).
+        assert!(
+            std::process::Command::new("/bin/cp")
+                .arg(&source)
+                .arg(bin.join("secret-tool"))
+                .status()
+                .unwrap()
+                .success()
+        );
+        std::fs::set_permissions(
+            bin.join("secret-tool"),
+            std::fs::Permissions::from_mode(0o755),
+        )
+        .unwrap();
+        let env = humanitl_config::Env::from_pairs([
+            ("HOME", home.display().to_string()),
+            (
+                "XDG_CONFIG_HOME",
+                home.join(".config").display().to_string(),
+            ),
+            (
+                "XDG_DATA_HOME",
+                root.path().join("data").display().to_string(),
+            ),
+            (
+                "XDG_RUNTIME_DIR",
+                root.path().join("run").display().to_string(),
+            ),
+            ("PATH", bin.display().to_string()),
+        ]);
+        let paths = humanitl_config::Paths::new(env.clone());
+        std::fs::create_dir_all(paths.config_path().parent().unwrap()).unwrap();
+        std::fs::write(
+            paths.config_path(),
+            "[agents]\nencrypt_credentials = true\n",
+        )
+        .unwrap();
+        let credentials = paths.agents_dir().join("claude/credentials");
+        std::fs::create_dir_all(&credentials).unwrap();
+        for dir in [
+            paths.agents_dir(),
+            paths.agents_dir().join("claude"),
+            credentials.clone(),
+        ] {
+            std::fs::set_permissions(&dir, std::fs::Permissions::from_mode(0o700)).unwrap();
+        }
+        let stored = credentials.join(".credentials.json");
+        std::fs::write(&stored, br#"{"token":"plain"}"#).unwrap();
+        std::fs::set_permissions(&stored, std::fs::Permissions::from_mode(0o600)).unwrap();
+        let ctx = crate::cmd::Context {
+            paths,
+            env,
+            cwd: root.path().to_path_buf(),
+            cli_config: Vec::new(),
+            config_file: None,
+            profile: None,
+            profile_means: crate::cmd::ProfileMeaning::Sandbox,
+            render: crate::render::Renderer::new(false, 0, true),
+            source_lock: humanitl_config::agents::SourceLock::none(),
+        };
+        let config = humanitl_config::Config::default();
+        let command = [std::ffi::OsString::from("sh")];
+        let session = humanitl_core::ids::SessionId::new();
+        super::plan_depot(
+            &ctx,
+            &config,
+            &super::Wiring::Daemon,
+            session,
+            &command,
+            true,
+        )
+        .unwrap();
+        assert!(
+            humanitl_sandbox::agent::depot::seal::is_sealed(&std::fs::read(&stored).unwrap()),
+            "the local start left the login in plain text"
         );
     }
 

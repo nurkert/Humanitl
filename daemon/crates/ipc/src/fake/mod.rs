@@ -936,11 +936,16 @@ impl DaemonApi for FakeDaemon {
                     "XDG_DATA_HOME",
                     "/nonexistent-humanitl-fake",
                 )]));
+                // Kein Schlüsselbund: Der Fake fragt nie den des Menschen.
+                let keys = humanitl_sandbox::agent::depot::seal::CredentialKeys::new(
+                    humanitl_config::secret::KeyStore::for_paths(&paths).with_secret_tool(None),
+                );
                 Ok(crate::agents::status(
                     &paths,
                     &humanitl_config::Config::default(),
                     &humanitl_config::agents::SourceLock::none(),
                     None,
+                    &keys,
                 ))
             }
             Some(_) => Err(Diagnostic::builder(codes::IPC_006, Severity::Error)
