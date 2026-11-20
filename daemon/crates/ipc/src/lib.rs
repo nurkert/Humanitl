@@ -51,7 +51,13 @@ pub const PROTO_MAJOR: u32 = 1;
 /// Minor-Version des Vertrags. Steigt bei jeder additiven Änderung
 /// (`Info.proto_minor`).
 ///
-/// `56` seit den verschlüsselten Zugangsdateien des Depots (HUM-523):
+/// `57` seit den Werten der Sitzung für Vorschlag, Kommandozeile und Ziehen
+/// (HUM-567): `ProjectsRequest.Proposal.cli_overrides` trägt dieselben Werte
+/// wie `Start.cli_overrides`, die neue Operation `SandboxRequest.argv_plan`
+/// die Kommandozeile eines Starts mit einem `Plan`, und `argv`,
+/// `argv_plan` und `image_pull` lösen mit der gespeicherten Projektwahl des
+/// Ordners auf wie Start und Vorschau.
+/// `56` waren die verschlüsselten Zugangsdateien des Depots (HUM-523):
 /// `AgentsRequest.set_encryption` schaltet `agents.encrypt_credentials` und
 /// verschlüsselt oder entschlüsselt dabei die vorhandenen Dateien,
 /// `AgentsStatus.encryption` (`CredentialEncryption`) nennt den Stand auf der
@@ -315,7 +321,7 @@ pub const PROTO_MAJOR: u32 = 1;
 /// Spiegelung in `app/lib/core/ipc/proto_version.dart` darf nachziehen: eine
 /// abweichende Minor ist verabredetermaßen kein Grund, die Verbindung
 /// abzulehnen (`docs/PROTOCOL.md`).
-pub const PROTO_MINOR: u32 = 56;
+pub const PROTO_MINOR: u32 = 57;
 
 /// Metadata-Schlüssel für das Session-Token aus
 /// `$XDG_RUNTIME_DIR/humanitl/token` (CONVENTIONS.md 3.6).

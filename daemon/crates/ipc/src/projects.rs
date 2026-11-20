@@ -449,13 +449,28 @@ fn resolve_at(
     path: &str,
     choice: Option<&ProjectChoice>,
 ) -> Result<Resolved, Diagnostic> {
+    resolve_at_with(paths, locks, path, choice, &[])
+}
+
+/// [`resolve_at`] with the session values of a start (HUM-567,
+/// `Proposal.cli_overrides`) on the command line level beside the folder,
+/// above the project choice and below the locks, as the start mixes them.
+/// The caller checks the paths ([`crate::session::check_override_key`]).
+pub(crate) fn resolve_at_with(
+    paths: &Paths,
+    locks: &PolicyLocks,
+    path: &str,
+    choice: Option<&ProjectChoice>,
+    overrides: &[(String, String)],
+) -> Result<Resolved, Diagnostic> {
     let dir = Path::new(path);
     let present = dir.is_dir();
-    let pairs: Vec<(String, String)> = if present {
+    let mut pairs: Vec<(String, String)> = if present {
         vec![("sandbox.work_dir".to_owned(), path.to_owned())]
     } else {
         Vec::new()
     };
+    pairs.extend(overrides.iter().cloned());
     let sources = humanitl_config::sources_for(
         &ProfileSelection::default(),
         present.then_some(dir),

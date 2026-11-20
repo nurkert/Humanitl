@@ -1040,7 +1040,10 @@ message SandboxRequest {
     google.protobuf.Empty stop = 2;
     google.protobuf.Empty status = 3;
     google.protobuf.Empty isolation_check = 4;
-    // Liefert die vollstaendige Kommandozeile, ohne zu starten.
+    // Liefert die vollstaendige Kommandozeile, ohne zu starten. Seit
+    // Minor 57 mit der gespeicherten Projektwahl des eingestellten Ordners
+    // wie ein `Plan` ohne Ordner (HUM-567); fuer einen Ordner, ein Backend
+    // oder Werte der Sitzung `argv_plan`.
     google.protobuf.Empty argv = 5;
     // Wie `status`, aber fuer ein Projektverzeichnis, das noch nicht gilt.
     Plan plan = 6;
@@ -1108,6 +1111,16 @@ message SandboxRequest {
     // sich nicht aufloesen laesst, ein `Diagnostic`. Ein Client fragt damit
     // vor dem Start, ob er einmal nachfragen muss.
     Start check_cloud_inference = 14;
+    // Wie `argv`, aber die Kommandozeile eines Starts mit diesem Plan
+    // (HUM-567): Ordner, Profil, `Plan.backend` und `Plan.cli_overrides`
+    // wie beim `Plan`, mit der gespeicherten Projektwahl des Ordners
+    // darunter. Vorschau, Kommandozeile und Start sehen so bei gleichen
+    // Eingaben dasselbe Backend und dieselbe Untergrenze. Ein Wert, den der
+    // Start ablehnt, ist hier derselbe `Diagnostic` (`CONFIG_003`,
+    // `CONFIG_024`, `SANDBOX_035`). Ein Daemon vor Minor 57 kennt die
+    // Operation nicht und antwortet mit einer Momentaufnahme wie auf
+    // `status`, ohne `argv_line`.
+    Plan argv_plan = 15;
   }
 
   // Welches Abbild gezogen wird (HUM-439).
@@ -1130,7 +1143,10 @@ message SandboxRequest {
     // `CONFIG_003` wie beim Start, und nichts wird gezogen. Fehlt der Plan,
     // gilt `sandbox.backend` der gespeicherten Konfiguration, wie vor
     // Minor 40. Ein Daemon vor Minor 40 kennt das Feld nicht und zieht mit
-    // der Einstellung.
+    // der Einstellung. `Plan.cli_overrides` gilt seit Minor 55 wie beim
+    // `Plan`, die gespeicherte Projektwahl des Ordners seit Minor 57
+    // (HUM-567): Eine Wahl, die nicht mehr laedt, ist `CONFIG_024` wie beim
+    // Start, und nichts wird gezogen.
     Plan plan = 3;
   }
 
@@ -3275,6 +3291,15 @@ message ProjectsRequest {
     // Schluessel; ein leerer Wert nimmt den Schluessel aus der Wahl. Der
     // Vorschlag wird damit neu berechnet, ohne zu speichern.
     repeated ChoiceValue values = 3;
+    // Die Werte der Sitzung wie `SandboxRequest.Start.cli_overrides`
+    // (HUM-567): dieselbe Erlaubnisliste, ein Pfad ausserhalb ist
+    // `CONFIG_003`. Sie liegen ueber der Projektwahl und der Teilwahl, die
+    // Untergrenze hebt also nur, und die Vorgaben sind dann der Start mit
+    // diesen Werten. Gespeichert werden sie nie: Die Wahl der Vorgaben
+    // (`StartProposal.choice`) ist die des Vorschlags ohne sie; nur Felder,
+    // Befunde und Zeile der Vorgaben zeigen den Start mit ihnen. Ein Daemon
+    // vor Minor 57 kennt das Feld nicht und rechnet ohne sie.
+    repeated SandboxRequest.CliOverride cli_overrides = 4;
   }
   oneof op {
     List list = 1;

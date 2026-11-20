@@ -21,6 +21,16 @@
 //!
 //! **Prüfen ohne Speichern.** Die Teilwahl der Anfrage liegt nur für diese
 //! Antwort über der gespeicherten Wahl; gespeichert wird mit `save_choice`.
+//!
+//! **Die Werte der Sitzung wie beim Start** (HUM-567). `Proposal.cli_overrides`
+//! sind die Werte, die ein Start dieses Aufrufs als `Start.cli_overrides`
+//! schickte, mit derselben Erlaubnisliste. Sie liegen auf der Ebene der
+//! Kommandozeile über Wahl und Teilwahl (`projects::resolve_at_with`); die
+//! Untergrenze hebt also nur, und ein Backend unter ihr nennt der Vorschlag
+//! mit `SANDBOX_035` wie der Start. Die Wahl selbst wird ohne sie geprüft
+//! wie beim Speichern, denn gespeichert werden sie nie: Auch die Wahl der
+//! Vorgaben (`StartProposal.choice`) kommt aus dem Vorschlag ohne sie; nur
+//! Felder, Befunde und die Zeile der Vorgaben zeigen den Start mit ihnen.
 
 use std::collections::BTreeMap;
 use std::ffi::OsStr;
@@ -132,17 +142,59 @@ pub(crate) async fn answer(
     recorder: &Recorder,
     asked: v1::projects_request::Proposal,
 ) -> Result<v1::ProjectsResponse, Diagnostic> {
+    let overrides = session_values(&asked.cli_overrides)?;
     let (row, path) = target(recorder, &asked).await?;
     let choice = merged(row.as_ref(), &asked.values)?;
     let ctx = ctx.clone();
     let proposal = blocking("Projects", move || {
-        propose(&ctx, row.as_ref(), &path, &choice)
+        propose(&ctx, row.as_ref(), &path, &choice, &overrides)
     })
     .await??;
     Ok(v1::ProjectsResponse {
         proposal: Some(proposal),
         ..v1::ProjectsResponse::default()
     })
+}
+
+/// Die Werte der Sitzung einer Anfrage (HUM-567): derselbe getrimmte Pfad
+/// und derselbe ungetrimmte Wert wie beim Start, jeder Pfad gegen dieselbe
+/// Erlaubnisliste ([`crate::session::check_override_key`]).
+///
+/// # Errors
+///
+/// `CONFIG_003` für einen Pfad, den eine Sitzung nicht setzt.
+pub fn session_values(
+    overrides: &[v1::sandbox_request::CliOverride],
+) -> Result<Vec<(String, String)>, Diagnostic> {
+    overrides
+        .iter()
+        .map(|entry| {
+            let path = entry.path.trim();
+            crate::session::check_override_key(path)?;
+            Ok((path.to_owned(), entry.value.clone()))
+        })
+        .collect()
+}
+
+/// Die Auflösung eines Starts in `path` mit dieser Wahl und diesen Werten
+/// der Sitzung (HUM-567): die Wahl geprüft wie beim Speichern
+/// ([`check_for`], ohne die Werte), darüber die Werte auf der Ebene der
+/// Kommandozeile.
+///
+/// # Errors
+///
+/// Die Befunde von [`check_for`] und des Ladens mit den Werten.
+fn resolve_with_session(
+    ctx: &Context,
+    path: &str,
+    choice: &ProjectChoice,
+    overrides: &[(String, String)],
+) -> Result<Resolved, Diagnostic> {
+    let checked = check_for(&ctx.paths, &ctx.locks, path, choice)?;
+    if overrides.is_empty() {
+        return Ok(checked);
+    }
+    super::resolve_at_with(&ctx.paths, &ctx.locks, path, Some(choice), overrides)
 }
 
 /// Der Ordner und, wenn das Register ihn kennt, seine Zeile.
@@ -219,14 +271,16 @@ pub fn merged(
     ProjectChoice::from_pairs(pairs)
 }
 
-/// Der Vorschlag für diesen Ordner mit dieser Wahl. Blockierend.
+/// Der Vorschlag für diesen Ordner mit dieser Wahl und diesen Werten der
+/// Sitzung. Blockierend.
 fn propose(
     ctx: &Context,
     row: Option<&ProjectRow>,
     path: &str,
     choice: &ProjectChoice,
+    overrides: &[(String, String)],
 ) -> Result<v1::StartProposal, Diagnostic> {
-    let resolved = check_for(&ctx.paths, &ctx.locks, path, choice)?;
+    let resolved = resolve_with_session(ctx, path, choice, overrides)?;
     let config = &resolved.config;
     let searched = match &ctx.proposal.backends {
         BackendFacts::Searches { searches, deadline } => Some((searches, *deadline)),
@@ -261,12 +315,19 @@ fn propose(
         plan,
         backends: &backends,
         agents: agents(&ctx.paths, config, &ctx.proposal.source_lock),
-        servers: servers(ctx, path, choice, &resolved),
+        servers: servers(ctx, path, choice, overrides, &resolved),
         profiles,
         cloud: crate::cloud::status(&ctx.paths, config),
     };
     let mut built = build(&inputs);
     keep_unedited(&mut built, choice);
+    // Die Wahl zum Speichern kommt ohne die Werte der Sitzung (HUM-567):
+    // Sie gelten für einen Lauf, nicht für das Projekt. Ein Client, der die
+    // Vorgaben speichert, schriebe sonst etwa das Backend dieses Aufrufs in
+    // die Projektwahl. Die Felder zeigen den Start mit ihnen.
+    if !overrides.is_empty() {
+        built.choice = propose(ctx, row, path, choice, &[])?.choice;
+    }
     Ok(proposal(row, path, built))
 }
 
@@ -455,6 +516,7 @@ fn servers(
     ctx: &Context,
     path: &str,
     choice: &ProjectChoice,
+    overrides: &[(String, String)],
     resolved: &Resolved,
 ) -> Vec<ServerFacts> {
     let mut names: Vec<String> = resolved.config.llm.servers.keys().cloned().collect();
@@ -483,7 +545,7 @@ fn servers(
                 .filter(|(key, _)| key != humanitl_config::servers::SERVER)
                 .chain([(humanitl_config::servers::SERVER.to_owned(), name.clone())]);
             let with = ProjectChoice::from_pairs(pairs)
-                .and_then(|with| check_for(&ctx.paths, &ctx.locks, path, &with))
+                .and_then(|with| resolve_with_session(ctx, path, &with, overrides))
                 .ok();
             let cloud = with
                 .as_ref()

@@ -168,9 +168,25 @@ fn ask(path: &std::path::Path, values: &[(&str, &str)]) -> v1::ProjectsRequest {
                         value: (*value).to_owned(),
                     })
                     .collect(),
+                cli_overrides: Vec::new(),
             },
         )),
     }
+}
+
+/// [`ask`] with these session values (HUM-567).
+fn ask_with(path: &std::path::Path, overrides: &[(&str, &str)]) -> v1::ProjectsRequest {
+    let mut request = ask(path, &[]);
+    if let Some(v1::projects_request::Op::Proposal(proposal)) = request.op.as_mut() {
+        proposal.cli_overrides = overrides
+            .iter()
+            .map(|(path, value)| v1::sandbox_request::CliOverride {
+                path: (*path).to_owned(),
+                value: (*value).to_owned(),
+            })
+            .collect();
+    }
+    request
 }
 
 async fn propose(ctx: Context, request: v1::ProjectsRequest) -> v1::StartProposal {
@@ -878,4 +894,98 @@ fn a_configured_agent_command_applies_to_every_adapter() {
     let missing = pi.host.as_ref().unwrap_err();
     assert_eq!(missing.code.as_str(), "AGENT_001");
     assert!(missing.why.contains("/missing"), "{missing:?}");
+}
+
+/// The session floor of a start reaches the proposal (HUM-567): with
+/// `sandbox.min_isolation = kernel` among the session values the shared
+/// kernel is not choosable and the proposal names `SANDBOX_035` as the start
+/// would; without them the same folder proposes the shared kernel.
+///
+/// Mutation proof: `resolve_with_session` returning the resolution without
+/// the values (or `answer` dropping `cli_overrides`) makes the shared kernel
+/// available and this test red.
+#[tokio::test]
+async fn the_session_floor_reaches_the_proposal_like_the_start() {
+    let fixture = Fixture::new("");
+    let dir = fixture.folder("repo");
+    let ctx = || fixture.context(PolicyLocks::none(), nothing_missing);
+
+    let without = propose(ctx(), ask(&dir, &[])).await;
+    assert!(option(field(&without, ISOLATION), SHARED_KERNEL).available);
+
+    let with = propose(
+        ctx(),
+        ask_with(&dir, &[("sandbox.min_isolation", "kernel")]),
+    )
+    .await;
+    let shared = option(field(&with, ISOLATION), SHARED_KERNEL);
+    assert!(!shared.available, "{shared:?}");
+    assert!(
+        codes(&with.diagnostics).contains(&"SANDBOX_035"),
+        "{:?}",
+        with.diagnostics
+    );
+}
+
+/// The backend among the session values lies above the saved project
+/// choice, as at the start (HUM-567): a choice of the kernel level with a
+/// session backend `auto` proposes the shared kernel, the choice alone the
+/// kernel level. Nothing is saved.
+///
+/// Mutation proof: the session values mixed below the choice (or not at
+/// all) keep the kernel level and turn the second assertion red.
+#[tokio::test]
+async fn the_session_backend_lies_above_the_saved_choice() {
+    let fixture = Fixture::new("");
+    let choice = format!(
+        r#"{{"sandbox.backend":"{}"}}"#,
+        humanitl_sandbox::VM_BACKEND
+    );
+    let row = fixture.known("repo", Some(&choice)).await;
+    let dir = std::path::PathBuf::from(&row.path);
+    let ctx = || fixture.context(PolicyLocks::none(), nothing_missing);
+
+    let saved = propose(ctx(), ask(&dir, &[])).await;
+    assert_eq!(field(&saved, ISOLATION).value, KERNEL);
+    let session = propose(
+        ctx(),
+        ask_with(&dir, &[("sandbox.backend", humanitl_sandbox::AUTO_BACKEND)]),
+    )
+    .await;
+    assert_eq!(field(&session, ISOLATION).value, SHARED_KERNEL);
+    // The values to save stay those without the session (HUM-567): the
+    // backend of the saved choice, not the one of this call.
+    //
+    // Mutation proof: `propose` without the second pass for the choice saves
+    // the shared backend, and this assertion turns red.
+    assert_eq!(session.choice, saved.choice);
+    assert!(
+        session
+            .choice
+            .iter()
+            .any(|value| value.key == "sandbox.backend"
+                && value.value == humanitl_sandbox::VM_BACKEND),
+        "{:?}",
+        session.choice
+    );
+    let after = fixture.recorder.get_project(row.id).await.unwrap().unwrap();
+    assert_eq!(after.choice, row.choice, "nothing was saved");
+}
+
+/// A path a session may not set is `CONFIG_003`, as the start refuses it
+/// (HUM-567, the same allow list).
+///
+/// Mutation proof: `session_values` without `check_override_key` mixes
+/// `sandbox.profile` in and answers with a proposal; this test turns red.
+#[tokio::test]
+async fn a_session_value_the_start_refuses_is_config_003() {
+    let fixture = Fixture::new("");
+    let dir = fixture.folder("repo");
+    let refused = answer(
+        fixture.context(PolicyLocks::none(), nothing_missing),
+        ask_with(&dir, &[("sandbox.profile", "default")]),
+    )
+    .await
+    .unwrap_err();
+    assert_eq!(refused.code.as_str(), "CONFIG_003", "{}", refused.why);
 }

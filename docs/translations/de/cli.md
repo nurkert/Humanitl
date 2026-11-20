@@ -373,7 +373,26 @@ der Projektwahl, der Firmenvorgabe und dem Start, also senkt
 Daemon vor Vertrag 1.49 kennt die Untergrenze nicht als Schlüssel der Sitzung,
 und `humanitl run` endet dann mit `CLI_004`, statt ohne sie zu starten. Steht
 die Untergrenze auf `kernel`, startet nur `qemu`; jedes andere Backend endet
-mit `SANDBOX_035`, statt darunter zu laufen.
+mit `SANDBOX_035`, statt darunter zu laufen. `humanitl sandbox plan`,
+`humanitl projects proposal` und `humanitl sandbox image pull` schicken
+dieselben Werte mit (HUM-559, HUM-567): Die Vorschau zeigt dann den Start mit
+ihnen, der Vorschlag ist dieser Start, und das Ziehen geht an das Backend, das
+er nähme. Alle drei lösen wie `Sandbox(Argv)` über der gespeicherten
+Projektwahl des Ordners auf; das Ziehen schickt den Ordner, in dem `humanitl
+run` desselben Aufrufs startete. Ein Ordner, den der Start ablehnt, hält das
+Ziehen mit demselben `SANDBOX_006` auf, außer er ist nur das aktuelle
+Verzeichnis (etwa das Heimatverzeichnis selbst): Dann wählt er kein Projekt,
+und das Ziehen nimmt wie bisher den eingestellten Ordner. Die Wahl zum
+Speichern im Vorschlag (`StartProposal.choice`) bleibt die ohne die Werte der
+Sitzung; sie gelten für einen Lauf, nicht für das Projekt. Gegen einen Daemon
+vor Vertrag 1.57 rechnet der Vorschlag ohne diese Werte, und der Befehl sagt
+das in einer Warnung (`CLI_004`), die sie nennt; das Ziehen endet dann mit
+`CLI_004`, wenn die gespeicherte Wahl des Ordners einen Schlüssel `sandbox.*`
+setzt, den ein solcher Daemon nicht sähe. Den Ordner schickt es trotzdem, damit
+sein Projekt-Profil gilt, außer er ist nur ein aktuelles Verzeichnis, das der
+Start ablehnt. Ein Ziehen mit
+Untergrenze oder Laufzeit unter Podman endet gegen einen Daemon vor 1.55 mit
+`CLI_004`, statt für ein anderes Backend zu ziehen, als der Start nimmt.
 
 **Was `humanitl doctor` zur Kernel-Stufe sagt.** In der Gruppe der
 Kernel-Stufe gibt der Doctor eine Zeile je Voraussetzung: `kvm` (`/dev/kvm`),

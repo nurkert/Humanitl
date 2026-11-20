@@ -36,6 +36,21 @@ pub const CANCEL_MINOR: u32 = 37;
 /// Befehl ihn deshalb ab.
 pub const PLAN_MINOR: u32 = 40;
 
+/// Die erste Minor, die im Plan des Ziehens auch die übrigen Werte der
+/// Sitzung sieht (`Plan.cli_overrides`, seit HUM-559 wie im Plan), vor allem
+/// die Untergrenze und die Laufzeit der Container-Engine (HUM-567). Seit 1.57 lädt
+/// der Daemon dazu die gespeicherte Projektwahl des Ordners.
+pub const VALUES_MINOR: u32 = 55;
+
+/// Die erste Minor, die beim Ziehen die gespeicherte Projektwahl des Ordners
+/// lädt (HUM-567). Davor lehnt der Befehl ab, wenn diese Wahl das Backend
+/// mitentscheiden kann ([`refuse_without_choice`]).
+pub const CHOICE_MINOR: u32 = 57;
+
+/// Ab dieser Minor kennt der Daemon `Projects` (HUM-532); davor gibt es kein
+/// Register und keine gespeicherte Projektwahl.
+const PROJECTS_MINOR: u32 = 45;
+
 /// Der Exit-Code nach `Ctrl+C`: `128 + SIGINT`, wie `humanitl run`.
 const EXIT_INTERRUPTED: u8 = 130;
 
@@ -55,9 +70,16 @@ pub const NETWORK_NOTE: &str = "Pulling downloads the image from the registry it
 /// `SANDBOX_034`, `SANDBOX_043`, `SANDBOX_048`.
 pub async fn pull(ctx: &Context, reference: Option<&str>, yes: bool) -> Result<u8, Failure> {
     // Das Backend wie bei `humanitl run` (HUM-500): `--backend` vor der
-    // Umgebung, sonst entscheidet der Daemon mit seiner Konfiguration.
+    // Umgebung, sonst entscheidet der Daemon mit seiner Konfiguration. Dazu
+    // dieselben Werte der Sitzung wie beim Start (HUM-567), vor allem die
+    // Untergrenze: Sie entscheidet mit, welches Backend der Start nimmt.
     let resolved = ctx.config()?;
     let backend = crate::cmd::run::session_backend(ctx.cli_pairs(), &resolved);
+    let overrides = crate::cmd::run::client_overrides(ctx, &resolved);
+    // Der Ordner, in dem `humanitl run` dieses Aufrufs startete: Sein
+    // Projekt-Profil und seine gespeicherte Projektwahl entscheiden das
+    // Backend mit (HUM-567).
+    let folder = ctx.work_dir(&resolved);
     let shown = reference.map_or_else(|| "the configured image".to_owned(), str::to_owned);
     eprintln!("{NETWORK_NOTE}");
     if !yes {
@@ -74,7 +96,12 @@ pub async fn pull(ctx: &Context, reference: Option<&str>, yes: bool) -> Result<u
         .map_err(|status| Failure::new(status_diagnostic(&status, "GetInfo")))?
         .into_inner();
     crate::cmd::daemon::check_proto(&info)?;
-    check_minor(info.proto_minor, backend.as_deref())?;
+    check_minor(info.proto_minor, &overrides)?;
+    // Ein Daemon vor 1.57 zöge ohne die gespeicherte Projektwahl des Ordners
+    // (HUM-567). Bestimmt sie das Backend mit, zöge er womöglich für ein
+    // anderes als der Start; dann lieber nicht.
+    let chosen = saved_backend_choice(&mut client, &folder.0, info.proto_minor).await?;
+    refuse_without_choice(info.proto_minor, &chosen)?;
     // **Erst der Empfänger, dann das Ziehen.** Ein Strom, der vor dem
     // Senden steht, puffert ein `SIGINT`, das kommt, bevor `select!` zum
     // ersten Mal wartet; ohne ihn beendete der Kernel den Befehl, und das
@@ -87,7 +114,15 @@ pub async fn pull(ctx: &Context, reference: Option<&str>, yes: bool) -> Result<u
     } else {
         String::new()
     };
-    let request = pull_request(reference, pull_id.clone(), backend);
+    let request = pull_request(
+        reference,
+        pull_id.clone(),
+        sent_folder(
+            (&folder.0, &folder.1),
+            start_refuses(ctx, &resolved, &folder),
+        ),
+        overrides,
+    );
     // Der Abbruch geht über eine zweite Anfrage auf demselben Kanal.
     let mut canceller = client.clone();
     let mut stream = client
@@ -151,13 +186,15 @@ pub async fn pull(ctx: &Context, reference: Option<&str>, yes: bool) -> Result<u
 }
 
 /// Ob der Daemon mit Vertrag 1.`minor` dieses Ziehen versteht: überhaupt
-/// (1.36) und, mit einem gewählten `backend`, mit dem Backend der Sitzung
-/// (1.40, HUM-500).
+/// (1.36), mit einem gewählten Backend (1.40, HUM-500) und mit den Werten
+/// der Sitzung, die das Backend mitentscheiden (1.55, HUM-567:
+/// [`backend_values`]).
 ///
 /// # Errors
 ///
-/// `CLI_004` für einen Daemon, der zu alt ist.
-fn check_minor(minor: u32, backend: Option<&str>) -> Result<(), Failure> {
+/// `CLI_004` für einen Daemon, der zu alt ist; der Befund nennt die Werte,
+/// die er still überginge, und die Minor, die sie brauchen.
+fn check_minor(minor: u32, overrides: &[v1::sandbox_request::CliOverride]) -> Result<(), Failure> {
     if minor < IMAGE_MINOR {
         return Err(Failure::new(
             Diagnostic::builder(codes::CLI_004, Severity::Error)
@@ -170,14 +207,23 @@ fn check_minor(minor: u32, backend: Option<&str>) -> Result<(), Failure> {
                 .build(),
         ));
     }
-    if let Some(backend) = backend
-        && minor < PLAN_MINOR
-    {
+    let unseen: Vec<(&v1::sandbox_request::CliOverride, u32)> = overrides
+        .iter()
+        .filter_map(|pair| backend_values(&pair.path).map(|needed| (pair, needed)))
+        .filter(|(_, needed)| minor < *needed)
+        .collect();
+    if let Some(needed) = unseen.iter().map(|(_, needed)| *needed).max() {
+        let named: Vec<String> = unseen
+            .iter()
+            .map(|(pair, _)| format!("{} = {:?}", pair.path, pair.value))
+            .collect();
         return Err(Failure::new(
             Diagnostic::builder(codes::CLI_004, Severity::Error)
                 .why(format!(
-                    "the daemon speaks contract 1.{minor}, and pulling for the backend \
-                     {backend:?} needs 1.{PLAN_MINOR}; this daemon would pull with its own setting"
+                    "the daemon speaks contract 1.{minor}, and pulling with {} needs \
+                     1.{needed}; this daemon would pull for another backend than the start \
+                     takes",
+                    named.join(", ")
                 ))
                 .fix(FixAction::CopyCommand(
                     humanitl_core::diagnostics::RESTART_DAEMON_COMMAND.to_owned(),
@@ -188,20 +234,164 @@ fn check_minor(minor: u32, backend: Option<&str>) -> Result<(), Failure> {
     Ok(())
 }
 
+/// Ob der Start den Ordner `folder` ablehnte: dieselbe Prüfung wie im
+/// Daemon ([`humanitl_ipc::work_dir::check_requested`]).
+fn start_refuses(
+    ctx: &Context,
+    resolved: &humanitl_config::Resolved,
+    folder: &(std::path::PathBuf, humanitl_sandbox::WorkDirSource),
+) -> bool {
+    humanitl_ipc::work_dir::check_requested(
+        &ctx.paths,
+        resolved.config.sandbox.work_dir.as_deref(),
+        &folder.0,
+        &folder.1,
+    )
+    .is_err()
+}
+
+/// Der Ordner, den das Ziehen schickt (HUM-567): der Ordner des Starts
+/// dieses Aufrufs, mit seinem Projekt-Profil und, ab 1.57, seiner
+/// gespeicherten Projektwahl; auch ein älterer Daemon löst mit dem
+/// Projekt-Profil auf. Keiner, wenn der Ordner nur das aktuelle Verzeichnis
+/// ist und der Start ihn ablehnt (`refused`, etwa das Heimatverzeichnis
+/// selbst): Ein Daemon vor 1.57 prüfte ihn wie beim Start und lehnte ein
+/// Ziehen ab, das bisher ging; ab 1.57 wählte er für ihn ohnehin kein
+/// Projekt.
+fn sent_folder<'a>(
+    folder: (&'a std::path::Path, &'a humanitl_sandbox::WorkDirSource),
+    refused: bool,
+) -> Option<(&'a std::path::Path, &'a humanitl_sandbox::WorkDirSource)> {
+    let only_cwd = matches!(folder.1, humanitl_sandbox::WorkDirSource::CurrentDir);
+    (!(only_cwd && refused)).then_some(folder)
+}
+
+/// Die Schlüssel `sandbox.*`, die die gespeicherte Projektwahl des Ordners
+/// `folder` setzt, gefragt nur bei einem Daemon mit Register und vor 1.57
+/// (HUM-567). Sie können das Backend des Starts mitentscheiden (Backend,
+/// Untergrenze, Sandbox-Profil, Laufzeit), und ein solcher Daemon zöge ohne
+/// sie.
+///
+/// # Errors
+///
+/// Der Befund des Daemons, außer für einen Ordner, den das Register nicht
+/// kennt (`CONFIG_003`), oder einen Daemon ohne Register (`IPC_006`): Dann
+/// gibt es keine Wahl. Jeder andere Befund hält das Ziehen auf, statt eine
+/// Wahl zu übergehen, die es geben könnte.
+async fn saved_backend_choice(
+    client: &mut humanitl_ipc::client::Client,
+    folder: &std::path::Path,
+    minor: u32,
+) -> Result<Vec<String>, Failure> {
+    if !(PROJECTS_MINOR..CHOICE_MINOR).contains(&minor) {
+        return Ok(Vec::new());
+    }
+    let answer = client
+        .projects(v1::ProjectsRequest {
+            op: Some(v1::projects_request::Op::Get(v1::projects_request::Get {
+                project_id: String::new(),
+                path: folder.display().to_string(),
+            })),
+        })
+        .await;
+    match answer {
+        Ok(shown) => Ok(backend_choice_keys(&shown.into_inner())),
+        Err(status) => {
+            let found = status_diagnostic(&status, "Projects");
+            if found.code == codes::CONFIG_003 || found.code == codes::IPC_006 {
+                Ok(Vec::new())
+            } else {
+                Err(Failure::new(found))
+            }
+        }
+    }
+}
+
+/// Die Schlüssel `sandbox.*` mit gewähltem Wert in der Antwort auf
+/// `Projects.get`.
+fn backend_choice_keys(shown: &v1::ProjectsResponse) -> Vec<String> {
+    shown
+        .choice
+        .iter()
+        .filter(|field| field.key.starts_with("sandbox.") && !field.chosen.trim().is_empty())
+        .map(|field| format!("{} = {:?}", field.key, field.chosen))
+        .collect()
+}
+
+/// `CLI_004`, wenn ein Daemon der Minor `minor` ohne die gespeicherte
+/// Projektwahl `chosen` zöge (vor 1.57, HUM-567).
+///
+/// # Errors
+///
+/// `CLI_004`, der die gewählten Werte und die Minor 1.57 nennt.
+fn refuse_without_choice(minor: u32, chosen: &[String]) -> Result<(), Failure> {
+    if minor >= CHOICE_MINOR || chosen.is_empty() {
+        return Ok(());
+    }
+    Err(Failure::new(
+        Diagnostic::builder(codes::CLI_004, Severity::Error)
+            .why(format!(
+                "the daemon speaks contract 1.{minor}, and the saved project choice of this \
+                 folder ({}) needs 1.{CHOICE_MINOR} to reach a pull; this daemon would pull \
+                 for another backend than the start takes",
+                chosen.join(", ")
+            ))
+            .fix(FixAction::CopyCommand(
+                humanitl_core::diagnostics::RESTART_DAEMON_COMMAND.to_owned(),
+            ))
+            .build(),
+    ))
+}
+
+/// Die Minor, ab der ein Daemon diesen Wert der Sitzung im Plan des Ziehens
+/// sieht, wenn er mitentscheidet, welches Backend zieht; `None` für einen
+/// Wert, der das nicht tut (`llm.endpoint`, `hold.timeout_secs`). Ein
+/// älterer Daemon überginge ihn still; für das Ziehen zählt das nur beim
+/// Backend.
+fn backend_values(path: &str) -> Option<u32> {
+    match path {
+        "sandbox.backend" => Some(PLAN_MINOR),
+        // Die Untergrenze und die Laufzeit der Container-Engine: jeder
+        // andere Wert der Sitzung unter `sandbox.`.
+        other if other.starts_with("sandbox.") => Some(VALUES_MINOR),
+        _ => None,
+    }
+}
+
 /// Die Anfrage des Ziehens: mit dem Plan des Starts, für den gezogen wird
-/// (HUM-500). Der Plan trägt nur das Backend der Sitzung; leer heißt, der
-/// Daemon nimmt `sandbox.backend` seiner Konfiguration, misst aber wie beim
-/// Start auch das Sandbox-Profil und die Untergrenze.
+/// (HUM-500). Der Plan trägt die Werte der Sitzung wie ein Start dieses
+/// Aufrufs (HUM-567, [`crate::cmd::run::client_overrides`]) in
+/// `Plan.cli_overrides` und das Backend darunter zusätzlich in
+/// `Plan.backend`, das ein Daemon seit 1.40 kennt; ohne Backend nimmt der
+/// Daemon `sandbox.backend` seiner Konfiguration, misst aber wie beim Start
+/// auch das Sandbox-Profil, die Untergrenze und die Projektwahl.
+///
+/// `folder` ist der Ordner eines Starts dieses Aufrufs mit seiner Herkunft,
+/// wie ihn `humanitl sandbox plan` schickt: Der Daemon löst mit seinem
+/// Projekt-Profil und lädt seine gespeicherte Projektwahl. `None` lässt
+/// den Daemon den eingestellten Ordner nehmen.
 fn pull_request(
     reference: Option<&str>,
     pull_id: String,
-    backend: Option<String>,
+    folder: Option<(&std::path::Path, &humanitl_sandbox::WorkDirSource)>,
+    overrides: Vec<v1::sandbox_request::CliOverride>,
 ) -> v1::sandbox_request::ImagePull {
+    let backend = overrides
+        .iter()
+        .find(|pair| pair.path == "sandbox.backend")
+        .map(|pair| pair.value.clone())
+        .unwrap_or_default();
     v1::sandbox_request::ImagePull {
         reference: reference.unwrap_or_default().to_owned(),
         pull_id,
         plan: Some(v1::sandbox_request::Plan {
-            backend: backend.unwrap_or_default(),
+            work_dir: folder
+                .map(|(dir, _)| dir.display().to_string())
+                .unwrap_or_default(),
+            work_dir_source: folder
+                .map(|(_, source)| humanitl_ipc::work_dir::source_to_proto(source)),
+            backend,
+            cli_overrides: overrides,
             ..v1::sandbox_request::Plan::default()
         }),
     }
@@ -397,6 +587,56 @@ mod tests {
         assert!(NETWORK_NOTE.contains("not through the Humanitl proxy"));
     }
 
+    /// Ein Kontext für `humanitl sandbox image pull --yes` mit diesen
+    /// Argumenten und dieser Umgebung, in einem leeren Zuhause.
+    fn pull_context(home: &std::path::Path, args: &[&str], extra: &[(&str, &str)]) -> Context {
+        let matches = crate::cli::command()
+            .try_get_matches_from(
+                ["humanitl", "sandbox", "image", "pull", "--yes"]
+                    .iter()
+                    .chain(args),
+            )
+            .expect("the command line parses");
+        let mut pairs = vec![
+            ("HOME".to_owned(), home.display().to_string()),
+            (
+                "XDG_CONFIG_HOME".to_owned(),
+                home.join("cfg").display().to_string(),
+            ),
+        ];
+        pairs.extend(
+            extra
+                .iter()
+                .map(|(key, value)| ((*key).to_owned(), (*value).to_owned())),
+        );
+        let env = humanitl_config::Env::from_pairs(pairs);
+        Context {
+            paths: humanitl_config::Paths::new(env.clone()),
+            env,
+            cwd: home.join("project"),
+            cli_config: crate::cli::config_pairs(&matches),
+            config_file: None,
+            profile: None,
+            profile_means: crate::cmd::ProfileMeaning::Session,
+            render: crate::render::Renderer::new(false, 0, true),
+            source_lock: humanitl_config::agents::SourceLock::none(),
+        }
+    }
+
+    /// Der Plan des Ziehens, das dieser Kontext schickte.
+    fn sent_plan(ctx: &Context) -> v1::sandbox_request::Plan {
+        let resolved = ctx.config().expect("the client resolves");
+        let (dir, source) = ctx.work_dir(&resolved);
+        pull_request(
+            None,
+            String::new(),
+            Some((&dir, &source)),
+            crate::cmd::run::client_overrides(ctx, &resolved),
+        )
+        .plan
+        .expect("the pull carries a plan")
+    }
+
     /// Das Ziehen schickt das Backend, das `humanitl run` mit denselben
     /// Flags und derselben Umgebung als `sandbox.backend` in
     /// `cli_overrides` schickte (HUM-500): `--backend` am Befehl selbst, die
@@ -408,41 +648,9 @@ mod tests {
     /// Zusicherung scheitern.
     #[test]
     fn the_pull_sends_the_backend_a_start_would_send() {
-        use humanitl_config::{Env, ProfileSelection, resolve};
-
         let home = tempfile::tempdir().expect("tempdir");
-        let resolved = |extra: &[(&str, &str)]| {
-            let mut pairs = vec![
-                ("HOME".to_owned(), home.path().display().to_string()),
-                (
-                    "XDG_CONFIG_HOME".to_owned(),
-                    home.path().join("cfg").display().to_string(),
-                ),
-            ];
-            pairs.extend(
-                extra
-                    .iter()
-                    .map(|(key, value)| ((*key).to_owned(), (*value).to_owned())),
-            );
-            resolve(&ProfileSelection::any(), None, &Env::from_pairs(pairs), &[])
-                .expect("the client resolves")
-        };
-        let flags = |args: &[&str]| {
-            let matches = crate::cli::command()
-                .try_get_matches_from(
-                    ["humanitl", "sandbox", "image", "pull", "--yes"]
-                        .iter()
-                        .chain(args),
-                )
-                .expect("the command line parses");
-            crate::cli::config_pairs(&matches)
-        };
         let sent = |args: &[&str], env: &[(&str, &str)]| {
-            let backend = crate::cmd::run::session_backend(flags(args), &resolved(env));
-            pull_request(None, String::new(), backend)
-                .plan
-                .expect("the pull carries a plan")
-                .backend
+            sent_plan(&pull_context(home.path(), args, env)).backend
         };
         // Ein Name des Schemas, den jeder Build kennt; welcher, ist hier gleich.
         let chosen = humanitl_sandbox::PLATFORM_BACKEND_NAME;
@@ -457,16 +665,147 @@ mod tests {
             "auto"
         );
         assert_eq!(sent(&[], &[]), "");
-        // Ein Daemon vor 1.40 zöge mit seiner Einstellung: mit einer Wahl
-        // abgelehnt, ohne Wahl zieht er wie bisher.
-        let refused = check_minor(PLAN_MINOR - 1, Some(chosen)).expect_err("an older daemon");
-        assert_eq!(refused.diagnostic.code, codes::CLI_004);
-        assert!(check_minor(PLAN_MINOR - 1, None).is_ok());
-        assert!(check_minor(PLAN_MINOR, Some(chosen)).is_ok());
-        let request = pull_request(Some("r@sha256:x"), "id".to_owned(), None);
+        let request = pull_request(Some("r@sha256:x"), "id".to_owned(), None, Vec::new());
         assert_eq!(
             (request.reference.as_str(), request.pull_id.as_str()),
             ("r@sha256:x", "id")
         );
+    }
+
+    /// Das Ziehen schickt genau die Werte der Sitzung eines Starts desselben
+    /// Aufrufs (HUM-567), vor allem die Untergrenze aus Flag oder Umgebung,
+    /// und den Ordner, in dem dieser Start geschähe, damit der Daemon dessen
+    /// Projektwahl lädt.
+    ///
+    /// Mutation proof: `pull_request` mit leeren `cli_overrides` oder ohne
+    /// `work_dir` lässt eine Zusicherung scheitern.
+    #[test]
+    fn the_pull_sends_the_session_values_and_the_folder_of_a_start() {
+        let home = tempfile::tempdir().expect("tempdir");
+        for (args, env) in [
+            (&["--sandbox-min-isolation", "kernel"][..], &[][..]),
+            (
+                &[][..],
+                &[("HUMANITL_SANDBOX__MIN_ISOLATION", "kernel")][..],
+            ),
+        ] {
+            let ctx = pull_context(home.path(), args, env);
+            let plan = sent_plan(&ctx);
+            let start = crate::cmd::run::client_overrides(&ctx, &ctx.config().expect("resolves"));
+            assert!(
+                start
+                    .iter()
+                    .any(|pair| pair.path == "sandbox.min_isolation" && pair.value == "kernel"),
+                "{start:?}"
+            );
+            assert_eq!(plan.cli_overrides, start, "{args:?} {env:?}");
+            assert_eq!(
+                plan.work_dir,
+                home.path().join("project").display().to_string()
+            );
+        }
+    }
+
+    /// Das Ziehen schickt den Ordner des Starts, damit auch ein älterer
+    /// Daemon sein Projekt-Profil sieht (HUM-567), außer er ist nur das
+    /// aktuelle Verzeichnis und der Start lehnt ihn ab; ein genannter Ordner
+    /// geht immer mit, und der Daemon nennt dann den Befund des Starts.
+    /// Vor 1.57 lehnt das Ziehen ab, wenn die gespeicherte Projektwahl des
+    /// Ordners einen Schlüssel `sandbox.*` setzt: Ein solcher Daemon zöge
+    /// ohne sie. Eine Wahl ohne solche Schlüssel hält nichts auf.
+    ///
+    /// Mutation proof: `sent_folder`, das nie einen Ordner schickt, oder
+    /// eines ohne die Ausnahme für das abgelehnte aktuelle Verzeichnis
+    /// (oder ohne den Blick auf die Herkunft) lässt eine der ersten
+    /// Zusicherungen scheitern; `refuse_without_choice`, das immer `Ok`
+    /// gibt, oder `backend_choice_keys` ohne den Filter auf den gewählten
+    /// Wert lassen eine spätere scheitern.
+    #[test]
+    fn the_folder_goes_along_unless_it_is_a_refused_current_directory() {
+        use humanitl_sandbox::WorkDirSource;
+
+        let dir = std::path::Path::new("/home/someone/project");
+        let cwd = WorkDirSource::CurrentDir;
+        let flag = WorkDirSource::Flag;
+        assert_eq!(
+            sent_folder((dir, &cwd), false).map(|(dir, _)| dir),
+            Some(dir)
+        );
+        assert!(sent_folder((dir, &cwd), true).is_none());
+        assert_eq!(
+            sent_folder((dir, &flag), true).map(|(dir, _)| dir),
+            Some(dir)
+        );
+
+        let field = |key: &str, chosen: &str| v1::ProjectChoiceField {
+            key: key.to_owned(),
+            chosen: chosen.to_owned(),
+            ..v1::ProjectChoiceField::default()
+        };
+        let shown = v1::ProjectsResponse {
+            choice: vec![
+                field("sandbox.backend", humanitl_sandbox::VM_BACKEND),
+                field("sandbox.min_isolation", ""),
+                field("hold.ask_mode", "none"),
+            ],
+            ..v1::ProjectsResponse::default()
+        };
+        let chosen = backend_choice_keys(&shown);
+        assert_eq!(
+            chosen,
+            [format!(
+                "sandbox.backend = {:?}",
+                humanitl_sandbox::VM_BACKEND
+            )]
+        );
+        let refused =
+            refuse_without_choice(CHOICE_MINOR - 1, &chosen).expect_err("an older daemon");
+        assert_eq!(refused.diagnostic.code, codes::CLI_004);
+        assert!(
+            refused.diagnostic.why.contains("1.57"),
+            "{}",
+            refused.diagnostic.why
+        );
+        assert!(refuse_without_choice(CHOICE_MINOR, &chosen).is_ok());
+        let ask_only = v1::ProjectsResponse {
+            choice: vec![field("hold.ask_mode", "none")],
+            ..v1::ProjectsResponse::default()
+        };
+        assert!(refuse_without_choice(CHOICE_MINOR - 1, &backend_choice_keys(&ask_only)).is_ok());
+    }
+
+    /// Ein älterer Daemon überginge Werte, die das Backend mitentscheiden:
+    /// das Backend vor 1.40, Untergrenze und Laufzeit vor 1.55 (HUM-567).
+    /// Er wird dann abgelehnt, mit der Minor, die der Wert braucht; Werte,
+    /// die das Backend nicht berühren, halten das Ziehen nie auf.
+    ///
+    /// Mutation proof: `check_minor` ohne die Prüfung der Werte, oder
+    /// `backend_values` mit `None` für die Untergrenze, lässt das Ziehen mit
+    /// der Untergrenze an einem Daemon 1.54 durch.
+    #[test]
+    fn an_older_daemon_is_refused_for_values_that_choose_the_backend() {
+        let pair = |path: &str, value: &str| v1::sandbox_request::CliOverride {
+            path: path.to_owned(),
+            value: value.to_owned(),
+        };
+        let backend = [pair("sandbox.backend", "auto")];
+        let floor = [pair("sandbox.min_isolation", "kernel")];
+        let other = [pair("hold.timeout_secs", "30")];
+
+        let refused = check_minor(PLAN_MINOR - 1, &backend).expect_err("an older daemon");
+        assert_eq!(refused.diagnostic.code, codes::CLI_004);
+        assert!(check_minor(PLAN_MINOR, &backend).is_ok());
+        assert!(check_minor(PLAN_MINOR - 1, &[]).is_ok());
+
+        let refused = check_minor(VALUES_MINOR - 1, &floor).expect_err("no floor below 1.55");
+        assert!(
+            refused.diagnostic.why.contains("sandbox.min_isolation")
+                && refused.diagnostic.why.contains("1.55"),
+            "{}",
+            refused.diagnostic.why
+        );
+        assert!(check_minor(VALUES_MINOR, &floor).is_ok());
+        assert!(check_minor(IMAGE_MINOR, &other).is_ok());
+        assert!(check_minor(IMAGE_MINOR - 1, &[]).is_err());
     }
 }

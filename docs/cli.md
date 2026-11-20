@@ -403,8 +403,23 @@ same floor; a daemon older than contract 1.55 sees only the backend of these
 values (`Plan.backend`), and a preview with any other ends with `CLI_004`
 instead of showing a plan the start would not get. `humanitl sessions` sends
 none of them.
-`humanitl projects proposal` computes the proposal without these values and
-says so in a warning (`CLI_004`) that names them.
+`humanitl projects proposal` and `humanitl sandbox image pull` send the same
+values too (HUM-567): the proposal is then the start with them, and the pull
+goes to the backend that start would take. Both, like `Sandbox(Argv)`, resolve
+over the saved project choice of the folder; the pull sends the folder in which
+`humanitl run` of the same call would start. A folder the start refuses stops
+the pull with the same `SANDBOX_006`, unless it is only the current directory
+(the home directory itself, for example): then it chooses no project, and the
+pull goes to the configured folder as before. The values to save in the
+proposal (`StartProposal.choice`) stay those without the session values; they
+apply to a run, not to the project. Against a daemon older than contract 1.57
+the proposal is computed without these values and the command says so in a
+warning (`CLI_004`) that names them, and the pull ends with `CLI_004` when the
+saved choice of the folder sets a `sandbox.*` key, which such a daemon would
+not see; it still sends the folder, so its project profile applies, unless the
+folder is only a current directory the start refuses; a pull with a floor or a Podman runtime ends with
+`CLI_004` against a daemon older than 1.55, instead of pulling for another
+backend than the start takes.
 
 **What `humanitl doctor` says about the kernel level.** In the group of the
 kernel level the doctor gives one line per prerequisite: `kvm` (`/dev/kvm`),
