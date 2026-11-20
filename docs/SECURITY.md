@@ -1921,6 +1921,16 @@ tested (ESC-4):
 - **Redirects inherit nothing.** A `301` or `302` makes the client send a new request to a new
   destination, which runs through the rules again.
 - **Unknown methods lead to `ask`**, never to `allow`.
+- **A rule that cannot be read never widens what is allowed (HUM-561).** It costs only itself; the
+  other rules apply. Because the first match wins, every rule shields the rules below it, the
+  bundled ones included, so simply dropping a `block`, `ask` or `redact` rule could let a broader
+  `allow` below it decide. In its place therefore stands, until it is fixed, the rule itself when
+  its action and match could be read (a block stays a block, without an end), or else `ask` for its
+  host (ordinary requests and WebSocket upgrades), or for every host and address when the host
+  could not be read; a readable `expires: session` keeps the session rank. Only an `allow` rule is
+  simply left out. Because the replacement is not listed, a change that would put a rule above it
+  is refused (`RULES_009`) until the entry is repaired. Nothing is blocked that you did not block. The entry stays in `rules.yaml` and
+  is written back in its place; a file that cannot be read as a whole is not written at all.
 - **No rule lifts the hard block.** With `hold.hard_block_checksum_secrets` on, a request carrying a
   checksum-confirmed secret does not leave unchanged: an `allow` rule and the LLM passthrough block
   it as the system (`BlockReason::Secret`, `403`); without a rule it is held, and `Decide(Allow)`
@@ -2106,6 +2116,7 @@ passthrough or the audit chain gets a line here and in the change history of
 | 0.1.x | The agent depot (`agents.source`, off by default): a depot agent's resolved version directory read-only at `/run/humanitl/agent/`, each entry trust-checked before the bind; its configuration as a writable scratch copy deleted with the session; one guard on every backend's plan refuses a host program of a depot agent (`AGENT_017`); host install locations of depot agents masked (empty read-only mounts under Linux only where they exist, `file-read*` and `process-exec` deny rules under Seatbelt); a company lock may only name the depot (`AGENT_010`) (HUM-518). |
 | 0.1.x | Cleanup and forgetting only through a plan the daemon lists and a person confirms; its digest binds identity and version of every item and is checked again in the deleting transaction (`SANDBOX_054`); never the project folder, the audit chain or the running session (HUM-533, [section 5.2](#cleanup-and-forgetting-hum-533), K-37). |
 | 0.1.x | The project choice: a per-project configuration layer the daemon keeps on the host in its register, written only through `Projects.save_choice`, never read from the project folder; a fixed allow-list of keys, the isolation floor only raised, company locks win, `CONFIG_024` otherwise; a start without a project folder is refused with `SANDBOX_053` instead of taking the daemon's working directory (HUM-532, [section 5.2](#the-project-choice-hum-532), K-37). |
+| 0.1.x | A rule of `rules.yaml` that cannot be read costs only itself instead of every rule of the file; in its place stands the rule itself (action and match readable) or `ask` for its host or for every host and address, never nothing unless it is an `allow`; the entry is written back in its place, and a file that cannot be read as a whole is never overwritten (HUM-561, [section 7](#7-the-rules-engine)). |
 
 ## 12. macOS: Seatbelt instead of bubblewrap
 

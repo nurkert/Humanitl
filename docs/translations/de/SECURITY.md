@@ -1789,6 +1789,18 @@ Die Fallen sind alle bekannt und alle getestet (ESC-4):
 - **Weiterleitungen erben nichts.** Ein `301` oder `302` lässt den Client eine neue Anfrage an ein
   neues Ziel schicken, die erneut durch die Regeln läuft.
 - **Unbekannte Methoden führen zu `ask`**, nie zu `allow`.
+- **Eine Regel, die sich nicht lesen lässt, erweitert nie, was erlaubt ist (HUM-561).** Sie kostet
+  nur sich selbst; die übrigen Regeln gelten. Weil die erste passende Regel gewinnt, deckt jede Regel
+  die unter ihr ab, die mitgelieferten eingeschlossen; eine `block`-, `ask`- oder `redact`-Regel
+  einfach wegzulassen, ließe deshalb womöglich ein breiteres `allow` darunter entscheiden. An ihrem
+  Platz steht darum bis zur Reparatur die Regel selbst, wenn Aktion und Bedingung lesbar sind (eine
+  Sperre bleibt eine Sperre, ohne Ende), sonst `ask` für ihren Host (gewöhnliche Anfragen und
+  WebSocket-Upgrades) oder, wenn schon der Host nicht lesbar ist, für jeden Host und jede Adresse;
+  ein lesbares `expires: session` behält den Rang der Sitzung. Nur eine `allow`-Regel fehlt einfach.
+  Weil der Ersatz nicht in der Liste steht, lehnt der Daemon eine Änderung, die eine Regel über ihn
+  höbe, mit `RULES_009` ab, bis der Eintrag repariert ist. Gesperrt wird
+  nichts, was du nicht gesperrt hast. Der Eintrag bleibt in `rules.yaml` und wird an seinem Platz
+  zurückgeschrieben; eine Datei, die sich als Ganzes nicht lesen lässt, wird gar nicht geschrieben.
 - **Keine Regel hebt die harte Sperre auf.** Mit eingeschaltetem
   `hold.hard_block_checksum_secrets` geht eine Anfrage, die ein durch Prüfsumme bestätigtes Secret
   trägt, nicht unverändert hinaus: Eine `allow`-Regel und die LLM-Durchleitung blockieren sie als
@@ -1982,6 +1994,7 @@ der Durchleitung oder an der Audit-Kette bekommt hier eine Zeile und in der Änd
 | 0.1.x | Das Agent-Depot (`agents.source`, ohne Opt-in aus): der aufgelöste Versionsordner eines Depot-Agenten nur lesbar unter `/run/humanitl/agent/`, jeder Eintrag vor dem Einhängen geprüft; seine Konfiguration als schreibbare Arbeitskopie, die mit der Sitzung gelöscht wird; ein Wächter im Plan jedes Backends lehnt ein Programm des Hosts eines Depot-Agenten ab (`AGENT_017`); Host-Installationen von Depot-Agenten maskiert (unter Linux leere, nur lesbare Einhängungen nur für bestehende Orte, unter Seatbelt Verbotsregeln `file-read*` und `process-exec`); eine Firmenvorgabe darf nur das Depot nennen (`AGENT_010`) (HUM-518). |
 | 0.1.x | Aufräumen und Vergessen nur über einen Plan, den der Daemon auflistet und ein Mensch bestätigt; sein Digest bindet Identität und Fassung jedes Eintrags und wird in der löschenden Transaktion erneut geprüft (`SANDBOX_054`); nie der Projektordner, die Audit-Kette oder die laufende Sitzung (HUM-533, [Abschnitt 5.2](#aufräumen-und-vergessen-hum-533), K-37). |
 | 0.1.x | Die Projektwahl: eine Ebene der Konfiguration je Projekt, die der Daemon auf dem Host in seinem Register hält, nur über `Projects.save_choice` geschrieben, nie aus dem Projektordner gelesen; eine feste Erlaubnisliste von Schlüsseln, die Untergrenze der Isolation steigt nur, Sperren einer Firmenvorgabe gewinnen, sonst `CONFIG_024`; ein Start ohne Projektordner wird mit `SANDBOX_053` abgelehnt, statt das Arbeitsverzeichnis des Daemons zu nehmen (HUM-532, [Abschnitt 5.2](#die-projektwahl-hum-532), K-37). |
+| 0.1.x | Eine Regel der `rules.yaml`, die sich nicht lesen lässt, kostet nur sich selbst statt aller Regeln der Datei; an ihrem Platz steht die Regel selbst (Aktion und Bedingung lesbar) oder `ask` für ihren Host oder für jeden Host und jede Adresse, nie nichts, außer bei einem `allow`; der Eintrag wird an seinem Platz zurückgeschrieben, und eine Datei, die sich als Ganzes nicht lesen lässt, wird nie überschrieben (HUM-561, [Abschnitt 7](#7-die-regel-engine)). |
 
 ## 12. macOS: Seatbelt statt bubblewrap
 

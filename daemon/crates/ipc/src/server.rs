@@ -2239,6 +2239,10 @@ impl v1::humanitl_server::Humanitl for IpcServer {
                 ) {
                     crate::cloud::insert_doctor_line(&mut report, &resolved.config);
                 }
+                // Ob `rules.yaml` sich lesen lässt, und welche Regel fehlt
+                // (HUM-561); frisch von der Platte, wie der nächste Start sie
+                // läse.
+                crate::rules_doctor::insert_doctor_line(&mut report, &setup.paths.rules_path());
                 if let Ok(Some(groups)) = groups.join() {
                     report.backends = convert::doctor_backends_to_proto(&groups);
                 }

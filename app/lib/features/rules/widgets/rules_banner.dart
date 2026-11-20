@@ -19,19 +19,41 @@ import '../severity.dart';
 import 'arrive.dart';
 
 /// The diagnostics of the rule set, above the list.
-class RulesBannerView extends ConsumerWidget {
+///
+/// Every finding gets its card: two rules of `rules.yaml` that cannot be read
+/// are two reasons, and the second must not wait until the first is fixed
+/// (HUM-561). Past [collapsedCount] cards the rest folds away behind a button
+/// that names how many there are, so a long list does not push the rules off
+/// the screen.
+class RulesBannerView extends ConsumerStatefulWidget {
   /// Creates the banner.
   const RulesBannerView({super.key});
 
+  /// How many cards stand open before the rest folds away.
+  static const int collapsedCount = 2;
+
   @override
-  Widget build(BuildContext context, WidgetRef ref) {
+  ConsumerState<RulesBannerView> createState() => _RulesBannerViewState();
+}
+
+class _RulesBannerViewState extends ConsumerState<RulesBannerView> {
+  bool _expanded = false;
+
+  @override
+  Widget build(BuildContext context) {
     final HTokens tokens = HTheme.of(context);
     final AppLocalizations l10n = context.l10n;
     final List<Diagnostic> found = ref.watch(rulesBannerProvider);
     if (found.isEmpty) {
       return const SizedBox.shrink();
     }
-    final Diagnostic first = found.first;
+    final int hidden = _expanded
+        ? 0
+        : (found.length - RulesBannerView.collapsedCount).clamp(
+            0,
+            found.length,
+          );
+    final List<Diagnostic> shown = found.sublist(0, found.length - hidden);
     return ArriveIn(
       child: Padding(
         padding: EdgeInsets.fromLTRB(
@@ -43,18 +65,24 @@ class RulesBannerView extends ConsumerWidget {
         child: Column(
           crossAxisAlignment: CrossAxisAlignment.start,
           children: <Widget>[
-            HDiagnosticCard(
-              code: first.code,
-              severityLabel: ruleSeverityLabel(l10n, first.severity),
-              color: ruleSeverityColor(tokens, first.severity),
-              title: first.title.isEmpty ? first.code : first.title,
-              // The daemon's own sentence, with the field and the line it
-              // names. The app writes the title, never the reason
-              // (`docs/UX.md` 4.4).
-              why: first.why,
-              docsUrl: first.docsUrl,
-              width: double.infinity,
-            ),
+            for (final (int index, Diagnostic diagnostic)
+                in shown.indexed) ...<Widget>[
+              if (index > 0) SizedBox(height: tokens.spacing.x2),
+              HDiagnosticCard(
+                code: diagnostic.code,
+                severityLabel: ruleSeverityLabel(l10n, diagnostic.severity),
+                color: ruleSeverityColor(tokens, diagnostic.severity),
+                title: diagnostic.title.isEmpty
+                    ? diagnostic.code
+                    : diagnostic.title,
+                // The daemon's own sentence, with the field and the line it
+                // names. The app writes the title, never the reason
+                // (`docs/UX.md` 4.4).
+                why: diagnostic.why,
+                docsUrl: diagnostic.docsUrl,
+                width: double.infinity,
+              ),
+            ],
             SizedBox(height: tokens.spacing.x2),
             Row(
               children: <Widget>[
@@ -69,11 +97,17 @@ class RulesBannerView extends ConsumerWidget {
                   onPressed: ref.read(rulesBannerProvider.notifier).clear,
                   child: Text(l10n.rulesBannerDismiss),
                 ),
-                if (found.length > 1) ...<Widget>[
+                if (found.length > RulesBannerView.collapsedCount) ...<Widget>[
                   SizedBox(width: tokens.spacing.x2),
-                  Text(
-                    l10n.rulesBannerMore(found.length - 1),
-                    style: tokens.typography.ui12.tinted(tokens.colors.fg1),
+                  HButton(
+                    key: const Key('rules-banner-more'),
+                    variant: HButtonVariant.ghost,
+                    onPressed: () => setState(() => _expanded = !_expanded),
+                    child: Text(
+                      _expanded
+                          ? l10n.rulesBannerFewer
+                          : l10n.rulesBannerMore(hidden),
+                    ),
                   ),
                 ],
               ],
