@@ -6210,6 +6210,25 @@ behobene Fassung gibt.
    der Alarm mit Begründung geschlossen.
 2. Danach liegt keine betroffene Fassung mehr in `website/package-lock.json`.
 
+
+### Stand nach der Umsetzung (2026-11-20)
+Erledigt ohne Änderung an der Website: GitHub hat das Advisory
+GHSA-fc5q-39xc-vjpf („picomatch vulnerable to ReDoS through single-branch
+repeated extglobs") am 2026-11-18 zurückgezogen (`withdrawn_at`
+2026-11-18T15:38:56Z, Titel jetzt „Withdrawn Advisory: …"). Alarm #3 steht
+seit 2026-11-19 im Zustand `fixed` (`fixed_at` 2026-11-19T10:38:06Z) und
+wurde nicht verworfen; beides abgefragt am 2026-11-20 über die REST-API
+(`dependabot/alerts/3`). Wer oder was den Zustand gesetzt hat, sagt die API
+nicht. Eine
+neuere Fassung als 4.0.7 gibt es auf npm weiterhin nicht, und
+`website/package-lock.json` führt unverändert `picomatch` 4.0.7 (dazu 2.3.2
+unter `anymatch`). Damit greifen die Akzeptanzkriterien nicht mehr: Es gibt
+keinen offenen Alarm zu schließen, und das zurückgezogene Advisory löst kein
+Update mehr aus. Ob 4.0.7 frei von dem beschriebenen Verhalten ist, sagt der
+Rückzug nicht; die Einschätzung oben (nur Build, Globs aus eigenem Code)
+bleibt deshalb als Begründung stehen, und erscheint das Advisory neu, gilt
+die Spezifikation wieder.
+
 ---
 
 ## HUM-528 · Ein Installationsskript für alle Systeme unter `humanitl.de/install`
