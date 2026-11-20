@@ -14,9 +14,10 @@
 //! geladen, bevor sie die Datei ersetzt ([`probe`]). `CONFIG_003` mit Grund,
 //! statt eine Datei zu hinterlassen, die der nächste Start ablehnt.
 
-use std::path::{Path, PathBuf};
+use std::path::Path;
 
-use humanitl_config::value::{check_value, default_fix, parse_value, scalar, to_toml};
+use humanitl_config::value::{check_value, parse_value, scalar, to_toml};
+use humanitl_config::write_check::{ProbeContext, Scope, check_write};
 use humanitl_config::{ProfileSource, ProjectScope, Resolved, alias, schema};
 use humanitl_core::diagnostics::codes;
 use humanitl_core::{Diagnostic, FixAction, Severity};
@@ -612,8 +613,53 @@ async fn set(ctx: &Context, key: &str, text: &str, project: bool) -> Result<u8, 
     if let Some(notice) = cloud_notice(ctx, &path) {
         ctx.render.note(&notice);
     }
+    // Ein Platzhalter wird geschrieben, aber nicht stillschweigend (HUM-562):
+    // Der Start lehnt ihn nicht ab, ein Testaufbau braucht ihn, und im Alltag
+    // antwortet dort nie jemand.
+    if let Some(host) = humanitl_config::value::placeholder_host(&value) {
+        ctx.render.note(&format!(
+            "[humanitl] {path} points at {host}, a name reserved for examples and tests \
+             (RFC 2606, RFC 6761); nothing answers there unless resolver.overrides maps it"
+        ));
+    }
     ctx.render.note(&reach(ctx, &file).await);
     Ok(EXIT_OK)
+}
+
+/// Die Gegenprobe vor dem Schreiben: [`check_write`], dieselbe wie für
+/// `SetConfig` des Daemons (HUM-562), mit den Ebenen, die der nächste Start
+/// ohne Flags lädt. Wird trotz älterer Befunde geschrieben, sagt eine Zeile
+/// auf `stderr`, dass die Konfiguration noch nicht lädt.
+fn probe(
+    ctx: &Context,
+    field: &schema::Field,
+    scope: Scope,
+    file: &Path,
+    candidate: &Path,
+) -> Result<(), Diagnostic> {
+    let older = check_write(&probe_context(ctx), &field.path, scope, file, candidate)?;
+    if let Some(why) = older {
+        ctx.render.note(&format!(
+            "the configuration still does not load ({}); {} is written because it adds no \
+             finding of its own",
+            crate::render::plain(&why),
+            field.path
+        ));
+    }
+    Ok(())
+}
+
+/// Die Eingaben der Gegenprobe aus der Kommandozeile.
+fn probe_context(ctx: &Context) -> ProbeContext {
+    ProbeContext {
+        selection: ctx.selection(),
+        cwd: Some(ctx.cwd.clone()),
+        env: ctx.env.clone(),
+        global: ctx
+            .config_file
+            .clone()
+            .unwrap_or_else(|| ctx.paths.config_path()),
+    }
 }
 
 /// Der Hinweis auf Cloud-Inferenz, einmal, wenn `config set` den Agenten
@@ -666,560 +712,6 @@ fn resolved_work_dir(path: &str, value: Value) -> Value {
             .map_or(value, |resolved| Value::String(resolved.to_owned())),
         Ok(_) | Err(_) => value,
     }
-}
-
-/// Wohin `config set` schreibt.
-#[derive(Debug, Clone, Copy, PartialEq, Eq)]
-enum Scope {
-    /// `config.toml` des Menschen.
-    Global,
-    /// `<projekt>/.humanitl/profile.toml`, unter `[config]`.
-    Project,
-}
-
-impl Scope {
-    /// Das Wort für die Ausgabe.
-    const fn as_str(self) -> &'static str {
-        match self {
-            Self::Global => "global",
-            Self::Project => "project",
-        }
-    }
-}
-
-/// Lädt die Konfiguration so, wie der nächste Start sie lädt — mit der
-/// Nebendatei an der Stelle der wirklichen — und entscheidet, ob der Wert
-/// geschrieben werden darf.
-///
-/// Die Quellen werden dafür **mit** der Nebendatei neu bestimmt und nicht an
-/// einem vorab bestimmten Satz ausgetauscht: Welches Projekt-Profil gilt,
-/// hängt an `sandbox.work_dir`, und `config set sandbox.work_dir` ändert
-/// genau das.
-///
-/// Geschrieben wird, wenn die Konfiguration mit dem neuen Wert lädt, **oder**
-/// wenn jeder Befund nachher genau so schon vorher dastand: derselbe Code am
-/// selben Schlüssel mit demselben Text, und keiner nennt den gesetzten
-/// Schlüssel. Ein Wert, der selbst falsch ist, wird nicht geschrieben, auch
-/// wenn derselbe falsche Wert schon dastand. Ein Befund, der sich durch den neuen
-/// Wert nur im Text ändert — ein Paar wie `limits.hold_max_bytes` und
-/// `limits.hold_body_cap_bytes`, dessen Grenze der neue Wert verschiebt —, ist
-/// ein neuer Befund. Ein Befund ohne Schlüssel verhindert das Schreiben immer.
-/// Die Ladung meldet nur ihren ersten Befund; alle Befunde einer Ebenenfolge
-/// sammelt deshalb [`findings`]. So verdeckt ein älterer Fehler keinen neuen,
-/// und eine Konfiguration mit zwei falschen Werten lässt sich trotzdem
-/// Schlüssel für Schlüssel reparieren.
-fn probe(
-    ctx: &Context,
-    field: &schema::Field,
-    scope: Scope,
-    file: &Path,
-    candidate: &Path,
-) -> Result<(), Diagnostic> {
-    let candidate_text = std::fs::read_to_string(candidate).map_err(|error| {
-        Diagnostic::builder(codes::CONFIG_015, Severity::Error)
-            .why(format!(
-                "{} could not be read back for the check: {error}",
-                candidate.display()
-            ))
-            .build()
-    })?;
-    let after = findings(ctx, scope, Some(&candidate_text), file);
-    if after.is_empty() {
-        return Ok(());
-    }
-    let current_text = std::fs::read_to_string(file).ok();
-    let before = findings(ctx, scope, current_text.as_deref(), file);
-    let new = after.iter().find(|finding| {
-        finding.key.is_none()
-            || finding.involved.contains(&field.path)
-            || !before.iter().any(|old| old.same_as(finding))
-    });
-    match new {
-        None => {
-            // Alles, was jetzt noch scheitert, scheiterte schon vorher genau
-            // so; der Wert bringt nichts Neues mit.
-            if let Some(first) = before.first() {
-                ctx.render.note(&format!(
-                    "the configuration still does not load ({}); {} is written because it adds \
-                     no finding of its own",
-                    crate::render::plain(&first.diagnostic.why),
-                    field.path
-                ));
-            }
-            Ok(())
-        }
-        Some(finding) => Err(refusal(field, finding, !before.is_empty(), file, candidate)),
-    }
-}
-
-/// Der Befund, mit dem `config set` ablehnt.
-fn refusal(
-    field: &schema::Field,
-    finding: &Finding,
-    broken_before: bool,
-    file: &Path,
-    candidate: &Path,
-) -> Diagnostic {
-    // Die Ladung nennt die Nebendatei; der Mensch kennt nur seine Datei.
-    let why = finding.diagnostic.why.replace(
-        &candidate.display().to_string(),
-        &file.display().to_string(),
-    );
-    let names_the_key = finding.involved.contains(&field.path);
-    // Nennt der Befund den gesetzten Schlüssel, gilt sein eigener Vorschlag;
-    // sonst ist die Datei als Ganzes zu richten. Lud die Konfiguration schon
-    // vorher nicht, sagt der Text das in jedem Fall.
-    let fix = if finding.key.is_none() {
-        // Ein Befund ohne Schlüssel kann aus einer Ebene kommen, die der
-        // Mensch hier nicht schreibt, etwa aus dem Projekt-Profil, das
-        // `sandbox.work_dir` gerade wählt. Dessen Vorschlag trüge einen Wert
-        // aus dem Projekt in die globale Datei; die Grenze zwischen beiden
-        // bleibt, und der Vorschlag ist die Datei als Ganzes.
-        Some(FixAction::CopyCommand("humanitl config edit".to_owned()))
-    } else if names_the_key {
-        finding
-            .diagnostic
-            .fix
-            .clone()
-            .or_else(|| default_fix(field))
-    } else if broken_before {
-        Some(FixAction::CopyCommand("humanitl config edit".to_owned()))
-    } else {
-        finding.diagnostic.fix.clone()
-    };
-    let why = if broken_before {
-        format!(
-            "{why}; the configuration did not load before this change either, and this \
-             finding is new or cannot be told apart from the older ones"
-        )
-    } else {
-        why
-    };
-    let mut builder =
-        Diagnostic::builder(finding.diagnostic.code, finding.diagnostic.severity).why(why);
-    if let Some(fix) = fix {
-        builder = builder.fix(fix);
-    }
-    builder.build()
-}
-
-/// Ein Befund der Ladung und die Schlüssel, die er nennt.
-#[derive(Debug)]
-struct Finding {
-    /// Der Befund, wie die Ladung ihn meldet.
-    diagnostic: Diagnostic,
-    /// Der Schlüssel, um den es geht: der erste, den der Text nennt. `None`,
-    /// wenn der Text keinen nennt oder der Befund keinen haben kann
-    /// (`CONFIG_002`, ein Schlüssel, den das Schema nicht kennt).
-    key: Option<String>,
-    /// Alle Schlüssel, die der Text nennt, in der Reihenfolge ihres
-    /// Vorkommens; bei einem Befund über ein Paar beide.
-    involved: Vec<String>,
-}
-
-impl Finding {
-    /// Derselbe Befund: derselbe Code am selben Schlüssel mit demselben Text.
-    ///
-    /// Der Text zählt mit: Ein Befund über ein Paar behält seinen Schlüssel,
-    /// wenn der neue Wert die Grenze des anderen verschiebt, aber nicht seinen
-    /// Text. Der Pfad der Nebendatei wird dafür vorher ersetzt
-    /// ([`findings`]).
-    fn same_as(&self, other: &Self) -> bool {
-        self.key.is_some()
-            && self.key == other.key
-            && self.diagnostic.code == other.diagnostic.code
-            && self.diagnostic.why == other.diagnostic.why
-    }
-}
-
-/// Wie oft [`findings`] höchstens einen Schlüssel herausnimmt und neu lädt.
-const MAX_FINDINGS: usize = 16;
-
-/// Alle Befunde einer Ebenenfolge, in der Reihenfolge, in der die Ladung sie
-/// meldet.
-///
-/// `file_text` ist der Text der Datei, die `config set` schreibt (oder `None`,
-/// wenn es sie nicht gibt); die übrigen Ebenen kommen von der Platte und aus
-/// der Umgebung. Nach jedem Befund wird sein Schlüssel — samt seinen alten
-/// Namen — aus der globalen Datei, aus dem Projekt-Profil und aus der Umgebung
-/// genommen und neu geladen, bis die Ladung gelingt. Ein Befund ohne
-/// Schlüssel, einer, der sich unverändert wiederholt (der Fehler steckt in
-/// einer Ebene, die hier nicht verändert wird), und das Ende der Runden
-/// beenden das Zählen mit einem Befund ohne Schlüssel: Was danach käme, ist
-/// nicht gezählt, und ein unvollständiges Bild darf nie zum Schreiben führen.
-fn findings(ctx: &Context, scope: Scope, file_text: Option<&str>, file: &Path) -> Vec<Finding> {
-    let Ok(scratch) = tempfile::tempdir() else {
-        return vec![unknown_finding(
-            file,
-            "no temporary directory for the check",
-        )];
-    };
-    findings_in(ctx, scope, file_text, file, scratch.path(), |path, text| {
-        std::fs::write(path, text)
-    })
-}
-
-/// Schreibt eine Nebendatei; im Betrieb `std::fs::write`, im Test einer, der
-/// scheitert.
-type ScratchWriter = fn(&Path, &str) -> std::io::Result<()>;
-
-/// [`findings`] mit den Nebendateien in `scratch`, geschrieben von `write`.
-fn findings_in(
-    ctx: &Context,
-    scope: Scope,
-    file_text: Option<&str>,
-    file: &Path,
-    scratch: &Path,
-    write: ScratchWriter,
-) -> Vec<Finding> {
-    let mut layers = Layers::new(ctx, scope, file_text, file, write);
-    let mut out: Vec<Finding> = Vec::new();
-
-    for round in 0..MAX_FINDINGS {
-        let Err(diagnostic) = layers.load(ctx, scratch, round) else {
-            return out;
-        };
-        let (key, involved) = keys_named_in(&diagnostic);
-        let repeated = out.last().is_some_and(|last| {
-            last.diagnostic.code == diagnostic.code
-                && last.key == key
-                && last.diagnostic.why == diagnostic.why
-        });
-        if repeated {
-            out.push(unknown_finding(
-                file,
-                "a finding repeats after its key was taken out of every layer, so the rest \
-                 cannot be counted",
-            ));
-            return out;
-        }
-        let peel = key.clone();
-        out.push(Finding {
-            diagnostic,
-            key,
-            involved,
-        });
-        let Some(peel) = peel else {
-            return out;
-        };
-        layers.peel(&peel);
-    }
-    out.push(unknown_finding(
-        file,
-        "the check stopped after its last round, so not every finding is counted",
-    ));
-    out
-}
-
-/// Die Ebenen, die [`findings`] Runde um Runde lädt und aus denen es
-/// Schlüssel herausnimmt.
-struct Layers {
-    /// Der Text der globalen Datei, `None`, wenn es keine gibt.
-    global: Option<String>,
-    /// Die globale Datei, für die die Nebendatei im Text eines Befunds steht.
-    global_real: PathBuf,
-    /// Der Text des Projekt-Profils, sobald er festgehalten ist.
-    project: Option<String>,
-    /// Das Projekt-Profil, für das die Nebendatei im Text steht.
-    project_real: Option<PathBuf>,
-    /// Ob das Projekt-Profil schon gelesen und festgehalten ist.
-    project_pinned: bool,
-    /// Die Umgebung ohne die schon herausgenommenen Variablen.
-    env: humanitl_config::Env,
-    /// Die schon herausgenommenen Schlüssel, in ihrer Reihenfolge.
-    peeled: Vec<String>,
-    /// Was die Nebendateien schreibt.
-    write: ScratchWriter,
-}
-
-impl Layers {
-    /// Die Ebenen am Anfang: die Datei, die `config set` schreibt, an ihrer
-    /// Stelle, alles andere von der Platte und aus der Umgebung.
-    fn new(
-        ctx: &Context,
-        scope: Scope,
-        file_text: Option<&str>,
-        file: &Path,
-        write: ScratchWriter,
-    ) -> Self {
-        let (global, project, project_real) = match scope {
-            Scope::Global => (file_text.map(ToOwned::to_owned), None, None),
-            Scope::Project => (
-                global_text(ctx),
-                file_text.map(ToOwned::to_owned),
-                Some(file.to_path_buf()),
-            ),
-        };
-        Self {
-            global,
-            global_real: ctx
-                .config_file
-                .clone()
-                .unwrap_or_else(|| ctx.paths.config_path()),
-            project,
-            project_real,
-            project_pinned: scope == Scope::Project,
-            env: ctx.env.clone(),
-            peeled: Vec::new(),
-            write,
-        }
-    }
-
-    /// Lädt die Ebenen dieser Runde aus Nebendateien in `scratch`.
-    ///
-    /// Im Text eines Befunds steht danach die Datei, für die eine Nebendatei
-    /// steht: Der Mensch kennt nur seine, und ein Vergleich mit der anderen
-    /// Folge darf nicht an einem Namen einer Nebendatei scheitern.
-    fn load(&mut self, ctx: &Context, scratch: &Path, round: usize) -> Result<(), Diagnostic> {
-        let write = self.write;
-        let global_path = self
-            .global
-            .as_ref()
-            .map(|text| write_scratch(write, &scratch.join(format!("global-{round}.toml")), text))
-            .transpose()?;
-        let mut written: Vec<(PathBuf, PathBuf)> = global_path
-            .iter()
-            .map(|path| (path.clone(), self.global_real.clone()))
-            .collect();
-        let result = humanitl_config::sources_with_global(
-            &ctx.selection(),
-            Some(&ctx.cwd),
-            &self.env,
-            &[],
-            global_path,
-        )
-        .and_then(|mut sources| {
-            if !self.project_pinned {
-                // Das Projekt-Profil der wirklichen Folge wird einmal gelesen
-                // und danach wie die globale Datei behandelt; was schon
-                // herausgenommen ist, fehlt auch darin.
-                self.project_real.clone_from(&sources.profile_project);
-                self.project = sources
-                    .profile_project
-                    .as_ref()
-                    .and_then(|path| std::fs::read_to_string(path).ok())
-                    .map(|text| {
-                        self.peeled
-                            .iter()
-                            .fold(text, |text, key| without_in_profile(&text, key))
-                    });
-                self.project_pinned = true;
-            }
-            sources.profile_project = self
-                .project
-                .as_ref()
-                .map(|text| {
-                    write_scratch(write, &scratch.join(format!("project-{round}.toml")), text)
-                })
-                .transpose()?;
-            if let (Some(temp), Some(real)) = (&sources.profile_project, &self.project_real) {
-                written.push((temp.clone(), real.clone()));
-            }
-            humanitl_config::load(&sources).map(|_| ())
-        });
-        result.map_err(|mut diagnostic| {
-            for (temp, real) in &written {
-                diagnostic.why = diagnostic
-                    .why
-                    .replace(&temp.display().to_string(), &real.display().to_string());
-            }
-            diagnostic
-        })
-    }
-
-    /// Nimmt einen Schlüssel aus allen Ebenen: aus der globalen Datei, aus dem
-    /// Projekt-Profil und aus der Umgebung, jeweils samt seinen alten Namen.
-    fn peel(&mut self, key: &str) {
-        self.global = self
-            .global
-            .take()
-            .map(|text| without_everywhere(&text, key, &[]));
-        self.project = self
-            .project
-            .take()
-            .map(|text| without_in_profile(&text, key));
-        self.env = without_variable(&self.env, key);
-        self.peeled.push(key.to_owned());
-    }
-}
-
-/// Schreibt eine Nebendatei für [`Layers::load`].
-///
-/// Ein Schreibfehler ist ein Befund ohne Schlüssel und verhindert damit das
-/// Schreiben. Still übergangen bliebe eine leere oder halbe Nebendatei zurück
-/// (etwa bei vollem `TMPDIR`), die als Vorgabe lädt, und die Prüfung meldete
-/// eine Konfiguration als gut, die sie nie gesehen hat. Den Vorschlag setzt
-/// [`refusal`], wie für jeden Befund ohne Schlüssel.
-fn write_scratch(write: ScratchWriter, path: &Path, text: &str) -> Result<PathBuf, Diagnostic> {
-    write(path, text).map_err(|error| {
-        Diagnostic::builder(codes::CONFIG_015, Severity::Error)
-            .why(format!(
-                "{}: the check could not write its scratch copy: {error}",
-                path.display()
-            ))
-            .build()
-    })?;
-    Ok(path.to_path_buf())
-}
-
-/// Ein Befund, der keinen Schlüssel hat, weil die Prüfung selbst nicht zu
-/// Ende kam. Er verhindert das Schreiben.
-fn unknown_finding(file: &Path, why: &str) -> Finding {
-    Finding {
-        diagnostic: Diagnostic::builder(codes::CONFIG_015, Severity::Error)
-            .why(format!("{}: {why}", file.display()))
-            .build(),
-        key: None,
-        involved: Vec::new(),
-    }
-}
-
-/// Der Text der globalen `config.toml`, falls es sie gibt.
-fn global_text(ctx: &Context) -> Option<String> {
-    let path = ctx
-        .config_file
-        .clone()
-        .unwrap_or_else(|| ctx.paths.config_path());
-    std::fs::read_to_string(path).ok()
-}
-
-/// Die Schlüssel, die ein Befund nennt: der früheste und alle.
-///
-/// Gelesen wird der Text, weil der Befund keinen Schlüssel als Feld trägt;
-/// deshalb gelten drei Regeln, die ihn davor schützen, etwas Falsches zu
-/// lesen. `CONFIG_002` ist ein Schlüssel, den das Schema nicht kennt: Der
-/// Blattpfad in seinem Text ist ein Vorschlag (`did you mean …?`) und nicht der
-/// Schlüssel, also hat er keinen. Ein alter Name zählt als sein heutiger. Bei
-/// gleichem Anfang gewinnt der längere Pfad. Gesucht wird nur, wo die
-/// bekannten Sätze der Ladung einen Schlüssel hinschreiben ([`key_regions`]);
-/// ein Wert, der zufällig wie ein Schlüssel aussieht, nennt keinen.
-fn keys_named_in(diagnostic: &Diagnostic) -> (Option<String>, Vec<String>) {
-    if diagnostic.code == codes::CONFIG_002 {
-        return (None, Vec::new());
-    }
-    let why = key_regions(&diagnostic.why).join("\n");
-    let why = why.as_str();
-    let mut hits: Vec<(usize, usize, &'static str)> = schema::leaf_paths()
-        .into_iter()
-        .flat_map(|path| {
-            why.match_indices(path)
-                .map(move |(at, _)| (at, path.len(), path))
-        })
-        .chain(alias::ALIASES.iter().flat_map(|entry| {
-            why.match_indices(entry.old)
-                .map(move |(at, _)| (at, entry.old.len(), entry.canonical))
-        }))
-        .collect();
-    // Früher zuerst, bei gleichem Anfang der längere; ein Pfad, der nur der
-    // Anfang eines längeren an derselben Stelle ist, zählt nicht.
-    hits.sort_by(|a, b| a.0.cmp(&b.0).then(b.1.cmp(&a.1)));
-    let mut involved: Vec<String> = Vec::new();
-    let mut covered_until = 0;
-    for (at, len, path) in hits {
-        if at < covered_until {
-            continue;
-        }
-        covered_until = at + len;
-        if !involved.iter().any(|known| known == path) {
-            involved.push(path.to_owned());
-        }
-    }
-    (involved.first().cloned(), involved)
-}
-
-/// Die Teile eines Befundtextes, in denen ein Schlüssel stehen kann.
-///
-/// Zwei Sätze der Ladung tragen neben dem Schlüssel einen Wert aus der Datei
-/// oder einen Pfad, und der kann aussehen wie ein Schlüssel
-/// (`[ui] theme = "hold.timeout_secs"`):
-///
-/// - `<key> = <found> is out of range; allowed is <allowed> (default …)`
-///   (`validate::out_of_range`): der Schlüssel vorn und die Grenze, die einen
-///   zweiten nennen kann (`at least limits.hold_body_cap_bytes (…)`).
-/// - `<key> (from <origin>) expects <expected>, found <found>`
-///   (`load::bad_value`): nur der Schlüssel vorn.
-///
-/// Jeder andere Text zählt als Ganzes. Das liest im Zweifel einen Schlüssel
-/// zu viel, und ein Schlüssel zu viel verhindert ein Schreiben, statt eines
-/// zu erlauben.
-fn key_regions(why: &str) -> Vec<&str> {
-    const OUT_OF_RANGE: &str = " is out of range; allowed is ";
-    if let Some((subject, rest)) = why.split_once(" = ")
-        && let Some((_, allowed)) = rest.rsplit_once(OUT_OF_RANGE)
-    {
-        let allowed = allowed
-            .rsplit_once(" (default ")
-            .map_or(allowed, |(allowed, _)| allowed);
-        return vec![subject, allowed];
-    }
-    if let Some((subject, rest)) = why.split_once(" (from ")
-        && rest.contains(" expects ")
-    {
-        return vec![subject];
-    }
-    vec![why]
-}
-
-/// Der TOML-Text ohne den Schlüssel `key` und ohne jeden seiner alten Namen,
-/// jeweils unter dem Präfix `prefix`.
-fn without_everywhere(text: &str, key: &str, prefix: &[String]) -> String {
-    std::iter::once(key)
-        .chain(alias::old_names(key))
-        .fold(text.to_owned(), |text, name| {
-            let mut segments = prefix.to_vec();
-            segments.extend(name.split('.').map(ToOwned::to_owned));
-            without_key(&text, &segments)
-        })
-}
-
-/// Das Projekt-Profil ohne den Schlüssel unter `[config]`.
-fn without_in_profile(text: &str, key: &str) -> String {
-    without_everywhere(text, key, &[PROFILE_SECTION.to_owned()])
-}
-
-/// Der TOML-Text ohne den Schlüssel unter `segments`; unverändert, wenn er
-/// dort nicht steht oder der Text kein TOML ist.
-fn without_key(text: &str, segments: &[String]) -> String {
-    let Ok(mut document) = text.parse::<toml_edit::DocumentMut>() else {
-        return text.to_owned();
-    };
-    let Some((last, groups)) = segments.split_last() else {
-        return text.to_owned();
-    };
-    let mut cursor: &mut dyn toml_edit::TableLike = document.as_table_mut();
-    for group in groups {
-        match cursor
-            .get_mut(group)
-            .and_then(toml_edit::Item::as_table_like_mut)
-        {
-            Some(next) => cursor = next,
-            None => return text.to_owned(),
-        }
-    }
-    cursor.remove(last);
-    document.to_string()
-}
-
-/// Die Umgebung ohne die Variablen, die diesen Schlüssel setzen, unter
-/// seinem heutigen und unter jedem alten Namen.
-fn without_variable(env: &humanitl_config::Env, key: &str) -> humanitl_config::Env {
-    let head = format!("{}_", humanitl_config::DEFAULT_ENV_PREFIX);
-    humanitl_config::Env::from_pairs(
-        env.iter()
-            .filter(|(name, _)| {
-                let Some(rest) = name.strip_prefix(&head) else {
-                    return true;
-                };
-                let path = rest
-                    .to_lowercase()
-                    .split(humanitl_config::ENV_SEPARATOR)
-                    .collect::<Vec<_>>()
-                    .join(".");
-                let canonical = alias::canonical(&path).unwrap_or(path.as_str());
-                canonical != key
-            })
-            .map(|(name, value)| (name.clone(), value.clone())),
-    )
 }
 
 /// Wie lange [`reach`] auf die Antwort eines laufenden Daemons wartet.
@@ -1501,7 +993,7 @@ mod tests {
         use humanitl_core::{Diagnostic, Severity};
 
         let finding = |code, why: &str| {
-            super::keys_named_in(
+            humanitl_config::write_check::keys_named_in(
                 &Diagnostic::builder(code, Severity::Error)
                     .why(why.to_owned())
                     .build(),
@@ -1625,7 +1117,7 @@ mod tests {
     /// Eine Nebendatei, die sich nicht schreiben lässt, ist ein Befund ohne
     /// Schlüssel (HUM-216). Übergangen, bliebe eine leere Datei zurück, die
     /// als Vorgabe lädt, und die Prüfung meldete Ok.
-    fn unwritable_scratch(scope: super::Scope) -> Vec<super::Finding> {
+    fn unwritable_scratch(scope: super::Scope) -> Vec<humanitl_config::write_check::Finding> {
         let root = tempfile::tempdir().unwrap();
         let home = root.path().join("home");
         let cwd = root.path().join("work");
@@ -1656,10 +1148,17 @@ mod tests {
         };
         let scratch = root.path().join("scratch");
         std::fs::create_dir_all(&scratch).unwrap();
-        super::findings_in(&ctx, scope, Some(text), &file, &scratch, full_disk)
+        humanitl_config::write_check::findings_in(
+            &super::probe_context(&ctx),
+            scope,
+            Some(text),
+            &file,
+            &scratch,
+            full_disk,
+        )
     }
 
-    fn assert_refused_for_scratch(found: &[super::Finding], name: &str) {
+    fn assert_refused_for_scratch(found: &[humanitl_config::write_check::Finding], name: &str) {
         assert_eq!(found.len(), 1, "{found:?}");
         let finding = &found[0];
         assert!(finding.key.is_none(), "{finding:?}");

@@ -304,7 +304,7 @@ Test-Wurzel ohne Flag oder Flag ohne Test-Wurzel
 
 Test-Wurzel ohne absoluten Pfad
 
-**Auslöser.** `resolver.test_ca` ist kein absoluter Pfad und hinge damit am Startverzeichnis des Daemons.
+**Auslöser.** `resolver.test_ca` ist kein absoluter Pfad und hinge damit am Startverzeichnis des Daemons; schon das Laden der Konfiguration und `humanitl config set` lehnen ihn ab.
 
 **Fix.** Kein Fix: Der Text verlangt einen absoluten Pfad und nennt ein Beispiel; den Pfad kennt nur der Mensch (HUM-507).
 

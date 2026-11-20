@@ -321,10 +321,6 @@ impl Resolver for SystemResolver {
     }
 }
 
-/// Der Port, den `resolver.nameserver` meint, wenn der Wert nur eine Adresse
-/// nennt.
-const DNS_PORT: u16 = 53;
-
 /// Fragt genau den Server aus `resolver.nameserver`, UDP mit TCP-Rückfall,
 /// und sonst niemanden. Der Adapter für Tests und für Netze, in denen der
 /// Systemresolver nicht der gewünschte ist.
@@ -403,7 +399,7 @@ impl HickoryResolver {
         .with_options(options)
         .build()
         .map_err(|err| {
-            nameserver_diagnostic(
+            humanitl_config::nameserver_refused(
                 &server.to_string(),
                 &format!("from which no resolver can be built: {err}"),
             )
@@ -479,44 +475,6 @@ impl Resolver for HickoryResolver {
             }),
         }
     }
-}
-
-/// Liest `resolver.nameserver`: `IP:Port`, `[IPv6]:Port` oder nur die Adresse,
-/// dann mit Port 53. Ein leerer Wert heißt: kein eigener Server.
-///
-/// Ein Name ist kein zulässiger Wert. Um ihn zu benutzen, müsste der Daemon ihn
-/// erst auflösen, und zwar mit einem Namensdienst, den der Schlüssel gerade
-/// ersetzen soll.
-fn parse_nameserver(value: &str) -> Result<Option<SocketAddr>, Diagnostic> {
-    let value = value.trim();
-    if value.is_empty() {
-        return Ok(None);
-    }
-    let server = value
-        .parse::<SocketAddr>()
-        .or_else(|_| {
-            value
-                .parse::<IpAddr>()
-                .map(|ip| SocketAddr::new(ip, DNS_PORT))
-        })
-        .map_err(|_| nameserver_diagnostic(value, "which is neither IP:port nor an IP address"))?;
-    if server.port() == 0 {
-        return Err(nameserver_diagnostic(value, "and port 0 is not a server"));
-    }
-    Ok(Some(server))
-}
-
-/// Der Befund zu einem unbrauchbaren `resolver.nameserver`.
-fn nameserver_diagnostic(value: &str, problem: &str) -> Diagnostic {
-    Diagnostic::builder(CONFIG_003, Severity::Error)
-        // Der Rat ist eine Anleitung und kein Wert, den `config set` nimmt;
-        // er steht deshalb im Satz und nicht in einem `ChangeSetting`
-        // (HUM-507).
-        .why(format!(
-            "resolver.nameserver is \"{value}\", {problem}; set it to an address with port, for \
-             example 127.0.0.1:5353, or leave it empty for the system resolver"
-        ))
-        .build()
 }
 
 /// Ein Eintrag des Zwischenspeichers: die Adressen und der Zeitpunkt, ab dem
@@ -809,7 +767,9 @@ impl ResolverPort {
     /// `IP:Port` noch eine IP-Adresse ist.
     pub fn from_config(config: &ResolverConfig) -> Result<Self, Diagnostic> {
         let server = match config.nameserver.as_deref() {
-            Some(value) => parse_nameserver(value)?,
+            // Dieselbe Lesart wie das Laden der Konfiguration (HUM-562): Was
+            // `config set` durchlässt, nimmt auch der Start.
+            Some(value) => humanitl_config::nameserver_address(value)?,
             None => None,
         };
         let adapter: Arc<dyn Resolver> = match server {
@@ -897,20 +857,8 @@ mod tests {
 
     use super::{
         AddressRefusal, CachingResolver, OverrideResolver, ResolveError, Resolver, ResolverMetrics,
-        ResolverPort, parse_nameserver, pick, select,
+        ResolverPort, pick, select,
     };
-
-    #[test]
-    fn a_nameserver_reads_as_address_and_port_with_53_as_default() {
-        let parsed = |text: &str| parse_nameserver(text).unwrap().map(|addr| addr.to_string());
-        assert_eq!(parsed("127.0.0.1:5353").as_deref(), Some("127.0.0.1:5353"));
-        assert_eq!(parsed(" 127.0.0.1 ").as_deref(), Some("127.0.0.1:53"));
-        assert_eq!(parsed("[::1]:5353").as_deref(), Some("[::1]:5353"));
-        assert_eq!(parsed("::1").as_deref(), Some("[::1]:53"));
-        // Leer: kein eigener Server, der Namensdienst des Systems bleibt.
-        assert_eq!(parsed(""), None);
-        assert!(parse_nameserver("resolver.lan").is_err());
-    }
 
     /// Ein Adapter, der jeden Aufruf zählt und immer dieselbe Antwort gibt.
     struct Counting {

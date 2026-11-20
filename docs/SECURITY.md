@@ -1531,7 +1531,8 @@ network.
 the same machine with a self-signed certificate. `humanitld --allow-test-ca` reads the file in
 `resolver.test_ca` as PEM and adds every certificate in it as a trust anchor for the proxy's (and
 `ProbeLlm`'s) connections to destinations. The path must be absolute (otherwise `CONFIG_012`
-before the file is touched); with the flag and an unusable file the daemon does not start
+before the file is touched; since HUM-562 already when the configuration loads, with or without
+the flag, so `humanitl config set` never writes a relative path); with the flag and an unusable file the daemon does not start
 (`CONFIG_010`); the key without the flag, or the flag without the key, trusts nothing and warns
 (`CONFIG_011`). It is a flag and not a key because configuration comes from files a project can
 bring, and the command line belongs to the human who starts the daemon. The flag is in no systemd

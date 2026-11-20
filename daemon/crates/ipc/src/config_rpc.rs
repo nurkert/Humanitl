@@ -379,43 +379,37 @@ fn check_chosen_work_dir(paths: &Paths, file: &Path, dir: &Path) -> Result<PathB
 
 /// Lädt die Konfiguration so, wie der nächste Start sie lädt — mit der
 /// Nebendatei an der Stelle von `config.toml` — und entscheidet, ob der Wert
-/// geschrieben werden darf.
-///
-/// Geschrieben wird, wenn die Konfiguration mit dem neuen Wert lädt, oder wenn
-/// sie schon vorher mit genau demselben Befund nicht lud und der Befund den
-/// gesetzten Schlüssel nicht nennt: Ein alter Fehler an anderer Stelle soll
-/// das Formular nicht sperren, ein Wert, der selbst falsch ist, wird nie
-/// geschrieben. Die feinere Zählung über alle Befunde einer Ebenenfolge hat
-/// `humanitl config set` (HUM-070); das Formular schreibt acht Schlüssel mit
-/// festen Typen, und für sie genügt der erste Befund.
+/// geschrieben werden darf: [`humanitl_config::write_check::check_write`],
+/// dieselbe Entscheidung wie `humanitl config set` (HUM-562), mit allen
+/// Befunden statt nur dem ersten. Ein alter Fehler, den das Formular nicht
+/// beheben kann (aus der Umgebung), sperrt es nicht; ein alter Fehler in der
+/// Datei, der den Start verhindert, sperrt jeden anderen Schlüssel, und ein
+/// Wert, der selbst falsch ist, wird nie geschrieben.
 ///
 /// # Errors
 ///
-/// Der Befund der Ladung, mit dem Pfad der Nebendatei durch den von
-/// `config.toml` ersetzt.
+/// Der Befund, mit dem das Schreiben abgelehnt wird, mit dem Pfad der
+/// Nebendatei durch den von `config.toml` ersetzt.
 pub(crate) fn probe(
     paths: &Paths,
     file: &Path,
     candidate: &Path,
     key: &str,
 ) -> Result<(), Diagnostic> {
-    let Err(after) = load_with(paths, Some(candidate.to_path_buf())) else {
-        return Ok(());
+    let probe = humanitl_config::write_check::ProbeContext {
+        selection: ProfileSelection::default(),
+        cwd: None,
+        env: paths.env().clone(),
+        global: file.to_path_buf(),
     };
-    let candidate_text = candidate.display().to_string();
-    let file_text = file.display().to_string();
-    let after_why = after.why.replace(&candidate_text, &file_text);
-    let before = load_with(paths, file.is_file().then(|| file.to_path_buf()));
-    if let Err(before) = before
-        && before.code == after.code
-        && before.why == after_why
-        && !after_why.contains(key)
-    {
-        return Ok(());
-    }
-    let mut refusal = after;
-    refusal.why = after_why;
-    Err(refusal)
+    humanitl_config::write_check::check_write(
+        &probe,
+        key,
+        humanitl_config::write_check::Scope::Global,
+        file,
+        candidate,
+    )
+    .map(|_| ())
 }
 
 /// Die Konfiguration ohne Profilwunsch mit dieser Datei als globaler.
@@ -937,6 +931,132 @@ mod tests {
             std::fs::read_to_string(paths.config_path()).unwrap(),
             before
         );
+    }
+
+    /// HUM-562: Ein alter Fehler in `config.toml`, der den Start verhindert,
+    /// sperrt jeden anderen Schlüssel des Formulars mit seinem eigenen Befund;
+    /// sein eigener Schlüssel repariert ihn. Ein alter Fehler aus der
+    /// Umgebung sperrt nicht, das Formular könnte ihn nicht beheben.
+    #[test]
+    fn an_old_error_in_the_file_blocks_another_key_but_not_its_repair() {
+        let dir = tempfile::tempdir().unwrap();
+        let paths = paths_in(dir.path());
+        std::fs::create_dir_all(paths.config_dir()).unwrap();
+
+        let relative_root = "[resolver]\ntest_ca = \"ca.pem\"\n";
+        std::fs::write(paths.config_path(), relative_root).unwrap();
+        let refused = set(&paths, "ui.theme", "dark").expect_err("the file cannot start");
+        assert_eq!(refused.code.as_str(), "CONFIG_012", "{}", refused.why);
+        assert!(
+            refused.why.contains("resolver.test_ca is ca.pem"),
+            "{}",
+            refused.why
+        );
+        assert!(
+            refused.why.contains("ui.theme is not written"),
+            "{}",
+            refused.why
+        );
+        assert_eq!(
+            std::fs::read_to_string(paths.config_path()).unwrap(),
+            relative_root
+        );
+
+        let bad_timeout = "[hold]\ntimeout_secs = 0\n";
+        std::fs::write(paths.config_path(), bad_timeout).unwrap();
+        let refused = set(&paths, "ui.theme", "dark").expect_err("the file cannot start");
+        assert_eq!(refused.code.as_str(), "CONFIG_003", "{}", refused.why);
+        assert!(refused.why.contains("hold.timeout_secs"), "{}", refused.why);
+        assert_eq!(
+            std::fs::read_to_string(paths.config_path()).unwrap(),
+            bad_timeout
+        );
+        set(&paths, "hold.timeout_secs", "300").expect("the repair is written");
+        set(&paths, "ui.theme", "dark").expect("and then the rest");
+
+        let env_paths = Paths::new(Env::from_pairs([
+            ("HOME", dir.path().display().to_string()),
+            (
+                "XDG_CONFIG_HOME",
+                dir.path().join("config").display().to_string(),
+            ),
+            (
+                "XDG_DATA_HOME",
+                dir.path().join("data").display().to_string(),
+            ),
+            ("HUMANITL_HOLD__TIMEOUT_SECS", "0".to_owned()),
+        ]));
+        set(&env_paths, "ui.theme", "light").expect("an old error from the environment");
+        let text = std::fs::read_to_string(paths.config_path()).unwrap();
+        assert!(text.contains("theme = \"light\""), "{text}");
+    }
+
+    /// Pfade wie [`paths_in`], dazu Variablen der Umgebung.
+    fn paths_with_env(dir: &Path, vars: &[(&str, &str)]) -> Paths {
+        let mut pairs = vec![
+            ("HOME".to_owned(), dir.display().to_string()),
+            (
+                "XDG_CONFIG_HOME".to_owned(),
+                dir.join("config").display().to_string(),
+            ),
+            (
+                "XDG_DATA_HOME".to_owned(),
+                dir.join("data").display().to_string(),
+            ),
+        ];
+        pairs.extend(
+            vars.iter()
+                .map(|(name, value)| ((*name).to_owned(), (*value).to_owned())),
+        );
+        Paths::new(Env::from_pairs(pairs))
+    }
+
+    /// HUM-562, Delta: `SetConfig` sieht alle Befunde wie `config set`, nicht
+    /// nur den ersten, und jeden Schlüssel eines Paars.
+    #[test]
+    fn set_config_sees_every_finding_and_every_key_of_a_pair() {
+        let dir = tempfile::tempdir().unwrap();
+        std::fs::create_dir_all(dir.path().join("config/humanitl")).unwrap();
+        let config = dir.path().join("config/humanitl/config.toml");
+
+        // Ein Schlüssel, den das Schema nicht kennt: ein Befund ohne
+        // Schlüssel, der den Start verhindert.
+        let unknown = "[hold]\ntimeout_secz = 5\n";
+        std::fs::write(&config, unknown).unwrap();
+        let refused = set(&paths_in(dir.path()), "ui.theme", "dark").expect_err("unknown key");
+        assert_eq!(refused.code.as_str(), "CONFIG_002", "{}", refused.why);
+        assert_eq!(std::fs::read_to_string(&config).unwrap(), unknown);
+
+        // Der erste Befund kommt aus der Umgebung, ein späterer steht in der
+        // Datei: Der spätere sperrt.
+        let later = "[resolver]\ncache_ttl_secs = 999999999\n";
+        std::fs::write(&config, later).unwrap();
+        let env = paths_with_env(dir.path(), &[("HUMANITL_HOLD__TIMEOUT_SECS", "0")]);
+        let refused = set(&env, "ui.theme", "dark").expect_err("a later finding in the file");
+        assert_eq!(refused.code.as_str(), "CONFIG_003", "{}", refused.why);
+        assert!(
+            refused.why.contains("resolver.cache_ttl_secs"),
+            "{}",
+            refused.why
+        );
+        assert_eq!(std::fs::read_to_string(&config).unwrap(), later);
+
+        // Ein Paar: Die Höchstgrenze kommt aus der Umgebung, die Obergrenze
+        // eines Bodys steht in der Datei. Ohne sie verschwände der Befund.
+        let pair = "[limits]\nhold_body_cap_bytes = 67108864\n";
+        std::fs::write(&config, pair).unwrap();
+        let env = paths_with_env(
+            dir.path(),
+            &[("HUMANITL_LIMITS__HOLD_MAX_BYTES", "50331648")],
+        );
+        let refused = set(&env, "ui.theme", "dark").expect_err("the cap in the file");
+        assert_eq!(refused.code.as_str(), "CONFIG_003", "{}", refused.why);
+        assert!(
+            refused.why.contains("limits.hold_body_cap_bytes"),
+            "{}",
+            refused.why
+        );
+        assert_eq!(std::fs::read_to_string(&config).unwrap(), pair);
     }
 
     /// Geschrieben wird der aufgelöste Ordner, nicht der Verweis (Review

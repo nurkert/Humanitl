@@ -7,16 +7,18 @@
 //!
 //! Jeder Verstoß ist ein [`Diagnostic`] mit `CONFIG_003`, dem Pfad, dem
 //! gefundenen Wert, dem erlaubten Bereich und einem Vorschlag, der den
-//! Vorgabewert einsetzt.
+//! Vorgabewert einsetzt. Die eine Ausnahme ist `resolver.test_ca` ohne
+//! absoluten Pfad: `CONFIG_012`, derselbe Code wie zuvor beim Start.
 //!
 //! Zwei Prüfungen sehen aufs Dateisystem und aufs Netz, nicht nur auf Zahlen
 //! (`backlog/CONVENTIONS.md` 4.11): `llm.endpoint` spricht nur `http` oder
 //! `https`, und `sandbox.work_dir` muss ein absolutes, existierendes
 //! Verzeichnis ohne `..` sein, das sich kanonisieren lässt.
 
+use std::net::{IpAddr, SocketAddr};
 use std::path::{Component, Path};
 
-use humanitl_core::diagnostics::codes::CONFIG_003;
+use humanitl_core::diagnostics::codes::{CONFIG_003, CONFIG_012};
 use humanitl_core::shell::shell_path;
 use humanitl_core::{Diagnostic, FixAction, Severity};
 
@@ -352,9 +354,25 @@ fn audit_max_bytes_is_well_formed(max_bytes: u64) -> Result<(), Diagnostic> {
     ))
 }
 
-/// Der Resolver: die Frist des Caches und die festen Adressen.
+/// Der Port, den `resolver.nameserver` meint, wenn der Wert nur eine Adresse
+/// nennt.
+const DNS_PORT: u16 = 53;
+
+/// Der Resolver: die Frist des Caches, der eigene Namensserver, die festen
+/// Adressen und der Pfad der Testwurzel.
+///
+/// Namensserver und Testwurzel prüfte bis HUM-562 erst der Start des Daemons;
+/// `humanitl config set` nahm deshalb Werte an, die der nächste Start
+/// ablehnte. Beide Regeln stehen jetzt nur hier, und der Start ruft dieselben
+/// Funktionen ([`nameserver_address`], [`test_ca_is_absolute`]).
 fn resolver_is_well_formed(resolver: &ResolverConfig) -> Result<(), Diagnostic> {
     between("resolver.cache_ttl_secs", resolver.cache_ttl_secs, 0, DAY)?;
+    if let Some(value) = resolver.nameserver.as_deref() {
+        nameserver_address(value)?;
+    }
+    if let Some(path) = resolver.test_ca.as_deref() {
+        test_ca_is_absolute(path)?;
+    }
     for (host, address) in &resolver.overrides {
         if address.parse::<std::net::IpAddr>().is_err() {
             return Err(out_of_range(
@@ -365,6 +383,86 @@ fn resolver_is_well_formed(resolver: &ResolverConfig) -> Result<(), Diagnostic> 
         }
     }
     Ok(())
+}
+
+/// Liest `resolver.nameserver`: `IP:Port`, `[IPv6]:Port` oder nur die Adresse,
+/// dann mit Port 53. Ein leerer Wert heißt: kein eigener Server.
+///
+/// Ein Name ist kein zulässiger Wert. Um ihn zu benutzen, müsste der Daemon ihn
+/// erst auflösen, und zwar mit einem Namensdienst, den der Schlüssel gerade
+/// ersetzen soll.
+///
+/// Die eine Lesart für das Laden der Konfiguration und für den Resolver des
+/// Daemons (HUM-562): Was die Ladung durchlässt, nimmt auch der Start.
+///
+/// # Errors
+///
+/// `CONFIG_003`, wenn der Wert weder `IP:Port` noch eine IP-Adresse ist oder
+/// Port 0 nennt.
+pub fn nameserver_address(value: &str) -> Result<Option<SocketAddr>, Diagnostic> {
+    let value = value.trim();
+    if value.is_empty() {
+        return Ok(None);
+    }
+    let server = value
+        .parse::<SocketAddr>()
+        .or_else(|_| {
+            value
+                .parse::<IpAddr>()
+                .map(|ip| SocketAddr::new(ip, DNS_PORT))
+        })
+        .map_err(|_| nameserver_refused(value, "which is neither IP:port nor an IP address"))?;
+    if server.port() == 0 {
+        return Err(nameserver_refused(value, "and port 0 is not a server"));
+    }
+    Ok(Some(server))
+}
+
+/// Der Befund zu einem unbrauchbaren `resolver.nameserver`: `CONFIG_003` mit
+/// dem Wert, dem Problem und dem Rat im Satz. Auch der Resolver des Daemons
+/// meldet damit, wenn aus einer gültigen Adresse kein Resolver entsteht.
+#[must_use]
+pub fn nameserver_refused(value: &str, problem: &str) -> Diagnostic {
+    Diagnostic::builder(CONFIG_003, Severity::Error)
+        // Der Rat ist eine Anleitung und kein Wert, den `config set` nimmt;
+        // er steht deshalb im Satz und nicht in einem `ChangeSetting`
+        // (HUM-507).
+        .why(format!(
+            "resolver.nameserver is \"{value}\", {problem}; set it to an address with port, for \
+             example 127.0.0.1:5353, or leave it empty for the system resolver"
+        ))
+        .build()
+}
+
+/// `resolver.test_ca` steht als absoluter Pfad da (HUM-087, HUM-562).
+///
+/// Ein relativer Pfad würde gegen das Arbeitsverzeichnis des Starts
+/// aufgelöst, und das ist im Alltag das Projektverzeichnis. Dann entschiede
+/// das Verzeichnis mit, welcher Wurzel der Daemon vertraut: Das Flag
+/// `--allow-test-ca` bliebe nötig, aber die Datei, die es freischaltet, käme
+/// aus dem Projekt (`docs/SECURITY.md` 5). Die Regel gilt schon beim Laden,
+/// mit und ohne Flag, damit `humanitl config set` und die App einen solchen
+/// Wert gar nicht erst schreiben; der Start ruft dieselbe Funktion, bevor er
+/// die Datei liest.
+///
+/// # Errors
+///
+/// `CONFIG_012`, wenn der Pfad nicht absolut ist. Ein eigener Code und nicht
+/// `CONFIG_010`: Mit der Datei ist womöglich alles in Ordnung, sie steht nur
+/// an einer Stelle, die erst der Start festlegt.
+pub fn test_ca_is_absolute(path: &Path) -> Result<(), Diagnostic> {
+    if path.is_absolute() {
+        return Ok(());
+    }
+    Err(Diagnostic::builder(CONFIG_012, Severity::Error)
+        .why(format!(
+            "resolver.test_ca is {}, which is not an absolute path; it would be resolved against \
+             the directory the daemon was started in, so that directory would decide which root \
+             is trusted; set an absolute path there, for example /etc/humanitl/test-ca.crt",
+            path.display()
+        ))
+        // Kein `ChangeSetting`: Der Wert wäre eine Anleitung (HUM-507).
+        .build())
 }
 
 /// Der Entscheidungs-Proxy (ADR-0022, HUM-511): `http://HOST:PORT` ohne
@@ -851,7 +949,9 @@ impl Config {
     /// # Errors
     ///
     /// [`Diagnostic`] mit `CONFIG_003`, sobald ein Wert außerhalb seines
-    /// Bereichs liegt oder zwei Werte einander widersprechen.
+    /// Bereichs liegt oder zwei Werte einander widersprechen, und mit
+    /// `CONFIG_012` für eine Testwurzel ohne absoluten Pfad
+    /// ([`test_ca_is_absolute`]).
     pub fn validate(&self) -> Result<(), Diagnostic> {
         between("hold.timeout_secs", self.hold.timeout_secs, 1, DAY)?;
         limits_are_well_formed(&self.limits)?;
@@ -1109,6 +1209,59 @@ mod tests {
             .insert("api.example.com".to_owned(), "not-an-ip".to_owned());
         let why = why_of(&config);
         assert!(why.contains("api.example.com"), "{why}");
+    }
+
+    #[test]
+    fn a_nameserver_reads_as_address_and_port_with_53_as_default() {
+        let parsed = |text: &str| {
+            super::nameserver_address(text)
+                .unwrap()
+                .map(|addr| addr.to_string())
+        };
+        assert_eq!(parsed("127.0.0.1:5353").as_deref(), Some("127.0.0.1:5353"));
+        assert_eq!(parsed(" 127.0.0.1 ").as_deref(), Some("127.0.0.1:53"));
+        assert_eq!(parsed("[::1]:5353").as_deref(), Some("[::1]:5353"));
+        assert_eq!(parsed("::1").as_deref(), Some("[::1]:53"));
+        // Leer: kein eigener Server, der Namensdienst des Systems bleibt.
+        assert_eq!(parsed(""), None);
+        assert!(super::nameserver_address("resolver.lan").is_err());
+    }
+
+    /// HUM-562: Was erst der Resolver des Daemons ablehnte, lehnt schon das
+    /// Laden ab, mit demselben Satz.
+    #[test]
+    fn a_nameserver_that_is_no_address_does_not_load() {
+        let mut config = Config::default();
+        for refused in ["resolver.lan", "127.0.0.1:0"] {
+            config.resolver.nameserver = Some(refused.to_owned());
+            let why = why_of(&config);
+            assert!(why.starts_with("resolver.nameserver is"), "{why}");
+            assert!(why.contains(refused), "{why}");
+        }
+        config.resolver.nameserver = Some("127.0.0.1:5353".to_owned());
+        assert!(config.validate().is_ok());
+        config.resolver.nameserver = Some(String::new());
+        assert!(config.validate().is_ok(), "empty means the system resolver");
+    }
+
+    /// HUM-562: Eine Testwurzel ohne absoluten Pfad lädt nicht, mit dem Code
+    /// des Starts (`CONFIG_012`) und ohne einen Wert als Vorschlag.
+    #[test]
+    fn a_relative_test_ca_does_not_load() {
+        let mut config = Config::default();
+        for relative in ["ca.pem", "./ca.pem", "../ca.pem", "certs/ca.pem"] {
+            config.resolver.test_ca = Some(PathBuf::from(relative));
+            let refused = config.validate().unwrap_err();
+            assert_eq!(refused.code.as_str(), "CONFIG_012", "{relative}");
+            assert!(refused.why.contains(relative), "{}", refused.why);
+            assert!(refused.why.contains("absolute"), "{}", refused.why);
+            assert_eq!(refused.fix, None);
+        }
+        config.resolver.test_ca = Some(PathBuf::from("/etc/humanitl/test-ca.crt"));
+        assert!(
+            config.validate().is_ok(),
+            "whether the file is there decides the start, not the load"
+        );
     }
 
     #[test]

@@ -414,6 +414,38 @@ pub fn raised(key: &str, current: u64) -> Option<FixAction> {
     })
 }
 
+/// Namen, die nur für Beispiele und Tests reserviert sind (RFC 2606,
+/// RFC 6761): die drei Zonen unter `example` und die Endungen, die es im
+/// öffentlichen Namensraum nie geben wird.
+const PLACEHOLDER_DOMAINS: [&str; 3] = ["example.com", "example.net", "example.org"];
+
+/// Die Endungen dazu; `localhost` fehlt mit Absicht, ein lokales Modell
+/// lauscht dort wirklich.
+const PLACEHOLDER_TLDS: [&str; 3] = ["example", "test", "invalid"];
+
+/// Der Host einer Adresse, die auf einen Platzhalter zeigt, sonst keiner
+/// (HUM-562).
+///
+/// `https://api.example.com/v1` liest sich wie eine Adresse, und `config set`
+/// nimmt sie als solche; erreichen wird sie nie etwas. Abgelehnt wird sie
+/// trotzdem nicht: Der Start lehnt sie auch nicht ab, und ein Testaufbau
+/// beantwortet genau solche Namen mit `resolver.overrides` (HUM-024). Wer sie
+/// setzt, bekommt einen Hinweis und den Wert.
+///
+/// Geprüft wird nur ein Text, der sich als URL mit Host lesen lässt.
+#[must_use]
+pub fn placeholder_host(value: &Value) -> Option<String> {
+    let url = url::Url::parse(value.as_str()?).ok()?;
+    let host = url.host_str()?.trim_end_matches('.').to_ascii_lowercase();
+    let placeholder = PLACEHOLDER_DOMAINS
+        .iter()
+        .any(|domain| host == *domain || host.ends_with(&format!(".{domain}")))
+        || PLACEHOLDER_TLDS
+            .iter()
+            .any(|tld| host == *tld || host.ends_with(&format!(".{tld}")));
+    placeholder.then_some(host)
+}
+
 /// `CONFIG_003`: Der Wert liegt außerhalb des Bereichs.
 ///
 /// Der Vorschlag ist der Vorgabewert und nicht die Grenze: Die Grenze des
@@ -446,6 +478,35 @@ mod tests {
     #![allow(clippy::unwrap_used, clippy::expect_used, clippy::panic)]
 
     use super::*;
+
+    /// HUM-562: Die reservierten Namen werden erkannt, ein echter Name, eine
+    /// Adresse, `localhost` und ein Text ohne Host nicht.
+    #[test]
+    fn a_placeholder_host_is_named_and_a_real_one_is_not() {
+        let host = |text: &str| placeholder_host(&Value::String(text.to_owned()));
+        for (text, expected) in [
+            ("https://api.example.com/v1", "api.example.com"),
+            ("https://EXAMPLE.org", "example.org"),
+            ("http://llm.test:8080/v1", "llm.test"),
+            ("https://proxy.invalid.", "proxy.invalid"),
+            ("http://box.example/", "box.example"),
+        ] {
+            assert_eq!(host(text).as_deref(), Some(expected), "{text}");
+        }
+        for text in [
+            "https://api.openai.com/v1",
+            "https://notexample.com/v1",
+            "https://example.com.evil.net/",
+            "https://contest/",
+            "http://localhost:11434/v1",
+            "http://127.0.0.1:8080",
+            "example.com",
+            "/etc/humanitl/test-ca.crt",
+        ] {
+            assert_eq!(host(text), None, "{text}");
+        }
+        assert_eq!(placeholder_host(&Value::from(3)), None);
+    }
 
     /// Das Setzen einer Einstellung (`humanitl config set`, `SetConfig`)
     /// lehnt die frühere Laufzeit der Kernel-Stufe wie das Laden mit
