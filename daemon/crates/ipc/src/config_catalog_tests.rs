@@ -308,7 +308,7 @@ async fn the_catalog_speaks_the_asked_or_configured_language() {
         "Models"
     );
     let orders: Vec<u32> = catalog_de.categories.iter().map(|c| c.order).collect();
-    assert_eq!(orders, (0..9).collect::<Vec<_>>());
+    assert_eq!(orders, (0..10).collect::<Vec<_>>());
     // Ohne Sandbox-Dienst kann dieser Server keine Wegwerf-Sandbox.
     assert!(
         catalog_de

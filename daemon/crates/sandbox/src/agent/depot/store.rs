@@ -274,6 +274,32 @@ impl Depot {
         })
     }
 
+    /// The versions under `program/` an update switches to without a run
+    /// (HUM-521): directories with a valid name and a manifest that names
+    /// them, newest first. Links and anything else are left out; a depot
+    /// that fails [`Depot::check`] holds none.
+    #[must_use]
+    pub fn versions(&self) -> Vec<String> {
+        if self.check().is_err() {
+            return Vec::new();
+        }
+        let Ok(entries) = std::fs::read_dir(self.program_dir()) else {
+            return Vec::new();
+        };
+        let mut versions: Vec<String> = entries
+            .flatten()
+            .filter_map(|entry| entry.file_name().into_string().ok())
+            .filter(|name| version_name_ok(name))
+            .filter(|name| {
+                std::fs::symlink_metadata(self.program_dir().join(name))
+                    .is_ok_and(|meta| meta.is_dir())
+            })
+            .filter(|name| self.manifest_of(name).is_ok())
+            .collect();
+        versions.sort_by(|a, b| newer_first(a, b));
+        versions
+    }
+
     /// The bytes of every regular file in the depot; links are not followed.
     #[must_use]
     pub fn size(&self) -> u64 {
@@ -573,6 +599,32 @@ pub fn version_name_ok(name: &str) -> bool {
             .all(|c| c.is_ascii_alphanumeric() || matches!(c, '.' | '-' | '_' | '+'))
 }
 
+/// Orders two version names newest first: part by part along `.`, `-`, `_`
+/// and `+`, numbers as numbers, a number before a word, and on a tie the
+/// longer name first (`1.2.0` before `1.2`). The order of the list only; no
+/// decision rests on it.
+fn newer_first(a: &str, b: &str) -> std::cmp::Ordering {
+    use std::cmp::Ordering;
+    let split = |name: &str| -> Vec<String> {
+        name.split(['.', '-', '_', '+'])
+            .map(ToOwned::to_owned)
+            .collect()
+    };
+    let (left, right) = (split(a), split(b));
+    for (x, y) in left.iter().zip(right.iter()) {
+        let order = match (x.parse::<u64>(), y.parse::<u64>()) {
+            (Ok(x), Ok(y)) => x.cmp(&y),
+            (Ok(_), Err(_)) => Ordering::Greater,
+            (Err(_), Ok(_)) => Ordering::Less,
+            (Err(_), Err(_)) => x.cmp(y),
+        };
+        if order != Ordering::Equal {
+            return order.reverse();
+        }
+    }
+    right.len().cmp(&left.len()).then_with(|| b.cmp(a))
+}
+
 /// Whether the relative link at `link` with this target stays under `root`.
 /// An absolute target never does: the sandbox sees the tree elsewhere.
 pub(crate) fn link_stays_inside(root: &Path, link: &Path, target: &Path) -> bool {
@@ -714,6 +766,36 @@ pub(crate) mod tests {
         assert_eq!(installed.manifest.signature, "unsigned");
         assert!(!depot.logged_in());
         assert!(depot.size() > 0);
+    }
+
+    #[test]
+    fn versions_lists_every_held_version_newest_first() {
+        let base = tempfile::tempdir().unwrap();
+        let depot = filled(base.path(), "claude", "claude");
+        for version in ["1.10.0", "1.9.2"] {
+            let dir = depot.program_dir().join(version);
+            private_dir(&dir);
+            let manifest = format!("{{\"version\":\"{version}\"}}");
+            std::fs::write(dir.join(MANIFEST_FILE), manifest).unwrap();
+            std::fs::set_permissions(
+                dir.join(MANIFEST_FILE),
+                std::fs::Permissions::from_mode(0o600),
+            )
+            .unwrap();
+        }
+        // Ohne Manifest oder mit falschem Namen: keine Version.
+        private_dir(&depot.program_dir().join("2.0.0"));
+        private_dir(&depot.program_dir().join(".committing"));
+        assert_eq!(depot.versions(), vec!["1.10.0", "1.9.2", "1.0.0"]);
+        let missing = Depot::at(base.path().join("agents/codex"), "codex", uid());
+        assert!(missing.versions().is_empty());
+    }
+
+    #[test]
+    fn newer_first_orders_numbers_as_numbers() {
+        let mut names = vec!["1.2", "1.10.0", "1.2.0", "1.2.0-beta", "0.9"];
+        names.sort_by(|a, b| newer_first(a, b));
+        assert_eq!(names, vec!["1.10.0", "1.2.0-beta", "1.2.0", "1.2", "0.9"]);
     }
 
     #[test]

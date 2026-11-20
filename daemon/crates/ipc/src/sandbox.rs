@@ -951,6 +951,15 @@ impl SandboxService {
         self.inner.source_lock.clone()
     }
 
+    /// Whether a start could be claimed now (HUM-521): no session runs, no
+    /// start is being claimed, the daemon is not leaving. The same question
+    /// `claim_start` asks, without claiming; `Agents` offers its runs only
+    /// then.
+    #[must_use]
+    pub fn can_start(&self) -> bool {
+        !(lock(&self.inner.pending).claimed || self.inner.is_running() || self.inner.is_leaving())
+    }
+
     /// Der Agent, dessen Depot die laufende Sitzung eingehängt hat
     /// (HUM-518), oder dessen Wartungslauf gerade geht, bis zur Übernahme
     /// (HUM-563); `None` ohne beides. `agents remove` lehnt dann ab.

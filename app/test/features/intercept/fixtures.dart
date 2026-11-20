@@ -389,6 +389,11 @@ class TestDaemonClient implements DaemonClient {
   Future<EgressStatus> egress(EgressOp op, {String credentials = ''}) async =>
       EgressStatus.none;
 
+  // Das Agent-Depot gehört den Einstellungen (HUM-521); dieser Client kennt
+  // keinen Agenten.
+  @override
+  Future<AgentsStatus> agents(AgentsOp op) async => AgentsStatus.none;
+
   // Das Ziehen eines Abbilds gehört dem Sandbox-Bildschirm (HUM-439); dieser
   // Client zieht nichts und sagt das.
   @override

@@ -2539,19 +2539,34 @@ impl v1::humanitl_server::Humanitl for IpcServer {
         let paths = self.doctor.paths.clone();
         let lock = self.source_lock();
         let in_use = self.sandbox.as_ref().and_then(SandboxService::depot_in_use);
-        let mut status = tokio::task::spawn_blocking(move || {
-            crate::agents::answer(&paths, &lock, in_use.as_deref(), op)
+        let asked = decided.as_ref().map(|(agent, _)| agent.clone());
+        let (mut status, waited) = tokio::task::spawn_blocking(move || {
+            // Ob vor der Entscheidung ein Vorschlag auf der Platte lag
+            // (HUM-521): nur dann ersetzt ihr Ergebnis einen beendeten Lauf.
+            let waited = asked
+                .as_deref()
+                .and_then(humanitl_sandbox::agent::depot::recipe::known)
+                .is_some_and(|agent| {
+                    humanitl_sandbox::agent::depot::account::pending_dir(&paths, agent.id).is_dir()
+                });
+            crate::agents::answer(&paths, &lock, in_use.as_deref(), op).map(|state| (state, waited))
         })
         .await
         .map_err(|error| diagnostic_to_status(&unfinished("Agents", &error)))?
         .map_err(|diagnostic| diagnostic_to_status(&diagnostic))?;
         if let Some(sandbox) = self.sandbox.as_ref() {
-            if let Some(agent) = decided.as_deref() {
-                sandbox.config_decided(agent);
+            if let Some((agent, accepted)) = decided.as_ref() {
+                sandbox.config_decided(agent, *accepted, waited);
             }
             crate::agents::with_maintenance(&mut status, &sandbox.maintenance_runs());
             crate::agents::with_writeback_refusals(&mut status, &sandbox.writeback_refusals());
         }
+        // Läufe nur, wenn der Daemon jetzt eine Sitzung starten könnte
+        // (HUM-521); ohne Sandbox-Dienst nie.
+        crate::agents::with_startable(
+            &mut status,
+            self.sandbox.as_ref().is_some_and(SandboxService::can_start),
+        );
         if let Some(key) = written {
             self.config_events.publish([key], "");
         }

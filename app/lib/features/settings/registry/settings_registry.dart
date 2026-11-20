@@ -20,6 +20,7 @@ import '../../../core/domain/domain.dart';
 import '../../../core/ipc/config_providers.dart';
 import '../../../l10n/l10n.dart';
 import '../categories/agent_category.dart';
+import '../categories/agents_category.dart';
 import '../categories/daemon_category.dart';
 import '../categories/egress_category.dart';
 import '../categories/interface_category.dart';
@@ -48,6 +49,11 @@ final Map<String, SettingRowSpec> settingRowSpecs = <String, SettingRowSpec>{
   SettingIds.llmServerUsage: const SettingRowSpec(),
   FormKeys.agentAdapter: SettingRowSpec(
     build: (SettingsPageData data) => AgentRow(config: data.config),
+  ),
+  // Das Agent-Depot (HUM-521): eine Karte je Agent, alles über `Agents`.
+  SettingIds.agentsDepot: SettingRowSpec(
+    build: (SettingsPageData data) =>
+        AgentsSection(config: data.config, onOpenSession: data.onOpenSession),
   ),
   FormKeys.sandboxWorkDir: SettingRowSpec(
     build: (SettingsPageData data) => WorkDirRow(config: data.config),

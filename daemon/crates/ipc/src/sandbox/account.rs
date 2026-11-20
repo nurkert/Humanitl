@@ -79,15 +79,44 @@ impl SandboxService {
     }
 
     /// Hält fest, dass die wartende Konfiguration von `agent` übernommen
-    /// oder verworfen ist: Der Lauf steht danach auf `done`, seine Liste
-    /// nennt, was er geändert hätte.
-    pub fn config_decided(&self, agent: &str) {
-        let mut runs = lock(&self.inner.maintenance);
-        if let Some(run) = runs.get_mut(agent.trim())
-            && run.state == STATE_CONFIRM
-        {
-            STATE_DONE.clone_into(&mut run.state);
+    /// (`accepted`) oder verworfen ist; `waited` sagt, ob vor der
+    /// Entscheidung ein Vorschlag auf der Platte lag. Siehe `decide_slot`.
+    pub fn config_decided(&self, agent: &str, accepted: bool, waited: bool) {
+        decide_slot(&mut lock(&self.inner.maintenance), agent, accepted, waited);
+    }
+}
+
+/// Der Eintrag eines Agenten nach Übernehmen oder Verwerfen (HUM-521): ein
+/// wartender Lauf steht danach auf `done` oder `discarded`. Lag der
+/// Vorschlag nur auf der Platte (nach einem Neustart), ersetzt das Ergebnis
+/// einen beendeten Lauf im Speicher, etwa ein späteres Update, statt dessen
+/// Ergebnis stehen zu lassen. Ein laufender Lauf bleibt, wie er ist.
+pub(super) fn decide_slot(
+    runs: &mut BTreeMap<String, v1::AgentMaintenance>,
+    agent: &str,
+    accepted: bool,
+    waited: bool,
+) {
+    let state = if accepted {
+        STATE_DONE
+    } else {
+        crate::agents::DISCARDED
+    };
+    let agent = agent.trim();
+    match runs.get_mut(agent) {
+        Some(run) if run.state == STATE_CONFIRM => state.clone_into(&mut run.state),
+        Some(run) if run.state == STATE_RUNNING => {}
+        _ if waited => {
+            runs.insert(
+                agent.to_owned(),
+                v1::AgentMaintenance {
+                    task: MaintenanceTask::Config.as_str().to_owned(),
+                    state: state.to_owned(),
+                    ..v1::AgentMaintenance::default()
+                },
+            );
         }
+        _ => {}
     }
 }
 
@@ -487,6 +516,49 @@ mod tests {
     #![allow(clippy::unwrap_used, clippy::expect_used, clippy::panic)]
 
     use super::*;
+
+    fn run(task: &str, state: &str) -> v1::AgentMaintenance {
+        v1::AgentMaintenance {
+            sandbox_id: "s1".to_owned(),
+            task: task.to_owned(),
+            state: state.to_owned(),
+            version: "2.1.0".to_owned(),
+            ..v1::AgentMaintenance::default()
+        }
+    }
+
+    /// HUM-521 (Review): Nach einem Neustart wartet ein Vorschlag auf der
+    /// Platte, im Speicher steht ein späteres Update. Die Entscheidung
+    /// ersetzt dessen Ergebnis; ohne Vorschlag bleibt es.
+    #[test]
+    fn a_decision_on_a_disk_proposal_replaces_an_ended_run() {
+        let mut runs = BTreeMap::from([("claude".to_owned(), run("update", STATE_DONE))]);
+        decide_slot(&mut runs, "claude", true, true);
+        assert_eq!(runs["claude"].task, "config");
+        assert_eq!(runs["claude"].state, STATE_DONE);
+        assert!(runs["claude"].version.is_empty());
+
+        let mut runs = BTreeMap::from([("claude".to_owned(), run("update", STATE_DONE))]);
+        decide_slot(&mut runs, "claude", false, true);
+        assert_eq!(runs["claude"].task, "config");
+        assert_eq!(runs["claude"].state, crate::agents::DISCARDED);
+
+        let mut runs = BTreeMap::from([("claude".to_owned(), run("update", STATE_DONE))]);
+        decide_slot(&mut runs, "claude", false, false);
+        assert_eq!(
+            runs["claude"].task, "update",
+            "nothing waited, nothing replaced"
+        );
+
+        let mut runs = BTreeMap::from([("claude".to_owned(), run("config", STATE_CONFIRM))]);
+        decide_slot(&mut runs, "claude", false, true);
+        assert_eq!(runs["claude"].state, crate::agents::DISCARDED);
+        assert_eq!(runs["claude"].sandbox_id, "s1");
+
+        let mut runs = BTreeMap::from([("claude".to_owned(), run("login", STATE_RUNNING))]);
+        decide_slot(&mut runs, "claude", true, true);
+        assert_eq!(runs["claude"].state, STATE_RUNNING);
+    }
 
     /// Jede Übernahme und jede Ablehnung geht als Meldung ins Audit-Log,
     /// mit den SHA-256 und nie dem Inhalt; eine Ablehnung steht im Status,

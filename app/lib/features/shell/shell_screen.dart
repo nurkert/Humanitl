@@ -551,6 +551,13 @@ class _ShellScreenState extends ConsumerState<ShellScreen> {
     _go(Section.sandbox);
   }
 
+  /// Closes the settings and shows the terminal of the running session, the
+  /// way of a maintenance run of the agent depot (HUM-521).
+  void _openSessionFromSettings() {
+    _closeSettings();
+    _go(Section.sandbox);
+  }
+
   /// Asks the terminal that is shown to take the keyboard (HUM-303).
   ///
   /// Not while a layer holds the keyboard: the terminal would refuse anyway
@@ -1081,6 +1088,10 @@ class _ShellScreenState extends ConsumerState<ShellScreen> {
                       size: HButtonSize.sm,
                       label: context.l10n.settingsRestartButton,
                     ),
+                    // Ein Wartungslauf des Agent-Depots ist eine Sitzung wie
+                    // jede andere; ihr Terminal steht auf der Sandbox-Seite
+                    // (HUM-521).
+                    onOpenSession: _openSessionFromSettings,
                   ),
                 if (_pauseAsk) InterceptPauseDialog(onClose: _closePauseAsk),
                 if (_paletteOpen)

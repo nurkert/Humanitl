@@ -111,6 +111,7 @@ class SettingsPanel extends ConsumerStatefulWidget {
     this.focusKey,
     this.focusSerial = 0,
     this.daemonRestart,
+    this.onOpenSession,
     super.key,
   });
 
@@ -147,6 +148,10 @@ class SettingsPanel extends ConsumerStatefulWidget {
   /// (ARCHITECTURE 5); the shell hands its control in, and the category
   /// Daemon draws it in a row of its own.
   final Widget? daemonRestart;
+
+  /// Shows the terminal of the running session (HUM-521); null for a host
+  /// without a shell.
+  final VoidCallback? onOpenSession;
 
   /// The width of the column of categories, and the narrower one below
   /// [narrowBelow] of panel width.
@@ -556,6 +561,7 @@ class _SettingsPanelState extends ConsumerState<SettingsPanel> {
               config: values,
               status: status,
               daemonRestart: widget.daemonRestart,
+              onOpenSession: widget.onOpenSession,
             ),
           );
 

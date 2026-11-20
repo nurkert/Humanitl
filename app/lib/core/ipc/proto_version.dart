@@ -148,7 +148,11 @@ abstract final class ProtoVersion {
   /// that the connection through the decision proxy closed without an
   /// answer, by the proxy or the target behind it, instead of a connection
   /// error (HUM-555).
-  static const int minor = 51;
+  /// Raised to 54 with the settings section "Agents": it reads and writes
+  /// through `Agents`, switches its buttons by `AgentDepot.actions` and
+  /// offers the way back from `AgentDepot.versions` (HUM-521). 52 and 53
+  /// have no reader here of their own; 54 is the first this app reads.
+  static const int minor = 54;
 
   /// `major.minor` as text.
   static const String text = '$major.$minor';

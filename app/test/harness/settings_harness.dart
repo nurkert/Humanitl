@@ -18,6 +18,9 @@ abstract final class SettingsCategory {
   /// Der Agent.
   static const String agent = 'agent';
 
+  /// Das Agent-Depot (HUM-521).
+  static const String agents = 'agents';
+
   /// Die Sandbox.
   static const String sandbox = 'sandbox';
 
@@ -43,6 +46,7 @@ abstract final class SettingsCategory {
   static const List<String> values = <String>[
     models,
     agent,
+    agents,
     sandbox,
     requests,
     interface,

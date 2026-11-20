@@ -22,7 +22,9 @@
 
 use humanitl_config::agents::{AgentSource, SourceLock, effective_source};
 use humanitl_config::{Config, Paths};
-use humanitl_core::diagnostics::codes::{AGENT_009, AGENT_015, AGENT_018, CONFIG_003, IPC_006};
+use humanitl_core::diagnostics::codes::{
+    AGENT_008, AGENT_009, AGENT_015, AGENT_018, CONFIG_003, IPC_006,
+};
 use humanitl_core::{Diagnostic, FixAction, Severity};
 use humanitl_sandbox::agent::depot::{Depot, KNOWN, KnownAgent, MaintenanceTask, account};
 
@@ -177,6 +179,7 @@ fn agent_status(
     if source.source == AgentSource::Depot && agent.recipe.is_none() {
         findings.push(no_recipe(agent));
     }
+    let mut unusable = false;
     if depot.exists() || source.source == AgentSource::Depot {
         match depot.installed() {
             Ok(installed) => {
@@ -191,12 +194,91 @@ fn agent_status(
                     findings.push(not_logged_in(agent));
                 }
             }
-            Err(found) => findings.push(found),
+            Err(found) => {
+                // Dieselbe Prüfung wie Installation und Update: Ein Depot,
+                // das sie nicht besteht, nimmt keinen Lauf an (AGENT_013).
+                unusable = found.code != AGENT_008;
+                findings.push(found);
+            }
         }
         out.size_bytes = depot.size();
+        out.versions = depot.versions();
     }
+    out.credential_writeback = config
+        .agents
+        .settings(agent.id)
+        .is_none_or(|settings| settings.credential_writeback);
+    // Nach einem Neustart weiß der Daemon von keinem Lauf mehr; eine
+    // Konfiguration, die noch auf der Platte wartet, steht trotzdem da
+    // (HUM-521). Ein Lauf aus dem Speicher geht in `with_maintenance` vor.
+    out.maintenance = account::pending(paths, agent).map(|changes| v1::AgentMaintenance {
+        task: MaintenanceTask::Config.as_str().to_owned(),
+        state: CONFIRM.to_owned(),
+        config_changes: changes
+            .iter()
+            .map(crate::sandbox::config_change_to_proto)
+            .collect(),
+        ..v1::AgentMaintenance::default()
+    });
     out.diagnostics = findings.iter().map(convert::diagnostic_to_proto).collect();
+    out.actions = Some(actions_of(&out, agent, depot.exists(), unusable));
     out
+}
+
+/// The state of a configuration run that waits for its confirmation.
+const CONFIRM: &str = "confirm";
+
+/// The state of a configuration run the person discarded (HUM-521).
+pub const DISCARDED: &str = "discarded";
+
+/// What a client may offer for one agent (HUM-521), before a running
+/// maintenance run is known ([`with_maintenance`] takes back what it
+/// blocks). The client decides nothing of it itself.
+///
+/// Whether a session could start now is not known here either;
+/// [`with_startable`] takes the runs back when it could not.
+fn actions_of(
+    entry: &v1::AgentDepot,
+    agent: &KnownAgent,
+    exists: bool,
+    unusable: bool,
+) -> v1::AgentActions {
+    let installs = agent
+        .recipe
+        .as_ref()
+        .is_some_and(|recipe| recipe.install.is_some());
+    let installed = !entry.version.is_empty();
+    v1::AgentActions {
+        install: installs && !installed && !unusable,
+        update: installs && installed,
+        login: installed && account::login_declared(agent),
+        config: installed && agent.recipe.is_some(),
+        config_show: installed,
+        remove: exists && !entry.in_use,
+        source_host: entry.locked_by.is_empty(),
+        // `set_source` nimmt `depot` immer an; ohne Rezept mit AGENT_015.
+        source_depot: true,
+    }
+}
+
+/// Takes back every maintenance run when the daemon could not start a
+/// session now (HUM-521): another session runs, a start is being claimed,
+/// or the daemon has no sandbox service. The run would be refused
+/// (`CLI_005`, `IPC_006`).
+pub fn with_startable(status: &mut v1::AgentsStatus, startable: bool) {
+    if startable {
+        return;
+    }
+    for actions in status
+        .agents
+        .iter_mut()
+        .filter_map(|entry| entry.actions.as_mut())
+    {
+        actions.install = false;
+        actions.update = false;
+        actions.login = false;
+        actions.config = false;
+    }
 }
 
 /// One doctor line per agent with the source `depot`: version and login, or
@@ -317,14 +399,17 @@ pub fn with_writeback_refusals(
     }
 }
 
-/// The agent of a decision on a waiting configuration (HUM-520).
+/// The agent of a decision on a waiting configuration (HUM-520), and
+/// whether it was accepted (HUM-521).
 #[must_use]
-pub fn config_decision_of(op: Option<&v1::agents_request::Op>) -> Option<String> {
+pub fn config_decision_of(op: Option<&v1::agents_request::Op>) -> Option<(String, bool)> {
     match op {
-        Some(
-            v1::agents_request::Op::ConfigAccept(wish)
-            | v1::agents_request::Op::ConfigDiscard(wish),
-        ) => Some(wish.agent.trim().to_owned()),
+        Some(v1::agents_request::Op::ConfigAccept(wish)) => {
+            Some((wish.agent.trim().to_owned(), true))
+        }
+        Some(v1::agents_request::Op::ConfigDiscard(wish)) => {
+            Some((wish.agent.trim().to_owned(), false))
+        }
         _ => None,
     }
 }
@@ -335,7 +420,29 @@ pub fn with_maintenance(
     runs: &std::collections::BTreeMap<String, v1::AgentMaintenance>,
 ) {
     for entry in &mut status.agents {
-        entry.maintenance = runs.get(&entry.agent).cloned();
+        // A configuration waiting on disk stays visible beside an older run
+        // of this daemon that has ended (HUM-521).
+        let waiting = entry
+            .maintenance
+            .as_ref()
+            .is_some_and(|run| run.state == CONFIRM);
+        if let Some(run) = runs.get(&entry.agent)
+            && (!waiting || run.state == "running" || run.state == CONFIRM)
+        {
+            entry.maintenance = Some(run.clone());
+        }
+        // One run per agent at a time, and none under a removal (HUM-521).
+        let running = entry
+            .maintenance
+            .as_ref()
+            .is_some_and(|run| run.state == "running");
+        if let (true, Some(actions)) = (running, entry.actions.as_mut()) {
+            actions.install = false;
+            actions.update = false;
+            actions.login = false;
+            actions.config = false;
+            actions.remove = false;
+        }
     }
 }
 

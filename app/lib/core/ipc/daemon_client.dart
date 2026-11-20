@@ -485,6 +485,16 @@ abstract class DaemonClient {
   /// before contract 1.41.
   Future<EgressStatus> egress(EgressOp op, {String credentials = ''});
 
+  /// `Agents`: the agent depot (HUM-518 to HUM-521, ADR-0023).
+  ///
+  /// Every operation answers with the state afterwards. Install, update,
+  /// login and configuration answer once their maintenance run stands; the
+  /// run itself is a session with a terminal like any other. Which operation
+  /// is open for an agent says [AgentDepot.actions]. Throws a
+  /// [DaemonException] for a refusal, and `UNIMPLEMENTED` from a daemon
+  /// before contract 1.44.
+  Future<AgentsStatus> agents(AgentsOp op);
+
   /// `SandboxBackends`: the sandbox backends of this system with their
   /// isolation level, whether a start would pass, which one the
   /// configuration chooses and what is missing (HUM-432). Starts nothing.

@@ -1239,3 +1239,131 @@ extension SettingsEntryToDomain on pb.SettingsEntry {
     inProjectChoice: inProjectChoice,
   );
 }
+
+/// [AgentsOp] to `AgentsRequest` (HUM-521).
+extension AgentsOpToProto on AgentsOp {
+  /// The request with exactly one operation.
+  pb.AgentsRequest toProto() {
+    final pb.AgentsRequest request = pb.AgentsRequest();
+    pb.AgentsRequest_Maintain maintain() =>
+        pb.AgentsRequest_Maintain(agent: agent, version: value);
+    pb.AgentsRequest_Agent named() => pb.AgentsRequest_Agent(agent: agent);
+    switch (kind) {
+      case AgentsOpKind.status:
+        request.status = pb.AgentsRequest_Status();
+      case AgentsOpKind.setSource:
+        request.setSource = pb.AgentsRequest_SetSource(
+          agent: agent,
+          source: value,
+        );
+      case AgentsOpKind.remove:
+        request.remove = pb.AgentsRequest_Remove(agent: agent);
+      case AgentsOpKind.install:
+        request.install = maintain();
+      case AgentsOpKind.update:
+        request.update = maintain();
+      case AgentsOpKind.login:
+        request.login = pb.AgentsRequest_Maintain(agent: agent);
+      case AgentsOpKind.config:
+        request.config = pb.AgentsRequest_Maintain(agent: agent);
+      case AgentsOpKind.configAccept:
+        request.configAccept = named();
+      case AgentsOpKind.configDiscard:
+        request.configDiscard = named();
+      case AgentsOpKind.configShow:
+        request.configShow = named();
+      case AgentsOpKind.deliverCallback:
+        request.deliverCallback = pb.AgentsRequest_Callback(
+          agent: agent,
+          url: value,
+        );
+    }
+    return request;
+  }
+}
+
+/// `AgentConfigChange` to [AgentConfigChange] (HUM-521).
+extension AgentConfigChangeToDomain on pb.AgentConfigChange {
+  /// The domain form.
+  AgentConfigChange toDomain() => AgentConfigChange(
+    path: path,
+    change: change,
+    keys: List<String>.unmodifiable(keys),
+    commandKeys: List<String>.unmodifiable(commandKeys),
+    keysOmitted: keysOmitted,
+  );
+}
+
+/// `AgentMaintenance` to [AgentMaintenance] (HUM-521).
+extension AgentMaintenanceToDomain on pb.AgentMaintenance {
+  /// The domain form.
+  AgentMaintenance toDomain() => AgentMaintenance(
+    sandboxId: sandboxId,
+    task: task,
+    state: state,
+    version: version,
+    previous: previous,
+    diagnostics: List<Diagnostic>.unmodifiable(
+      diagnostics.map((pb.Diagnostic d) => d.toDomain()),
+    ),
+    loginUrls: List<AgentLoginUrl>.unmodifiable(
+      loginUrls.map(
+        (pb.AgentLoginUrl url) =>
+            AgentLoginUrl(url: url.url, openable: url.openable),
+      ),
+    ),
+    callbackPaste: callbackPaste,
+    configChanges: List<AgentConfigChange>.unmodifiable(
+      configChanges.map((pb.AgentConfigChange c) => c.toDomain()),
+    ),
+  );
+}
+
+/// `AgentsStatus` to [AgentsStatus] (HUM-521).
+extension AgentsStatusToDomain on pb.AgentsStatus {
+  /// The domain form. A daemon before contract 1.54 sends no `actions`;
+  /// then nothing is offered.
+  AgentsStatus toDomain() => AgentsStatus(
+    agents: List<AgentDepot>.unmodifiable(
+      agents.map(
+        (pb.AgentDepot entry) => AgentDepot(
+          agent: entry.agent,
+          displayName: entry.displayName,
+          source: entry.source,
+          origin: entry.origin,
+          lockedBy: entry.lockedBy,
+          depotSupported: entry.depotSupported,
+          version: entry.version,
+          signature: entry.signature,
+          loggedIn: entry.loggedIn,
+          lastWriteback: entry.lastWriteback,
+          sizeBytes: entry.sizeBytes.toInt(),
+          inUse: entry.inUse,
+          diagnostics: List<Diagnostic>.unmodifiable(
+            entry.diagnostics.map((pb.Diagnostic d) => d.toDomain()),
+          ),
+          maintenance: entry.hasMaintenance()
+              ? entry.maintenance.toDomain()
+              : null,
+          configFiles: List<AgentConfigChange>.unmodifiable(
+            entry.configFiles.map((pb.AgentConfigChange c) => c.toDomain()),
+          ),
+          versions: List<String>.unmodifiable(entry.versions),
+          actions: entry.hasActions()
+              ? AgentActions(
+                  install: entry.actions.install,
+                  update: entry.actions.update,
+                  login: entry.actions.login,
+                  config: entry.actions.config,
+                  configShow: entry.actions.configShow,
+                  remove: entry.actions.remove,
+                  sourceHost: entry.actions.sourceHost,
+                  sourceDepot: entry.actions.sourceDepot,
+                )
+              : AgentActions.none,
+          credentialWriteback: entry.credentialWriteback,
+        ),
+      ),
+    ),
+  );
+}

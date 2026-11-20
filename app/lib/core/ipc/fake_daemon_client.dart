@@ -96,7 +96,8 @@ class FakeDaemonClient
         FakeSandboxBackends,
         FakeImagePull,
         FakeEgress,
-        FakeCloudInference
+        FakeCloudInference,
+        FakeAgents
     implements DaemonClient {
   /// Creates a fake that answers `GetInfo` with [info] (or [defaultInfo]),
   /// or throws [infoFailure] when given, and replays [script] (or
@@ -1606,6 +1607,12 @@ class FakeDaemonClient
       _emit(FlowEvent.configChanged(at: _clock(), keys: <String>[key]));
       return;
     }
+    // Die Schlüssel je Agent (HUM-521), wie `is_form_key` im Daemon.
+    if (writeAgentSetting(key, value)) {
+      configWrites.add((key, value));
+      _emit(FlowEvent.configChanged(at: _clock(), keys: <String>[key]));
+      return;
+    }
     const String prefix = 'sandbox.env.';
     final String name = key.startsWith(prefix)
         ? key.substring(prefix.length)
@@ -2586,6 +2593,7 @@ class FakeDaemonClient
   // Zugangsschluessel haelt er nie, nur die Aussage, ob einer gesetzt ist.
 
   /// What `GetConfig` answers; `SetConfig` on a key of the form changes it.
+  @override
   ConfigValues configValues = ConfigValues.empty;
 
   /// What `LlmKey` answers. `setLlmKey` and `clearLlmKey` change it; the key
@@ -6188,4 +6196,459 @@ mixin FakeCloudInference {
       fix: const FixAction.copyCommand(command: 'humanitl run --yes'),
     );
   }
+}
+
+// ---------------------------------------------------------------------------
+// Agents (HUM-521)
+// ---------------------------------------------------------------------------
+// Ein Mixin am Ende der Datei, damit dieser Abschnitt die Klasse oben nur in
+// ihrer Kopfzeile berührt. Der Fake steht für den Daemon: Er rechnet
+// `actions` so aus wie `daemon/crates/ipc/src/agents.rs`, und ein Test spielt
+// mit [agentsStatus] und den Feldern daneben jeden Zustand.
+
+/// The scriptable `Agents` half of [FakeDaemonClient].
+mixin FakeAgents {
+  /// What `Agents(status)` answers; every operation changes it as the daemon
+  /// would. Claude Code with a recipe and nothing installed, Codex without
+  /// one.
+  AgentsStatus agentsStatus = AgentsStatus(
+    agents: <AgentDepot>[
+      fakeAgent('claude', 'Claude Code', depotSupported: true),
+      fakeAgent('codex', 'Codex'),
+    ],
+  );
+
+  /// Every operation asked for, in order, for tests.
+  final List<AgentsOp> agentsCalls = <AgentsOp>[];
+
+  /// Whether the fake daemon could start a session now; without, it
+  /// offers no run, as the daemon under a running session (HUM-521).
+  bool agentsStartable = true;
+
+  /// How many refreshes of the state fail with [agentsStatusFailure]
+  /// before it answers again.
+  int agentsStatusFailures = 0;
+
+  /// What a failing refresh throws.
+  Diagnostic agentsStatusFailure = const Diagnostic(
+    code: 'DAEMON_001',
+    severity: Severity.error,
+    why: 'the daemon does not answer',
+  );
+
+  /// The configuration the class holds; `agents.<id>.credential_writeback`
+  /// lands there.
+  ConfigValues get configValues;
+  set configValues(ConfigValues value);
+
+  /// `SetConfig` of `agents.<id>.source` and
+  /// `agents.<id>.credential_writeback` for a known agent, as the daemon
+  /// takes them (`is_form_key`); false for every other key.
+  bool writeAgentSetting(String key, String value) {
+    final List<String> path = key.split('.');
+    if (path.length != 3 ||
+        path.first != 'agents' ||
+        agentsStatus.of(path[1]) == null ||
+        (path[2] != 'credential_writeback' && path[2] != 'source')) {
+      return false;
+    }
+    final Object parsed = path[2] == 'source'
+        ? value
+        : switch (value) {
+            'true' => true,
+            'false' => false,
+            _ => throw DaemonException(
+              Diagnostic(
+                code: 'CONFIG_003',
+                severity: Severity.error,
+                why: '$key takes true or false, and $value is none',
+              ),
+            ),
+          };
+    final Map<String, Object?> values = Map<String, Object?>.of(
+      configValues.values,
+    );
+    final Map<String, Object?> agents = switch (values['agents']) {
+      final Map<String, Object?> existing => Map<String, Object?>.of(existing),
+      _ => <String, Object?>{},
+    };
+    final Map<String, Object?> agent = switch (agents[path[1]]) {
+      final Map<String, Object?> existing => Map<String, Object?>.of(existing),
+      _ => <String, Object?>{},
+    };
+    agent[path[2]] = parsed;
+    agents[path[1]] = agent;
+    // Der Status sagt den wirksamen Wert, wie der Daemon (HUM-521).
+    if (parsed case final bool on) {
+      final AgentDepot entry = agentsStatus.of(path[1])!;
+      _put(_copy(entry, credentialWriteback: on));
+    }
+    values['agents'] = agents;
+    configValues = ConfigValues(
+      values: values,
+      origins: <String, String>{...configValues.origins, key: 'global'},
+      configPath: configValues.configPath,
+    );
+    return true;
+  }
+
+  /// Thrown as a [DaemonException] by the next operation of that kind.
+  final Map<AgentsOpKind, Diagnostic> agentsRefusals =
+      <AgentsOpKind, Diagnostic>{};
+
+  /// The agents whose adapter declares a login run.
+  Set<String> agentsWithLogin = <String>{};
+
+  /// The URLs a login run prints in the fake.
+  List<AgentLoginUrl> agentsLoginUrls = const <AgentLoginUrl>[];
+
+  /// Whether a login run in the fake offers the callback field.
+  bool agentsCallbackPaste = false;
+
+  /// What a finished configuration run changed.
+  List<AgentConfigChange> agentsConfigChanges = const <AgentConfigChange>[];
+
+  /// The files `config_show` names.
+  List<AgentConfigChange> agentsConfigFiles = const <AgentConfigChange>[];
+
+  /// The callback URLs delivered, for tests.
+  final List<String> agentsCallbacks = <String>[];
+
+  /// An entry as the daemon builds it for an agent without a depot, with
+  /// its actions.
+  static AgentDepot fakeAgent(
+    String agent,
+    String displayName, {
+    bool depotSupported = false,
+    String source = AgentSource.host,
+    String lockedBy = '',
+    String version = '',
+    List<String> versions = const <String>[],
+    bool loggedIn = false,
+    String lastWriteback = '',
+    int sizeBytes = 0,
+    bool loginDeclared = false,
+    List<Diagnostic> diagnostics = const <Diagnostic>[],
+    AgentMaintenance? maintenance,
+  }) => withActions(
+    AgentDepot(
+      agent: agent,
+      displayName: displayName,
+      source: source,
+      origin: lockedBy.isNotEmpty
+          ? 'policy'
+          : (source == AgentSource.host ? 'default' : 'agents.<id>.source'),
+      lockedBy: lockedBy,
+      depotSupported: depotSupported,
+      version: version,
+      signature: version.isEmpty ? '' : 'verified',
+      versions: versions.isEmpty && version.isNotEmpty
+          ? <String>[version]
+          : versions,
+      loggedIn: loggedIn,
+      lastWriteback: lastWriteback,
+      sizeBytes: sizeBytes,
+      diagnostics: diagnostics,
+      maintenance: maintenance,
+    ),
+    loginDeclared: loginDeclared,
+  );
+
+  /// [entry] with the actions the daemon derives (HUM-521): from recipe,
+  /// depot, lock and a running run.
+  static AgentDepot withActions(
+    AgentDepot entry, {
+    bool loginDeclared = false,
+  }) {
+    final bool installed = entry.version.isNotEmpty;
+    final bool running = entry.maintenance?.running ?? false;
+    final bool exists = installed || entry.sizeBytes > 0;
+    return _copy(
+      entry,
+      actions: AgentActions(
+        install: entry.depotSupported && !installed && !running,
+        update: entry.depotSupported && installed && !running,
+        login: installed && loginDeclared && !running,
+        config: installed && entry.depotSupported && !running,
+        configShow: installed,
+        remove: exists && !entry.inUse && !running,
+        sourceHost: entry.lockedBy.isEmpty,
+        // `set_source depot` nimmt der Daemon immer an (HUM-521).
+        sourceDepot: true,
+      ),
+    );
+  }
+
+  /// Ends the running run of [agent] the way the daemon would: an install
+  /// or update with [version] taken over, a login stored, a configuration
+  /// waiting for the confirmation; [failure] fails it instead.
+  void finishAgentRun(
+    String agent, {
+    String version = '2.1.0',
+    Diagnostic? failure,
+  }) {
+    final AgentDepot? entry = agentsStatus.of(agent);
+    final AgentMaintenance? run = entry?.maintenance;
+    if (entry == null || run == null) {
+      return;
+    }
+    AgentDepot next = entry;
+    String state = failure == null ? AgentRunState.done : AgentRunState.failed;
+    List<AgentConfigChange> changes = const <AgentConfigChange>[];
+    if (failure == null) {
+      switch (run.task) {
+        case AgentRunTask.install:
+        case AgentRunTask.update:
+          next = _copy(
+            entry,
+            version: version,
+            signature: 'verified',
+            versions: <String>[
+              version,
+              ...entry.versions.where((String held) => held != version),
+            ],
+            sizeBytes: entry.sizeBytes + 180 * 1024 * 1024,
+          );
+        case AgentRunTask.login:
+          next = _copy(entry, loggedIn: true);
+        case AgentRunTask.config:
+          state = AgentRunState.confirm;
+          changes = agentsConfigChanges;
+      }
+    }
+    _put(
+      _copy(
+        next,
+        maintenance: AgentMaintenance(
+          sandboxId: run.sandboxId,
+          task: run.task,
+          state: state,
+          version: failure == null ? version : '',
+          previous: entry.version,
+          diagnostics: failure == null
+              ? const <Diagnostic>[]
+              : <Diagnostic>[failure],
+          configChanges: changes,
+        ),
+      ),
+    );
+  }
+
+  /// `Agents`.
+  Future<AgentsStatus> agents(AgentsOp op) async {
+    agentsCalls.add(op);
+    if (agentsRefusals.remove(op.kind) case final Diagnostic refusal) {
+      throw DaemonException(refusal);
+    }
+    if (op.kind == AgentsOpKind.status) {
+      if (agentsStatusFailures > 0) {
+        agentsStatusFailures--;
+        throw DaemonException(agentsStatusFailure);
+      }
+      return _answer();
+    }
+    final AgentDepot? entry = agentsStatus.of(op.agent);
+    if (entry == null) {
+      throw DaemonException(
+        Diagnostic(
+          code: 'CONFIG_003',
+          severity: Severity.error,
+          why: '"${op.agent}" is no agent of the depot',
+        ),
+      );
+    }
+    switch (op.kind) {
+      case AgentsOpKind.status:
+        break;
+      case AgentsOpKind.setSource:
+        if (op.value == AgentSource.host && entry.locked) {
+          throw DaemonException(
+            Diagnostic(
+              code: 'AGENT_010',
+              severity: Severity.error,
+              why:
+                  'the source of ${entry.displayName} is locked to the '
+                  'depot by ${entry.lockedBy}',
+            ),
+          );
+        }
+        _put(_copy(entry, source: op.value, origin: 'agents.<id>.source'));
+      case AgentsOpKind.remove:
+        _put(
+          AgentDepot(
+            agent: entry.agent,
+            displayName: entry.displayName,
+            source: entry.source,
+            origin: entry.origin,
+            lockedBy: entry.lockedBy,
+            depotSupported: entry.depotSupported,
+          ),
+        );
+      case AgentsOpKind.install:
+      case AgentsOpKind.update:
+        if (op.kind == AgentsOpKind.update &&
+            op.value.isNotEmpty &&
+            entry.versions.contains(op.value)) {
+          // Eine Version, die das Depot hält: umschalten ohne Lauf.
+          _put(
+            _copy(
+              entry,
+              version: op.value,
+              maintenance: AgentMaintenance(
+                task: AgentRunTask.update,
+                state: AgentRunState.done,
+                version: op.value,
+                previous: entry.version,
+              ),
+            ),
+          );
+        } else {
+          _start(entry, op.kind.name);
+        }
+      case AgentsOpKind.login:
+        _start(
+          entry,
+          AgentRunTask.login,
+          urls: agentsLoginUrls,
+          callbackPaste: agentsCallbackPaste,
+        );
+      case AgentsOpKind.config:
+        _start(entry, AgentRunTask.config);
+      case AgentsOpKind.configAccept:
+      case AgentsOpKind.configDiscard:
+        final AgentMaintenance? run = entry.maintenance;
+        if (run == null || run.state != AgentRunState.confirm) {
+          throw const DaemonException(
+            Diagnostic(
+              code: 'AGENT_019',
+              severity: Severity.error,
+              why: 'no configuration run waits for a confirmation',
+            ),
+          );
+        }
+        _put(
+          _copy(
+            entry,
+            maintenance: AgentMaintenance(
+              sandboxId: run.sandboxId,
+              task: run.task,
+              state: op.kind == AgentsOpKind.configAccept
+                  ? AgentRunState.done
+                  : AgentRunState.discarded,
+            ),
+          ),
+        );
+      case AgentsOpKind.configShow:
+        return _answer(
+          AgentsStatus(
+            agents: <AgentDepot>[
+              for (final AgentDepot each in agentsStatus.agents)
+                each.agent == entry.agent
+                    ? _copy(each, configFiles: agentsConfigFiles)
+                    : each,
+            ],
+          ),
+        );
+      case AgentsOpKind.deliverCallback:
+        if (!(entry.maintenance?.callbackPaste ?? false) ||
+            !op.value.startsWith('http://localhost:')) {
+          throw const DaemonException(
+            Diagnostic(
+              code: 'AGENT_014',
+              severity: Severity.error,
+              why: 'the pasted URL is not the callback of this login',
+            ),
+          );
+        }
+        agentsCallbacks.add(op.value);
+    }
+    return _answer();
+  }
+
+  /// [agentsStatus] as the daemon answers it: without a possible start no
+  /// run is offered.
+  AgentsStatus _answer([AgentsStatus? status]) => agentsStartable
+      ? status ?? agentsStatus
+      : AgentsStatus(
+          agents: <AgentDepot>[
+            for (final AgentDepot entry in (status ?? agentsStatus).agents)
+              _copy(
+                entry,
+                actions: AgentActions(
+                  configShow: entry.actions.configShow,
+                  remove: entry.actions.remove,
+                  sourceHost: entry.actions.sourceHost,
+                  sourceDepot: entry.actions.sourceDepot,
+                ),
+              ),
+          ],
+        );
+
+  void _start(
+    AgentDepot entry,
+    String task, {
+    List<AgentLoginUrl> urls = const <AgentLoginUrl>[],
+    bool callbackPaste = false,
+  }) {
+    _put(
+      _copy(
+        entry,
+        maintenance: AgentMaintenance(
+          sandboxId: 'maint-${entry.agent}-$task',
+          task: task,
+          state: AgentRunState.running,
+          loginUrls: urls,
+          callbackPaste: callbackPaste,
+        ),
+      ),
+    );
+  }
+
+  void _put(AgentDepot entry) {
+    agentsStatus = AgentsStatus(
+      agents: <AgentDepot>[
+        for (final AgentDepot each in agentsStatus.agents)
+          each.agent == entry.agent
+              ? withActions(
+                  entry,
+                  loginDeclared: agentsWithLogin.contains(entry.agent),
+                )
+              : each,
+      ],
+    );
+  }
+
+  static AgentDepot _copy(
+    AgentDepot entry, {
+    String? source,
+    String? origin,
+    String? version,
+    String? signature,
+    List<String>? versions,
+    bool? loggedIn,
+    int? sizeBytes,
+    AgentMaintenance? maintenance,
+    List<AgentConfigChange>? configFiles,
+    AgentActions? actions,
+    bool? credentialWriteback,
+  }) => AgentDepot(
+    agent: entry.agent,
+    displayName: entry.displayName,
+    source: source ?? entry.source,
+    origin: origin ?? entry.origin,
+    lockedBy: entry.lockedBy,
+    depotSupported: entry.depotSupported,
+    version: version ?? entry.version,
+    signature: signature ?? entry.signature,
+    loggedIn: loggedIn ?? entry.loggedIn,
+    lastWriteback: entry.lastWriteback,
+    sizeBytes: sizeBytes ?? entry.sizeBytes,
+    inUse: entry.inUse,
+    diagnostics: entry.diagnostics,
+    maintenance: maintenance ?? entry.maintenance,
+    configFiles: configFiles ?? const <AgentConfigChange>[],
+    versions: versions ?? entry.versions,
+    actions: actions ?? entry.actions,
+    credentialWriteback: credentialWriteback ?? entry.credentialWriteback,
+  );
 }

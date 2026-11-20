@@ -93,9 +93,10 @@ impl Client {
 }
 
 /// Die Kategorien in der Reihenfolge der linken Spalte.
-pub const CATEGORIES: [&str; 9] = [
+pub const CATEGORIES: [&str; 10] = [
     "models",
     "agent",
+    "agents",
     "sandbox",
     "requests",
     "interface",
@@ -185,6 +186,10 @@ pub const DEFS: &[Def] = &[
     Def::key("agent.adapter", "agent", Control::Choice)
         .next()
         .with_choices(AGENT_ADAPTERS),
+    // Das Agent-Depot je Agent (HUM-521): Quelle, Version, Anmeldung und
+    // Wartungsläufe über `Agents`; die Schlüssel `agents.*` zeichnet die
+    // Zeile selbst, darum stehen sie in `catalog/hidden.toml`.
+    Def::key("agents.depot", "agents", Control::Special),
     Def::key("sandbox.work_dir", "sandbox", Control::Path).next(),
     Def::key("sandbox.mode", "sandbox", Control::Choice).next(),
     // Welche Backends es gibt und welche wählbar sind, sagt

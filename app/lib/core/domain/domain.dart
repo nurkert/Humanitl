@@ -2,6 +2,7 @@
 /// without a Flutter import. Screens and providers import this file.
 library;
 
+export 'agents.dart';
 export 'catalog.dart';
 export 'cloud_inference.dart';
 export 'daemon_info.dart';

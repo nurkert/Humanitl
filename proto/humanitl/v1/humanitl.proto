@@ -3062,7 +3062,10 @@ message AgentMaintenance {
   string task = 2;
   // `running`, solange der Lauf geht; `done` nach der Uebernahme;
   // `failed`, wenn nichts uebernommen wurde; `confirm`, wenn ein
-  // Konfigurationslauf auf die Bestaetigung wartet (HUM-520).
+  // Konfigurationslauf auf die Bestaetigung wartet (HUM-520); `discarded`,
+  // wenn der Mensch ihn verworfen hat (HUM-521). Nach einem Neustart des
+  // Daemons nennt `confirm` eine Konfiguration, die noch auf der Platte
+  // wartet, ohne Sandbox.
   string state = 3;
   // Die Version, die `current` nach dem Lauf nennt; leer davor und nach
   // einem Fehlschlag.
@@ -3123,6 +3126,47 @@ message AgentDepot {
   // Die Dateien von `config/` mit ihren Schluesseln, die Befehle
   // ausfuehren; nur in der Antwort auf `config_show` (HUM-520).
   repeated AgentConfigChange config_files = 15;
+  // Die Versionen, die das Depot unter `program/` haelt, die neueste zuerst
+  // (HUM-521). Ein Client bietet sie fuer ein Zurueck mit `update` an; die
+  // installierte steht in `version`.
+  repeated string versions = 16;
+  // Was ein Client jetzt anbieten darf (HUM-521). Der Daemon entscheidet
+  // es aus Rezept, Depot, Sperre und laufendem Wartungslauf; ein Client
+  // schaltet seine Knoepfe danach und entscheidet nichts selbst. Fehlt bei
+  // einem Daemon vor Minor 54: dann bietet ein Client nichts an.
+  AgentActions actions = 17;
+  // Der wirksame Wert von `agents.<id>.credential_writeback` (HUM-521),
+  // so wie der Daemon ihn liest; geschrieben wird er ueber `SetConfig`.
+  bool credential_writeback = 18;
+}
+
+// Die Operationen, die `Agents` fuer einen Agenten jetzt annimmt (HUM-521).
+// Ein falsches Feld verspricht nichts: der Daemon prueft jede Operation
+// ohnehin selbst und lehnt mit einem Befund ab.
+message AgentActions {
+  // `install`: das Rezept bringt eine Installation mit, das Depot haelt
+  // keine Version und ist nicht unbrauchbar, und der Daemon koennte jetzt
+  // eine Sitzung starten (keine laeuft, kein Lauf geht).
+  bool install = 1;
+  // `update`, auch zurueck auf eine Version aus `versions`: wie `install`,
+  // aber mit installierter Version.
+  bool update = 2;
+  // `login`: der Adapter erklaert Anmeldelauf und Format der Zugangsdatei,
+  // eine Version liegt im Depot, eine Sitzung liesse sich starten.
+  bool login = 3;
+  // `config`: das Rezept besteht, eine Version liegt im Depot, eine Sitzung
+  // liesse sich starten.
+  bool config = 4;
+  // `config_show`: eine Version liegt im Depot.
+  bool config_show = 5;
+  // `remove`: das Depot besteht, keine Sitzung und kein Lauf nutzt es; auch
+  // fuer einen Agenten ohne Rezept.
+  bool remove = 6;
+  // `set_source` auf `host`: keine Firmenvorgabe sperrt die Quelle.
+  bool source_host = 7;
+  // `set_source` auf `depot`: immer, auch ohne Rezept (dann mit dem Hinweis
+  // `AGENT_015`, und ein Start bricht damit ab).
+  bool source_depot = 8;
 }
 
 // Der Stand aller bekannten Agenten, in der Reihenfolge von

@@ -26,13 +26,21 @@ void writeSetting(BuildContext context, String key, String value) {
 /// high as every other control of the page and stand on the same right edge.
 class OnOffControl extends StatelessWidget {
   /// Creates the control showing [value]; [onChanged] gets the new value.
-  const OnOffControl({required this.value, required this.onChanged, super.key});
+  const OnOffControl({
+    required this.value,
+    required this.onChanged,
+    this.enabled = true,
+    super.key,
+  });
 
   /// Whether the setting is on.
   final bool value;
 
   /// Invoked with the chosen value.
   final ValueChanged<bool> onChanged;
+
+  /// Whether the control takes a choice.
+  final bool enabled;
 
   @override
   Widget build(BuildContext context) {
@@ -43,6 +51,7 @@ class OnOffControl extends StatelessWidget {
         HSegmentOption<bool>(value: false, label: l10n.settingsOff),
       ],
       selected: value,
+      enabled: enabled,
       onSelect: (bool on) {
         if (on != value) {
           onChanged(on);

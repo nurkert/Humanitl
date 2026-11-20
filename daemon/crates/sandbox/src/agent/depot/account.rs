@@ -49,6 +49,11 @@ const KEYS_LISTED: usize = 50;
 /// The directory of a pending configuration, beside the depots.
 const PENDING_SUFFIX: &str = "config-pending";
 
+/// Where a configuration run's copy is gathered before it becomes the
+/// pending proposal with one `rename` (HUM-521): a restart in the middle of
+/// the copy leaves only this, never a partial proposal.
+const STAGING_SUFFIX: &str = "config-staging";
+
 /// A prepared login or configuration run.
 #[derive(Debug)]
 pub struct AgentRun {
@@ -204,6 +209,9 @@ pub(crate) fn prepare_in(
         }
     })?;
     let lock = maintenance::maintenance_lock(&depot)?;
+    // Ein Rest aus einem abgebrochenen Konfigurationslauf (HUM-521): unter
+    // der Wartungssperre läuft keine Kopie dorthin, er kann weg.
+    let _ = std::fs::remove_dir_all(staging_dir(paths, agent.id));
     let reservation = depot.reserve_for_session()?;
     let work = maintenance::work_dir(paths, agent.id, session);
     let _ = std::fs::remove_dir_all(&work);
@@ -233,6 +241,16 @@ pub(crate) fn prepare_in(
         copy,
         _lock: lock,
     })
+}
+
+/// Whether the adapter of `agent` declares everything a login run needs; the
+/// status offers `login` only then (HUM-521).
+#[must_use]
+pub fn login_declared(agent: &KnownAgent) -> bool {
+    agent
+        .recipe
+        .as_ref()
+        .is_some_and(|recipe| login_possible(agent, recipe).is_ok())
 }
 
 /// Whether the adapter can log in at all, `AGENT_014` otherwise.
@@ -555,22 +573,52 @@ impl AgentRun {
             }
             _ => None,
         };
-        let pending = pending_dir(&self.paths, agent);
-        let _ = std::fs::remove_dir_all(&pending);
-        let mut budget = (SCRATCH_CAP_BYTES, CONFIG_ENTRIES_CAP);
-        let skip = self.recipe.credential_file;
-        copy_config(agent, self.copy.path(), &pending, skip, &mut budget).inspect_err(|_| {
-            let _ = std::fs::remove_dir_all(&pending);
-        })?;
-        let changes = diff(&self.depot.config_dir(), &pending, self.recipe.command_keys);
+        let staged = self.stage_config()?;
+        let changes = diff(&self.depot.config_dir(), &staged, self.recipe.command_keys);
         if changes.is_empty() {
-            let _ = std::fs::remove_dir_all(&pending);
+            let _ = std::fs::remove_dir_all(&staged);
+            let _ = std::fs::remove_dir_all(pending_dir(&self.paths, agent));
+        } else {
+            publish_config(&self.paths, agent, &staged)?;
         }
         Ok(ConfigProposal {
             changes,
             credential,
         })
     }
+
+    /// Copies the run's copy into the staging place, never into the pending
+    /// proposal itself; [`publish_config`] makes it the proposal afterwards.
+    /// Returns the staging directory.
+    pub(crate) fn stage_config(&self) -> Result<PathBuf, Diagnostic> {
+        let agent = self.agent.id;
+        let staged = staging_dir(&self.paths, agent);
+        let _ = std::fs::remove_dir_all(&staged);
+        let mut budget = (SCRATCH_CAP_BYTES, CONFIG_ENTRIES_CAP);
+        let skip = self.recipe.credential_file;
+        copy_config(agent, self.copy.path(), &staged, skip, &mut budget).inspect_err(|_| {
+            let _ = std::fs::remove_dir_all(&staged);
+        })?;
+        Ok(staged)
+    }
+}
+
+/// Makes the complete copy in `staged` the pending proposal of `agent`: the
+/// tree is synced, an older proposal goes, and one `rename` puts the new
+/// one in place, so `pending` never sees a partial proposal (HUM-521).
+fn publish_config(paths: &Paths, agent: &str, staged: &Path) -> Result<(), Diagnostic> {
+    let pending = pending_dir(paths, agent);
+    let failed = |what: &str, err: std::io::Error| {
+        let _ = std::fs::remove_dir_all(staged);
+        config_failed(agent, &format!("the proposal {what} ({err})"))
+    };
+    super::adopt::sync_dir(staged).map_err(|err| failed("cannot be synced", err))?;
+    let _ = std::fs::remove_dir_all(&pending);
+    std::fs::rename(staged, &pending).map_err(|err| failed("cannot be put in place", err))?;
+    if let Some(parent) = pending.parent() {
+        super::adopt::sync_dir(parent).map_err(|err| failed("cannot be synced", err))?;
+    }
+    Ok(())
 }
 
 impl Drop for AgentRun {
@@ -614,6 +662,16 @@ pub fn login_failed(
             agent.id
         )))
         .build()
+}
+
+/// `agents/.maintenance/<id>.config-staging/`, where a configuration run's
+/// copy is gathered (HUM-521).
+#[must_use]
+pub fn staging_dir(paths: &Paths, agent: &str) -> PathBuf {
+    let data = std::fs::canonicalize(paths.data_dir()).unwrap_or_else(|_| paths.data_dir());
+    data.join("agents")
+        .join(".maintenance")
+        .join(format!("{agent}.{STAGING_SUFFIX}"))
 }
 
 /// `agents/.maintenance/<id>.config-pending/`.

@@ -123,4 +123,7 @@ const List<String> goldenNames = <String>[
   'sandbox_header_cloud',
   'sandbox_cloud_tag_open',
   'sandbox_cloud_confirm',
+  // agents_golden_test.dart (HUM-521)
+  'settings_agents_cards',
+  'settings_agents_runs',
 ];

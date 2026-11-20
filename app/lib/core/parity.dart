@@ -14,6 +14,9 @@ library;
 
 /// RPC-Name (`Service.Methode`) → Ort in der Oberfläche.
 const parity = <String, String>{
+  // Eine Karte je Agent: Quelle, Installieren, Anmelden, Konfigurieren
+  // (HUM-521).
+  'Humanitl.Agents': 'features/settings/categories/agents_category',
   'Humanitl.Audit': 'features/audit/audit_screen',
   'Humanitl.Decide': 'features/intercept/widgets/action_bar',
   'Humanitl.DiscoverLlm': 'features/setup/widgets/llm_discover_sheet',

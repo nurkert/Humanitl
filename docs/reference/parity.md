@@ -20,7 +20,7 @@ Eine RPC ohne CLI-Zeile und ohne Ausnahme bricht den CI-Job
 
 | RPC | CLI | UI |
 |---|---|---|
-| `Humanitl.Agents` | `humanitl agents install`<br>`humanitl agents remove`<br>`humanitl agents source`<br>`humanitl agents status`<br>`humanitl agents update` | fehlt |
+| `Humanitl.Agents` | `humanitl agents install`<br>`humanitl agents remove`<br>`humanitl agents source`<br>`humanitl agents status`<br>`humanitl agents update` | `features/settings/categories/agents_category` |
 | `Humanitl.Audit` | `humanitl audit export`<br>`humanitl audit verify` | `features/audit/audit_screen` |
 | `Humanitl.Decide` | `humanitl flows decide` | `features/intercept/widgets/action_bar` |
 | `Humanitl.DiscoverLlm` | `humanitl llm discover` | `features/setup/widgets/llm_discover_sheet` |
@@ -48,7 +48,6 @@ Eine RPC ohne CLI-Zeile und ohne Ausnahme bricht den CI-Job
 
 ## UI-Lücken
 
-- `Humanitl.Agents`
 - `Humanitl.Egress`
 - `Humanitl.GetSessionSummary`
 - `Humanitl.Projects`

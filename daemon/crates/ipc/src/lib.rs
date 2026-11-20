@@ -51,7 +51,15 @@ pub const PROTO_MAJOR: u32 = 1;
 /// Minor-Version des Vertrags. Steigt bei jeder additiven Änderung
 /// (`Info.proto_minor`).
 ///
-/// `53` seit der Anmeldung im Agent-Depot (HUM-520): `AgentsRequest` trägt
+/// `54` seit dem Abschnitt „Agenten" der App (HUM-521): `AgentDepot.versions`
+/// nennt die Versionen im Depot für ein Zurück, `AgentDepot.actions`
+/// (`AgentActions`) die Operationen, die ein Client jetzt anbieten darf; der
+/// Daemon entscheidet sie aus Rezept, Prüfung des Depots, Sperre, laufendem
+/// Lauf und ob eine Sitzung starten könnte. `AgentDepot.credential_writeback`
+/// nennt den wirksamen Wert des Schlüssels; `AgentMaintenance.state` kennt
+/// `discarded`, und eine Konfiguration, die nach einem Neustart noch auf der
+/// Platte wartet, steht als `confirm` da.
+/// `53` war die Anmeldung im Agent-Depot (HUM-520): `AgentsRequest` trägt
 /// `login` und `config` (je `Maintain`), `config_accept`, `config_discard`,
 /// `config_show` und `deliver_callback`; `AgentMaintenance` nennt die URLs
 /// eines Anmeldelaufs (`AgentLoginUrl`, nur die Anmeldehosts des Adapters
@@ -294,7 +302,7 @@ pub const PROTO_MAJOR: u32 = 1;
 /// Spiegelung in `app/lib/core/ipc/proto_version.dart` darf nachziehen: eine
 /// abweichende Minor ist verabredetermaßen kein Grund, die Verbindung
 /// abzulehnen (`docs/PROTOCOL.md`).
-pub const PROTO_MINOR: u32 = 53;
+pub const PROTO_MINOR: u32 = 54;
 
 /// Metadata-Schlüssel für das Session-Token aus
 /// `$XDG_RUNTIME_DIR/humanitl/token` (CONVENTIONS.md 3.6).

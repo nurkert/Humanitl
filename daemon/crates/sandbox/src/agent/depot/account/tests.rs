@@ -649,3 +649,32 @@ fn a_merge_beyond_the_file_cap_writes_nothing() {
     assert!(!fixture.depot.logged_in());
     assert_eq!(std::fs::read(&target).unwrap(), depot_file.as_bytes());
 }
+
+/// HUM-521 (review): a restart in the middle of the copy leaves only the
+/// staging place, never a partial proposal; the next run clears it.
+#[test]
+fn an_interrupted_copy_leaves_no_pending_proposal() {
+    let fixture = Fixture::new();
+    let run = fixture.run(&STANDIN, MaintenanceTask::Config);
+    std::fs::write(run.mount().scratch.join("settings.json"), r#"{"hooks":{}}"#).unwrap();
+    // Der Daemon endet nach der Kopie und vor dem Umbenennen.
+    let staged = run.stage_config().unwrap();
+    assert!(staged.join("settings.json").exists());
+    assert!(pending(&fixture.paths, &STANDIN).is_none());
+    assert!(!pending_dir(&fixture.paths, "standin").exists());
+    drop(run);
+    assert!(staging_dir(&fixture.paths, "standin").exists());
+    // Übernehmen findet nichts, die Konfiguration bleibt.
+    let found = accept_config(&fixture.paths, "standin").unwrap_err();
+    assert_eq!(found.code, AGENT_019);
+    assert_eq!(
+        std::fs::read(fixture.depot.config_dir().join("settings.json")).unwrap(),
+        b"{}\n"
+    );
+    let next = fixture.run(&STANDIN, MaintenanceTask::Config);
+    assert!(
+        !staging_dir(&fixture.paths, "standin").exists(),
+        "stale staging is cleared"
+    );
+    drop(next);
+}
