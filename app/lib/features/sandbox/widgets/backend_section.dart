@@ -114,9 +114,12 @@ class _SandboxBackendSectionState extends ConsumerState<SandboxBackendSection> {
       heading: l10n.sandboxBackendSessionLabel,
       children: <Widget>[
         if (shown != null && choosing) ...<Widget>[
-          HSegmented<String>(
-            key: const Key('sandbox-backend-choice'),
-            options: sandboxBackendOptions(l10n, list),
+          // Eine Wahl lädt die Liste für das neue Backend und sperrt die
+          // Segmente; wer mit der Tastatur gewählt hat, behält den Fokus
+          // (HUM-560).
+          SandboxBackendSegments(
+            segmentsKey: const Key('sandbox-backend-choice'),
+            list: list,
             selected: shown,
             onSelect: ref.read(sandboxBackendChoiceProvider.notifier).choose,
             enabled: !pending,
