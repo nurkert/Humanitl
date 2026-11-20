@@ -114,15 +114,16 @@ fn every_subcommand_has_a_help_of_its_own() {
 /// Die elf Kennungen, in der Reihenfolge der Anzeige.
 fn doctor_ids() -> Vec<String> {
     // Hinter `llm` die Zeilen `egress` und `inference`, die der Bericht aus
-    // der Konfiguration dazusetzt (HUM-511, HUM-516,
-    // `humanitl_ipc::egress::insert_doctor_line`,
-    // `humanitl_ipc::cloud::insert_doctor_line`).
+    // der Konfiguration dazusetzt, und `rules` aus der Regel-Datei (HUM-511,
+    // HUM-516, HUM-561, `humanitl_ipc::egress::insert_doctor_line`,
+    // `humanitl_ipc::cloud::insert_doctor_line`,
+    // `humanitl_ipc::rules_doctor::insert_doctor_line`).
     humanitl_sandbox::doctor::CheckId::ALL
         .iter()
         .flat_map(|id| {
             let id = (*id).as_str();
             let after: &[&str] = if id == "llm" {
-                &["egress", "inference"]
+                &["egress", "inference", "rules"]
             } else {
                 &[]
             };

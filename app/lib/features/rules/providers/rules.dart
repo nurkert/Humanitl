@@ -64,7 +64,10 @@ class Rules extends _$Rules {
     try {
       final RuleSet answered = await client.listRules();
       state = AsyncData<RuleSet>(answered);
-      _report(answered);
+      // Eine Liste trägt die Befunde, die zu `rules.yaml` stehen (HUM-561).
+      // Hat sie keine, ist die Datei wieder lesbar, und was der Streifen
+      // noch zeigt, ist überholt.
+      ref.read(rulesBannerProvider.notifier).show(answered.diagnostics);
     } on DaemonException catch (error) {
       state = AsyncError<RuleSet>(error, StackTrace.current);
     }
@@ -241,11 +244,13 @@ class Rules extends _$Rules {
 
   /// Bringt die Befunde einer geglückten Antwort über die Liste.
   ///
-  /// Jede `Rules`-Antwort kann sie tragen, nicht nur die des Reloads; heute
-  /// füllt der Daemon sie nur dort, und eine Antwort, deren Befunde niemand
-  /// liest, wäre eine stille Warnung (`docs/UX.md` 4.4). Ein leeres Feld
-  /// löscht nichts: was der Reload gemeldet hat, verschwindet nicht, weil
-  /// jemand danach eine Regel angelegt hat.
+  /// Jede `Rules`-Antwort kann sie tragen. Der Daemon füllt sie beim Reload
+  /// und bei jeder Liste, dort mit den Befunden, die zu `rules.yaml` stehen,
+  /// etwa je Regel, die sich nicht lesen ließ (HUM-561); eine Antwort, deren
+  /// Befunde niemand liest, wäre eine stille Warnung (`docs/UX.md` 4.4). Nach
+  /// einer Änderung löscht ein leeres Feld nichts: was der Reload gemeldet
+  /// hat, verschwindet nicht, weil jemand danach eine Regel angelegt hat. Die
+  /// Liste dagegen ersetzt den Streifen ganz ([refresh]).
   void _report(RuleSet answered) {
     if (answered.diagnostics.isNotEmpty) {
       ref.read(rulesBannerProvider.notifier).show(answered.diagnostics);

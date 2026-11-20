@@ -131,7 +131,14 @@ impl RulesService {
         // [`crate::validate`] und gilt für den Fake genauso.
         crate::validate::rules_op(&request)?;
         match request.op {
-            None | Some(v1::rules_request::Op::List(())) => {}
+            // Eine Liste trägt die Befunde, die zur Datei stehen: je Regel,
+            // die sich nicht lesen ließ, einer (HUM-561). So sieht sie, wer
+            // den Regel-Bildschirm öffnet oder `rules list` ruft, ohne dass
+            // jemand neu laden muss. Alle sind Warnungen; die Liste scheitert
+            // nicht daran.
+            None | Some(v1::rules_request::Op::List(())) => {
+                diagnostics = self.store.findings();
+            }
             // Der Ursprung ist `rpc`: Oberfläche und Kommandozeile schicken
             // dieselbe Nachricht, und keine weist sich aus.
             Some(v1::rules_request::Op::Add(rule)) => {

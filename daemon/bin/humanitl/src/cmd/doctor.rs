@@ -340,6 +340,8 @@ async fn local(
     humanitl_ipc::egress::insert_doctor_line(&mut report, &config.egress);
     // Ebenso die Zeile der Inferenz (HUM-516).
     humanitl_ipc::cloud::insert_doctor_line(&mut report, config);
+    // Und die Zeile der Regel-Datei (HUM-561).
+    humanitl_ipc::rules_doctor::insert_doctor_line(&mut report, &ctx.paths.rules_path());
     report.backends = local_backends(ctx, config, probe).await;
     report
 }

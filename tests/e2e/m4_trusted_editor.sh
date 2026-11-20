@@ -289,6 +289,11 @@ if [ "${E2E_IN_NAMESPACE:-0}" != 1 ]; then
         lintian --display-level '>=warning' --show-overrides --fail-on error "$m4_deb" \
             > "$M4_PACKAGE_OUT/lintian.txt" 2>&1 || m4_lintian_status=$?
         cat "$M4_PACKAGE_OUT/lintian.txt"
+        # Das Protokoll des Laufs liest nur ein Admin; die Ausgabe von lintian
+        # geht deshalb bei einem Fehler zusätzlich als Annotation hinaus.
+        if [[ "$m4_lintian_status" -ne 0 && "${GITHUB_ACTIONS:-}" == true ]]; then
+            echo "::error title=lintian (status $m4_lintian_status)::$(grep -v '^[ON]: ' "$M4_PACKAGE_OUT/lintian.txt" | head -c 3000 | tr '\n' ' ')"
+        fi
         e2e_expect "lintian ends without an error" 0 "$m4_lintian_status"
         e2e_expect "and reports no E: line" 0 \
             "$(m4_count_lines '^E: ' "$M4_PACKAGE_OUT/lintian.txt")"

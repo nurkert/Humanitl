@@ -72,7 +72,11 @@ use std::time::{SystemTime, UNIX_EPOCH};
 use humanitl_core::diagnostics::codes;
 use humanitl_core::rule::{Action, Expiry, Rule};
 use humanitl_core::{Diagnostic, FixAction, RuleId, SessionId, Severity};
-use humanitl_rules::{RuleSet, parse_rules_for_session, serialize_rules};
+use humanitl_rules::unreadable::{lifted_above, reanchor, with_fences};
+use humanitl_rules::{
+    RuleSet, UnreadableRule, parse_rules_for_session, read_user_rules, refused_finding,
+    serialize_rules, serialize_user_rules,
+};
 use jiff::Timestamp;
 use tokio::sync::broadcast;
 
@@ -175,6 +179,20 @@ struct State {
     /// stillschweigend zurückgehen, nur weil `rules/default.yaml` sich geändert
     /// hat (HUM-038).
     disabled_bundled: BTreeSet<RuleId>,
+    /// Regeln der Datei, die sich nicht lesen ließen (HUM-561).
+    ///
+    /// Ihr Ersatz steht im Schnappschuss an ihrem Platz, ihr Eintrag geht bei
+    /// jedem Schreiben unverändert zurück in die Datei. In [`RulesStore::list`]
+    /// erscheinen sie nicht: Ändern lässt sich eine solche Regel nur in der
+    /// Datei.
+    unreadable: Vec<UnreadableRule>,
+    /// Die Befunde, die gelten, solange die Datei so ist, wie sie gelesen
+    /// wurde: je unlesbarer Regel einer, oder die Ablehnung der ganzen Datei.
+    findings: Vec<Diagnostic>,
+    /// Gesetzt, wenn die Datei als Ganzes nicht lesbar war. Geschrieben wird
+    /// dann nicht: Der Speicher kennt ihren Inhalt nicht und ersetzte ihn
+    /// sonst still durch das, was er im Speicher hat.
+    refused: bool,
 }
 
 impl State {
@@ -220,11 +238,15 @@ impl RulesStore {
     /// Liest `rules.yaml` und baut den Speicher.
     ///
     /// Eine fehlende Datei ist kein Fehler: vor der ersten eigenen Regel gibt
-    /// es sie nicht. Lässt die Engine die Datei nicht durchgehen, startet der
-    /// Speicher **ohne** dauerhafte Regeln des Nutzers und meldet die Befunde;
-    /// ein halb geladener Regelsatz wäre die schlechtere Antwort, weil niemand
-    /// ihm ansieht, welche Hälfte fehlt. Ohne Regel wird jede Anfrage gehalten,
-    /// der Fehler kostet also Rückfragen und nie eine stille Freigabe.
+    /// es sie nicht. Eine Regel, die sich nicht lesen lässt, kostet nur sich
+    /// selbst (HUM-561): Die übrigen gelten, an ihrem Platz steht ein Ersatz,
+    /// der nie mehr erlaubt als sie ([`humanitl_rules::unreadable`]), und ihr
+    /// Befund steht in den zurückgegebenen Befunden und in
+    /// [`RulesStore::findings`]. Ist die Datei als Ganzes nicht lesbar (kein
+    /// YAML, unbekannte Version), startet der Speicher **ohne** dauerhafte
+    /// Regeln des Nutzers, meldet die Befunde und schreibt die Datei nicht, bis
+    /// sie wieder lesbar ist. Ohne Regel wird jede Anfrage gehalten, der Fehler
+    /// kostet also Rückfragen und nie eine stille Freigabe.
     ///
     /// `bundled` sind die mitgelieferten Regeln aus `rules/default.yaml` und
     /// die Durchreiche des Agent-Adapters; sie werden hinter die Nutzerregeln
@@ -234,7 +256,15 @@ impl RulesStore {
     /// Satz auch dann stimmt, wenn er anderswo gebaut wurde.
     #[must_use]
     pub fn load(path: &Path, bundled: &[Rule], session: SessionId) -> (Self, Vec<Diagnostic>) {
-        let (persistent, disabled_bundled, diagnostics) = read_file(path, session);
+        let read = read_rules_file(path, session);
+        let findings = read.findings();
+        let FileRead {
+            rules: persistent,
+            disabled_bundled,
+            unreadable,
+            diagnostics,
+            refused,
+        } = read;
         let bundled: Vec<Rule> = bundled
             .iter()
             .cloned()
@@ -248,6 +278,9 @@ impl RulesStore {
             persistent,
             bundled,
             disabled_bundled,
+            unreadable,
+            findings,
+            refused,
         };
         let snapshot = Arc::new(RwLock::new(snapshot_of(&state)));
         let (changed, _idle) = broadcast::channel(REVISION_BUFFER);
@@ -379,8 +412,7 @@ impl RulesStore {
         } else {
             let mut next = state.persistent.clone();
             next.insert(clamp(pos, next.len()), rule.clone());
-            self.write(&next, &state.disabled_bundled)?;
-            state.persistent = next;
+            self.commit(&mut state, next)?;
         }
         self.publish(&state);
         Ok(rule)
@@ -411,21 +443,18 @@ impl RulesStore {
             (Origin::User, false) => {
                 let mut next = state.persistent.clone();
                 replace_in(&mut next, &rule);
-                self.write(&next, &state.disabled_bundled)?;
-                state.persistent = next;
+                self.commit(&mut state, next)?;
             }
             (Origin::Session, false) => {
                 let mut next = state.persistent.clone();
                 next.push(rule.clone());
-                self.write(&next, &state.disabled_bundled)?;
+                self.commit(&mut state, next)?;
                 state.session.retain(|old| old.id != rule.id);
-                state.persistent = next;
             }
             (Origin::User, true) => {
                 let mut next = state.persistent.clone();
                 next.retain(|old| old.id != rule.id);
-                self.write(&next, &state.disabled_bundled)?;
-                state.persistent = next;
+                self.commit(&mut state, next)?;
                 state.session.push(rule.clone());
             }
             (Origin::Bundled, _) => unreachable!("bundled rules are refused above"),
@@ -464,8 +493,7 @@ impl RulesStore {
                 let at = position_of(&state.persistent, id).ok_or_else(|| unknown(id))?;
                 let mut next = state.persistent.clone();
                 let rule = next.remove(at);
-                self.write(&next, &state.disabled_bundled)?;
-                state.persistent = next;
+                self.commit(&mut state, next)?;
                 self.publish(&state);
                 Ok(rule)
             }
@@ -500,8 +528,7 @@ impl RulesStore {
             Origin::User => {
                 let mut next = state.persistent.clone();
                 move_within(&mut next, id, pos);
-                self.write(&next, &state.disabled_bundled)?;
-                state.persistent = next;
+                self.commit(&mut state, next)?;
                 self.publish(&state);
                 Ok(())
             }
@@ -523,8 +550,7 @@ impl RulesStore {
         let sorted_session = sort_by_order(&state.session, order);
         let sorted_persistent = sort_by_order(&state.persistent, order);
         if sorted_persistent != state.persistent {
-            self.write(&sorted_persistent, &state.disabled_bundled)?;
-            state.persistent = sorted_persistent;
+            self.commit(&mut state, sorted_persistent)?;
         }
         state.session = sorted_session;
         self.publish(&state);
@@ -548,25 +574,54 @@ impl RulesStore {
         }
     }
 
+    /// Die Befunde, die gelten, solange `rules.yaml` so ist, wie sie zuletzt
+    /// gelesen wurde.
+    ///
+    /// Je Regel, die sich nicht lesen ließ, einer (HUM-561), oder die Befunde,
+    /// mit denen die Datei als Ganzes abgelehnt wurde. Leer, wenn die Datei
+    /// lesbar war. Der Regel-RPC legt sie jeder Liste bei, damit Oberfläche
+    /// und Kommandozeile sie sehen, ohne dass jemand `reload` ruft.
+    #[must_use]
+    pub fn findings(&self) -> Vec<Diagnostic> {
+        self.lock().findings.clone()
+    }
+
     /// Liest `rules.yaml` neu ein.
     ///
-    /// Lehnt die Engine die Datei ab, bleiben die geltenden Regeln in Kraft und
-    /// die Befunde beschreiben, warum. Sitzungsregeln bleiben unberührt, sie
-    /// stehen nie in der Datei.
+    /// Eine Regel, die sich nicht lesen lässt, kostet nur sich selbst, wie
+    /// beim Start. Ist die Datei als Ganzes nicht lesbar, bleiben die
+    /// geltenden Regeln in Kraft, die Befunde beschreiben, warum, und die
+    /// Datei wird nicht geschrieben, bis sie wieder lesbar ist. Sitzungsregeln
+    /// bleiben unberührt, sie stehen nie in der Datei.
     ///
     /// Der erste Befund ist bei Erfolg ein `RULES_011` mit dem, was sich
     /// geändert hat.
     pub fn reload(&self) -> Vec<Diagnostic> {
-        let (loaded, disabled_bundled, mut diagnostics) = read_file(&self.path, self.session);
-        if diagnostics
-            .iter()
-            .any(|diagnostic| matches!(diagnostic.severity, Severity::Error | Severity::Blocking))
-        {
+        let read = read_rules_file(&self.path, self.session);
+        let findings = read.findings();
+        let FileRead {
+            rules: loaded,
+            disabled_bundled,
+            unreadable,
+            mut diagnostics,
+            refused,
+        } = read;
+        if refused {
+            // Die Regeln von vorher gelten weiter, aber geschrieben wird erst
+            // wieder, wenn die Datei lesbar ist: Sonst ersetzte die nächste
+            // Änderung die Fassung, die der Mensch gerade von Hand geschrieben
+            // hat, still durch die alte.
+            let mut state = self.lock();
+            state.refused = true;
+            state.findings = findings;
             return diagnostics;
         }
         let mut state = self.lock();
         let report = compare(&state.persistent, &loaded);
         state.persistent = loaded;
+        state.findings = findings;
+        state.unreadable = unreadable;
+        state.refused = false;
         // Auch das Abschalten kommt aus der Datei: Wer sie von Hand ändert,
         // erwartet, dass ein `reload` genau das übernimmt.
         for rule in &mut state.bundled {
@@ -647,9 +702,8 @@ impl RulesStore {
             next.remove(&id);
         }
         let persistent = state.persistent.clone();
-        self.write(&persistent, &next)?;
+        self.commit_with(&mut state, persistent, next)?;
 
-        state.disabled_bundled = next;
         let Some(rule) = state.bundled.get_mut(position) else {
             return Err(Diagnostic::builder(codes::RULES_010, Severity::Error)
                 .why(format!(
@@ -687,8 +741,7 @@ impl RulesStore {
             .collect();
         let removed = before - (state.session.len() + kept.len());
         if kept.len() != state.persistent.len() {
-            self.write(&kept, &state.disabled_bundled)?;
-            state.persistent = kept;
+            self.commit(&mut state, kept)?;
         }
         if removed > 0 {
             self.publish(&state);
@@ -737,13 +790,51 @@ impl RulesStore {
         }
     }
 
-    /// Schreibt die dauerhaften Regeln, atomar.
-    fn write(&self, rules: &[Rule], disabled_bundled: &BTreeSet<RuleId>) -> Result<(), Diagnostic> {
-        let mut set = RuleSet::from_rules(rules.iter().cloned());
+    /// Schreibt die dauerhaften Regeln und übernimmt sie, wenn das gelang.
+    fn commit(&self, state: &mut State, next: Vec<Rule>) -> Result<(), Diagnostic> {
+        let disabled = state.disabled_bundled.clone();
+        self.commit_with(state, next, disabled)
+    }
+
+    /// Schreibt die dauerhaften Regeln und die abgeschalteten mitgelieferten,
+    /// atomar, und übernimmt beides erst danach.
+    ///
+    /// Die Einträge, die sich nicht lesen ließen, gehen mit in die Datei, an
+    /// ihren Platz (HUM-561). Ist eine Regel verschwunden, hinter der einer
+    /// stand, rückt er hinter die Regel davor ([`reanchor`]).
+    ///
+    /// # Errors
+    ///
+    /// `RULES_009`, wenn die Datei nicht geschrieben werden konnte, als
+    /// Ganzes nicht lesbar war, oder wenn die Änderung eine Regel über den
+    /// Ersatz einer unlesbaren Regel höbe ([`lifted_above`]).
+    fn commit_with(
+        &self,
+        state: &mut State,
+        next: Vec<Rule>,
+        disabled_bundled: BTreeSet<RuleId>,
+    ) -> Result<(), Diagnostic> {
+        if state.refused {
+            return Err(refused_write(&self.path));
+        }
+        let mut unreadable = state.unreadable.clone();
+        reanchor(&mut unreadable, &state.persistent, &next);
+        if let Some(fenced) = lifted_above(&state.persistent, &next, &state.unreadable, &unreadable)
+        {
+            return Err(over_unreadable(&self.path, fenced));
+        }
+        let mut set = RuleSet::from_rules(next.iter().cloned());
         // Ohne diese Zeile verschwände die Liste bei der nächsten Änderung aus
         // der Datei, und ein abgeschaltetes Bündel käme still zurück.
         set.set_disabled_bundled(disabled_bundled.iter().copied());
-        write_atomically(&self.path, &serialize_rules(&set))
+        let written = serialize_user_rules(&set, &unreadable);
+        write_atomically(&self.path, &written)?;
+        let unreadable = located_in(&written, self.session, unreadable);
+        state.findings = standing(&unreadable, &[], false);
+        state.persistent = next;
+        state.unreadable = unreadable;
+        state.disabled_bundled = disabled_bundled;
+        Ok(())
     }
 
     /// Übernimmt den neuen Stand in den Schnappschuss und meldet die Revision.
@@ -787,7 +878,10 @@ impl RulesStore {
 /// ans Ende und wird trotzdem zuerst geprüft: Ihren Vorrang trägt sie an sich
 /// selbst, nicht an ihrem Platz in der Liste.
 fn snapshot_of(state: &State) -> RuleSet {
-    let mut set = RuleSet::from_rules(state.session.iter().chain(&state.persistent).cloned());
+    // Der Ersatz einer unlesbaren Regel steht an ihrem Platz unter den
+    // dauerhaften Regeln, nie davor und nie dahinter (HUM-561).
+    let persistent = with_fences(&state.persistent, &state.unreadable);
+    let mut set = RuleSet::from_rules(state.session.iter().cloned().chain(persistent));
     // Vor `add_bundled`: die Liste entscheidet dort mit, welche mitgelieferte
     // Regel abgeschaltet in den Satz geht.
     set.set_disabled_bundled(state.disabled_bundled.iter().copied());
@@ -795,35 +889,117 @@ fn snapshot_of(state: &State) -> RuleSet {
     set
 }
 
+/// Was [`read_rules_file`] aus `rules.yaml` gelesen hat.
+#[derive(Debug, Clone, Default)]
+pub struct FileRead {
+    /// Die lesbaren Regeln, in der Reihenfolge der Datei.
+    pub rules: Vec<Rule>,
+    /// Die abgeschalteten mitgelieferten Regeln.
+    pub disabled_bundled: BTreeSet<RuleId>,
+    /// Die Regeln, die sich nicht lesen ließen (HUM-561).
+    pub unreadable: Vec<UnreadableRule>,
+    /// Alle Befunde: je unlesbarer Regel einer und die Warnungen, oder die
+    /// Gründe, aus denen die Datei als Ganzes abgelehnt wurde.
+    pub diagnostics: Vec<Diagnostic>,
+    /// Wahr, wenn die Datei als Ganzes nicht lesbar war; dann sind
+    /// [`FileRead::rules`] und [`FileRead::unreadable`] leer.
+    pub refused: bool,
+}
+
 /// Liest die Regel-Datei; eine fehlende Datei ist ein leerer Regelsatz.
-fn read_file(path: &Path, session: SessionId) -> (Vec<Rule>, BTreeSet<RuleId>, Vec<Diagnostic>) {
+///
+/// Derselbe Weg, den der Speicher beim Start und beim `reload` nimmt; der
+/// Doctor liest damit, ohne einen Speicher zu bauen.
+#[must_use]
+pub fn read_rules_file(path: &Path, session: SessionId) -> FileRead {
     if path.as_os_str().is_empty() {
-        return (Vec::new(), BTreeSet::new(), Vec::new());
+        return FileRead::default();
     }
     let text = match std::fs::read_to_string(path) {
         Ok(text) => text,
         Err(error) if error.kind() == std::io::ErrorKind::NotFound => {
-            return (Vec::new(), BTreeSet::new(), Vec::new());
+            return FileRead::default();
         }
         Err(error) => {
-            return (
-                Vec::new(),
-                BTreeSet::new(),
-                vec![
+            return FileRead {
+                diagnostics: vec![
                     Diagnostic::builder(codes::RULES_001, Severity::Error)
                         .why(format!("cannot read {}: {error}", path.display()))
                         .build(),
                 ],
-            );
+                refused: true,
+                ..FileRead::default()
+            };
         }
     };
-    match parse_rules_for_session(&text, session) {
-        Ok((set, warnings)) => (
-            set.iter().cloned().collect(),
-            set.disabled_bundled().collect(),
-            warnings,
-        ),
-        Err(diagnostics) => (Vec::new(), BTreeSet::new(), diagnostics),
+    match read_user_rules(&text, session) {
+        Ok(read) => FileRead {
+            diagnostics: read.diagnostics(),
+            rules: read.rules,
+            disabled_bundled: read.disabled_bundled.into_iter().collect(),
+            unreadable: read.unreadable,
+            refused: false,
+        },
+        Err(diagnostics) => FileRead {
+            diagnostics,
+            refused: true,
+            ..FileRead::default()
+        },
+    }
+}
+
+impl FileRead {
+    /// Die Befunde, die nach diesem Lesen stehen bleiben, bis die Datei
+    /// sich ändert ([`RulesStore::findings`]).
+    ///
+    /// Alle als Warnung: Sie beschreiben einen Zustand, keinen gescheiterten
+    /// Aufruf, und der Regel-RPC legt sie jeder Liste bei. Eine Datei, die als
+    /// Ganzes nicht lesbar war, steht deshalb als ein Befund da, der die Gründe
+    /// nennt und sagt, was daraus folgt.
+    #[must_use]
+    pub fn findings(&self) -> Vec<Diagnostic> {
+        standing(&self.unreadable, &self.diagnostics, self.refused)
+    }
+}
+
+/// Die unlesbaren Einträge mit Platz und Zeile, wie sie in `written` stehen.
+///
+/// Nach dem Schreiben stimmen Index und Zeile aus dem letzten Lesen nicht
+/// mehr: Die Datei ist neu gesetzt, und eine Regel darüber kann fehlen. Die
+/// Befunde sollen aber auf die Datei zeigen, die jetzt auf der Platte liegt.
+/// Gelesen wird deshalb das Geschriebene; nur wenn es genau dieselben
+/// Einträge in derselben Reihenfolge ergibt, gilt seine Fassung, sonst
+/// bleibt die bisherige (der Fall tritt nicht ein, wäre aber kein Grund,
+/// einen Eintrag zu verlieren).
+fn located_in(
+    written: &str,
+    session: SessionId,
+    unreadable: Vec<UnreadableRule>,
+) -> Vec<UnreadableRule> {
+    let Ok(read) = read_user_rules(written, session) else {
+        return unreadable;
+    };
+    let same = read.unreadable.len() == unreadable.len()
+        && read
+            .unreadable
+            .iter()
+            .zip(&unreadable)
+            .all(|(new, old)| new.entry() == old.entry() && new.after() == old.after());
+    if same { read.unreadable } else { unreadable }
+}
+
+fn standing(
+    unreadable: &[UnreadableRule],
+    diagnostics: &[Diagnostic],
+    refused: bool,
+) -> Vec<Diagnostic> {
+    if refused {
+        vec![refused_finding(diagnostics)]
+    } else {
+        unreadable
+            .iter()
+            .map(|entry| entry.diagnostic().clone())
+            .collect()
     }
 }
 
@@ -955,6 +1131,38 @@ fn io_failed(path: &Path, why: &str) -> Diagnostic {
             "cannot write {}: {why}; the rule set on disk is unchanged",
             path.display()
         ))
+        .build()
+}
+
+/// Der Befund für ein Schreiben, das eine nicht lesbare Datei ersetzen würde.
+fn refused_write(path: &Path) -> Diagnostic {
+    Diagnostic::builder(codes::RULES_009, Severity::Error)
+        .why(format!(
+            "{} could not be read when it was last loaded, so writing it now would replace \
+             your rules with the ones in memory; the file is unchanged. Fix it and reload the \
+             rules, then try again",
+            path.display()
+        ))
+        .fix(FixAction::CopyCommand("humanitl rules reload".to_owned()))
+        .build()
+}
+
+/// Der Befund für eine Änderung, die eine Regel über den Ersatz einer
+/// unlesbaren Regel höbe (HUM-561).
+fn over_unreadable(path: &Path, fenced: &UnreadableRule) -> Diagnostic {
+    let place = fenced.line().map_or_else(
+        || format!("rules[{}]", fenced.index()),
+        |line| format!("rules[{}] (line {line})", fenced.index()),
+    );
+    Diagnostic::builder(codes::RULES_009, Severity::Error)
+        .why(format!(
+            "this change would put a rule above {place} of {}, which could not be read and \
+             stands in its place until it is fixed; a rule above it would decide what it may \
+             have stopped. Nothing was changed. Fix or remove that entry and reload the rules, \
+             or place the rule below it",
+            path.display()
+        ))
+        .fix(FixAction::CopyCommand("humanitl rules reload".to_owned()))
         .build()
 }
 
@@ -1109,7 +1317,9 @@ mod tests {
             .expect("add");
         let before = store.effective();
 
-        std::fs::write(store.path(), "version: 1\nrules:\n  - action: nonsense\n").expect("write");
+        // Als Ganzes unlesbar: Eine einzelne kaputte Regel kostete seit HUM-561
+        // nur sich selbst (`tests/rules_unreadable.rs`).
+        std::fs::write(store.path(), "version: 2\nrules:\n  - action: nonsense\n").expect("write");
         let diagnostics = store.reload();
 
         assert!(

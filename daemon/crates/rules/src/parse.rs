@@ -6,10 +6,20 @@
 //! darin muss auffallen, statt eine Regel wirkungslos zu machen, an die sich
 //! jemand hält.
 //!
-//! Ein Fehler lehnt die ganze Datei ab ([`Err`]). Der Daemon läuft dann mit dem
-//! zuletzt gültigen Regelsatz weiter und zeigt den Befund; ein halb geladener
-//! Regelsatz wäre die schlechtere Antwort, weil niemand ihm ansieht, welche
-//! Hälfte fehlt. Warnungen kommen mit dem Regelsatz zusammen zurück.
+//! Zwei Lesarten mit demselben Parser:
+//!
+//! - [`parse_rules`] und [`parse_rules_for_session`] lehnen bei jedem Fehler
+//!   die ganze Eingabe ab ([`Err`]). So lesen Profile, `rules/default.yaml`
+//!   und die Prüfung einer Regel, die über die Leitung kommt: Dort gibt es
+//!   keinen Nutzer, dem eine halbe Datei mehr hilft als ein klarer Befund.
+//! - [`read_user_rules`] liest die `rules.yaml` des Nutzers. Ein Fehler in
+//!   einer Regel kostet dort nur diese Regel (HUM-561); abgelehnt wird die
+//!   Datei nur, wenn sie als Ganzes nicht lesbar ist (kein YAML, unbekannte
+//!   Version, unbekannter Schlüssel der obersten Ebene, ein unlesbarer
+//!   Eintrag in `disabled_bundled`). Was aus einer unlesbaren Regel wird,
+//!   steht an [`crate::unreadable`].
+//!
+//! Warnungen kommen in beiden Lesarten mit dem Regelsatz zusammen zurück.
 
 use humanitl_core::diagnostics::codes::{
     RULES_001, RULES_005, RULES_006, RULES_007, RULES_008, RULES_010,
@@ -19,10 +29,12 @@ use humanitl_core::{
     Diagnostic, FixAction, FlowId, Method, RuleId, Scheme, SessionId, Severity, Upgrade,
 };
 use serde::{Deserialize, Serialize};
+use serde_yaml_ng::Value;
 
 use crate::eval::{RuleSet, is_known_method};
 use crate::host;
 use crate::path::PathMatcher;
+use crate::unreadable::{self, UnreadableRule};
 
 /// Die einzige Fassung des Dateiformats, die es gibt.
 pub const RULES_VERSION: u32 = 1;
@@ -52,6 +64,119 @@ pub fn parse_rules_for_session(
     yaml: &str,
     session: SessionId,
 ) -> Result<(RuleSet, Vec<Diagnostic>), Vec<Diagnostic>> {
+    let read = read(yaml, session)?;
+    if read.diagnostics.iter().any(is_error) {
+        return Err(read.diagnostics);
+    }
+    let mut set = RuleSet::from_rules(read.rules);
+    set.set_disabled_bundled(read.disabled_bundled);
+    Ok((set, read.diagnostics))
+}
+
+/// Was [`read_user_rules`] aus der `rules.yaml` des Nutzers liest.
+#[derive(Debug, Clone)]
+pub struct UserRules {
+    /// Die lesbaren Regeln, in der Reihenfolge der Datei.
+    pub rules: Vec<Rule>,
+    /// Die Ids der mitgelieferten Regeln, die der Nutzer abgeschaltet hat.
+    pub disabled_bundled: Vec<RuleId>,
+    /// Die Regeln, die sich nicht lesen ließen, je mit ihrem Platz, ihrem
+    /// Eintrag, wie er in der Datei steht, und ihrem Ersatz.
+    pub unreadable: Vec<UnreadableRule>,
+    /// Die Warnungen zu den lesbaren Teilen.
+    pub warnings: Vec<Diagnostic>,
+}
+
+impl UserRules {
+    /// Alle Befunde: je unlesbarer Regel einer, dann die Warnungen.
+    #[must_use]
+    pub fn diagnostics(&self) -> Vec<Diagnostic> {
+        self.unreadable
+            .iter()
+            .map(|entry| entry.diagnostic().clone())
+            .chain(self.warnings.iter().cloned())
+            .collect()
+    }
+}
+
+/// Liest die `rules.yaml` des Nutzers; eine unlesbare Regel kostet nur sich.
+///
+/// Jede Regel, die sich nicht lesen lässt, fällt aus den geltenden Regeln
+/// heraus, bleibt aber mit ihrem Eintrag erhalten ([`UnreadableRule`]): Der
+/// Speicher schreibt ihn beim nächsten Speichern unverändert an ihren Platz
+/// zurück ([`serialize_user_rules`]), und solange sie nicht lesbar ist, steht
+/// an ihrem Platz ein Ersatz, der nie mehr erlaubt als die Regel selbst
+/// ([`crate::unreadable`]). Ihr Befund nennt Zeile und Grund.
+///
+/// # Errors
+///
+/// Die Befunde, wenn die Datei als Ganzes nicht lesbar ist: kein gültiges
+/// YAML, ein unbekannter Schlüssel der obersten Ebene, `version` fehlt oder
+/// ist unbekannt, ein Eintrag in `disabled_bundled` ist keine Regel-Id. Ein
+/// Eintrag in `disabled_bundled` schaltet eine mitgelieferte Regel ab, die
+/// auch erlauben kann; ihn zu überspringen, schaltete sie still wieder an.
+pub fn read_user_rules(yaml: &str, session: SessionId) -> Result<UserRules, Vec<Diagnostic>> {
+    let read = read(yaml, session)?;
+    if read.file_failed {
+        return Err(read.diagnostics);
+    }
+    Ok(UserRules {
+        rules: read.rules,
+        disabled_bundled: read.disabled_bundled,
+        unreadable: read.unreadable,
+        warnings: read
+            .diagnostics
+            .into_iter()
+            .filter(|diagnostic| !is_error(diagnostic))
+            .collect(),
+    })
+}
+
+/// Der eine Befund, der stehen bleibt, solange `rules.yaml` als Ganzes nicht
+/// lesbar ist: die Gründe aus [`read_user_rules`] und was daraus folgt.
+///
+/// Eine Warnung, weil er einen Zustand beschreibt und keinen gescheiterten
+/// Aufruf; der Regel-RPC legt ihn jeder Liste bei, und der Doctor zeigt ihn.
+#[must_use]
+pub fn refused_finding(diagnostics: &[Diagnostic]) -> Diagnostic {
+    let reason = diagnostics
+        .iter()
+        .map(|diagnostic| diagnostic.why.as_str())
+        .collect::<Vec<_>>()
+        .join("; ");
+    Diagnostic::builder(
+        diagnostics.first().map_or(RULES_001, |first| first.code),
+        Severity::Warning,
+    )
+    .why(format!(
+        "rules.yaml could not be read: {reason}. None of your persistent rules apply, and the \
+         daemon does not write the file until it can be read again; fix it and reload the rules"
+    ))
+    .fix(FixAction::CopyCommand("humanitl rules reload".to_owned()))
+    .build()
+}
+
+/// Wahr für einen Befund, der eine Regel oder die Datei ablehnt.
+fn is_error(diagnostic: &Diagnostic) -> bool {
+    matches!(diagnostic.severity, Severity::Error | Severity::Blocking)
+}
+
+/// Das gemeinsame Ergebnis beider Lesarten.
+struct Read {
+    rules: Vec<Rule>,
+    disabled_bundled: Vec<RuleId>,
+    unreadable: Vec<UnreadableRule>,
+    /// Alle Befunde in der Reihenfolge, in der sie auffielen.
+    diagnostics: Vec<Diagnostic>,
+    /// Ein Fehler, der nicht an einer einzelnen Regel hängt.
+    file_failed: bool,
+}
+
+/// Liest die Datei Regel für Regel.
+///
+/// [`Err`] nur, wenn schon die Struktur der obersten Ebene nicht passt; jede
+/// Regel wird für sich gelesen, damit ein Fehler darin bei ihr bleibt.
+fn read(yaml: &str, session: SessionId) -> Result<Read, Vec<Diagnostic>> {
     let file: RulesFile = match serde_yaml_ng::from_str(yaml) {
         Ok(file) => file,
         Err(err) => {
@@ -65,45 +190,30 @@ pub fn parse_rules_for_session(
 
     let mut diagnostics = Vec::new();
     let source = Source::new(yaml);
-
-    match file.version {
-        Some(RULES_VERSION) => {}
-        Some(other) => diagnostics.push(
-            Diagnostic::builder(RULES_006, Severity::Error)
-                .why(format!(
-                    "{}: rules.yaml has version {other}, and only version {RULES_VERSION} exists",
-                    place("version", source.top_key("version"))
-                ))
-                .build(),
-        ),
-        None => diagnostics.push(
-            Diagnostic::builder(RULES_006, Severity::Error)
-                .why(format!(
-                    "rules.yaml has no `version` key; write `version: {RULES_VERSION}`"
-                ))
-                .build(),
-        ),
-    }
+    let mut file_failed = !version_ok(file.version, &source, &mut diagnostics);
 
     let mut rules: Vec<Rule> = Vec::with_capacity(file.rules.len());
-    for (index, raw) in file.rules.into_iter().enumerate() {
-        if let Some(rule) = raw.into_rule(index, session, &source, &mut diagnostics) {
-            if rules.iter().any(|existing| existing.id == rule.id) {
-                let line = source
-                    .field(index, "id")
-                    .or_else(|| source.rule_start(index));
-                diagnostics.push(
-                    Diagnostic::builder(RULES_007, Severity::Error)
-                        .why(format!(
-                            "{}: the id {} is already taken; every rule needs its own",
-                            at(index, "id", line),
-                            rule.id
-                        ))
-                        .build(),
-                );
-            }
+    let mut unreadable_rules = Vec::new();
+    for (index, entry) in file.rules.into_iter().enumerate() {
+        let first = diagnostics.len();
+        if let Some(rule) = read_one(&entry, index, session, &source, &rules, &mut diagnostics) {
             diagnostics.extend(too_broad(index, &rule));
             rules.push(rule);
+        } else {
+            let errors: Vec<Diagnostic> = diagnostics[first..]
+                .iter()
+                .filter(|diagnostic| is_error(diagnostic))
+                .cloned()
+                .collect();
+            let readable = readable_parts(&entry, index, session, &source);
+            unreadable_rules.push(UnreadableRule::new(
+                index,
+                source.rule_start(index),
+                rules.last().map(|rule| rule.id),
+                entry,
+                &errors,
+                &readable,
+            ));
         }
     }
 
@@ -116,26 +226,163 @@ pub fn parse_rules_for_session(
                 }
                 disabled_bundled.push(id);
             }
-            Err(err) => diagnostics.push(
-                Diagnostic::builder(RULES_001, Severity::Error)
-                    .why(format!(
-                        "{}: disabled_bundled holds {text:?}, which is not a rule id: {err}",
-                        place("disabled_bundled", source.top_key("disabled_bundled"))
-                    ))
-                    .build(),
-            ),
+            Err(err) => {
+                file_failed = true;
+                diagnostics.push(
+                    Diagnostic::builder(RULES_001, Severity::Error)
+                        .why(format!(
+                            "{}: disabled_bundled holds {text:?}, which is not a rule id: {err}",
+                            place("disabled_bundled", source.top_key("disabled_bundled"))
+                        ))
+                        .build(),
+                );
+            }
         }
     }
 
-    if diagnostics
-        .iter()
-        .any(|diagnostic| matches!(diagnostic.severity, Severity::Error | Severity::Blocking))
-    {
-        return Err(diagnostics);
+    Ok(Read {
+        rules,
+        disabled_bundled,
+        unreadable: unreadable_rules,
+        diagnostics,
+        file_failed,
+    })
+}
+
+/// Prüft `version`; falsch, wenn die Datei damit als Ganzes nicht lesbar ist.
+fn version_ok(
+    version: Option<u32>,
+    source: &Source<'_>,
+    diagnostics: &mut Vec<Diagnostic>,
+) -> bool {
+    let why = match version {
+        Some(RULES_VERSION) => return true,
+        Some(other) => format!(
+            "{}: rules.yaml has version {other}, and only version {RULES_VERSION} exists",
+            place("version", source.top_key("version"))
+        ),
+        None => format!("rules.yaml has no `version` key; write `version: {RULES_VERSION}`"),
+    };
+    diagnostics.push(
+        Diagnostic::builder(RULES_006, Severity::Error)
+            .why(why)
+            .build(),
+    );
+    false
+}
+
+/// Liest einen Eintrag der Liste `rules`; `None`, wenn dabei ein Fehler auffiel.
+///
+/// Eine Id, die eine Regel davor schon trägt, macht den Eintrag unlesbar: Zwei
+/// Regeln mit derselben Id ließen sich weder ändern noch löschen, ohne dass
+/// offen bliebe, welche gemeint ist.
+fn read_one(
+    entry: &Value,
+    index: usize,
+    session: SessionId,
+    source: &Source<'_>,
+    before: &[Rule],
+    diagnostics: &mut Vec<Diagnostic>,
+) -> Option<Rule> {
+    let rule = match serde_yaml_ng::from_value::<RawRule>(entry.clone()) {
+        Ok(raw) => raw.into_rule(index, session, source, diagnostics)?,
+        Err(err) => {
+            diagnostics.push(
+                Diagnostic::builder(RULES_001, Severity::Error)
+                    .why(format!(
+                        "{}: {err}",
+                        place(&format!("rules[{index}]"), source.rule_start(index))
+                    ))
+                    .build(),
+            );
+            return None;
+        }
+    };
+    if before.iter().any(|existing| existing.id == rule.id) {
+        let line = source
+            .field(index, "id")
+            .or_else(|| source.rule_start(index));
+        diagnostics.push(
+            Diagnostic::builder(RULES_007, Severity::Error)
+                .why(format!(
+                    "{}: the id {} is already taken; every rule needs its own",
+                    at(index, "id", line),
+                    rule.id
+                ))
+                .build(),
+        );
+        return None;
     }
-    let mut set = RuleSet::from_rules(rules);
-    set.set_disabled_bundled(disabled_bundled);
-    Ok((set, diagnostics))
+    Some(rule)
+}
+
+/// Was sich aus einem unlesbaren Eintrag noch sicher lesen lässt.
+///
+/// Gelesen wird jedes Teil für sich: die Aktion, die ganze Bedingung und, wenn
+/// die nicht durchgeht, wenigstens das Host-Muster, dazu, ob die Regel nur für
+/// die Sitzung gilt: Eine Sitzungsregel wird vor allen dauerhaften Regeln
+/// geprüft, und ihr Ersatz soll diesen Rang behalten. Befunde dieses zweiten
+/// Lesens gehen verloren; sie stehen schon im Befund der Regel.
+fn readable_parts(
+    entry: &Value,
+    index: usize,
+    session: SessionId,
+    source: &Source<'_>,
+) -> unreadable::Readable {
+    let action = entry
+        .get("action")
+        .and_then(|value| serde_yaml_ng::from_value::<Action>(value.clone()).ok());
+    let raw_match = entry.get("match");
+    let mut ignored = Vec::new();
+    let matcher = raw_match
+        .and_then(|value| serde_yaml_ng::from_value::<RawMatch>(value.clone()).ok())
+        .and_then(|raw| raw.into_matcher(index, source, &mut ignored));
+    let host = raw_match
+        .and_then(|value| value.get("host"))
+        .and_then(Value::as_str)
+        .and_then(|text| host::parse_pattern(text).ok())
+        .map(|(pattern, _warnings)| pattern);
+    let session = entry
+        .get("expires")
+        .and_then(Value::as_str)
+        .filter(|text| *text == "session")
+        .map(|_| session);
+    unreadable::Readable {
+        action,
+        matcher,
+        host,
+        session,
+    }
+}
+
+/// Schreibt die `rules.yaml` des Nutzers samt der Regeln, die sich nicht lesen ließen.
+///
+/// Jeder unlesbare Eintrag steht danach wieder hinter der Regel, hinter der er
+/// stand ([`UnreadableRule::after`]), und zwar so, wie er gelesen wurde: Wer
+/// ihn repariert, findet seinen Text wieder, statt ihn neu schreiben zu
+/// müssen. Kommentare und Schreibweise der Datei überleben das Schreiben
+/// nicht, das gilt für jede Regel gleich.
+#[must_use]
+pub fn serialize_user_rules(set: &RuleSet, unreadable: &[UnreadableRule]) -> String {
+    let rules: Vec<Rule> = set.iter().cloned().collect();
+    let entries = unreadable::interleave(
+        &rules,
+        unreadable,
+        |rule| OutEntry::Rule(Box::new(OutRule::from_rule(rule))),
+        |entry| OutEntry::Kept(entry.entry().clone()),
+    );
+    let file = OutFile {
+        version: RULES_VERSION,
+        rules: entries,
+        disabled_bundled: set.disabled_bundled().map(|id| id.to_string()).collect(),
+    };
+    serde_yaml_ng::to_string(&file).unwrap_or_else(|err| {
+        // Die Struktur besteht aus Zeichenketten, Zahlen, Wahrheitswerten und
+        // gelesenen YAML-Werten; sie kann nicht scheitern. Der Zweig steht
+        // hier, weil ein `unwrap` in dieser Codebasis nicht vorkommt
+        // (CONVENTIONS 3.12).
+        format!("# rules.yaml could not be written: {err}\nversion: {RULES_VERSION}\nrules: []\n")
+    })
 }
 
 /// Schreibt einen Regelsatz als YAML.
@@ -145,17 +392,7 @@ pub fn parse_rules_for_session(
 /// geschrieben: eine Sitzung von gestern gibt es morgen nicht mehr.
 #[must_use]
 pub fn serialize_rules(set: &RuleSet) -> String {
-    let file = OutFile {
-        version: RULES_VERSION,
-        rules: set.iter().map(OutRule::from_rule).collect(),
-        disabled_bundled: set.disabled_bundled().map(|id| id.to_string()).collect(),
-    };
-    serde_yaml_ng::to_string(&file).unwrap_or_else(|err| {
-        // Die Struktur besteht aus Zeichenketten, Zahlen und Wahrheitswerten;
-        // sie kann nicht scheitern. Der Zweig steht hier, weil ein `unwrap` in
-        // dieser Codebasis nicht vorkommt (CONVENTIONS 3.12).
-        format!("# rules.yaml could not be written: {err}\nversion: {RULES_VERSION}\nrules: []\n")
-    })
+    serialize_user_rules(set, &[])
 }
 
 /// Findet die Zeile eines Schlüssels im Quelltext.
@@ -385,8 +622,10 @@ fn too_broad(index: usize, rule: &Rule) -> Vec<Diagnostic> {
 #[serde(deny_unknown_fields)]
 struct RulesFile {
     version: Option<u32>,
+    /// Jede Regel als YAML-Wert: gelesen wird sie einzeln, damit ein Fehler
+    /// darin bei ihr bleibt ([`read_user_rules`]).
     #[serde(default)]
-    rules: Vec<RawRule>,
+    rules: Vec<Value>,
     /// Ids mitgelieferter Regeln, die der Nutzer abgeschaltet hat.
     ///
     /// Der Zustand steht hier und nicht an der Regel: `rules/default.yaml`
@@ -771,11 +1010,20 @@ fn parse_expiry(text: &str, session: SessionId) -> Option<Expiry> {
 #[derive(Debug, Serialize)]
 struct OutFile {
     version: u32,
-    rules: Vec<OutRule>,
+    rules: Vec<OutEntry>,
     /// Leer weggelassen, damit eine Datei ohne abgeschaltete Regel so aussieht
     /// wie bisher.
     #[serde(skip_serializing_if = "Vec::is_empty")]
     disabled_bundled: Vec<String>,
+}
+
+/// Ein Eintrag der Liste `rules`: eine gelesene Regel oder ein Eintrag, der
+/// sich nicht lesen ließ und so bleibt, wie er war.
+#[derive(Debug, Serialize)]
+#[serde(untagged)]
+enum OutEntry {
+    Rule(Box<OutRule>),
+    Kept(Value),
 }
 
 #[derive(Debug, Serialize)]

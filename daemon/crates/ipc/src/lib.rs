@@ -356,6 +356,7 @@ pub mod llm_servers;
 pub mod policy_guard;
 pub mod projects;
 pub mod rules;
+pub mod rules_doctor;
 pub mod sandbox;
 pub mod server;
 pub mod server_stub;
