@@ -214,6 +214,51 @@ pub(crate) fn read_small(
     Ok(Some(bytes))
 }
 
+/// The SHA-256 of a regular file `rel` under `root`, read like
+/// [`read_small`] (no link on the way, no FIFO) but hashed as it streams, at
+/// most `cap` bytes: the archive of a run (HUM-566), too large to hold.
+/// `Ok(None)` when it does not exist.
+pub(crate) fn sha256_at(
+    root: BorrowedFd<'_>,
+    rel: &Path,
+    cap: u64,
+) -> Result<Option<String>, String> {
+    let parent = rel.parent().unwrap_or_else(|| Path::new(""));
+    let Some(name) = rel.file_name() else {
+        return Err(format!("{} names no file", rel.display()));
+    };
+    let dir = match open_dir_beneath(root, parent) {
+        Ok(dir) => dir,
+        Err(rustix::io::Errno::NOENT) => return Ok(None),
+        Err(err) => return Err(format!("{} cannot be opened ({err})", parent.display())),
+    };
+    let (fd, _) = match open_file_at(dir.as_fd(), name) {
+        Ok(opened) => opened,
+        Err(_) if rustix::fs::statat(&dir, name, AtFlags::SYMLINK_NOFOLLOW).is_err() => {
+            return Ok(None);
+        }
+        Err(what) => return Err(format!("{} {what}", rel.display())),
+    };
+    let mut input = File::from(fd).take(cap.saturating_add(1));
+    let mut hasher = Sha256::new();
+    let mut buf = vec![0_u8; 64 * 1024];
+    let mut total = 0_u64;
+    loop {
+        let read = input
+            .read(&mut buf)
+            .map_err(|err| format!("{} cannot be read ({err})", rel.display()))?;
+        if read == 0 {
+            break;
+        }
+        total = total.saturating_add(u64::try_from(read).unwrap_or(u64::MAX));
+        if total > cap {
+            return Err(format!("{} is larger than {cap} bytes", rel.display()));
+        }
+        hasher.update(buf.get(..read).unwrap_or_default());
+    }
+    Ok(Some(hex(&hasher.finalize())))
+}
+
 /// The version the vendor's manifest names at `pointer`, a valid version
 /// name.
 ///
@@ -262,7 +307,7 @@ pub(crate) fn vendor_checksum(
 }
 
 /// Lower-case hex of a hash.
-fn hex(bytes: &[u8]) -> String {
+pub(crate) fn hex(bytes: &[u8]) -> String {
     use std::fmt::Write as _;
     bytes
         .iter()

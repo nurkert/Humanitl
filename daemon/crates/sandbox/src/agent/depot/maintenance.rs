@@ -516,6 +516,7 @@ impl MaintenanceRun {
         // The signature first: the version of a signed install is the one
         // the verified manifest names, and every decision below uses it.
         let verified = self.verify_download(&depot, &result)?;
+        self.check_list(&result)?;
         adopt::recover(&depot);
         let previous = match depot.installed() {
             Ok(installed) => Some(installed.version),
@@ -637,10 +638,73 @@ impl MaintenanceRun {
                     &format!("program/ cannot be opened ({err})"),
                 )
             })?;
+        let checked = match self.install.checksums {
+            Some(_) => Some(self.read_checked(out.as_fd())?),
+            None => None,
+        };
         Ok(RunResult {
             version,
             signed,
+            checked,
             program,
+        })
+    }
+
+    /// Reads the files of a checksum list from the run's result: metadata
+    /// and list as bytes, the archive only as its SHA-256, which the daemon
+    /// computes from the bytes it reads (HUM-566).
+    fn read_checked(&self, out: std::os::fd::BorrowedFd<'_>) -> Result<Checked, Diagnostic> {
+        let agent = self.agent.id;
+        let missing = |name: &str| {
+            failed(
+                agent,
+                Step::Checksum,
+                &format!(
+                    "the run left no {}/{name} of the vendor",
+                    super::checksums::DIR
+                ),
+            )
+        };
+        let path = |name: &str| Path::new(super::checksums::DIR).join(name);
+        let read = |name: &str| {
+            adopt::read_small(out, &path(name), adopt::SMALL_FILE_CAP)
+                .map_err(|what| failed(agent, Step::Checksum, &what))?
+                .ok_or_else(|| missing(name))
+        };
+        let metadata = read(super::checksums::METADATA)?;
+        let list = read(super::checksums::LIST)?;
+        let archive_sha256 = adopt::sha256_at(
+            out,
+            &path(super::checksums::ARCHIVE),
+            adopt::MAX_PROGRAM_BYTES,
+        )
+        .map_err(|what| failed(agent, Step::Checksum, &what))?
+        .ok_or_else(|| missing(super::checksums::ARCHIVE))?;
+        Ok(Checked {
+            metadata,
+            list,
+            archive_sha256,
+        })
+    }
+
+    /// Checks the chain of a checksum list on the daemon's own reading
+    /// ([`super::checksums::check`]); nothing for a recipe without one.
+    fn check_list(&self, result: &RunResult) -> Result<(), Diagnostic> {
+        let agent = self.agent.id;
+        let (Some(spec), Some(checked)) = (self.install.checksums, &result.checked) else {
+            return Ok(());
+        };
+        super::checksums::check(
+            &spec,
+            self.platform,
+            &result.version,
+            &checked.metadata,
+            &checked.list,
+            &checked.archive_sha256,
+        )
+        .map_err(|found| match found {
+            super::checksums::Failed::Version(what) => failed(agent, Step::Pin, &what),
+            super::checksums::Failed::Checksum(what) => failed(agent, Step::Checksum, &what),
         })
     }
 
@@ -669,6 +733,19 @@ impl MaintenanceRun {
                 ),
             ));
         };
+        for path in self.install.expected {
+            if !files.contains_key(*path) {
+                return Err(failed(
+                    agent,
+                    Step::Tree,
+                    &format!(
+                        "the program tree holds no regular file {path}, which the recipe \
+                         expects beside the program"
+                    ),
+                ));
+            }
+        }
+        self.name_program(staging.path())?;
         if let Some(verified) = verified
             && sum != verified.checksum
         {
@@ -701,6 +778,42 @@ impl MaintenanceRun {
             })
             .map_err(|what| failed(agent, Step::Commit, &what))?;
         Ok((staging, manifest))
+    }
+
+    /// Puts the daemon's link `<program>` at the top of the staged tree to
+    /// [`InstallRecipe::program`] where that lies deeper (`codex ->
+    /// bin/codex`, HUM-566), so the session finds the program by its name.
+    /// The run may not name it itself: an entry of that name in the tree is
+    /// refused.
+    fn name_program(&self, staged: &Path) -> Result<(), Diagnostic> {
+        let agent = self.agent.id;
+        let Some(name) = self.agent.recipe.map(|recipe| recipe.program) else {
+            return Ok(());
+        };
+        if name == self.install.program {
+            return Ok(());
+        }
+        let link = staged.join(name);
+        if std::fs::symlink_metadata(&link).is_ok() {
+            return Err(failed(
+                agent,
+                Step::Tree,
+                &format!(
+                    "program/{name} exists in the tree, and only the daemon names the program \
+                     (a link to {})",
+                    self.install.program
+                ),
+            ));
+        }
+        std::os::unix::fs::symlink(self.install.program, &link)
+            .and_then(|()| adopt::sync_dir(staged))
+            .map_err(|err| {
+                failed(
+                    agent,
+                    Step::Commit,
+                    &format!("the link program/{name} cannot be made ({err})"),
+                )
+            })
     }
 
     /// Verifies a signed recipe's download on the daemon's own copy
@@ -888,8 +1001,19 @@ struct RunResult {
     /// For a signed recipe: manifest, signature and key, by their names in
     /// [`verify`].
     signed: Option<Vec<(&'static str, Vec<u8>)>>,
+    /// For a recipe with a checksum list: what the daemon read of it.
+    checked: Option<Checked>,
     /// The program tree, opened without following a link.
     program: std::os::fd::OwnedFd,
+}
+
+/// The files of a checksum list as the daemon read them (HUM-566).
+#[derive(Debug)]
+struct Checked {
+    metadata: Vec<u8>,
+    list: Vec<u8>,
+    /// The archive's SHA-256, computed by the daemon.
+    archive_sha256: String,
 }
 
 impl Drop for MaintenanceRun {
@@ -1012,11 +1136,15 @@ pub(crate) fn prune_unused(depot: &Depot, keep: &[&str], previous: Option<&str>)
 }
 
 fn no_install_recipe(agent: &KnownAgent) -> Diagnostic {
-    Diagnostic::builder(AGENT_015, Severity::Error)
-        .why(format!(
+    let why = match agent.recipe.and_then(|recipe| recipe.install_refused) {
+        Some(reason) => format!("the depot installs no {}: {reason}", agent.display_name),
+        None => format!(
             "the adapter of {} brings no install recipe for the depot yet; nothing is installed",
             agent.display_name
-        ))
+        ),
+    };
+    Diagnostic::builder(AGENT_015, Severity::Error)
+        .why(why)
         .build()
 }
 
@@ -1045,3 +1173,6 @@ fn now() -> String {
 
 #[cfg(test)]
 mod tests;
+
+#[cfg(test)]
+mod package_tests;

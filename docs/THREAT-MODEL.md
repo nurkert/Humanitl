@@ -1050,12 +1050,15 @@ itself (`SANDBOX_006`). Only the recipe's hosts pass without a hold, as `allow` 
 session that go when the run ends; the stored rules are never written, and for the run the bundled
 group has no LLM passthrough. The run only downloads; the daemon reads no verdict from it, checks
 the tree on its own copy, verifies a signing vendor's manifest with the host's `gpg` against the
-fingerprint fixed in the adapter and the program's checksum against it, and only then switches
-`current` with a journal; a run with a status other than 0 or a red guarantee changes nothing. The
-version is pinned, sessions keep theirs, and a session's read-only program directory makes a
-self-update fail. *Residual risk:* an unsigned recipe's version is the run's word; the person's own
-rules apply to the run as to any session; the kernel level and Seatbelt refuse a maintenance run
-for now (`AGENT_015`).
+fingerprint fixed in the adapter and the program's checksum against it, or, for a vendor that
+publishes a list of checksums instead (Codex, HUM-566), its own copy of the chain from release
+metadata over the list to the archive, and only then switches `current` with a journal; a run with a
+status other than 0 or a red guarantee changes nothing. The version is pinned, sessions keep theirs,
+and a session's read-only program directory makes a self-update fail. *Residual risk:* an unsigned
+recipe's version is the run's word; behind a checksum list stands only TLS to the vendor's host, and
+the unpacked tree is bound to the checked archive by the run, not by the daemon; the person's own
+rules apply to the run as to any session; the kernel level and Seatbelt refuse a maintenance run for
+now (`AGENT_015`).
 
 **Login, configuration and the credential file (third part, HUM-520).** *Attacker:* a compromised
 agent in any session of a depot agent, which can write its writable copy of the configuration at
@@ -1326,6 +1329,7 @@ These attackers are not defended against, and Humanitl does not claim to:
 | 2026-11-20 | K-02: the Antigravity CLI (HUM-517) gets a Gemini API key from its sandbox file through the same shell inside the sandbox, which exports `GEMINI_API_KEY` and writes `modelProvider = "gemini"` into its settings on the sandbox's own home; the key is no finding in `x-goog-api-key` towards `generativelanguage.googleapis.com:443` with a key and without `llm.endpoint`, whose passthrough covers only `POST`/`GET` on `/v1beta/models` and `/v1/models` and below. Its Google sign-in lives in the host's keyring over D-Bus, which never enters a sandbox; the depot supports `agy` with an API key only. Its own terminal sandbox cannot start inside ours (`--disable-userns`); the outer boundary stays Humanitl. | HUM-517 |
 | 2026-11-20 | K-38: flow events the audit sink loses behind the broadcast stand in the chain as `audit.events_dropped` with their number; after a gap the sink closes only flows it has not heard from since the previous gap, residual: a flow silent across two gaps loses its `flow.responded` | HUM-564 |
 | 2026-11-20 | K-38: a flow whose `Failed` event falls into a gap of the audit sink has no `flow.failed`; `Recorded` names only the flow, the reason stays in the recording | HUM-565 |
+| 2026-11-20 | K-36: an install may take a vendor's package of several files (Codex): the recipe lists the files it expects, the daemon starts the program through a link of its own and checks a vendor's list of checksums on its own copy (release metadata, list, archive); residual: only TLS to the vendor's host vouches for the metadata, and the unpacked tree is bound to the archive by the run, not the daemon. `agy` gets no install: its manifest offers no chosen version, points at a shared storage host and carries its only checksum itself | HUM-566 |
 
 Every security-relevant change to the shim, the mount allowlist, the filter or the passthrough gets
 a line here. Vulnerabilities are reported as described in

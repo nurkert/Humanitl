@@ -1776,8 +1776,9 @@ dieses Laufs, die mit seinem Ende gehen; jede andere Anfrage wird gehalten wie i
 die gespeicherten Regeln bleiben unberührt. Der Lauf lädt nur herunter: nichts Heruntergeladenes
 läuft, weder im Lauf noch auf diesem Rechner. Nach dem Lauf prüft der Daemon den Baum, prüft die
 Signatur des Anbieters, wo er signiert (Claude Code: das signierte `manifest.json`, geprüft mit dem
-`gpg` des Hosts), legt die Version ins Depot und schaltet `current` um; ein gescheiterter Lauf
-ändert nichts.
+`gpg` des Hosts), oder seine Liste der Prüfsummen, wo er stattdessen eine veröffentlicht (Codex:
+Release-Metadaten, `codex-package_SHA256SUMS` und das Archiv, an der eigenen Kopie des Daemons),
+legt die Version ins Depot und schaltet `current` um; ein gescheiterter Lauf ändert nichts.
 
 Beide fragen vorher (mit `--yes` nicht) und hängen dann dieses Terminal an das des Laufs, wie
 `humanitl sandbox attach`: Präfix und `d` hängen ab, der Lauf geht weiter, und `humanitl agents
@@ -1840,8 +1841,10 @@ stattdessen aus dem Schlüssel von Humanitl (`humanitl llm key set`; als `ANTHRO
 mit einem Gateway in `llm.endpoint` als `ANTHROPIC_AUTH_TOKEN` mit `ANTHROPIC_BASE_URL`). Die
 Antigravity CLI läuft aus dem Depot nur mit einem Gemini-API-Schlüssel: `humanitl agents login agy`
 antwortet mit `AGENT_014`, ein Konfigurationslauf mit `AGENT_015`, weil keine Variable ihr
-`~/.gemini` verlegt. Codex und die Antigravity CLI haben noch kein Installationsrezept, OpenCode
-und pi kein Rezept fürs Depot; für sie antwortet `install` mit `AGENT_015`.
+`~/.gemini` verlegt. Codex installiert sein ganzes Paket von `releases.openai.com` (HUM-566). Die
+Antigravity CLI hat kein Installationsrezept: Ihr Anbieter bietet keinen Abruf einer gewählten
+Version und signiert nichts, und `install` antwortet mit `AGENT_015` und diesem Grund. OpenCode und
+pi haben kein Rezept fürs Depot; auch für sie antwortet `install` mit `AGENT_015`.
 
 ## Die globalen Schalter
 

@@ -1856,8 +1856,10 @@ pass without a hold (for Claude Code `downloads.claude.ai`), as rules of this ru
 ends; every other request is held as in any session, and the stored rules are never touched. The
 run only downloads: nothing downloaded executes, neither in the run nor on this machine. After the
 run the daemon checks the tree, verifies the vendor's signature where the vendor signs (Claude Code:
-the signed `manifest.json`, checked with the host's `gpg`), moves the version into the depot and
-switches `current`; a run that fails changes nothing.
+the signed `manifest.json`, checked with the host's `gpg`) or its list of checksums where it
+publishes one instead (Codex: release metadata, `codex-package_SHA256SUMS` and the archive, on the
+daemon's own copy), moves the version into the depot and switches `current`; a run that fails
+changes nothing.
 
 Both ask first (`--yes` does not) and then attach this terminal to the run's, like `humanitl
 sandbox attach`: the prefix and `d` detach, and the run keeps going; `humanitl agents status
@@ -1909,15 +1911,16 @@ AGENT --show` lists the configuration as it is, with its keys that run commands.
 
 What each agent can do in the depot today, and Claude Code from the depot step by step, is in the
 [agent depot guide](guides/agent-depot.md). In short: Claude Code installs from
-`downloads.claude.ai` with its signed manifest verified, but cannot log in inside the depot yet.
-The format of its credential file is not declared until it is measured (HUM-553), so `humanitl
-agents login claude` answers `AGENT_014`, and a session gets its access from Humanitl's key
-instead (`humanitl llm key set`; as `ANTHROPIC_API_KEY`, or with a gateway in `llm.endpoint` as
+`downloads.claude.ai` with its signed manifest verified, but cannot log in inside the depot yet. The
+format of its credential file is not declared until it is measured (HUM-553), so `humanitl agents
+login claude` answers `AGENT_014`, and a session gets its access from Humanitl's key instead
+(`humanitl llm key set`; as `ANTHROPIC_API_KEY`, or with a gateway in `llm.endpoint` as
 `ANTHROPIC_AUTH_TOKEN` with `ANTHROPIC_BASE_URL`). The Antigravity CLI runs from the depot with a
 Gemini API key only: `humanitl agents login agy` answers `AGENT_014`, and a configuration run
-answers `AGENT_015`, because no variable moves its `~/.gemini`. Codex and the Antigravity CLI
-have no install recipe yet, and OpenCode and pi have no depot recipe; for them `install` answers
-`AGENT_015`.
+answers `AGENT_015`, because no variable moves its `~/.gemini`. Codex installs its whole package
+from `releases.openai.com` (HUM-566). The Antigravity CLI has no install recipe: its vendor offers
+no way to fetch a chosen version and signs nothing, and `install` answers `AGENT_015` with that
+reason. OpenCode and pi have no depot recipe; for them `install` answers `AGENT_015` as well.
 
 ## `humanitl sessions`
 

@@ -490,7 +490,7 @@ fn the_preflight_names_the_installer_when_codex_is_missing() {
 
 /// The depot recipe: `CODEX_HOME`, `auth.json` with its format from the
 /// source, the device login against `auth.openai.com` without a callback,
-/// the keys that run a command, and no install recipe until measured.
+/// the keys that run a command, and the install of the vendor's package.
 #[test]
 fn the_depot_recipe_declares_home_login_and_format() {
     let recipe = CodexAdapter::new().depot_recipe().expect("a depot recipe");
@@ -498,7 +498,22 @@ fn the_depot_recipe_declares_home_login_and_format() {
     assert_eq!(recipe.credential_file, Some("auth.json"));
     assert!(recipe.credential_format.is_some());
     assert_eq!(recipe.login, depot::LoginFlow::DeviceCode);
-    assert!(recipe.install.is_none(), "not measured (HUM-553)");
+    // The vendor's package, checked against its checksum list (HUM-566).
+    let install = recipe.install.expect("an install recipe");
+    assert_eq!(install.program, "bin/codex");
+    let hosts: Vec<&str> = install.hosts.iter().map(|host| host.host).collect();
+    assert_eq!(hosts, ["releases.openai.com"]);
+    assert!(install.signature.is_none(), "the vendor signs nothing");
+    let list = install.checksums.expect("a checksum list");
+    assert_eq!(list.list, "codex-package_SHA256SUMS");
+    assert_eq!(list.archive, "codex-package-{platform}.tar.gz");
+    for helper in [
+        "bin/codex-code-mode-host",
+        "codex-path/rg",
+        "codex-package.json",
+    ] {
+        assert!(install.expected.contains(&helper), "{helper}");
+    }
     let login = recipe.login_run.expect("a login run");
     assert_eq!(login.args, ["login", "--device-auth"]);
     let hosts: Vec<&str> = login.hosts.iter().map(|host| host.host).collect();

@@ -174,11 +174,19 @@ installer is not executed), or name its own verdict: the daemon checks the tree 
 (regular files, directories, relative links inside, no sockets, FIFOs, devices, hard links or set-ID
 bits, at most 2 GiB and 50,000 entries), verifies a signing vendor's manifest with the host's `gpg`
 against the fingerprint fixed in the adapter, compares the program's SHA-256 with it, and only then
-places `program/<version>/` and switches `current` with a journal. A run that ends with a status
+places `program/<version>/` and switches `current` with a journal. Where a vendor signs nothing but
+publishes a list of checksums (Codex, HUM-566), the daemon checks its own copy of the chain instead:
+the release metadata names the release and the list's SHA-256, the list names the archive's; the
+run compares the archive before `tar` unpacks it, and a tree without a file the recipe expects is
+refused. The program of such a package starts through a link `<program> -> <path>` that only the
+daemon makes. A run that ends with a status
 other than 0 or with a red guarantee changes nothing. The version is pinned: only `update` changes
 it, and sessions keep the version they started with. In a session the program directory is
 read-only, so an agent's self-update fails there on purpose. *Limits:* an unsigned recipe's version
-is the run's word, checked only for its form; the kernel level and Seatbelt refuse a maintenance run
+is the run's word, checked only for its form; a checksum list binds the version and the archive to
+the vendor's release metadata, but only TLS to the vendor's host vouches for that metadata, and
+the unpacked tree is bound to the archive by the run, which executes nothing it downloaded, not by
+a check of the daemon's; the kernel level and Seatbelt refuse a maintenance run
 for now (`AGENT_015`); one run at a time, and only while no other session runs.
 
 **Login and configuration runs (HUM-520).** `humanitl agents login` and `humanitl agents config`

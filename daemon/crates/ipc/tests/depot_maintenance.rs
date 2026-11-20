@@ -125,6 +125,7 @@ static STAND_IN: [KnownAgent; 1] = [KnownAgent {
                 evidence: "the stand-in server of this test",
             }],
             program: "claude",
+            expected: &[],
             platforms: &[
                 (HostPlatform::LinuxX64, "linux-x64"),
                 (HostPlatform::LinuxArm64, "linux-arm64"),
@@ -132,8 +133,10 @@ static STAND_IN: [KnownAgent; 1] = [KnownAgent {
                 (HostPlatform::LinuxArm64Musl, "linux-arm64-musl"),
             ],
             signature: None,
+            checksums: None,
             source: "https://downloads.standin.test",
         }),
+        install_refused: None,
         login: LoginFlow::PastedCode,
         credential_format: None,
         login_run: None,
@@ -725,6 +728,7 @@ static STAND_IN_LOGIN: [KnownAgent; 1] = [KnownAgent {
         update_off: &[("DISABLE_UPDATES", "1")],
         credential_file: Some(".credentials.json"),
         install: None,
+        install_refused: None,
         login: LoginFlow::PastedCode,
         credential_format: Some(CredentialFormat {
             fields: &[

@@ -437,7 +437,7 @@ fn the_preflight_names_the_installer_when_agy_is_missing() {
 }
 
 /// The depot recipe: API key only, no configuration variable, the updater
-/// off, no credential file, no install recipe until measured.
+/// off, no credential file, no install recipe, with its reason (HUM-566).
 #[test]
 fn the_depot_recipe_is_api_key_only() {
     let recipe = AntigravityAdapter::new()
@@ -449,7 +449,15 @@ fn the_depot_recipe_is_api_key_only() {
     assert_eq!(recipe.credential_file, None);
     assert_eq!(recipe.credential_format, None);
     assert_eq!(recipe.login_run, None);
-    assert!(recipe.install.is_none(), "not measured (HUM-553)");
+    // Decided in HUM-566: no pinned, checkable release; the reason is named.
+    assert!(recipe.install.is_none());
+    assert!(
+        recipe
+            .install_refused
+            .is_some_and(|why| why.contains("no way to fetch a chosen one")),
+        "{:?}",
+        recipe.install_refused
+    );
     let known = depot::recipe::known("agy").unwrap();
     assert!(!depot::account::login_declared(known));
 }

@@ -188,12 +188,21 @@ oder sein eigenes Urteil sprechen: Der Daemon prüft den Baum an seiner eigenen 
 Dateien, Ordner, relative Verweise innerhalb, keine Sockets, FIFOs, Geräte, harten Links oder
 Set-ID-Bits, höchstens 2 GiB und 50 000 Einträge), prüft das Manifest eines signierenden Anbieters mit
 dem `gpg` des Hosts gegen den im Adapter festen Fingerabdruck, vergleicht die SHA-256 des Programms
-damit und legt erst dann `program/<version>/` an und schaltet `current` mit einem Journal um. Ein
+damit und legt erst dann `program/<version>/` an und schaltet `current` mit einem Journal um. Wo
+ein Anbieter nichts signiert, aber eine Liste von Prüfsummen veröffentlicht (Codex, HUM-566),
+prüft der Daemon stattdessen seine eigene Kopie der Kette: Die Release-Metadaten nennen das
+Release und den SHA-256 der Liste, die Liste den des Archivs; der Lauf vergleicht das Archiv, bevor
+`tar` es auspackt, und ein Baum ohne eine Datei, die das Rezept erwartet, wird abgelehnt. Das
+Programm eines solchen Pakets startet über einen Verweis `<programm> -> <pfad>`, den nur der Daemon
+anlegt. Ein
 Lauf, der mit einem Status ungleich 0 oder einer roten Garantie endet, ändert nichts. Die Version
 ist angeheftet: nur `update` ändert sie, und Sitzungen behalten die Version, mit der sie starteten. In
 einer Sitzung ist der Programmordner nur lesbar; ein Selbst-Update des Agenten scheitert dort mit
 Absicht. *Grenzen:* Die Version eines Rezepts ohne Signatur ist das Wort des Laufs, nur auf ihre
-Form geprüft; Kernel-Stufe und Seatbelt lehnen einen Wartungslauf vorerst ab (`AGENT_015`); ein Lauf
+Form geprüft; eine Liste von Prüfsummen bindet Version und Archiv an die Release-Metadaten des
+Anbieters, für diese bürgt aber nur TLS zum Host des Anbieters, und an das Archiv bindet den
+ausgepackten Baum der Lauf, der nichts Heruntergeladenes ausführt, keine Prüfung des Daemons;
+Kernel-Stufe und Seatbelt lehnen einen Wartungslauf vorerst ab (`AGENT_015`); ein Lauf
 zur Zeit, und nur, solange keine andere Sitzung läuft.
 
 **Anmelde- und Konfigurationslauf (HUM-520).** `humanitl agents login` und `humanitl agents config`

@@ -1042,21 +1042,25 @@ darf.
 **Wartungsläufe (zweiter Teil, HUM-519, HUM-563).** *Angreifer:* ein Host des Anbieters oder ein
 Netzweg, der etwas anderes ausliefert als die Fassung des Anbieters, und der heruntergeladene
 Installer selbst. *Abwehr:* Installation und Update laufen nur in einer Sandbox des Daemons ohne
-Projekt: ihr eigener Arbeitsordner neben den Depots als `HOME` unter `/run/humanitl/agent-home`, kein
-`/work`, das Sandbox-Profil ohne seine Erweiterungen, keine Einhängung der Sitzung, kein Depot, die
-Host-Installationen des Agenten maskiert; der Wächter lässt diesen Ordner als Arbeitsort nur für
+Projekt: ihr eigener Arbeitsordner neben den Depots als `HOME` unter `/run/humanitl/agent-home`,
+kein `/work`, das Sandbox-Profil ohne seine Erweiterungen, keine Einhängung der Sitzung, kein Depot,
+die Host-Installationen des Agenten maskiert; der Wächter lässt diesen Ordner als Arbeitsort nur für
 eine Sitzung zu, die der Daemon gekennzeichnet hat, und nur auf sich selbst aufgelöst
-(`SANDBOX_006`). Ohne Halt gehen nur die Hosts des Rezepts hinaus, als `allow`-Regeln dieser Sitzung,
-die mit dem Ende des Laufs gehen; die gespeicherten Regeln werden nie geschrieben, und die
+(`SANDBOX_006`). Ohne Halt gehen nur die Hosts des Rezepts hinaus, als `allow`-Regeln dieser
+Sitzung, die mit dem Ende des Laufs gehen; die gespeicherten Regeln werden nie geschrieben, und die
 mitgelieferte Gruppe hat für den Lauf keine Durchreiche zum Sprachmodell. Der Lauf lädt nur
 herunter; der Daemon liest kein Urteil aus ihm, prüft den Baum an seiner eigenen Kopie, prüft das
 Manifest eines signierenden Anbieters mit dem `gpg` des Hosts gegen den im Adapter festen
-Fingerabdruck und die Prüfsumme des Programms dagegen, und schaltet erst dann `current` mit einem
-Journal um; ein Lauf mit einem Status ungleich 0 oder einer roten Garantie ändert nichts. Die Version
-ist angeheftet, Sitzungen behalten ihre, und der nur lesbare Programmordner einer Sitzung lässt ein
+Fingerabdruck und die Prüfsumme des Programms dagegen, oder, bei einem Anbieter, der stattdessen
+eine Liste von Prüfsummen veröffentlicht (Codex, HUM-566), seine eigene Kopie der Kette von den
+Release-Metadaten über die Liste zum Archiv, und schaltet erst dann `current` mit einem Journal um;
+ein Lauf mit einem Status ungleich 0 oder einer roten Garantie ändert nichts. Die Version ist
+angeheftet, Sitzungen behalten ihre, und der nur lesbare Programmordner einer Sitzung lässt ein
 Selbst-Update scheitern. *Restrisiko:* Die Version eines Rezepts ohne Signatur ist das Wort des
-Laufs; die eigenen Regeln des Menschen gelten für den Lauf wie für jede Sitzung; Kernel-Stufe und
-Seatbelt lehnen einen Wartungslauf vorerst ab (`AGENT_015`).
+Laufs; hinter einer Liste von Prüfsummen steht nur TLS zum Host des Anbieters, und an das geprüfte
+Archiv bindet den ausgepackten Baum der Lauf, nicht der Daemon; die eigenen Regeln des Menschen
+gelten für den Lauf wie für jede Sitzung; Kernel-Stufe und Seatbelt lehnen einen Wartungslauf
+vorerst ab (`AGENT_015`).
 
 **Anmeldung, Konfiguration und die Zugangsdatei (dritter Teil, HUM-520).** *Angreifer:* ein
 kompromittierter Agent in irgendeiner Sitzung eines Depot-Agenten, der seine schreibbare Kopie der
@@ -1332,6 +1336,7 @@ Gegen diese Angreifer gibt es keine Abwehr, und Humanitl behauptet das auch nich
 | 2026-11-19 | K-38 neu: Die Flow-Registry hält höchstens `limits.registry_max_finished_flows` abgeschlossene Flows (Vorgabe 10 000), gehaltene und laufende gehen nie; die Warteschlange des Audit-Schreibers hält höchstens 4 096 Records, und eine volle lässt den Absender warten, sodass keine Meldung der Sandbox verworfen wird | HUM-556 |
 | 2026-11-20 | K-38: Flow-Ereignisse, die der Audit-Sink hinter dem Rundfunk verliert, stehen in der Kette als `audit.events_dropped` mit ihrer Zahl; nach einer Lücke schließt der Sink nur Flows ab, von denen er seit der vorigen Lücke nichts gehört hat, Restrisiko: ein Flow, der über zwei Lücken schweigt, verliert sein `flow.responded` | HUM-564 |
 | 2026-11-20 | K-38: Ein Flow, dessen Ereignis `Failed` in eine Lücke des Audit-Sinks fällt, hat kein `flow.failed`; `Recorded` nennt nur den Flow, der Grund bleibt in der Aufzeichnung | HUM-565 |
+| 2026-11-20 | K-36: Eine Installation darf ein Paket des Anbieters aus mehreren Dateien übernehmen (Codex): Das Rezept nennt die erwarteten Dateien, der Daemon startet das Programm über einen eigenen Verweis und prüft eine Liste von Prüfsummen des Anbieters an seiner eigenen Kopie (Release-Metadaten, Liste, Archiv); Restrisiko: für die Metadaten bürgt nur TLS zum Host des Anbieters, und an das Archiv bindet den ausgepackten Baum der Lauf, nicht der Daemon. `agy` wird nicht installiert: sein Manifest bietet keine gewählte Version, zeigt auf einen geteilten Speicher-Host und trägt seine einzige Prüfsumme selbst | HUM-566 |
 
 Jede sicherheitsrelevante Änderung am Shim, an der Mount-Erlaubnisliste, am Filter oder an der
 Durchleitung bekommt hier eine Zeile. Schwachstellen werden gemeldet, wie in
