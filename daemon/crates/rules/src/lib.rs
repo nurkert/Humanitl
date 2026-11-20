@@ -13,6 +13,7 @@
 //! - [`host`] Label-Vergleich für Host-Muster, Adressen und Netze
 //! - [`path`] Glob und regulärer Ausdruck für den Pfad
 //! - [`parse`] `rules.yaml` lesen und schreiben
+//! - [`unreadable`] Regeln der Nutzerdatei, die sich nicht lesen ließen
 //! - [`eval`] [`RuleSet`], [`RequestKey`] und [`Verdict`]
 //!
 //! Die drei Zusagen dieser Crate, die kein Compiler prüft:
@@ -56,8 +57,13 @@ pub mod eval;
 pub mod host;
 pub mod parse;
 pub mod path;
+pub mod unreadable;
 
 pub use crate::eval::{RequestKey, RuleSet, UnknownRule, Verdict, is_known_method};
 pub use crate::host::matches as host_matches;
-pub use crate::parse::{RULES_VERSION, parse_rules, parse_rules_for_session, serialize_rules};
+pub use crate::parse::{
+    RULES_VERSION, UserRules, parse_rules, parse_rules_for_session, read_user_rules,
+    refused_finding, serialize_rules, serialize_user_rules,
+};
 pub use crate::path::PathMatcher;
+pub use crate::unreadable::UnreadableRule;

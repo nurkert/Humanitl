@@ -4621,6 +4621,10 @@
   "@settingsAgentsDoneDiscard": {"description": "Section Agents (HUM-521): result line after the waiting configuration was discarded."},
   "settingsAgentsNoRecipeDepot": "No depot recipe for this agent yet: sessions with the source Depot stop with AGENT_015 until there is one.",
   "@settingsAgentsNoRecipeDepot": {"description": "Section Agents (HUM-521): card of an agent without a depot recipe whose source is set to Depot; a start is refused until the adapter brings a recipe."},
+  "doctorCheckRules": "Rules file",
+  "@doctorCheckRules": {"description": "Heading of the doctor line `rules` (HUM-561): whether rules.yaml can be read and which rule in it is left out."},
+  "rulesBannerFewer": "Show fewer",
+  "@rulesBannerFewer": {"description": "Button under the opened findings banner of the rules screen that folds the findings past the first two away again (HUM-561)."},
   "settingsAgentCodex": "Codex",
   "@settingsAgentCodex": {"description": "Option of agent.adapter: the Codex CLI of OpenAI. A product name, not translated (HUM-515)."}
 }

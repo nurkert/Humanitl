@@ -770,6 +770,8 @@ impl DaemonApi for FakeDaemon {
         crate::egress::insert_doctor_line(&mut report, &humanitl_config::EgressConfig::default());
         // Der gespielte Agent bleibt im eigenen Netz (HUM-516).
         crate::cloud::insert_doctor_line(&mut report, &humanitl_config::Config::default());
+        // Der Fake hat keine Regel-Datei (HUM-561); die Zeile sagt das.
+        crate::rules_doctor::insert_doctor_line(&mut report, std::path::Path::new(""));
         report
     }
 

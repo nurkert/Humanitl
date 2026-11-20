@@ -128,6 +128,7 @@ String doctorCheckTitle(
   DoctorCheckId.llm => l10n.doctorCheckLlm,
   DoctorCheckId.egress => l10n.doctorCheckEgress,
   DoctorCheckId.inference => l10n.doctorCheckInference,
+  DoctorCheckId.rules => l10n.doctorCheckRules,
   DoctorCheckId.tray => l10n.doctorCheckTray,
   DoctorCheckId.renderer => l10n.doctorCheckRenderer,
   DoctorCheckId.diskSpace => l10n.doctorCheckDiskSpace,

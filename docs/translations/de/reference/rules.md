@@ -37,10 +37,42 @@ führe `humanitl rules reload` aus; der Daemon beobachtet die Datei nicht.
 
 Das Einlesen ist streng. Ein unbekannter Schlüssel, eine unbekannte Methode, ein
 Muster, das sich nicht kompilieren lässt, oder eine doppelte ID ist ein Fehler, und
-**ein einziger Fehler weist die ganze Datei zurück**. Der Daemon läuft dann mit dem
-letzten gültigen Regelsatz weiter und meldet die Diagnosen. Ein halb geladener
-Regelsatz wäre schlimmer, weil niemand sagen könnte, welche Hälfte fehlt. Warnungen
-weisen die Datei nicht zurück; sie werden neben den geladenen Regeln gemeldet.
+**ein Fehler kostet die Regel, in der er steht, nie die anderen**. Der Daemon nennt
+die Regel mit Zeile und Grund beim Start, in `humanitl rules list`, im
+Regel-Bildschirm und in der Zeile `rules` von `humanitl doctor`; die übrigen Regeln
+gelten. Was bis zur Reparatur an ihrem Platz gilt, hängt davon ab, was sich noch
+lesen ließ:
+
+- Eine `allow`-Regel fehlt einfach; was sie durchließ, wird gefragt.
+- Eine `block`-, `ask`- oder `redact`-Regel, deren Aktion und Bedingung lesbar
+  sind, wirkt weiter auf genau diese Bedingung, ohne Ende; eine Sperre bleibt also
+  eine Sperre.
+- Jede andere Regel (Bedingung oder Aktion unlesbar) wird an ihrem Platz durch
+  `ask` für ihren Host ersetzt, für gewöhnliche Anfragen wie für
+  WebSocket-Upgrades. Ist auch der Host nicht lesbar, fragt der Ersatz für jeden
+  Host und jede Adresse; jedes `allow` darunter, deine eigenen wie die
+  mitgelieferten, fragt dann bis zur Reparatur. Eine Regel darunter kann deshalb
+  nie durchlassen, was die kaputte Regel vielleicht gestoppt hätte.
+- Ein Ersatz behält den Rang einer Sitzungsregel, wenn `expires: session` lesbar
+  dasteht; sonst gilt er ohne Ende bis zur Reparatur.
+
+Der Ersatz steht nicht in der Liste der Regeln. Positionen (`humanitl rules reorder`, eine Position, die mit einer neuen Regel
+kommt, Umsortieren in der App) zählen nur die Regeln, die du siehst; eine
+Regel direkt hinter der Regel über einem kaputten Eintrag landet hinter dessen
+Ersatz. Eine Änderung, die eine Regel über einen Ersatz höbe (eine neue Regel
+davor oder eine Regel, die von darunter nach darüber rückt, auch wenn die Regel
+direkt darüber weiter nach unten wandert), lehnt der Daemon mit `RULES_009` ab,
+bis der Eintrag repariert ist; Anlegen am Ende und Löschen gehen immer.
+
+Der Eintrag bleibt in `rules.yaml`, wie du ihn geschrieben hast: Schreibt der
+Daemon die Datei, setzt er den Eintrag an seinen Platz zurück. Nur ein Fehler, der
+die ganze Datei betrifft, weist sie zurück: kein gültiges YAML, ein unbekannter
+Schlüssel der obersten Ebene, eine fehlende oder unbekannte `version` oder ein
+Eintrag in `disabled_bundled`, der keine Regel-ID ist. Dann gilt keine deiner
+dauerhaften Regeln, bei einem Reload läuft der Daemon mit dem letzten gültigen
+Regelsatz weiter, und er schreibt die Datei nicht, bis sie wieder lesbar ist
+(`RULES_009`). Warnungen weisen nie etwas zurück; sie werden neben den geladenen
+Regeln gemeldet.
 
 ## Wie die Beispiele auf dieser Seite geprüft werden
 
@@ -1097,6 +1129,7 @@ Bildschirm „Regeln" die Anfrage erklären kann. Jede deiner Regeln für
 | `RULES_008` | Warnung | Eine Regel erlaubt jeden Host ohne jede Bedingung, oder eine Durchleitung ist nicht begrenzt. |
 | `RULES_010` | Warnung | `bundled` in einer Datei, oder `disabled_bundled` nennt eine deiner eigenen Regeln. |
 
-Jeder Fehler weist die ganze Datei zurück; die Meldung nennt den Index der Regel, das
+Ein Fehler lässt die Regel aus, in der er steht, oder weist die ganze Datei zurück,
+wenn er die Datei betrifft (siehe oben). Die Meldung nennt den Index der Regel, das
 Feld und, wo bekannt, die Zeile, zum Beispiel
 `rules[3].match.host (line 12): host pattern "*foo.com" is invalid: a wildcard must be a whole label`.
