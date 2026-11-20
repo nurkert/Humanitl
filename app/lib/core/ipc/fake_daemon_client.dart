@@ -6314,6 +6314,14 @@ mixin FakeAgents {
   /// The callback URLs delivered, for tests.
   final List<String> agentsCallbacks = <String>[];
 
+  /// The encryption of the credential files (HUM-523) every answer
+  /// carries; null plays a daemon before contract 1.56. Without
+  /// [CredentialEncryption.keyring] switching on is refused with
+  /// `AGENT_020`, as the daemon does.
+  CredentialEncryption? agentsEncryption = const CredentialEncryption(
+    keyring: true,
+  );
+
   /// An entry as the daemon builds it for an agent without a depot, with
   /// its actions.
   static AgentDepot fakeAgent(
@@ -6447,6 +6455,10 @@ mixin FakeAgents {
       }
       return _answer();
     }
+    if (op.kind == AgentsOpKind.setEncryption) {
+      _setEncryption(on: op.enabled);
+      return _answer();
+    }
     final AgentDepot? entry = agentsStatus.of(op.agent);
     if (entry == null) {
       throw DaemonException(
@@ -6459,6 +6471,7 @@ mixin FakeAgents {
     }
     switch (op.kind) {
       case AgentsOpKind.status:
+      case AgentsOpKind.setEncryption:
         break;
       case AgentsOpKind.setSource:
         if (op.value == AgentSource.host && entry.locked) {
@@ -6568,8 +6581,12 @@ mixin FakeAgents {
   /// [agentsStatus] as the daemon answers it: without a possible start no
   /// run is offered.
   AgentsStatus _answer([AgentsStatus? status]) => agentsStartable
-      ? status ?? agentsStatus
+      ? AgentsStatus(
+          agents: (status ?? agentsStatus).agents,
+          encryption: (status ?? agentsStatus).encryption ?? agentsEncryption,
+        )
       : AgentsStatus(
+          encryption: (status ?? agentsStatus).encryption ?? agentsEncryption,
           agents: <AgentDepot>[
             for (final AgentDepot entry in (status ?? agentsStatus).agents)
               _copy(
@@ -6631,6 +6648,7 @@ mixin FakeAgents {
     List<AgentConfigChange>? configFiles,
     AgentActions? actions,
     bool? credentialWriteback,
+    bool? credentialsEncrypted,
   }) => AgentDepot(
     agent: entry.agent,
     displayName: entry.displayName,
@@ -6650,5 +6668,37 @@ mixin FakeAgents {
     versions: versions ?? entry.versions,
     actions: actions ?? entry.actions,
     credentialWriteback: credentialWriteback ?? entry.credentialWriteback,
+    credentialsEncrypted: credentialsEncrypted ?? entry.credentialsEncrypted,
   );
+
+  /// `set_encryption` as the daemon does it (HUM-523): refused without a
+  /// keyring, otherwise every stored login follows the switch.
+  void _setEncryption({required bool on}) {
+    final CredentialEncryption state =
+        agentsEncryption ?? const CredentialEncryption();
+    if (on && !state.keyring) {
+      throw const DaemonException(
+        Diagnostic(
+          code: 'AGENT_020',
+          severity: Severity.error,
+          why:
+              'the credential files of the depot cannot be encrypted or '
+              'opened: the system keyring cannot be used (secret-tool is not '
+              'installed); nothing was changed',
+        ),
+      );
+    }
+    agentsEncryption = CredentialEncryption(
+      enabled: on,
+      configured: on,
+      keyring: state.keyring,
+    );
+    agentsStatus = AgentsStatus(
+      encryption: agentsStatus.encryption == null ? null : agentsEncryption,
+      agents: <AgentDepot>[
+        for (final AgentDepot each in agentsStatus.agents)
+          _copy(each, credentialsEncrypted: on && each.loggedIn),
+      ],
+    );
+  }
 }

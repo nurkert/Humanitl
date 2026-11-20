@@ -1754,6 +1754,14 @@ Configuration run not taken over
 
 **Fix.** `CopyCommand` with `humanitl agents config <id>` to run it again.
 
+#### AGENT_020
+
+Credential encryption not possible
+
+**Auslöser.** With agents.encrypt_credentials = true the credential files of the depot lie encrypted with ChaCha20-Poly1305, and the key lies only in the system keyring (Secret Service on Linux, the login Keychain on macOS), never in a file next to the data. Either the keyring did not answer, so the setting was refused, or an encrypted file did not open with the key from the keyring: another key, a damaged file or a format this daemon does not know. Nothing was changed, and no file was written in plain text instead.
+
+**Fix.** `CopyCommand` with the package of `secret-tool` when it is missing, or `humanitl agents login <id>` when a file does not open with the stored key; otherwise none, unlock the keyring and try again.
+
 ### Bereich edit
 
 #### EDIT_001

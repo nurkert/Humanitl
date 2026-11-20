@@ -7,7 +7,9 @@
 //! under the runtime directory, binds that writable as the agent's
 //! configuration directory, and deletes it at the end of the session. The
 //! scratch never lies under the depot: what a session writes stays in the
-//! session (the guarded credential write-back is HUM-520).
+//! session (the guarded credential write-back is HUM-520). A sealed
+//! credential file (HUM-523) is opened here, into the scratch only; the depot
+//! keeps it sealed.
 //!
 //! A scratch outlives its session only when the process that started it
 //! dies; [`sweep_stale`] removes such a scratch the next time a daemon or a
@@ -20,6 +22,7 @@ use humanitl_config::Paths;
 use humanitl_core::Diagnostic;
 use humanitl_core::ids::SessionId;
 
+use super::seal::CredentialKeys;
 use super::store::{Depot, Reservation, unusable};
 
 /// The cap of what one session copies out of the depot.
@@ -123,17 +126,20 @@ pub fn scratch_path(paths: &Paths, session: SessionId) -> PathBuf {
 }
 
 /// Copies `config/` and the files of `credentials/` of a checked depot into
-/// a fresh scratch of this session.
+/// a fresh scratch of this session; a sealed credential file is opened with
+/// `keys` on the way (HUM-523).
 ///
 /// # Errors
 ///
 /// `AGENT_013` when the copy would exceed [`SCRATCH_CAP_BYTES`], an entry is
-/// neither a file, a directory nor a link, or the scratch cannot be written.
+/// neither a file, a directory nor a link, or the scratch cannot be written;
+/// `AGENT_020` for a sealed credential file that does not open.
 pub fn create(
     paths: &Paths,
     session: SessionId,
     depot: &Depot,
     reservation: Option<Reservation>,
+    keys: Option<&CredentialKeys>,
 ) -> Result<Scratch, Diagnostic> {
     let parent = paths.agent_scratch_dir();
     sweep_stale(&parent);
@@ -157,6 +163,14 @@ pub fn create(
     }
     // The credential file lies beside the configuration, where the agent
     // looks for it (Claude Code: `$CLAUDE_CONFIG_DIR/.credentials.json`).
+    // Read under the agent's credential lock: no write-back and no switch of
+    // the encryption runs between the decision sealed or plain and the copy
+    // (HUM-523, review).
+    let _held = if std::fs::symlink_metadata(depot.credentials_dir()).is_ok() {
+        Some(super::credential::lock(depot)?)
+    } else {
+        None
+    };
     if let Ok(entries) = std::fs::read_dir(depot.credentials_dir()) {
         for entry in entries.flatten() {
             let path = entry.path();
@@ -170,12 +184,13 @@ pub fn create(
                     "is not a regular file; credentials/ holds only the credential file",
                 ));
             }
-            copy_file(
+            copy_credential(
                 depot,
                 &path,
                 &dir.join(entry.file_name()),
                 &meta,
                 &mut budget,
+                keys,
             )?;
             if let Some(name) = entry.file_name().to_str()
                 && let Some(sum) = super::credential::fingerprint(&dir, name)
@@ -242,6 +257,54 @@ fn copy_file(
         0o700
     };
     std::fs::set_permissions(to, std::fs::Permissions::from_mode(mode))
+        .map_err(|err| failed(depot, to, &err))
+}
+
+/// Copies one credential file into the scratch, `0600`, from the bytes read
+/// once: a sealed one opened, a plain one only where the depot allows plain
+/// text ([`super::seal::from_disk`]). The file is never read a second time.
+fn copy_credential(
+    depot: &Depot,
+    from: &Path,
+    to: &Path,
+    meta: &std::fs::Metadata,
+    budget: &mut u64,
+    keys: Option<&CredentialKeys>,
+) -> Result<(), Diagnostic> {
+    use std::io::Write as _;
+    use std::os::unix::fs::OpenOptionsExt as _;
+    let over = || {
+        unusable(
+            depot.agent(),
+            from,
+            &format!(
+                "would take the copy for the session over its cap of {} MiB",
+                SCRATCH_CAP_BYTES / (1024 * 1024)
+            ),
+        )
+    };
+    if meta.len() > *budget {
+        return Err(over());
+    }
+    let raw =
+        zeroize::Zeroizing::new(std::fs::read(from).map_err(|err| failed(depot, from, &err))?);
+    let name = from
+        .file_name()
+        .and_then(|name| name.to_str())
+        .unwrap_or_default();
+    let plain = super::seal::from_disk(depot, name, &raw, keys)?;
+    let len = u64::try_from(plain.len()).unwrap_or(u64::MAX);
+    if len > *budget {
+        return Err(over());
+    }
+    *budget -= len;
+    let _ = std::fs::remove_file(to);
+    std::fs::OpenOptions::new()
+        .write(true)
+        .create_new(true)
+        .mode(0o600)
+        .open(to)
+        .and_then(|mut out| out.write_all(&plain))
         .map_err(|err| failed(depot, to, &err))
 }
 
@@ -315,7 +378,7 @@ mod tests {
         std::fs::write(depot.credentials_dir().join(".credentials.json"), b"{}").unwrap();
         let paths = paths(base.path());
         let session = SessionId::new();
-        let scratch = create(&paths, session, &depot, None).unwrap();
+        let scratch = create(&paths, session, &depot, None, None).unwrap();
         assert!(scratch.path().starts_with(paths.agent_scratch_dir()));
         assert!(!scratch.path().starts_with(depot.root()));
         assert!(scratch.path().join("settings.json").is_file());
@@ -339,7 +402,7 @@ mod tests {
         let depot = filled(base.path(), "claude", "claude");
         let big = std::fs::File::create(depot.config_dir().join("big")).unwrap();
         big.set_len(SCRATCH_CAP_BYTES + 1).unwrap();
-        let found = create(&paths(base.path()), SessionId::new(), &depot, None).unwrap_err();
+        let found = create(&paths(base.path()), SessionId::new(), &depot, None, None).unwrap_err();
         assert_eq!(found.code, AGENT_013);
         assert!(found.why.contains("64 MiB"), "{}", found.why);
     }

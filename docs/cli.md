@@ -1886,6 +1886,13 @@ is `AGENT_012`, an older token or another account `AGENT_016`, both in `humanitl
 login the adapter cannot store yet, because it declares no format of its credential file, answers
 `AGENT_014` before anything starts.
 
+`humanitl config set agents.encrypt_credentials true` encrypts the credential files of the depot
+(HUM-523): the daemon seals every stored login with a key that lies only in the system keyring and
+decrypts it only into the copy of each session. Without a keyring that answers the setting is
+refused (`AGENT_020`) and nothing changes; `false` decrypts them again. The command needs a running
+daemon, which converts the files before it writes the value. `humanitl agents status` names the
+state in its first line and says `encrypted` beside each encrypted login.
+
 `humanitl agents callback AGENT URL` delivers the callback URL from the browser's address bar into
 the running login, for an agent that waits for the browser on its own loopback: exactly
 `http://localhost:<port><path>?<query>` of the adapter is accepted and delivered by one process

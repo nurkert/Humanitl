@@ -126,4 +126,6 @@ const List<String> goldenNames = <String>[
   // agents_golden_test.dart (HUM-521)
   'settings_agents_cards',
   'settings_agents_runs',
+  // agents_golden_test.dart (HUM-523)
+  'settings_agents_encryption',
 ];

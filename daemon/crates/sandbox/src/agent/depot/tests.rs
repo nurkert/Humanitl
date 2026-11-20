@@ -54,6 +54,7 @@ impl Fixture {
             command: &command,
             from_caller,
             purpose: Purpose::Preview,
+            keys: None,
         })
     }
 }
@@ -476,6 +477,7 @@ fn a_depot_agent_without_a_configuration_variable_gets_no_copy() {
         command: &command,
         from_caller: false,
         purpose: Purpose::Start,
+        keys: None,
     })
     .unwrap();
     let mount = plan.session.mount.clone().expect("mounted");
@@ -613,6 +615,7 @@ fn a_start_and_a_removal_never_overlap() {
             command: &command,
             from_caller: false,
             purpose: Purpose::Start,
+            keys: None,
         })
     };
     let depot = Depot::of(&fx.paths, "claude");

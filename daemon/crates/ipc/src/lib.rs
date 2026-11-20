@@ -51,7 +51,14 @@ pub const PROTO_MAJOR: u32 = 1;
 /// Minor-Version des Vertrags. Steigt bei jeder additiven Änderung
 /// (`Info.proto_minor`).
 ///
-/// `55` seit der Vorschau mit den Werten der Sitzung (HUM-559):
+/// `56` seit den verschlüsselten Zugangsdateien des Depots (HUM-523):
+/// `AgentsRequest.set_encryption` schaltet `agents.encrypt_credentials` und
+/// verschlüsselt oder entschlüsselt dabei die vorhandenen Dateien,
+/// `AgentsStatus.encryption` (`CredentialEncryption`) nennt den Stand auf der
+/// Platte, den Wert in `config.toml`, ob ein Schlüsselbund da ist, und die
+/// Befunde, `AgentDepot.credentials_encrypted`, ob die Zugangsdatei eines
+/// Agenten verschlüsselt liegt.
+/// `55` war die Vorschau mit den Werten der Sitzung (HUM-559):
 /// `SandboxRequest.Plan.cli_overrides` trägt dieselben Werte wie
 /// `Start.cli_overrides`, mit derselben Erlaubnisliste; vor allem die
 /// Untergrenze `sandbox.min_isolation` der Kommandozeile gilt so auch für den
@@ -308,7 +315,7 @@ pub const PROTO_MAJOR: u32 = 1;
 /// Spiegelung in `app/lib/core/ipc/proto_version.dart` darf nachziehen: eine
 /// abweichende Minor ist verabredetermaßen kein Grund, die Verbindung
 /// abzulehnen (`docs/PROTOCOL.md`).
-pub const PROTO_MINOR: u32 = 55;
+pub const PROTO_MINOR: u32 = 56;
 
 /// Metadata-Schlüssel für das Session-Token aus
 /// `$XDG_RUNTIME_DIR/humanitl/token` (CONVENTIONS.md 3.6).

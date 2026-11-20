@@ -463,9 +463,11 @@ class _Facts extends StatelessWidget {
             crossAxisAlignment: CrossAxisAlignment.start,
             children: <Widget>[
               Text(
-                entry.loggedIn
-                    ? l10n.settingsAgentsLoggedIn
-                    : l10n.settingsAgentsLoggedOut,
+                switch ((entry.loggedIn, entry.credentialsEncrypted)) {
+                  (true, true) => l10n.settingsAgentsLoggedInEncrypted,
+                  (true, false) => l10n.settingsAgentsLoggedIn,
+                  (false, _) => l10n.settingsAgentsLoggedOut,
+                },
                 key: ValueKey<String>('agent-login-$agent'),
                 style: entry.loggedIn ? value : quiet,
               ),

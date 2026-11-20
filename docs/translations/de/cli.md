@@ -1807,6 +1807,14 @@ demselben geprüften Weg zurück, während sie läuft und an ihrem Ende
 status`. Eine Anmeldung, die der Adapter noch nicht speichern kann, weil er kein Format seiner
 Zugangsdatei erklärt, antwortet `AGENT_014`, bevor etwas startet.
 
+`humanitl config set agents.encrypt_credentials true` verschlüsselt die Zugangsdateien des Depots
+(HUM-523): Der Daemon versiegelt jede gespeicherte Anmeldung mit einem Schlüssel, der nur im
+Schlüsselbund des Systems liegt, und entschlüsselt sie nur in die Kopie jeder Session. Ohne
+Schlüsselbund, der antwortet, wird die Einstellung abgelehnt (`AGENT_020`), und nichts ändert sich;
+`false` entschlüsselt sie wieder. Der Befehl braucht einen laufenden Daemon, der die Dateien
+umwandelt, bevor er den Wert schreibt. `humanitl agents status` nennt den Stand in der ersten Zeile
+und sagt `encrypted` neben jeder verschlüsselten Anmeldung.
+
 `humanitl agents callback AGENT URL` stellt die Callback-URL aus der Adresszeile des Browsers in
 die laufende Anmeldung zu, für einen Agenten, der auf seinem eigenen Loopback auf den Browser
 wartet: Angenommen wird genau `http://localhost:<port><pfad>?<query>` des Adapters, zugestellt von

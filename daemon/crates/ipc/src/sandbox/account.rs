@@ -127,7 +127,17 @@ impl Inner {
         entry: &'static KnownAgent,
         task: MaintenanceTask,
     ) -> Result<Staged, Diagnostic> {
-        let run = account::prepare(&self.paths, entry, task, self.session)?;
+        // Ein Anmelde- oder Konfigurationslauf schreibt die Zugangsdatei ins
+        // Depot: erst muss das Depot so verschlüsselt sein, wie
+        // `config.toml` sagt, sonst läuft er nicht (HUM-523, Review).
+        humanitl_sandbox::agent::depot::seal::reconcile(&self.paths, &self.credential_keys)?;
+        let run = account::prepare(
+            &self.paths,
+            entry,
+            task,
+            self.session,
+            Some(self.credential_keys.clone()),
+        )?;
         let config = self
             .resolver
             .resolve(&SessionRequest::default())
@@ -363,6 +373,7 @@ impl Inner {
             Arc::new(move |outcome: &Outcome| {
                 report(notices.as_ref(), &refusals, &outcome.agent, &outcome.result);
             }),
+            Some(self.credential_keys.clone()),
         )
     }
 

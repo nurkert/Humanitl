@@ -470,6 +470,7 @@ fn login_and_configuration_of_agy_in_the_depot_are_refused() {
         known,
         depot::MaintenanceTask::Login,
         SessionId::nil(),
+        None,
     ) else {
         panic!("a login of agy was prepared");
     };
@@ -486,6 +487,7 @@ fn login_and_configuration_of_agy_in_the_depot_are_refused() {
         known,
         depot::MaintenanceTask::Config,
         SessionId::nil(),
+        None,
     ) else {
         panic!("a configuration run of agy was prepared");
     };

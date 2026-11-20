@@ -17,6 +17,7 @@ import '../providers/agents_provider.dart';
 import '../registry/settings_registry.dart';
 import '../settings_scope.dart';
 import '../widgets/agents/agent_card.dart';
+import '../widgets/agents/credential_encryption_card.dart';
 import '../widgets/setting_row.dart';
 
 /// The section: the catalog's sentence about the depot, then the cards.
@@ -69,7 +70,14 @@ class AgentsSection extends ConsumerWidget {
           // einen Lauf weiter, von dem der Daemon nichts mehr sagt.
           if (state.hasError && !state.isLoading)
             _LoadFailed(error: state.error)
-          else if (status != null)
+          else if (status != null) ...<Widget>[
+            // Die Verschlüsselung gilt für jedes Depot (HUM-523); ein Daemon
+            // vor 1.56 nennt sie nicht, dann fehlt die Karte.
+            if (status.encryption
+                case final CredentialEncryption encryption) ...<Widget>[
+              CredentialEncryptionCard(encryption: encryption),
+              SizedBox(height: tokens.spacing.x3),
+            ],
             for (int i = 0; i < status.agents.length; i++) ...<Widget>[
               if (i > 0) SizedBox(height: tokens.spacing.x3),
               AgentCard(
@@ -78,8 +86,8 @@ class AgentsSection extends ConsumerWidget {
                 config: config,
                 onOpenSession: onOpenSession,
               ),
-            ]
-          else
+            ],
+          ] else
             Text(
               l10n.settingsAgentsLoading,
               key: const Key('settings-agents-loading'),

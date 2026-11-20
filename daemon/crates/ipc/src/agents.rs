@@ -11,6 +11,11 @@
 //!   `SetConfig`, with the same refusal under a company lock (`AGENT_010`).
 //! - `remove`: removes the depot of one agent, refused while the running
 //!   session has it bound (`AGENT_018`); the source stays as it is.
+//! - `set_encryption` (HUM-523): seals or opens every credential file of the
+//!   depot ([`humanitl_sandbox::agent::depot::seal::switch`]), all or
+//!   nothing, and only then writes `agents.encrypt_credentials`; without a
+//!   keyring that answers it refuses with `AGENT_020`. Every answer carries
+//!   the state of the encryption ([`encryption`]).
 //! - `install` and `update` (HUM-563) are a maintenance session of the
 //!   sandbox service (`crate::sandbox`); the server hands them there and
 //!   answers with the state once the run stands. Every answer carries the
@@ -23,9 +28,10 @@
 use humanitl_config::agents::{AgentSource, SourceLock, effective_source};
 use humanitl_config::{Config, Paths};
 use humanitl_core::diagnostics::codes::{
-    AGENT_008, AGENT_009, AGENT_015, AGENT_018, CONFIG_003, IPC_006,
+    AGENT_008, AGENT_009, AGENT_015, AGENT_018, AGENT_020, CONFIG_003, IPC_006,
 };
 use humanitl_core::{Diagnostic, FixAction, Severity};
+use humanitl_sandbox::agent::depot::seal::{self, CredentialKeys};
 use humanitl_sandbox::agent::depot::{Depot, KNOWN, KnownAgent, MaintenanceTask, account};
 
 use crate::{convert, v1};
@@ -39,11 +45,33 @@ use crate::{convert, v1};
 ///
 /// `CONFIG_003` without an operation, for an unknown agent or source;
 /// `AGENT_010` for `host` under a lock; `AGENT_018` for a depot in use;
-/// `AGENT_013` when removing fails; the findings of writing `config.toml`.
+/// `AGENT_013` when removing fails; `AGENT_020` when the encryption cannot be
+/// switched; the findings of writing `config.toml`.
 pub fn answer(
     paths: &Paths,
     lock: &SourceLock,
     in_use: Option<&str>,
+    keys: &CredentialKeys,
+    op: Option<v1::agents_request::Op>,
+) -> Result<v1::AgentsStatus, Diagnostic> {
+    // Ein unterbrochenes Umschalten der Verschlüsselung wird zu Ende
+    // geführt, bevor eine Antwort einen Stand nennt (HUM-523, Review).
+    let keys = keys.clone().with_setting(setting(paths));
+    let recovery = seal::recover(paths, &keys).err();
+    let mut state = answer_op(paths, lock, in_use, &keys, op)?;
+    if let (Some(found), Some(encryption)) = (recovery, state.encryption.as_mut()) {
+        encryption
+            .diagnostics
+            .insert(0, convert::diagnostic_to_proto(&found));
+    }
+    Ok(state)
+}
+
+fn answer_op(
+    paths: &Paths,
+    lock: &SourceLock,
+    in_use: Option<&str>,
+    keys: &CredentialKeys,
     op: Option<v1::agents_request::Op>,
 ) -> Result<v1::AgentsStatus, Diagnostic> {
     match op {
@@ -79,6 +107,9 @@ pub fn answer(
             }
             Depot::of(paths, agent.id).remove()?;
         }
+        Some(v1::agents_request::Op::SetEncryption(set)) => {
+            set_encryption(paths, keys, set.enabled)?;
+        }
         // The sandbox service runs them (HUM-563, HUM-520); the server
         // hands them there before it asks this function for the state
         // afterwards.
@@ -105,7 +136,7 @@ pub fn answer(
         }
         Some(v1::agents_request::Op::ConfigShow(wish)) => {
             let agent = known(&wish.agent)?;
-            let mut state = status(paths, &configured(paths)?, lock, in_use);
+            let mut state = status(paths, &configured(paths)?, lock, in_use, keys);
             if let Some(entry) = state
                 .agents
                 .iter_mut()
@@ -120,7 +151,111 @@ pub fn answer(
         }
         None => return Err(refused("the request names no operation")),
     }
-    Ok(status(paths, &configured(paths)?, lock, in_use))
+    Ok(status(paths, &configured(paths)?, lock, in_use, keys))
+}
+
+/// Switches the encryption of the credential files (HUM-523): one
+/// transaction of [`seal::switch`] under one lock, the files, the state and
+/// `agents.encrypt_credentials` in `config.toml` together; a session start
+/// that reconciles waits for the same lock and reads the value written.
+///
+/// # Errors
+///
+/// `AGENT_020` without a keyring that answers or for a file that does not
+/// open; `AGENT_012` while a write-back holds a depot; the findings of
+/// writing `config.toml` (then the files are switched back).
+pub fn set_encryption(
+    paths: &Paths,
+    keys: &CredentialKeys,
+    enabled: bool,
+) -> Result<(), Diagnostic> {
+    let keys = keys.clone().with_setting(setting(paths));
+    seal::switch(paths, &keys, enabled).map(|_switched| ())
+}
+
+/// `agents.encrypt_credentials` as the daemon reads and writes it
+/// (HUM-523): read from `config.toml` without a project, written through
+/// the same check as `SetConfig`; `false` removes the line.
+#[must_use]
+pub fn setting(paths: &Paths) -> seal::Setting {
+    let read_paths = paths.clone();
+    let write_paths = paths.clone();
+    seal::Setting {
+        read: std::sync::Arc::new(move || {
+            configured(&read_paths).map(|config| config.agents.encrypt_credentials)
+        }),
+        write: std::sync::Arc::new(move |enabled| {
+            let file = write_paths.config_path();
+            let segments: Vec<String> = seal::SETTING.split('.').map(ToOwned::to_owned).collect();
+            let value = enabled.then_some(toml::Value::Boolean(true));
+            humanitl_config::edit::set_value(&file, &segments, value.as_ref(), |candidate| {
+                crate::config_rpc::probe(&write_paths, &file, candidate, seal::SETTING)
+            })?;
+            // Durable before the switch goes on: switching off writes plain
+            // files only after `false` is on disk (HUM-523, review).
+            if let Some(dir) = file.parent() {
+                std::fs::File::open(dir)
+                    .and_then(|dir| dir.sync_all())
+                    .map_err(|err| {
+                        seal::unavailable(
+                            &format!("{} cannot be synced ({err})", dir.display()),
+                            None,
+                        )
+                    })?;
+            }
+            Ok(())
+        }),
+    }
+}
+
+/// The state of the encryption of the credential files (HUM-523): as the
+/// depot says on disk, as `config.toml` says, and whether a keyring is
+/// there to ask.
+#[must_use]
+pub fn encryption(
+    paths: &Paths,
+    config: &Config,
+    keys: &CredentialKeys,
+) -> v1::CredentialEncryption {
+    let enabled = seal::enabled(paths);
+    let configured = config.agents.encrypt_credentials;
+    let keyring = keys.keyring_available();
+    let mut findings = Vec::new();
+    if !keyring {
+        findings.push(seal::unavailable(
+            "this system has no keyring the daemon can ask (on Linux secret-tool of \
+             libsecret-tools), and the key lies only there, never in a file next to the data",
+            (!cfg!(target_os = "macos"))
+                .then(|| FixAction::CopyCommand("sudo apt-get install libsecret-tools".to_owned())),
+        ));
+    }
+    if configured != enabled {
+        findings.push(
+            Diagnostic::builder(AGENT_020, Severity::Warning)
+                .why(format!(
+                    "config.toml says {} = {configured}, and the credential files of the depot \
+                     are {}; the next start of a session from the depot follows config.toml, or \
+                     switch it now",
+                    seal::SETTING,
+                    if enabled {
+                        "encrypted"
+                    } else {
+                        "not encrypted"
+                    }
+                ))
+                .fix(FixAction::CopyCommand(format!(
+                    "humanitl config set {} {configured}",
+                    seal::SETTING
+                )))
+                .build(),
+        );
+    }
+    v1::CredentialEncryption {
+        enabled,
+        configured,
+        keyring,
+        diagnostics: findings.iter().map(convert::diagnostic_to_proto).collect(),
+    }
 }
 
 /// The configuration without a project, as it lies on disk.
@@ -145,12 +280,14 @@ pub fn status(
     config: &Config,
     lock: &SourceLock,
     in_use: Option<&str>,
+    keys: &CredentialKeys,
 ) -> v1::AgentsStatus {
     v1::AgentsStatus {
         agents: KNOWN
             .iter()
             .map(|agent| agent_status(paths, config, lock, in_use, agent))
             .collect(),
+        encryption: Some(encryption(paths, config, keys)),
     }
 }
 
@@ -186,6 +323,7 @@ fn agent_status(
                 out.version = installed.version;
                 out.signature = installed.manifest.signature;
                 out.logged_in = depot.logged_in();
+                out.credentials_encrypted = seal::files_sealed(&depot);
                 out.last_writeback = depot
                     .last_writeback()
                     .map(|last| format!("{} session {}", last.at, last.session))

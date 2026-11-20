@@ -91,6 +91,9 @@ const REGISTER: &[(&str, &str)] = &[
     ("agents.claude.source", "effective"),
     ("agents.codex.credential_writeback", "effective"),
     ("agents.codex.source", "effective"),
+    // Gelesen vom Start einer Sitzung aus dem Depot, die einen abweichenden
+    // Stand der Verschlüsselung nachzieht, und vom Status (HUM-523).
+    ("agents.encrypt_credentials", "effective"),
     ("agents.opencode.credential_writeback", "effective"),
     ("agents.opencode.source", "effective"),
     ("agents.pi.credential_writeback", "effective"),

@@ -27,6 +27,8 @@
 //! - [`account`]: login and configuration as maintenance runs of the depot
 //!   program (HUM-520); [`login_url`] reads the URLs a login prints and
 //!   checks a pasted callback.
+//! - [`seal`]: the credential files encrypted at rest with a key from the
+//!   system keyring (`agents.encrypt_credentials`, HUM-523).
 //!
 //! **Never on the host.** No function here starts anything from the depot,
 //! not even `--version`: the version comes from `manifest.json`.
@@ -39,6 +41,7 @@ pub mod login_url;
 pub mod maintenance;
 pub mod recipe;
 pub mod scratch;
+pub mod seal;
 pub mod store;
 pub(crate) mod tree;
 pub mod verify;
@@ -226,6 +229,10 @@ pub struct DepotInput<'a> {
     pub from_caller: bool,
     /// Preview or start.
     pub purpose: Purpose,
+    /// The key of sealed credential files (HUM-523); a start opens them into
+    /// the session's scratch with it. `None` without keyring access: a
+    /// sealed depot then refuses the start (`AGENT_020`).
+    pub keys: Option<&'a seal::CredentialKeys>,
 }
 
 /// What [`plan_session`] answers.
@@ -367,6 +374,7 @@ fn mount_for(
             input.session,
             &depot,
             Some(reservation),
+            input.keys,
         )?),
         // No copy: the reservation alone goes with the sandbox.
         Some(reservation) => Some(Scratch::reservation_only(reservation)),

@@ -19,6 +19,40 @@ fn paths(dir: &Path) -> Paths {
     ]))
 }
 
+/// Keys without any keyring: the person's keyring is never asked.
+fn no_keyring() -> CredentialKeys {
+    CredentialKeys::new(
+        humanitl_config::secret::KeyStore::for_paths(&paths(Path::new("/nonexistent")))
+            .with_secret_tool(None),
+    )
+}
+
+/// Keys behind a stand-in of `secret-tool` that keeps its entries in `dir`.
+fn fake_keyring(paths: &Paths, dir: &Path) -> CredentialKeys {
+    let store = dir.join("keyring");
+    std::fs::create_dir_all(&store).unwrap();
+    let script = dir.join("secret-tool");
+    crate::test_support::write_executable(
+        &script,
+        &format!(
+            "#!/bin/sh\nstore='{}'\nfor last; do :; done\n\
+             case \"$1\" in\n  store) cat > \"$store/$last\" ;;\n  \
+             lookup) [ -f \"$store/$last\" ] || exit 1; cat \"$store/$last\" ;;\nesac\n",
+            store.display()
+        ),
+    );
+    CredentialKeys::new(
+        humanitl_config::secret::KeyStore::for_paths(paths).with_secret_tool(Some(script)),
+    )
+}
+
+#[allow(clippy::unnecessary_wraps)]
+fn set_encryption(enabled: bool) -> Option<v1::agents_request::Op> {
+    Some(v1::agents_request::Op::SetEncryption(
+        v1::agents_request::SetEncryption { enabled },
+    ))
+}
+
 fn locked() -> SourceLock {
     SourceLock::none()
         .lock(
@@ -83,7 +117,14 @@ fn of<'a>(status: &'a v1::AgentsStatus, agent: &str) -> &'a v1::AgentDepot {
 #[test]
 fn the_status_lists_every_registered_agent_from_host_by_default() {
     let dir = tempfile::tempdir().unwrap();
-    let status = answer(&paths(dir.path()), &SourceLock::none(), None, status_op()).unwrap();
+    let status = answer(
+        &paths(dir.path()),
+        &SourceLock::none(),
+        None,
+        &no_keyring(),
+        status_op(),
+    )
+    .unwrap();
     let ids: Vec<&str> = status
         .agents
         .iter()
@@ -107,6 +148,7 @@ fn the_status_reads_version_and_signature_from_the_manifest() {
         &paths,
         &SourceLock::none(),
         Some("claude"),
+        &no_keyring(),
         set("claude", "depot"),
     )
     .unwrap();
@@ -141,7 +183,7 @@ fn under_the_lock_no_way_writes_host_and_the_file_stays() {
     std::fs::write(paths.config_path(), "# mine\n").unwrap();
     let lock = locked();
 
-    let refused = answer(&paths, &lock, None, set("claude", "host")).unwrap_err();
+    let refused = answer(&paths, &lock, None, &no_keyring(), set("claude", "host")).unwrap_err();
     assert_eq!(refused.code.as_str(), "AGENT_010");
     assert!(
         refused.why.contains("/etc/humanitl/policy.toml"),
@@ -166,7 +208,7 @@ fn under_the_lock_no_way_writes_host_and_the_file_stays() {
         "# mine\n"
     );
 
-    let status = answer(&paths, &lock, None, status_op()).unwrap();
+    let status = answer(&paths, &lock, None, &no_keyring(), status_op()).unwrap();
     let claude = of(&status, "claude");
     assert_eq!(claude.source, "depot");
     assert_eq!(claude.origin, "policy");
@@ -190,7 +232,14 @@ fn set_config_writes_the_source_without_a_lock() {
         "agents.codex.credential_writeback"
     ));
     assert!(!crate::config_rpc::is_form_key("agents.unknown.source"));
-    let status = answer(&paths, &SourceLock::none(), None, status_op()).unwrap();
+    let status = answer(
+        &paths,
+        &SourceLock::none(),
+        None,
+        &no_keyring(),
+        status_op(),
+    )
+    .unwrap();
     assert_eq!(of(&status, "codex").source, "depot");
     assert_eq!(of(&status, "codex").origin, "agents.source");
 }
@@ -202,17 +251,31 @@ fn remove_waits_for_the_session_and_keeps_the_source() {
     let dir = tempfile::tempdir().unwrap();
     let paths = paths(dir.path());
     fill(&paths, "claude");
-    answer(&paths, &SourceLock::none(), None, set("claude", "depot")).unwrap();
+    answer(
+        &paths,
+        &SourceLock::none(),
+        None,
+        &no_keyring(),
+        set("claude", "depot"),
+    )
+    .unwrap();
     let remove = || {
         Some(v1::agents_request::Op::Remove(v1::agents_request::Remove {
             agent: "claude".to_owned(),
         }))
     };
-    let refused = answer(&paths, &SourceLock::none(), Some("claude"), remove()).unwrap_err();
+    let refused = answer(
+        &paths,
+        &SourceLock::none(),
+        Some("claude"),
+        &no_keyring(),
+        remove(),
+    )
+    .unwrap_err();
     assert_eq!(refused.code.as_str(), "AGENT_018");
     assert!(paths.agents_dir().join("claude").exists());
 
-    let status = answer(&paths, &SourceLock::none(), None, remove()).unwrap();
+    let status = answer(&paths, &SourceLock::none(), None, &no_keyring(), remove()).unwrap();
     assert!(!paths.agents_dir().join("claude").exists());
     let claude = of(&status, "claude");
     assert_eq!(claude.source, "depot", "remove does not change the source");
@@ -230,7 +293,7 @@ fn an_unknown_agent_or_source_is_refused() {
     let dir = tempfile::tempdir().unwrap();
     let paths = paths(dir.path());
     for op in [set("aider", "depot"), set("claude", "cloud"), None] {
-        let refused = answer(&paths, &SourceLock::none(), None, op).unwrap_err();
+        let refused = answer(&paths, &SourceLock::none(), None, &no_keyring(), op).unwrap_err();
         assert_eq!(refused.code.as_str(), "CONFIG_003");
     }
 }
@@ -287,6 +350,7 @@ fn install_and_update_go_to_the_sandbox_service() {
         &paths(dir.path()),
         &SourceLock::none(),
         None,
+        &no_keyring(),
         Some(v1::agents_request::Op::Install(wish)),
     )
     .unwrap_err();
@@ -297,7 +361,13 @@ fn install_and_update_go_to_the_sandbox_service() {
 fn every_answer_names_the_last_run_of_its_agent() {
     let dir = tempfile::tempdir().unwrap();
     let paths = paths(dir.path());
-    let mut status = status(&paths, &Config::default(), &SourceLock::none(), None);
+    let mut status = status(
+        &paths,
+        &Config::default(),
+        &SourceLock::none(),
+        None,
+        &no_keyring(),
+    );
     let run = v1::AgentMaintenance {
         sandbox_id: "s1".to_owned(),
         task: "install".to_owned(),
@@ -318,7 +388,13 @@ fn every_answer_names_the_last_run_of_its_agent() {
 fn the_actions_follow_recipe_depot_and_lock() {
     let dir = tempfile::tempdir().unwrap();
     let paths = paths(dir.path());
-    let fresh = status(&paths, &Config::default(), &SourceLock::none(), None);
+    let fresh = status(
+        &paths,
+        &Config::default(),
+        &SourceLock::none(),
+        None,
+        &no_keyring(),
+    );
     let claude = of(&fresh, "claude").actions.unwrap();
     assert!(claude.install && !claude.update && !claude.config && !claude.remove);
     assert!(claude.source_host && claude.source_depot);
@@ -331,7 +407,7 @@ fn the_actions_follow_recipe_depot_and_lock() {
     assert!(of(&fresh, "opencode").credential_writeback);
 
     fill(&paths, "claude");
-    let filled = status(&paths, &Config::default(), &locked(), None);
+    let filled = status(&paths, &Config::default(), &locked(), None, &no_keyring());
     let entry = of(&filled, "claude");
     assert_eq!(entry.versions, vec!["2.1.0"]);
     let claude = entry.actions.unwrap();
@@ -344,6 +420,7 @@ fn the_actions_follow_recipe_depot_and_lock() {
         &Config::default(),
         &SourceLock::none(),
         Some("claude"),
+        &no_keyring(),
     );
     assert!(!of(&used, "claude").actions.unwrap().remove);
 }
@@ -353,7 +430,13 @@ fn a_running_run_takes_back_every_maintenance_action() {
     let dir = tempfile::tempdir().unwrap();
     let paths = paths(dir.path());
     fill(&paths, "claude");
-    let mut status = status(&paths, &Config::default(), &SourceLock::none(), None);
+    let mut status = status(
+        &paths,
+        &Config::default(),
+        &SourceLock::none(),
+        None,
+        &no_keyring(),
+    );
     let run = v1::AgentMaintenance {
         sandbox_id: "s1".to_owned(),
         task: "update".to_owned(),
@@ -374,7 +457,13 @@ fn a_depot_without_recipe_can_be_removed() {
     let dir = tempfile::tempdir().unwrap();
     let paths = paths(dir.path());
     fill(&paths, "opencode");
-    let state = status(&paths, &Config::default(), &SourceLock::none(), None);
+    let state = status(
+        &paths,
+        &Config::default(),
+        &SourceLock::none(),
+        None,
+        &no_keyring(),
+    );
     let actions = of(&state, "opencode").actions.unwrap();
     assert!(actions.remove && actions.config_show);
     assert!(!actions.install && !actions.update && !actions.login && !actions.config);
@@ -390,7 +479,13 @@ fn an_unusable_depot_offers_no_install() {
     let current = paths.agents_dir().join("claude/current");
     std::fs::remove_file(&current).unwrap();
     std::fs::write(&current, b"not a link").unwrap();
-    let state = status(&paths, &Config::default(), &SourceLock::none(), None);
+    let state = status(
+        &paths,
+        &Config::default(),
+        &SourceLock::none(),
+        None,
+        &no_keyring(),
+    );
     let entry = of(&state, "claude");
     assert!(entry.version.is_empty());
     let actions = entry.actions.unwrap();
@@ -404,7 +499,13 @@ fn without_a_start_no_run_is_offered() {
     let dir = tempfile::tempdir().unwrap();
     let paths = paths(dir.path());
     fill(&paths, "claude");
-    let mut state = status(&paths, &Config::default(), &SourceLock::none(), None);
+    let mut state = status(
+        &paths,
+        &Config::default(),
+        &SourceLock::none(),
+        None,
+        &no_keyring(),
+    );
     with_startable(&mut state, true);
     assert!(of(&state, "claude").actions.unwrap().update);
     with_startable(&mut state, false);
@@ -423,7 +524,13 @@ fn a_configuration_waiting_on_disk_is_shown() {
     let pending = account::pending_dir(&paths, "claude");
     std::fs::create_dir_all(&pending).unwrap();
     std::fs::write(pending.join("settings.json"), br#"{"hooks":{}}"#).unwrap();
-    let mut state = status(&paths, &Config::default(), &SourceLock::none(), None);
+    let mut state = status(
+        &paths,
+        &Config::default(),
+        &SourceLock::none(),
+        None,
+        &no_keyring(),
+    );
     let run = of(&state, "claude").maintenance.clone().unwrap();
     assert_eq!(run.state, "confirm");
     assert_eq!(run.task, "config");
@@ -454,4 +561,169 @@ fn accept_and_discard_are_told_apart() {
         config_decision_of(Some(&v1::agents_request::Op::ConfigDiscard(wish()))),
         Some(("claude".to_owned(), false))
     );
+}
+
+/// HUM-523: the switch over the RPC seals the stored credential file and
+/// writes `agents.encrypt_credentials`; off opens it and removes the line.
+/// The status follows both ways.
+#[test]
+fn set_encryption_seals_the_files_and_writes_the_setting() {
+    let dir = tempfile::tempdir().unwrap();
+    let paths = paths(dir.path());
+    fill(&paths, "claude");
+    let stored = paths
+        .agents_dir()
+        .join("claude/credentials/.credentials.json");
+    std::fs::write(&stored, br#"{"token":"secret-token"}"#).unwrap();
+    std::fs::set_permissions(&stored, std::fs::Permissions::from_mode(0o600)).unwrap();
+    let keys = fake_keyring(&paths, dir.path());
+
+    let status = answer(
+        &paths,
+        &SourceLock::none(),
+        None,
+        &keys,
+        set_encryption(true),
+    )
+    .unwrap();
+    let encryption = status.encryption.clone().unwrap();
+    assert!(encryption.enabled && encryption.configured && encryption.keyring);
+    assert!(
+        encryption.diagnostics.is_empty(),
+        "{:?}",
+        encryption.diagnostics
+    );
+    assert!(of(&status, "claude").credentials_encrypted);
+    let bytes = std::fs::read(&stored).unwrap();
+    assert!(seal::is_sealed(&bytes));
+    assert!(!bytes.windows(12).any(|window| window == b"secret-token"));
+    let config = std::fs::read_to_string(paths.config_path()).unwrap();
+    assert!(config.contains("encrypt_credentials = true"), "{config}");
+
+    let status = answer(
+        &paths,
+        &SourceLock::none(),
+        None,
+        &keys,
+        set_encryption(false),
+    )
+    .unwrap();
+    let encryption = status.encryption.clone().unwrap();
+    assert!(!encryption.enabled && !encryption.configured);
+    assert!(!of(&status, "claude").credentials_encrypted);
+    assert_eq!(
+        std::fs::read(&stored).unwrap(),
+        br#"{"token":"secret-token"}"#
+    );
+    let config = std::fs::read_to_string(paths.config_path()).unwrap_or_default();
+    assert!(!config.contains("encrypt_credentials"), "{config}");
+}
+
+/// Without a keyring the setting is refused: no line in `config.toml`, the
+/// file as it was, and the status says why the switch stays off.
+#[test]
+fn set_encryption_without_a_keyring_is_refused() {
+    let dir = tempfile::tempdir().unwrap();
+    let paths = paths(dir.path());
+    fill(&paths, "claude");
+    let stored = paths
+        .agents_dir()
+        .join("claude/credentials/.credentials.json");
+    std::fs::write(&stored, br#"{"token":"t"}"#).unwrap();
+    std::fs::set_permissions(&stored, std::fs::Permissions::from_mode(0o600)).unwrap();
+    let refused = answer(
+        &paths,
+        &SourceLock::none(),
+        None,
+        &no_keyring(),
+        set_encryption(true),
+    )
+    .unwrap_err();
+    assert_eq!(refused.code, AGENT_020, "{}", refused.why);
+    assert!(!paths.config_path().exists());
+    assert_eq!(std::fs::read(&stored).unwrap(), br#"{"token":"t"}"#);
+    let status = answer(
+        &paths,
+        &SourceLock::none(),
+        None,
+        &no_keyring(),
+        status_op(),
+    )
+    .unwrap();
+    let encryption = status.encryption.unwrap();
+    assert!(!encryption.enabled && !encryption.keyring);
+    assert_eq!(encryption.diagnostics[0].code, "AGENT_020");
+}
+
+/// A hand edit of `config.toml` is named in the status until a start or the
+/// switch follows it.
+#[test]
+fn a_hand_edited_setting_is_named_in_the_status() {
+    let dir = tempfile::tempdir().unwrap();
+    let paths = paths(dir.path());
+    std::fs::create_dir_all(paths.config_path().parent().unwrap()).unwrap();
+    std::fs::write(
+        paths.config_path(),
+        "[agents]\nencrypt_credentials = true\n",
+    )
+    .unwrap();
+    let keys = fake_keyring(&paths, dir.path());
+    let status = answer(&paths, &SourceLock::none(), None, &keys, status_op()).unwrap();
+    let encryption = status.encryption.unwrap();
+    assert!(encryption.configured && !encryption.enabled);
+    assert!(
+        encryption
+            .diagnostics
+            .iter()
+            .any(|found| found.code == "AGENT_020" && found.why.contains("config.toml says")),
+        "{:?}",
+        encryption.diagnostics
+    );
+}
+
+/// HUM-523, review: a switch that a crash interrupted is finished before the
+/// status answers; afterwards the file is sealed and `config.toml` says so.
+#[test]
+fn the_status_finishes_an_interrupted_switch_first() {
+    let dir = tempfile::tempdir().unwrap();
+    let paths = paths(dir.path());
+    fill(&paths, "claude");
+    let stored = paths
+        .agents_dir()
+        .join("claude/credentials/.credentials.json");
+    std::fs::write(&stored, br#"{"token":"secret-token"}"#).unwrap();
+    std::fs::set_permissions(&stored, std::fs::Permissions::from_mode(0o600)).unwrap();
+    let keys = fake_keyring(&paths, dir.path());
+    // On and off once: the key lies in the keyring, as before any journal.
+    answer(
+        &paths,
+        &SourceLock::none(),
+        None,
+        &keys,
+        set_encryption(true),
+    )
+    .unwrap();
+    answer(
+        &paths,
+        &SourceLock::none(),
+        None,
+        &keys,
+        set_encryption(false),
+    )
+    .unwrap();
+    // What a crash right after writing the journal leaves.
+    std::fs::write(
+        paths.agents_dir().join("credential-seal.journal"),
+        br#"{"version":1,"target":true,"files":[["claude",".credentials.json"]]}"#,
+    )
+    .unwrap();
+    let status = answer(&paths, &SourceLock::none(), None, &keys, status_op()).unwrap();
+    let encryption = status.encryption.clone().unwrap();
+    assert!(
+        encryption.enabled && encryption.configured,
+        "{encryption:?}"
+    );
+    assert!(of(&status, "claude").credentials_encrypted);
+    assert!(seal::is_sealed(&std::fs::read(&stored).unwrap()));
+    assert!(!paths.agents_dir().join("credential-seal.journal").exists());
 }

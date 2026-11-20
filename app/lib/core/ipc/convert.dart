@@ -1277,6 +1277,10 @@ extension AgentsOpToProto on AgentsOp {
           agent: agent,
           url: value,
         );
+      case AgentsOpKind.setEncryption:
+        request.setEncryption = pb.AgentsRequest_SetEncryption(
+          enabled: enabled,
+        );
     }
     return request;
   }
@@ -1362,8 +1366,19 @@ extension AgentsStatusToDomain on pb.AgentsStatus {
                 )
               : AgentActions.none,
           credentialWriteback: entry.credentialWriteback,
+          credentialsEncrypted: entry.credentialsEncrypted,
         ),
       ),
     ),
+    encryption: hasEncryption()
+        ? CredentialEncryption(
+            enabled: encryption.enabled,
+            configured: encryption.configured,
+            keyring: encryption.keyring,
+            diagnostics: List<Diagnostic>.unmodifiable(
+              encryption.diagnostics.map((pb.Diagnostic d) => d.toDomain()),
+            ),
+          )
+        : null,
   );
 }

@@ -5761,6 +5761,170 @@ Klartext liegen.
    Verschlüsselung und ihre Grenze (der Daemon entschlüsselt für jede
    Sitzung) im selben Commit.
 
+### Stand nach der Umsetzung (2026-11-20)
+
+Gebaut: `agents.encrypt_credentials` (Vorgabe `false`, `x-tier = advanced`,
+`x-project-scope = denied`, im Katalog unter `hidden.toml` mit dem Grund
+`agent_source`, gezeichnet von der Zeile `agents.depot`). Neues Modul
+`sandbox/src/agent/depot/seal.rs`: ChaCha20-Poly1305 aus `ring::aead`, je
+Schreiben eine frische 96-Bit-Nonce aus `ring::rand::SystemRandom`. Format
+einer versiegelten Datei: `HTLSEAL\0` (8 Bytes), Version `1` (1 Byte), Nonce
+(12 Bytes), Chiffrat mit Tag (16 Bytes); Kopf, Agent und Dateiname sind die
+zugehörigen Daten. Eine JSON-Datei beginnt nie mit der Magie, Klartext und
+Chiffrat sind am Anfang unterscheidbar, jeder Leser nimmt beide. Der
+Schlüssel: 32 Zufallsbytes als Hex-Text im Schlüsselbund unter
+`humanitl/agents-depot`, über neue Wege von `KeyStore`
+(`keyring_ref`, `lookup_in_keyring`, `store_in_keyring`), die nie in die
+Rückfalldatei gehen. `lookup_in_keyring` unterscheidet „kein Eintrag" (Ende
+ohne Ausgabe und Fehlertext, `errSecItemNotFound`) von einem Schlüsselbund,
+der nicht antwortet; nur im ersten Fall und nur, solange keine Datei
+versiegelt ist, entsteht ein neuer Schlüssel. `CredentialKeys` hält ihn
+nach dem ersten Lesen im Speicher des Dienstes. Eine Rotation des
+Schlüssels gibt es nicht.
+
+Der Stand auf der Platte ist `agents/credential-seal.json` (Version und Ort
+des Schlüssels, kein Geheimnis): Jeder Schreiber (Wächter der Rückschrift,
+Anmeldelauf, `restore`) liest ihn unter der Sperre des Agenten, sodass eine
+Sitzung, die vor einem Umschalten begann, im Stand danach schreibt.
+`seal::switch` hält die eigene Sperre `credential-seal.switch.lock` und die
+Sperre jedes vorhandenen Depots, prüft jedes Depot, liest und wandelt jede
+Datei erst im Speicher, setzt beim Einschalten den Stand vor den Dateien,
+ersetzt jede Datei atomar (temporäre Datei, `rename`, `fsync`), setzt bei
+einem Fehler die schon geschriebenen zurück und nimmt beim Ausschalten den
+Stand nach den Dateien weg. Entschlüsselt wird nur in die Arbeitskopie der
+Sitzung (`scratch::create`, `0600`) und im Wächter für den Vergleich; alle
+SHA-256 (Basis, alt, neu, Audit) bleiben die der Klartextdatei. `Snapshot`
+und `restore` eines Anmeldelaufs tragen die Datei Byte für Byte, wie sie lag.
+Ein falscher Schlüssel, eine beschädigte Datei oder eine fremde Version ist
+`AGENT_020` (neu, mit ARB und `diagnostic_l10n.dart`), und die Datei bleibt.
+
+RPC `Agents.set_encryption` (Protokoll 1.56): erst `seal::switch`, dann
+`config.toml` (bei `false` fällt die Zeile weg); scheitert das Schreiben,
+schaltet der Daemon die Dateien zurück. `AgentsStatus.encryption`
+(`CredentialEncryption`: Stand auf der Platte, Wert in `config.toml`, ob ein
+Schlüsselbund da ist, Befunde), `AgentDepot.credentials_encrypted`. Eine
+Änderung von Hand in `config.toml` zieht der nächste Start einer Sitzung
+im Daemon nach (`seal::reconcile`, scheitert es, ein Hinweis an der
+Sitzung), bis dahin nennt der Status die Abweichung. CLI: `humanitl config
+set agents.encrypt_credentials` ruft `set_encryption` (ohne Daemon
+`DAEMON_001`, die Datei bleibt), `humanitl agents status` zeigt den Stand in
+der ersten Zeile und `logged in, encrypted` je Agent. Die lokale Sitzung
+ohne Daemon (`humanitl sandbox run`) öffnet eine versiegelte Datei mit dem
+Schlüsselbund. App: Karte „Zugangsdateien verschlüsseln" über den Agenten
+mit Schalter, Stand „Verschlüsselt"/„Nicht verschlüsselt" und den Befunden;
+ohne Schlüsselbund ist der Schalter zu und der Befund steht an der Karte,
+eine Absage des Daemons ebenso. Die Karte eines Agenten sagt „Angemeldet,
+verschlüsselt". Docs: SECURITY 5.7, Tabelle der Seitenkanäle, Changelog,
+K-36 (Zeile, Abschnitt, Änderungsliste), README-Tabelle, `docs/cli.md` (en,
+de), `PROTOCOL.md`; `docs/CONFIG.md`, `DIAGNOSTICS.md`, `reference/cli.md`
+erzeugt. `daemon/Cargo.toml` trägt `ring` als Workspace-Eintrag.
+
+Tests: `seal/tests.rs` (Versiegeln und Öffnen nur mit Schlüssel, Agent und
+Name, frische Nonce, Version, beschädigter Tag; Einschalten versiegelt, kein
+Klartext und kein Schlüssel unter dem Datenordner, Ausschalten bringt die
+Datei Byte für Byte zurück; ohne Schlüsselbund abgelehnt, nichts geändert,
+keine Schlüsseldatei; Sitzung bekommt Klartext, Rückschrift wieder
+versiegelt; Rückschrift folgt einem Umschalten während der Sitzung;
+falscher Schlüssel bei Start, Rückschrift und Ausschalten ist `AGENT_020`,
+Datei unverändert; ein Schlüsselbund, der nicht antwortet, bekommt keinen
+neuen Schlüssel; `reconcile`), `secret.rs` (nur Schlüsselbund, nie die
+Rückfalldatei), `ipc/src/agents/tests.rs` (RPC an und aus samt
+`config.toml` und Status, ohne Schlüsselbund abgelehnt, Änderung von Hand im
+Status), CLI (`config set` ohne Daemon, Statuszeile), Widget-Tests in
+`agents_settings_test.dart` (an und aus rufen je den RPC und der Stand
+folgt; ohne Schlüsselbund bleibt der Schalter aus und der Befund steht an der
+Karte; Absage des Daemons; Daemon vor 1.56 ohne Karte; je Linux und macOS),
+Golden `settings_agents_encryption` (hell, dunkel, en, de).
+Mutationsbeweise, jeder rot: Rückschrift im Klartext (`seal::for_disk`
+gibt immer den Klartext zurück) färbt
+`a_session_gets_plain_text_and_its_renewal_is_stored_sealed` und
+`a_write_back_follows_a_switch_made_during_the_session`; ein Schlüsselbund,
+der nicht antwortet, als leer genommen, färbt
+`a_silent_keyring_never_gets_a_new_key`; der Schalter der App ohne Blick auf
+den Schlüsselbund färbt den Widget-Test „without a keyring the switch stays
+off" unter Linux und macOS.
+
+Nach dem Review: Das Umschalten ist eine Transaktion (`seal/switch.rs`). Eine
+Sperre (`credential-seal.switch.lock`) hält Umschalten und `config.toml`
+zusammen; Lesen und Schreiben der Einstellung gehen über `seal::Setting`, die
+der Daemon an `CredentialKeys` hängt. Vor jeder Änderung steht das Journal
+`agents/credential-seal.journal` (Ziel, umzuwandelnde Dateien), dann Stand
+(an), Dateien (an: nur versiegelte Bytes zwischengelagert), Stand weg (aus),
+`config.toml`, Journal weg. Ein Absturz an jeder Stelle hinterlässt das
+Journal; bis es fertig ist, liest sich eine gelistete Datei in beiden
+Formen, und `for_disk` schreibt nichts. `seal::recover` führt es vorwärts zu
+Ende, vor jeder Statusantwort (`agents::answer`), jedem Sitzungsstart
+(`reconcile`) und jedem Anmelde- oder Konfigurationslauf (`stage_agent`
+ruft `reconcile` und lehnt mit `AGENT_020` ab). Ein Schritt, der ohne Absturz
+scheitert, dreht unter einem neuen Journal zurück. `reconcile` liest die
+Einstellung unter der Sperre. In einem versiegelten Depot ist eine Datei ohne
+Kopf `AGENT_020` (Start, Rückschrift, Umschalten), nie Klartext. Einschalten
+fragt den Schlüsselbund jedes Mal und lehnt einen fehlenden oder anderen
+Schlüssel als den gemerkten ab. `for_disk` lehnt Klartext ab, solange die
+Einstellung `true` sagt und das Depot nicht versiegelt ist. Klartextkopien
+liegen in `Zeroizing`.
+
+Tests dazu: `an_interrupted_switch_is_finished_forward_at_every_crash_point`
+(fünf Absturzstellen, beide Richtungen, zwei Dateien),
+`a_failed_setting_write_turns_the_switch_back`,
+`a_start_during_the_setting_write_does_not_switch_back`,
+`a_damaged_header_is_a_finding_not_plain_text`,
+`switching_on_checks_the_keyring_every_time`,
+`a_write_back_refuses_plain_text_while_the_setting_says_true`,
+`a_login_in_a_sealed_depot_stores_sealed_and_restores_byte_for_byte`,
+ipc `the_status_finishes_an_interrupted_switch_first`. Mutationsbeweise, jeder
+rot: keine Wiederaufnahme des Journals; `config.toml` nach dem Lösen der
+Sperre geschrieben; Klartext ohne Kopf im versiegelten Depot angenommen;
+Einschalten ohne Abgleich mit dem Schlüsselbund; Klartext trotz `true`;
+`Snapshot` hält den Klartext statt der Rohbytes.
+
+Zweite Runde: Vor dem Einschalten sind die Dateien per Definition Klartext;
+`config.toml` sagt `true` erst, wenn jede Datei versiegelt ist (zuletzt
+geschrieben), darauf bezieht sich Akzeptanzkriterium 1. Temporäre Dateien
+der Rückschrift (`.<datei>.writeback`) im Wurzelordner eines Depots gehen
+vor jedem Umschalten und jeder Wiederaufnahme. Ein Journal wird geprüft
+(Version, registrierter Agent, Dateiname als eine Komponente, Zugangsdatei
+des Rezepts oder vorhandene Datei unter `credentials/`, innerhalb von
+`agents/`), sonst `AGENT_020` und nicht befolgt. `credential-seal.json`
+vermerkt `key_id` (SHA-256 eines festen Etiketts und des Schlüssels); ein
+anderer Schlüssel wird abgelehnt, und ein einmal gelesener, dann fehlender
+Eintrag erzeugt keinen neuen Schlüssel. Das lokale `humanitl sandbox run`
+ruft vor dem Start `seal::recover` und lehnt ab, wenn es scheitert. Die
+Kopie einer Sitzung liest die Zugangsdateien unter der Sperre des Agenten
+und schreibt die einmal gelesenen Bytes, ohne die Datei ein zweites Mal zu
+lesen. Tests: `a_left_over_write_back_file_goes_before_a_switch_on`,
+`a_forged_journal_is_refused_and_followed_nowhere`,
+`a_key_once_read_is_never_replaced_silently`,
+`the_copy_of_a_session_reads_under_the_credential_lock`, CLI
+`the_local_start_finishes_an_interrupted_switch_or_refuses`; jeder färbt
+sich unter seiner Mutation rot (kein Wegräumen, keine Prüfung des Journals,
+neuer Schlüssel trotz gemerktem, keine Prüfung der Kennung, keine Sperre in
+der Kopie, keine Wiederaufnahme im lokalen Start).
+
+Dritte Runde: Die Reihenfolge von `config.toml` ist beim Einschalten
+`true` zuletzt, nach jeder versiegelten Datei, beim Ausschalten `false`
+zuerst, synchronisiert (`fsync` des Ordners), vor der ersten Klartextdatei;
+die Wiederaufnahme hält dieselbe Reihenfolge. Der lokale Start ruft
+`seal::reconcile` statt nur `recover` und folgt so auch einem von Hand
+gesetzten `true`. Tests: der Absturztest prüft an jeder Stelle, dass
+`config.toml` nie `true` sagt, während eine Datei Klartext ist, und dass
+das Ausschalten nach dem Journal schon `false` sagt (Mutation: `false`
+zuletzt geschrieben, rot); CLI `the_local_start_follows_a_hand_set_encryption`
+(Mutation: nur `recover`, rot).
+
+Kandidaten für eigene Issues: eine Klartextdatei, die jemand mit
+Schreibrecht auf das Depot ablegt, während es nicht versiegelt ist
+(Herabstufung ohne Spur); Rotation des Schlüssels; ein Test für ein
+`secret-tool lookup`, das stumm mit 1 endet, obwohl ein Eintrag besteht.
+
+Abweichungen: `ring` statt `chacha20poly1305` aus RustCrypto, weil `ring`
+über rustls schon im Baum steht und keine neue Krypto-Crate dazukommt.
+Die benannten Felder einer Anmeldung (`NamedFields`, etwa die Kontofelder in
+`.claude.json` unter `config/`) bleiben unverschlüsselt; sie tragen kein
+Token. Ohne Schlüsselbund nennt der Status `AGENT_020` schon vorab, sobald
+das Werkzeug fehlt (`secret-tool`, `/usr/bin/security`); ob ein vorhandener
+antwortet, zeigt erst das Umschalten.
+
 ---
 
 ## HUM-524 · Entscheidungs-Proxy: Burp Suite in der Anleitung, mit Probelauf des Eigentümers

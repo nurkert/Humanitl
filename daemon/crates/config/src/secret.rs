@@ -681,6 +681,130 @@ impl KeyStore {
         }))
     }
 
+    /// Der Verweis auf den Eintrag `name` im Schlüsselbund dieses Systems,
+    /// ohne den Rückfall in eine Datei (HUM-523); `None`, wenn `name` kein
+    /// gültiger Name ist oder sich der Schlüsselbund hier nicht fragen lässt
+    /// (kein `secret-tool`, kein nutzbares `/usr/bin/security`).
+    ///
+    /// Ob der Schlüsselbund wirklich antwortet, zeigt erst ein Aufruf von
+    /// [`KeyStore::lookup_in_keyring`] oder [`KeyStore::store_in_keyring`].
+    #[must_use]
+    pub fn keyring_ref(&self, name: &str) -> Option<KeyRef> {
+        let reachable = match self.system {
+            StoreKind::Keychain => self.keychain_tool.is_some(),
+            StoreKind::SecretService | StoreKind::File => self.secret_tool.is_some(),
+        };
+        (reachable && is_key_name(name)).then(|| named_ref(self.system, name))
+    }
+
+    /// Liest den Eintrag `name` allein aus dem Schlüsselbund, nie aus der
+    /// Datei des Rückfalls (HUM-523).
+    ///
+    /// `Ok(None)` nur, wenn der Schlüsselbund geantwortet hat, dass es den
+    /// Eintrag nicht gibt: `secret-tool lookup` endet dann ohne Ausgabe und
+    /// ohne Fehlertext, `security` mit `errSecItemNotFound`. Ein Sitzungsbus,
+    /// der nicht antwortet, oder ein gesperrter Schlüsselbund ist ein Fehler,
+    /// kein fehlender Eintrag; ein Aufrufer, der dann einen neuen Schlüssel
+    /// anlegte, überschriebe den alten.
+    ///
+    /// # Errors
+    ///
+    /// `CONFIG_020` mit dem Grund ohne den Wert, wenn sich der Schlüsselbund
+    /// nicht fragen lässt, nicht antwortet oder einen Eintrag liefert, der
+    /// kein Schlüssel ist.
+    pub fn lookup_in_keyring(&self, name: &str) -> Result<Option<ApiKey>, Diagnostic> {
+        self.keyring_lookup(name)
+            .map_err(|why| keyring_failed(&why))
+    }
+
+    fn keyring_lookup(&self, name: &str) -> Result<Option<ApiKey>, String> {
+        let key_ref = self
+            .keyring_ref(name)
+            .ok_or_else(|| self.no_keyring_reason())?;
+        let output = match key_ref.store() {
+            StoreKind::Keychain => {
+                let output = self.find_in_keychain(name)?;
+                if output.status.code() == Some(KEYCHAIN_NOT_FOUND) {
+                    return Ok(None);
+                }
+                if !output.status.success() {
+                    return Err(describe(&output, &SECURITY_TOOL));
+                }
+                output
+            }
+            StoreKind::SecretService | StoreKind::File => {
+                let tool = self
+                    .secret_tool
+                    .as_ref()
+                    .ok_or_else(|| self.no_keyring_reason())?;
+                let output = run_tool(
+                    tool,
+                    &attributes("lookup", name),
+                    None,
+                    self.timeout,
+                    &SECRET_TOOL,
+                )?;
+                if !output.status.success() {
+                    if output.stdout.is_empty() && output.stderr.iter().all(u8::is_ascii_whitespace)
+                    {
+                        return Ok(None);
+                    }
+                    return Err(describe(&output, &SECRET_TOOL));
+                }
+                output
+            }
+        };
+        let text = std::str::from_utf8(&output.stdout)
+            .map_err(|_not_text| "the keyring entry is not text".to_owned())?;
+        ApiKey::from_pasted(text)
+            .map(Some)
+            .map_err(|_refused| "the keyring entry is not a usable key".to_owned())
+    }
+
+    /// Legt `key` unter `name` allein im Schlüsselbund ab, nie in der Datei
+    /// des Rückfalls (HUM-523), und liest ihn zur Probe zurück.
+    ///
+    /// # Errors
+    ///
+    /// `CONFIG_020` mit dem Grund ohne den Schlüssel, wenn sich der
+    /// Schlüsselbund nicht fragen lässt, den Schlüssel nicht nimmt oder ihn
+    /// nicht unverändert zurückgibt. Eine Datei entsteht in keinem Fall.
+    pub fn store_in_keyring(&self, name: &str, key: &ApiKey) -> Result<KeyRef, Diagnostic> {
+        self.keyring_store(name, key)
+            .map_err(|why| keyring_failed(&why))
+    }
+
+    fn keyring_store(&self, name: &str, key: &ApiKey) -> Result<KeyRef, String> {
+        let key_ref = self
+            .keyring_ref(name)
+            .ok_or_else(|| self.no_keyring_reason())?;
+        match key_ref.store() {
+            StoreKind::Keychain => self.store_keychain(name, key)?,
+            StoreKind::SecretService | StoreKind::File => self.store_secret_service(name, key)?,
+        }
+        match self.keyring_lookup(name)? {
+            Some(back) if back == *key => Ok(key_ref),
+            _ => Err(format!(
+                "{} reported success, and the entry does not read back as the key",
+                self.system.keyring_label()
+            )),
+        }
+    }
+
+    /// Warum sich der Schlüsselbund hier nicht fragen lässt.
+    fn no_keyring_reason(&self) -> String {
+        match self.system {
+            StoreKind::Keychain => {
+                format!(
+                    "{KEYCHAIN_TOOL} cannot be used here, so the macOS Keychain cannot be asked"
+                )
+            }
+            StoreKind::SecretService | StoreKind::File => {
+                "secret-tool is not installed, so the system keyring cannot be asked".to_owned()
+            }
+        }
+    }
+
     /// Ob `key_ref` in den Schlüsselbund des anderen Systems zeigt.
     fn is_foreign(&self, key_ref: &KeyRef) -> bool {
         key_ref.store() != StoreKind::File && key_ref.store() != self.system
@@ -1008,6 +1132,15 @@ impl KeyStore {
         }
         Ok(())
     }
+}
+
+/// `CONFIG_020` für einen Schlüsselbund, der ohne den Rückfall in die Datei
+/// nicht nahm oder nicht herausgab (HUM-523). Der Grund ist der Text des
+/// Werkzeugs ohne den Wert.
+fn keyring_failed(why: &str) -> Diagnostic {
+    Diagnostic::builder(CONFIG_020, Severity::Error)
+        .why(why.to_owned())
+        .build()
 }
 
 /// Der Verweis auf den Schlüssel `name` an diesem Ort.
@@ -2131,5 +2264,40 @@ esac
         let store = KeyStore::for_system(&paths, StoreKind::Keychain).with_secret_tool(None);
         assert_eq!(store.system, StoreKind::SecretService);
         assert!(store.keychain_tool.is_none());
+    }
+
+    /// HUM-523: Der Schlüssel der verschlüsselten Zugangsdateien liegt nur im
+    /// Schlüsselbund. Ohne Schlüsselbund wird nichts abgelegt und keine Datei
+    /// angelegt; ein fehlender Eintrag ist `None`, ein Schlüsselbund, der
+    /// nicht antwortet, ein Fehler.
+    #[test]
+    fn the_keyring_only_way_never_writes_the_fallback_file() {
+        let dir = tempfile::tempdir().unwrap();
+        let key = ApiKey::new(SECRET).unwrap();
+
+        let keyring = store_in(dir.path(), Some(fake_tool(dir.path())));
+        assert_eq!(keyring.lookup_in_keyring("agents-depot").unwrap(), None);
+        let stored = keyring.store_in_keyring("agents-depot", &key).unwrap();
+        assert_eq!(stored, KeyRef::secret_service("agents-depot").unwrap());
+        assert_eq!(
+            keyring.lookup_in_keyring("agents-depot").unwrap(),
+            Some(key.clone())
+        );
+
+        let broken = store_in(dir.path(), Some(broken_tool(dir.path())));
+        assert!(broken.lookup_in_keyring("agents-depot").is_err());
+        assert!(broken.store_in_keyring("agents-depot", &key).is_err());
+
+        let none = store_in(dir.path(), None);
+        assert!(none.keyring_ref("agents-depot").is_none());
+        let refused = none.store_in_keyring("agents-depot", &key).unwrap_err();
+        assert_eq!(refused.code, CONFIG_020);
+        assert!(refused.why.contains("secret-tool"), "{}", refused.why);
+        assert!(none.lookup_in_keyring("agents-depot").is_err());
+
+        assert!(
+            !dir.path().join("keys").exists(),
+            "no fallback file, not even its directory"
+        );
     }
 }

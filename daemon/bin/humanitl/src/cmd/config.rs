@@ -559,6 +559,13 @@ async fn set(ctx: &Context, key: &str, text: &str, project: bool) -> Result<u8, 
         &humanitl_config::PolicyLocks::of_policy(&ctx.paths),
     )
     .map_err(Failure::new)?;
+    // Die Verschlüsselung der Zugangsdateien (HUM-523) schaltet der Daemon:
+    // Er verschlüsselt oder entschlüsselt die vorhandenen Dateien und schreibt
+    // den Wert erst danach. Ein Wert, den diese Datei allein trüge, ließe
+    // Depot und Einstellung auseinanderlaufen.
+    if path == humanitl_sandbox::agent::depot::seal::SETTING {
+        return set_encryption(ctx, &path, &value).await;
+    }
     let value = resolved_work_dir(&path, value);
     let toml_value = to_toml(field, &value).map_err(Failure::new)?;
 
@@ -623,6 +630,56 @@ async fn set(ctx: &Context, key: &str, text: &str, project: bool) -> Result<u8, 
         ));
     }
     ctx.render.note(&reach(ctx, &file).await);
+    Ok(EXIT_OK)
+}
+
+/// `config set agents.encrypt_credentials` (HUM-523): ein Aufruf von
+/// `Agents.set_encryption`, kein Schreiben der Datei. Der Daemon prüft den
+/// Schlüsselbund, verschlüsselt oder entschlüsselt die Zugangsdateien des
+/// Depots, alles oder nichts, und schreibt dann `config.toml`.
+///
+/// # Errors
+///
+/// `DAEMON_001` ohne Daemon; `AGENT_020` ohne Schlüsselbund oder für eine
+/// Datei, die sich nicht öffnen lässt; die Dateien bleiben dann, wie sie
+/// waren.
+async fn set_encryption(ctx: &Context, path: &str, value: &Value) -> Result<u8, Failure> {
+    let enabled = value.as_bool().unwrap_or(false);
+    let mut client = ctx.connect().await?;
+    let status = client
+        .agents(humanitl_ipc::v1::AgentsRequest {
+            op: Some(humanitl_ipc::v1::agents_request::Op::SetEncryption(
+                humanitl_ipc::v1::agents_request::SetEncryption { enabled },
+            )),
+        })
+        .await
+        .map_err(|status| Failure::new(crate::cmd::status_diagnostic(&status, "Agents")))?
+        .into_inner();
+    let encrypted: Vec<&str> = status
+        .agents
+        .iter()
+        .filter(|entry| entry.credentials_encrypted)
+        .map(|entry| entry.agent.as_str())
+        .collect();
+    if ctx.render.is_json() {
+        ctx.render.value(&json!({
+            "key": path,
+            "value": enabled,
+            "scope": Scope::Global.as_str(),
+            "file": ctx.paths.config_path().display().to_string(),
+            "encrypted_agents": encrypted,
+        }));
+        return Ok(EXIT_OK);
+    }
+    ctx.render
+        .line(&format!("{path} = {enabled} ({})", Scope::Global.as_str()));
+    ctx.render.note(&if enabled {
+        "[humanitl] The credential files of the depot are encrypted now; the key lies in the \
+         system keyring, and the daemon decrypts only into the copy of each session."
+            .to_owned()
+    } else {
+        "[humanitl] The credential files of the depot are not encrypted any more.".to_owned()
+    });
     Ok(EXIT_OK)
 }
 
@@ -1107,6 +1164,44 @@ mod tests {
             .await
             .unwrap();
         assert!(std::fs::read_to_string(&file).unwrap().contains("depot"));
+    }
+
+    /// HUM-523: `config set agents.encrypt_credentials` is the daemon's
+    /// switch, never a line this command writes itself. Without a daemon it
+    /// ends with `DAEMON_001`, and `config.toml` stays as it was.
+    #[tokio::test]
+    async fn config_set_of_the_encryption_needs_the_daemon_and_leaves_the_file() {
+        let root = tempfile::tempdir().unwrap();
+        let home = root.path().join("home");
+        std::fs::create_dir_all(home.join(".config/humanitl")).unwrap();
+        let env = Env::from_pairs([
+            ("HOME", home.to_str().unwrap()),
+            ("XDG_CONFIG_HOME", home.join(".config").to_str().unwrap()),
+            ("XDG_RUNTIME_DIR", root.path().join("run").to_str().unwrap()),
+        ]);
+        let ctx = crate::cmd::Context {
+            paths: humanitl_config::Paths::new(env.clone()),
+            env,
+            cwd: root.path().to_path_buf(),
+            cli_config: Vec::new(),
+            config_file: None,
+            profile: None,
+            profile_means: crate::cmd::ProfileMeaning::Session,
+            render: crate::render::Renderer::new(false, 0, true),
+            source_lock: humanitl_config::agents::SourceLock::none(),
+        };
+        let file = ctx.paths.config_path();
+        std::fs::write(&file, "# mine\n").unwrap();
+        let refused = super::set(&ctx, "agents.encrypt_credentials", "true", false)
+            .await
+            .unwrap_err();
+        assert_eq!(refused.diagnostic.code.as_str(), "DAEMON_001");
+        assert_eq!(std::fs::read_to_string(&file).unwrap(), "# mine\n");
+        // The project profile never takes it.
+        let refused = super::set(&ctx, "agents.encrypt_credentials", "true", true)
+            .await
+            .unwrap_err();
+        assert_eq!(refused.diagnostic.code.as_str(), "CONFIG_003");
     }
 
     fn full_disk(path: &std::path::Path, _text: &str) -> std::io::Result<()> {

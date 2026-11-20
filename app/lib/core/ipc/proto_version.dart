@@ -152,7 +152,11 @@ abstract final class ProtoVersion {
   /// through `Agents`, switches its buttons by `AgentDepot.actions` and
   /// offers the way back from `AgentDepot.versions` (HUM-521). 52 and 53
   /// have no reader here of their own; 54 is the first this app reads.
-  static const int minor = 54;
+  /// Raised to 56 with the encrypted credential files of the depot: the
+  /// section "Agents" shows `AgentsStatus.encryption` as a switch and calls
+  /// `AgentsRequest.set_encryption`, and each card says whether its
+  /// credential file is encrypted (HUM-523). 55 has no reader here.
+  static const int minor = 56;
 
   /// `major.minor` as text.
   static const String text = '$major.$minor';

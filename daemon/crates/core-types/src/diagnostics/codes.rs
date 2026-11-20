@@ -2079,6 +2079,16 @@ registry! {
     CONFIG_025 => "config", "Data location not printable", "#config_025",
         "A data location comes from `XDG_CONFIG_HOME`, `XDG_DATA_HOME` or `HOME`, and one of them holds a line break or another control character. `humanitl config paths` prints one location per line, and `uninstall.sh --purge` deletes exactly the locations it reads there; such a path would split into rows that name other directories. Nothing was printed.",
         "Set the variable the sentence names to a path without control characters, then run the command again. No fix action: the right path is known only to the person.";
+
+    // HUM-523: the credential files of the depot, encrypted.
+    /// The encryption of the depot's credential files cannot be used: the
+    /// system keyring cannot be reached, so `agents.encrypt_credentials` is
+    /// refused (never a key file next to the data), or an encrypted file does
+    /// not open with the key from the keyring (another key, a damaged file,
+    /// an unknown format version). The files are as they were (HUM-523).
+    AGENT_020 => "agent", "Credential encryption not possible", "#agent_020",
+        "With agents.encrypt_credentials = true the credential files of the depot lie encrypted with ChaCha20-Poly1305, and the key lies only in the system keyring (Secret Service on Linux, the login Keychain on macOS), never in a file next to the data. Either the keyring did not answer, so the setting was refused, or an encrypted file did not open with the key from the keyring: another key, a damaged file or a format this daemon does not know. Nothing was changed, and no file was written in plain text instead.",
+        "`CopyCommand` with the package of `secret-tool` when it is missing, or `humanitl agents login <id>` when a file does not open with the stored key; otherwise none, unlock the keyring and try again.";
 }
 
 /// Sucht einen Code im Register.

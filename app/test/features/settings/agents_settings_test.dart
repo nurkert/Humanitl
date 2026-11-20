@@ -708,4 +708,121 @@ void main() {
       expect(find.text('settings.json'), findsNothing);
     }, variant: _desktops);
   });
+
+  // HUM-523: die Verschlüsselung der Zugangsdateien als Schalter über den
+  // Karten. Er zeigt, was der Daemon über das Depot sagt, und schickt jeden
+  // Wechsel als `set_encryption`; ohne Schlüsselbund bleibt er aus, und der
+  // Befund steht an der Karte.
+  group('encryption of the credential files', () {
+    String badge(WidgetTester tester) => tester
+        .widget<HBadge>(find.byKey(const Key('agents-encryption-state')))
+        .text;
+
+    testWidgets('on and off each call the RPC, and the state follows', (
+      WidgetTester tester,
+    ) async {
+      final FakeDaemonClient client = _with(_installed(loggedIn: true));
+      await _open(tester, client);
+      expect(badge(tester), 'Not encrypted');
+      expect(_text(tester, 'agent-login-claude'), 'Logged in');
+
+      await tapSegment(tester, const Key('agents-encryption-switch'), 'On');
+      expect(
+        client.agentsCalls.last,
+        const AgentsOp.setEncryption(enabled: true),
+      );
+      expect(badge(tester), 'Encrypted');
+      expect(_text(tester, 'agent-login-claude'), 'Logged in, encrypted');
+      expect(
+        find.byKey(const Key('agents-encryption-finding-0')),
+        findsNothing,
+      );
+
+      await tapSegment(tester, const Key('agents-encryption-switch'), 'Off');
+      expect(
+        client.agentsCalls.last,
+        const AgentsOp.setEncryption(enabled: false),
+      );
+      expect(
+        client.agentsCalls
+            .where((AgentsOp op) => op.kind == AgentsOpKind.setEncryption)
+            .length,
+        2,
+      );
+      expect(badge(tester), 'Not encrypted');
+      expect(_text(tester, 'agent-login-claude'), 'Logged in');
+    }, variant: _desktops);
+
+    testWidgets('without a keyring the switch stays off and the finding '
+        'stands at the card', (WidgetTester tester) async {
+      final FakeDaemonClient client = _with(_installed(loggedIn: true))
+        ..agentsEncryption = const CredentialEncryption(
+          diagnostics: <Diagnostic>[
+            Diagnostic(
+              code: 'AGENT_020',
+              severity: Severity.error,
+              why:
+                  'the credential files of the depot cannot be encrypted or '
+                  'opened: this system has no keyring the daemon can ask; '
+                  'nothing was changed',
+              fix: FixAction.copyCommand(
+                command: 'sudo apt-get install libsecret-tools',
+              ),
+            ),
+          ],
+        );
+      await _open(tester, client);
+      expect(badge(tester), 'Not encrypted');
+      expect(
+        find.byKey(const Key('agents-encryption-finding-0')),
+        findsOneWidget,
+      );
+      expect(
+        find.textContaining('no keyring the daemon can ask'),
+        findsOneWidget,
+      );
+      final int calls = client.agentsCalls.length;
+      await tapSegment(tester, const Key('agents-encryption-switch'), 'On');
+      expect(client.agentsCalls, hasLength(calls), reason: 'switch is closed');
+      expect(badge(tester), 'Not encrypted');
+    }, variant: _desktops);
+
+    testWidgets('a keyring that does not answer: the refusal stands at the '
+        'card and the switch stays off', (WidgetTester tester) async {
+      final FakeDaemonClient client = _with(_installed(loggedIn: true));
+      client.agentsRefusals[AgentsOpKind.setEncryption] = const Diagnostic(
+        code: 'AGENT_020',
+        severity: Severity.error,
+        why:
+            'the credential files of the depot cannot be encrypted or '
+            'opened: the system keyring cannot be used (secret-tool ended '
+            'with 1); nothing was changed',
+      );
+      await _open(tester, client);
+      await tapSegment(tester, const Key('agents-encryption-switch'), 'On');
+      expect(
+        client.agentsCalls.last,
+        const AgentsOp.setEncryption(enabled: true),
+      );
+      expect(badge(tester), 'Not encrypted');
+      expect(
+        find.byKey(const Key('agents-encryption-finding-0')),
+        findsOneWidget,
+      );
+      expect(find.textContaining('secret-tool ended with 1'), findsOneWidget);
+    }, variant: _desktops);
+
+    testWidgets('a daemon before 1.56 shows no switch', (
+      WidgetTester tester,
+    ) async {
+      final FakeDaemonClient client = _with(_installed())
+        ..agentsEncryption = null;
+      await _open(tester, client);
+      expect(find.byKey(const Key('agents-encryption')), findsNothing);
+      expect(
+        find.byKey(const ValueKey<String>('agent-card-claude')),
+        findsOneWidget,
+      );
+    }, variant: _desktops);
+  });
 }

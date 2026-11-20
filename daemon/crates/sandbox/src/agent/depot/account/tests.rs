@@ -126,7 +126,25 @@ impl Fixture {
     }
 
     fn run(&self, agent: &'static KnownAgent, task: MaintenanceTask) -> AgentRun {
-        prepare(&self.paths, agent, task, SessionId::new()).unwrap()
+        prepare(&self.paths, agent, task, SessionId::new(), None).unwrap()
+    }
+
+    /// The depots sealed (HUM-523), with keys behind a stand-in keyring in
+    /// `dir`; the stored login, if any, sealed with them.
+    fn sealed(&self, dir: &Path) -> crate::agent::depot::seal::CredentialKeys {
+        use crate::agent::depot::seal;
+        let tool = seal::tests::fake_keyring(dir);
+        let keys = seal::CredentialKeys::new(
+            humanitl_config::secret::KeyStore::for_paths(&self.paths).with_secret_tool(Some(tool)),
+        );
+        seal::switch(&self.paths, &keys, true).unwrap();
+        let stored = self.depot.credentials_dir().join(".credentials.json");
+        if let Ok(plain) = std::fs::read(&stored) {
+            let sealed =
+                seal::seal(&keys.key().unwrap(), "standin", ".credentials.json", &plain).unwrap();
+            std::fs::write(&stored, sealed).unwrap();
+        }
+        keys
     }
 }
 
@@ -287,6 +305,7 @@ fn a_login_the_adapter_cannot_store_is_refused_before_the_run() {
             agent,
             MaintenanceTask::Login,
             SessionId::new(),
+            None,
         )
         .unwrap_err();
         assert_eq!(found.code, AGENT_014, "{}", found.why);
@@ -302,6 +321,7 @@ fn a_login_the_adapter_cannot_store_is_refused_before_the_run() {
                 agent,
                 MaintenanceTask::Login,
                 SessionId::new(),
+                None,
             )
             .unwrap_err();
             assert!(
@@ -322,6 +342,7 @@ fn a_login_needs_an_installed_agent() {
         &STANDIN,
         MaintenanceTask::Login,
         SessionId::new(),
+        None,
     )
     .unwrap_err();
     assert_eq!(found.code, AGENT_008);
@@ -698,4 +719,61 @@ fn an_interrupted_copy_leaves_no_pending_proposal() {
         "stale staging is cleared"
     );
     drop(next);
+}
+
+/// HUM-523: a login in a sealed depot stores its credential file sealed; a
+/// named write that fails afterwards puts the earlier sealed file back byte
+/// for byte, never its plain text.
+#[test]
+fn a_login_in_a_sealed_depot_stores_sealed_and_restores_byte_for_byte() {
+    use crate::agent::depot::seal;
+    let earlier = br#"{"token":"t0","expires":50,"account":"acc"}"#;
+    for fail in [false, true] {
+        let fixture = Fixture::new();
+        let stored = fixture.depot.credentials_dir().join(".credentials.json");
+        private_file(&stored, earlier);
+        let keyring = tempfile::tempdir().unwrap();
+        let keys = fixture.sealed(keyring.path());
+        let sealed_before = std::fs::read(&stored).unwrap();
+        assert!(seal::is_sealed(&sealed_before));
+        let run = prepare(
+            &fixture.paths,
+            &STANDIN,
+            MaintenanceTask::Login,
+            SessionId::new(),
+            Some(keys.clone()),
+        )
+        .unwrap();
+        let copy = run
+            .mount()
+            .scratch
+            .expect("a login run has a configuration copy");
+        assert_eq!(
+            std::fs::read(copy.join(".credentials.json")).unwrap(),
+            earlier
+        );
+        std::fs::write(
+            copy.join(".credentials.json"),
+            r#"{"token":"t1","expires":100,"account":"acc"}"#,
+        )
+        .unwrap();
+        std::fs::write(
+            copy.join(".claude.json"),
+            r#"{"oauthAccount":{"emailAddress":"a@example.invalid"}}"#,
+        )
+        .unwrap();
+        if fail {
+            std::fs::create_dir(fixture.depot.root().join("..claude.json.named")).unwrap();
+            run.commit_login(true, true).unwrap_err();
+            assert_eq!(std::fs::read(&stored).unwrap(), sealed_before);
+        } else {
+            run.commit_login(true, true).unwrap();
+            let now = std::fs::read(&stored).unwrap();
+            assert!(seal::is_sealed(&now), "the login lies in plain text");
+            let opened =
+                seal::from_disk(&fixture.depot, ".credentials.json", &now, Some(&keys)).unwrap();
+            let value: serde_json::Value = serde_json::from_slice(&opened).unwrap();
+            assert_eq!(value["token"], "t1");
+        }
+    }
 }

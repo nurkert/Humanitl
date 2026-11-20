@@ -1128,6 +1128,7 @@ dependencies = [
  "humanitl-core",
  "humanitl-rules",
  "jiff",
+ "ring",
  "rustix",
  "serde",
  "serde_json",

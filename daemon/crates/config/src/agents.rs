@@ -98,6 +98,9 @@ macro_rules! known_agents {
             /// Woher die Agenten kommen, für jeden, der unter `agents.<id>.source` nichts sagt: `host` (Vorgabe) sucht das Programm auf dem Rechner, `depot` nimmt Programm, Konfiguration und Anmeldung aus dem Depot unter dem Datenordner des Daemons (`humanitl agents status`). Im Projekt-Profil gesperrt.
             #[schemars(extend("x-tier" = "advanced", "x-project-scope" = "denied"))]
             pub source: AgentSource,
+            /// Ob die Zugangsdateien im Depot verschlüsselt liegen (ChaCha20-Poly1305, HUM-523). Der Schlüssel liegt nur im Schlüsselbund des Systems, nie in einer Datei neben den Daten; ohne erreichbaren Schlüsselbund lehnt der Daemon `true` ab. Umschalten über `humanitl config set agents.encrypt_credentials` oder den Schalter im Abschnitt Agenten: Der Daemon verschlüsselt oder entschlüsselt dabei die vorhandenen Dateien. Der Daemon entschlüsselt für jede Sitzung in ihre Arbeitskopie. Im Projekt-Profil gesperrt.
+            #[schemars(extend("x-tier" = "advanced", "x-project-scope" = "denied"))]
+            pub encrypt_credentials: bool,
             $(
                 #[doc = $doc]
                 #[schemars(extend("x-tier" = "advanced", "x-project-scope" = "denied"))]

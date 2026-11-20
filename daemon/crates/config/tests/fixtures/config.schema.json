@@ -111,6 +111,7 @@
           "credential_writeback": true,
           "source": null
         },
+        "encrypt_credentials": false,
         "opencode": {
           "credential_writeback": true,
           "source": null
@@ -225,6 +226,13 @@
             }
           },
           "type": "object",
+          "x-project-scope": "denied",
+          "x-tier": "advanced"
+        },
+        "encrypt_credentials": {
+          "default": false,
+          "description": "Ob die Zugangsdateien im Depot verschlüsselt liegen (ChaCha20-Poly1305, HUM-523). Der Schlüssel liegt nur im Schlüsselbund des Systems, nie in einer Datei neben den Daten; ohne erreichbaren Schlüsselbund lehnt der Daemon `true` ab. Umschalten über `humanitl config set agents.encrypt_credentials` oder den Schalter im Abschnitt Agenten: Der Daemon verschlüsselt oder entschlüsselt dabei die vorhandenen Dateien. Der Daemon entschlüsselt für jede Sitzung in ihre Arbeitskopie. Im Projekt-Profil gesperrt.",
+          "type": "boolean",
           "x-project-scope": "denied",
           "x-tier": "advanced"
         },

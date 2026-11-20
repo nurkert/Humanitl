@@ -154,6 +154,7 @@ impl Fixture {
             command: &command,
             from_caller,
             purpose: Purpose::Start,
+            keys: None,
         })
         .unwrap()
     }

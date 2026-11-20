@@ -70,6 +70,9 @@ pub fn of_agents(op: Option<&v1::agents_request::Op>) -> Vec<String> {
             "agents.source".to_owned(),
             format!("agents.{}.source", set.agent.trim()),
         ],
+        Some(v1::agents_request::Op::SetEncryption(_)) => {
+            vec!["agents.encrypt_credentials".to_owned()]
+        }
         _ => Vec::new(),
     }
 }
