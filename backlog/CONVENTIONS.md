@@ -4086,3 +4086,25 @@ user.") werden nicht geraten. Ein „Drop" mit Fehlerseite bleibt deshalb ein
 weitergeleiteter Flow mit dem Status der Seite; die Grenze steht in
 `docs/SECURITY.md` beim Nachfragemodus `upstream` und in der Anleitung zu
 Burp Suite.
+
+### 4.58 Aus der Umsetzung der Lücke im Audit-Log (HUM-564, 2026-11-20)
+
+**Neue Art `audit.events_dropped`.** `data` ist `{ "dropped": u64,
+"open_flows": u64 }` (`humanitl_audit::kinds::AuditEventsDropped`): wie viele
+Flow-Ereignisse der Sink des Audit-Logs (`audit_sink.rs`) mit
+`RecvError::Lagged(n)` verloren hat und wie viele Flows er in diesem Moment
+offen hielt. Kein Flow, kein Host, kein Pfad; der Rundfunk sagt nicht, welche
+Flows betroffen sind. Der Record steht unter der Sitzung des Sinks ungefähr
+dort in der Kette, wo die Lücke entstand (ein `flow.received` eines schon
+offenen Flows kann ihm folgen), einer je `Lagged`, auch beim Leeren des Stroms in `AuditSink::finish`. Das synthetische
+`FlowEvent::Lagged` der Clients (4.18) ist etwas anderes und bleibt ohne Record.
+`RecordKind::NAMES` hat damit 28 Namen.
+
+**Nach einer Lücke fällt nur, wer schweigt.** Bis HUM-564 schloss der Sink bei
+jedem `Lagged` alle offenen Flows ab. Jetzt trägt jeder offene Eintrag ein
+Zeichen `stale`: Ein `Lagged` schließt die Einträge ab, die es schon trugen
+(ein ausstehendes `flow.received` wird noch geschrieben), und setzt es bei
+allen übrigen; jedes Ereignis eines Flows (`FlowEvent::flow_id`) löscht es.
+Die Tabelle hält so höchstens die offenen Flows zweier Lücken. Die Grenze, die
+bleibt, steht in `docs/THREAT-MODEL.md` K-38: Ein Flow ohne Ereignis über zwei
+Lücken gilt als verloren; endet er doch, fehlt sein `flow.responded`.

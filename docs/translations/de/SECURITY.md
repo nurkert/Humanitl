@@ -1862,7 +1862,11 @@ Sie beweist **nicht**:
 
 1. dass der Daemon ehrlich geschrieben hat. Ein manipulierter Daemon protokolliert, was er will;
 2. dass keine Ereignisse fehlen, die nie geschrieben wurden. Ein hart beendeter Daemon kann eine
-   halbe letzte Zeile schreiben; der nächste Start legt sie beiseite (`AUDIT_002`);
+   halbe letzte Zeile schreiben; der nächste Start legt sie beiseite (`AUDIT_002`). Auch
+   Flow-Ereignisse, die der Audit-Sink verliert, weil er hinter den Rundfunk der Ereignisse
+   zurückfiel, stehen nicht im Log; ungefähr dort, wo sie fehlen, hält die Kette einen Record
+   `audit.events_dropped` mit ihrer Zahl, sodass die Lücke selbst signiert ist (HUM-564,
+   `docs/THREAT-MODEL.md` K-38);
 3. dass die letzten bis zu `anchor_every` Einträge nach dem letzten Anker nicht abgeschnitten
    wurden. Ein Schnitt genau an einem Anker hinterlässt eine gültige, kürzere Kette; `verify` warnt
    nur vor unverankerten Einträgen dahinter (`UnanchoredTail`). Ein Daemon, der geordnet anhält,
