@@ -521,6 +521,109 @@ void main() {
       TargetPlatform.macOS,
     }),
   );
+
+  // HUM-560, Review: Wer während der Sperre ein anderes Feld fokussiert, hat
+  // den Fokus bewusst bewegt; nach dem Neuladen bleibt er dort. Mutations-
+  // beweis: eine Rückgabe ohne den Vergleich mit dem Knoten, auf den die
+  // Sperre den Fokus schob, macht diesen Test rot.
+  testWidgets(
+    'focus moved to another field while the row is locked stays there',
+    (WidgetTester tester) async {
+      final _HeldClient client = _HeldClient()
+        ..sandboxBackendList = clientWith().sandboxBackendList;
+      await openSettings(tester, client);
+      final Finder target = find.descendant(
+        of: row,
+        matching: find.text('container'),
+      );
+      await tester.ensureVisible(target);
+      await tester.pumpAndSettle();
+      Focus.of(tester.element(target)).requestFocus();
+      await tester.pump();
+      expect(focusInRow(tester), isTrue);
+
+      final Completer<SandboxBackendList> held =
+          Completer<SandboxBackendList>();
+      client.held = held;
+      await tester.sendKeyEvent(LogicalKeyboardKey.enter);
+      await tester.pump();
+      await tester.pump();
+      await tester.pump(const Duration(milliseconds: 600));
+      expect(tester.widget<HSegmented<String>>(row).enabled, isFalse);
+      expect(focusInRow(tester), isFalse);
+
+      final FocusNode field = tester
+          .widget<EditableText>(find.byType(EditableText).first)
+          .focusNode;
+      field.requestFocus();
+      await tester.pump();
+      expect(FocusManager.instance.primaryFocus, same(field));
+
+      held.complete(client.sandboxBackendList);
+      await tester.pumpAndSettle();
+      expect(tester.widget<HSegmented<String>>(row).enabled, isTrue);
+      expect(FocusManager.instance.primaryFocus, same(field));
+      expect(focusInRow(tester), isFalse);
+    },
+    variant: TargetPlatformVariant(<TargetPlatform>{
+      TargetPlatform.linux,
+      TargetPlatform.macOS,
+    }),
+  );
+
+  // HUM-560, Review: Fällt der Fokus nach dem Feld dorthin zurück, wohin
+  // die Sperre ihn schob, bleibt die Rückgabe trotzdem aufgehoben.
+  // Mutationsbeweis: nur beim Entsperren zu vergleichen macht diesen Test
+  // rot.
+  testWidgets(
+    'focus moved away and back while the row is locked is not pulled in',
+    (WidgetTester tester) async {
+      final _HeldClient client = _HeldClient()
+        ..sandboxBackendList = clientWith().sandboxBackendList;
+      await openSettings(tester, client);
+      final Finder target = find.descendant(
+        of: row,
+        matching: find.text('container'),
+      );
+      await tester.ensureVisible(target);
+      await tester.pumpAndSettle();
+      Focus.of(tester.element(target)).requestFocus();
+      await tester.pump();
+      expect(focusInRow(tester), isTrue);
+
+      final Completer<SandboxBackendList> held =
+          Completer<SandboxBackendList>();
+      client.held = held;
+      await tester.sendKeyEvent(LogicalKeyboardKey.enter);
+      await tester.pump();
+      await tester.pump();
+      await tester.pump(const Duration(milliseconds: 600));
+      expect(tester.widget<HSegmented<String>>(row).enabled, isFalse);
+      final FocusNode? fallback = FocusManager.instance.primaryFocus;
+
+      final FocusNode field = tester
+          .widget<EditableText>(find.byType(EditableText).first)
+          .focusNode;
+      field.requestFocus();
+      await tester.pump();
+      expect(FocusManager.instance.primaryFocus, same(field));
+      // Zurück auf den Knoten, auf den die Sperre den Fokus schob.
+      expect(fallback, isNotNull);
+      fallback!.requestFocus();
+      await tester.pump();
+      expect(FocusManager.instance.primaryFocus, same(fallback));
+
+      held.complete(client.sandboxBackendList);
+      await tester.pumpAndSettle();
+      expect(tester.widget<HSegmented<String>>(row).enabled, isTrue);
+      expect(FocusManager.instance.primaryFocus, same(fallback));
+      expect(focusInRow(tester), isFalse);
+    },
+    variant: TargetPlatformVariant(<TargetPlatform>{
+      TargetPlatform.linux,
+      TargetPlatform.macOS,
+    }),
+  );
 }
 
 /// Ein Fake, der die nächste Liste erst nennt, wenn der Test [held] erfüllt.

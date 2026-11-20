@@ -9,6 +9,7 @@
 
 import 'dart:async';
 
+import 'package:flutter/services.dart';
 import 'package:flutter/widgets.dart';
 import 'package:flutter_test/flutter_test.dart';
 import 'package:flutter_riverpod/flutter_riverpod.dart';
@@ -135,6 +136,49 @@ Future<void> switchProject(WidgetTester tester, Finder section) async {
         .write(FormKeys.sandboxWorkDir, '/home/dev/other-project'),
   );
   await settle(tester);
+}
+
+/// Das Segment, auf dem der Fokus steht, oder null, wenn er nicht in der
+/// Wahl liegt.
+HSegment<String>? focusedSegment() {
+  final BuildContext? focused = FocusManager.instance.primaryFocus?.context;
+  if (focused == null ||
+      find
+          .descendant(of: choice, matching: find.byWidget(focused.widget))
+          .evaluate()
+          .isEmpty) {
+    return null;
+  }
+  return focused.findAncestorWidgetOfExactType<HSegment<String>>();
+}
+
+/// Wählt Container per Enter, mit zurückgehaltener Liste für Container,
+/// und prüft, dass die Sperre den Fokus aus der Wahl nimmt (HUM-560).
+Future<Completer<SandboxBackendList>> _chooseContainerByKeyboard(
+  WidgetTester tester,
+  _HeldBackendsClient client,
+) async {
+  await openIsolation(tester, client);
+  final Finder target = find.descendant(
+    of: choice,
+    matching: find.text('container'),
+  );
+  await tester.ensureVisible(target);
+  await tester.pumpAndSettle();
+  Focus.of(tester.element(target)).requestFocus();
+  await tester.pump();
+  expect(focusedSegment()?.option.value, 'container');
+
+  final Completer<SandboxBackendList> held = Completer<SandboxBackendList>();
+  client.held['container'] = held;
+  await tester.sendKeyEvent(LogicalKeyboardKey.enter);
+  await settle(tester);
+  expect(client.sandboxBackendsAsked, contains('container'));
+  expect(held.isCompleted, isFalse);
+  expect(tester.widget<HSegmented<String>>(choice).selected, 'container');
+  expect(tester.widget<HSegmented<String>>(choice).enabled, isFalse);
+  expect(focusedSegment(), isNull);
+  return held;
 }
 
 void main() {
@@ -756,6 +800,138 @@ void main() {
     client.sandboxBackendsFailure = containerMissing;
     await switchProject(tester, section);
     expect(section, findsNothing);
+  }, variant: linuxAndMac);
+
+  // HUM-560: Eine Wahl per Tastatur fragt nach der Liste für das neue
+  // Backend; bis sie da ist, sind die Segmente gesperrt, und ein gesperrtes
+  // Segment verliert den Fokus. Danach steht er wieder auf dem gewählten
+  // Segment. Mutationsbeweis: ohne die Rückgabe in `SandboxBackendSegments`
+  // ist dieser Test rot.
+  testWidgets('choosing a backend by keyboard keeps the focus in the choice '
+      'across the reload', (WidgetTester tester) async {
+    final _HeldBackendsClient client = _HeldBackendsClient()
+      ..sandboxBackendList = listWith(availableContainer);
+    final Completer<SandboxBackendList> held = await _chooseContainerByKeyboard(
+      tester,
+      client,
+    );
+
+    held.complete(listWith(availableContainer));
+    await settle(tester);
+    expect(tester.widget<HSegmented<String>>(choice).enabled, isTrue);
+    expect(focusedSegment()?.option.value, 'container');
+  }, variant: linuxAndMac);
+
+  // HUM-560, Review: Wer während der Sperre ein anderes Bedienelement
+  // anklickt oder fokussiert, hat den Fokus bewusst bewegt; die Rückgabe holt ihn nicht in die Wahl zurück.
+  // Mutationsbeweis: eine Rückgabe ohne den Vergleich mit dem Knoten, auf
+  // den die Sperre den Fokus schob, macht diesen Test rot.
+  testWidgets('focus moved away while the choice is locked stays where it '
+      'went', (WidgetTester tester) async {
+    final _HeldBackendsClient client = _HeldBackendsClient()
+      ..sandboxBackendList = listWith(availableContainer);
+    final Completer<SandboxBackendList> held = await _chooseContainerByKeyboard(
+      tester,
+      client,
+    );
+    final FocusNode? fallback = FocusManager.instance.primaryFocus;
+    // Ein anderes Bedienelement nimmt den Fokus, wie nach einem Klick.
+    final Finder start = find.byKey(const Key('sandbox-start'));
+    Focus.of(
+      tester.element(
+        find.descendant(of: start, matching: find.byType(Text)).first,
+      ),
+    ).requestFocus();
+    await tester.pump();
+    final FocusNode? moved = FocusManager.instance.primaryFocus;
+    expect(moved, isNotNull);
+    expect(moved, isNot(same(fallback)));
+    expect(focusedSegment(), isNull);
+
+    held.complete(listWith(availableContainer));
+    await settle(tester);
+    expect(tester.widget<HSegmented<String>>(choice).enabled, isTrue);
+    expect(FocusManager.instance.primaryFocus, same(moved));
+    expect(focusedSegment(), isNull);
+  }, variant: linuxAndMac);
+
+  // HUM-560, Review: Wer den Fokus während der Sperre fortbewegt und er
+  // danach dorthin zurückfällt, wohin die Sperre ihn schob, hat ihn doch
+  // bewegt; die Rückgabe bleibt aufgehoben. Mutationsbeweis: nur beim
+  // Entsperren zu vergleichen macht diesen Test rot.
+  testWidgets('focus moved away and back while the choice is locked is not '
+      'pulled in', (WidgetTester tester) async {
+    final _HeldBackendsClient client = _HeldBackendsClient()
+      ..sandboxBackendList = listWith(availableContainer);
+    final Completer<SandboxBackendList> held = await _chooseContainerByKeyboard(
+      tester,
+      client,
+    );
+    final FocusNode? fallback = FocusManager.instance.primaryFocus;
+    final Finder start = find.byKey(const Key('sandbox-start'));
+    final FocusNode other = Focus.of(
+      tester.element(
+        find.descendant(of: start, matching: find.byType(Text)).first,
+      ),
+    )..requestFocus();
+    await tester.pump();
+    expect(FocusManager.instance.primaryFocus, same(other));
+    other.unfocus();
+    await tester.pump();
+    expect(FocusManager.instance.primaryFocus, same(fallback));
+
+    held.complete(listWith(availableContainer));
+    await settle(tester);
+    expect(tester.widget<HSegmented<String>>(choice).enabled, isTrue);
+    expect(FocusManager.instance.primaryFocus, same(fallback));
+    expect(focusedSegment(), isNull);
+  }, variant: linuxAndMac);
+
+  // HUM-560, Review: Verschwindet die Wahl während der Sperre, etwa weil
+  // eine Sitzung startet, wartet nichts mehr auf die Rückgabe: keine
+  // Ausnahme, und die Antwort danach bewegt den Fokus nicht.
+  testWidgets('a choice removed while locked restores nothing', (
+    WidgetTester tester,
+  ) async {
+    final _HeldBackendsClient client = _HeldBackendsClient()
+      ..sandboxBackendList = listWith(availableContainer);
+    final Completer<SandboxBackendList> held = await _chooseContainerByKeyboard(
+      tester,
+      client,
+    );
+    await tester.tap(find.byKey(const Key('sandbox-start')));
+    await settle(tester);
+    expect(find.byKey(const Key('sandbox-backend-current')), findsOneWidget);
+    expect(choice, findsNothing);
+    final FocusNode? before = FocusManager.instance.primaryFocus;
+
+    held.complete(listWith(availableContainer));
+    await settle(tester);
+    expect(tester.takeException(), isNull);
+    expect(FocusManager.instance.primaryFocus, same(before));
+  }, variant: linuxAndMac);
+
+  // HUM-560: Wer nicht in der Wahl war, als sie gesperrt wurde, bekommt
+  // dort nach dem Neuladen keinen Fokus. Mutationsbeweis: eine Rückgabe ohne
+  // die Bedingung macht diesen Test rot.
+  testWidgets('a reload does not pull focus into the choice from elsewhere', (
+    WidgetTester tester,
+  ) async {
+    final _HeldBackendsClient client = _HeldBackendsClient()
+      ..sandboxBackendList = listWith(availableContainer);
+    await openIsolation(tester, client);
+    final Finder section = find.byKey(const Key('sandbox-backend'));
+    expect(focusedSegment(), isNull);
+
+    final Completer<SandboxBackendList> held = Completer<SandboxBackendList>();
+    client.held[null] = held;
+    await switchProject(tester, section);
+    expect(tester.widget<HSegmented<String>>(choice).enabled, isFalse);
+
+    held.complete(listWith(availableContainer));
+    await settle(tester);
+    expect(tester.widget<HSegmented<String>>(choice).enabled, isTrue);
+    expect(focusedSegment(), isNull);
   }, variant: linuxAndMac);
 }
 

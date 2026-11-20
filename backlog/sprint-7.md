@@ -4361,209 +4361,6 @@ die der Launcher bei `depot` maskiert (HUM-518 Punkt 4).
    Wegwerf-Sitzung.
 2. Die Anmeldedaten des Hosts erreichen die Sandbox nicht.
 
-### Stand nach der Umsetzung (2026-11-20)
-
-Gebaut: `daemon/crates/sandbox/src/agent/codex.rs` (`CodexAdapter`, vierter
-Eintrag im Register, `agent.adapter = "codex"`, auch in Katalog und App), aus
-den Bausteinen von HUM-514 (Starter mit memfd-Datei, aufgelöster Endpunkt für
-Umgebung, Durchreiche, Briefing, Hinweis und Maske, `command_preflight`, kein
-kopierter Adapter). Quellen, gelesen 2026-11-20: learn.chatgpt.com
-(`/docs/config-file/config-reference`, `/docs/config-file/environment-variables`,
-`/docs/auth`, `/docs/enterprise/managed-configuration`, `/docs/build-skills`,
-`/docs/agent-configuration/agents-md`, `/docs/sandboxing`) und
-github.com/openai/codex, Commit `a0a30c40e8dbcc44af52e2df64dcce64368d4422`;
-jede Angabe steht mit Adresse bzw. Datei im Code. Nichts ist am echten
-`codex` gemessen.
-
-- Programm: `sudo npm install -g --ignore-scripts @openai/codex` (`README.md`
-  des Repos); `bin/codex.js` ist ein Node-Starter vor dem Binary eines
-  Plattform-Pakets (`codex-cli/bin/codex.js`), also kein natives Programm
-  (`is_native_program = false` wie pi). Orte einer Host-Installation im
-  Rezept: `{prefix}/lib/node_modules` und `{prefix}/bin` mit `prefix` dort, wo
-  node liegt (docs.npmjs.com/cli/v11/configuring-npm/folders).
-- Proxy: `HTTPS_PROXY`/`ALL_PROXY`/`NO_PROXY` aus der Umgebung, wenn die
-  Plattform keinen System-Proxy meldet (unter Linux nie), sonst reqwests
-  Vorgabe mit denselben Variablen
-  (`codex-rs/http-client/src/outbound_proxy.rs`, `resolve_env_proxy_route`).
-  Kommt aus dem Env-Kit wie bei jedem Agenten.
-- CA: `CODEX_CA_CERTIFICATE` auf die CA der Sandbox (environment-variables:
-  Vorrang vor `SSL_CERT_FILE`, gilt für HTTPS, Anmeldung, WebSocket); Codex
-  hängt sie an die nativen Wurzeln an (`codex-rs/http-client/src/custom_ca.rs`).
-- Zustand: `CODEX_HOME=<home>/.codex` auf dem tmpfs-Home („must already
-  exist": die `config.toml` des Adapters legt den Ordner an); im Depot setzt
-  das Rezept ihn auf die Kopie, und dieser Wert gewinnt.
-- `config.toml` unter `CODEX_HOME` (nur lesbar): `check_for_update_on_startup
-  = false`, `analytics.enabled = false`, `feedback.enabled = false`,
-  `cli_auth_credentials_store = "file"` (im tmpfs, nie der Schlüsselbund des
-  Hosts), `sandbox_mode = "danger-full-access"`, `projects."/work".trust_level
-  = "untrusted"` (keine Frage nach Vertrauen, die in die nur lesbare Datei
-  schreiben wollte; Hooks und Regeln aus `.codex/` des Projekts laufen nicht
-  ungefragt). Unter Linux erzwingt `/etc/codex/requirements.toml`
-  (managed-configuration) Update-Prüfung aus, Ablage `file` und Feedback aus
-  auch in einer Depot-Sitzung, deren `CODEX_HOME` die Kopie ist.
-- Anbieter und Schlüssel: Mit Schlüssel (`llm.api_key_ref`) oder
-  `llm.endpoint` erklärt der Adapter einen eigenen Anbieter `humanitl`
-  (`model_provider`, `model_providers.humanitl.base_url`, `wire_api =
-  "responses"`, mit Schlüssel `env_key = "OPENAI_API_KEY"`, erstes Modell aus
-  `llm.models`). Ein eigener Anbieter hat `requires_openai_auth = false`
-  (kein Anmeldebildschirm, Schlüssel aus `env_key`) und `supports_websockets
-  = false` (`codex-rs/model-provider-info/src/lib.rs`); der Schlüssel geht
-  als `Authorization: Bearer` (`codex-rs/model-provider/src/auth.rs`), also
-  in die Vorgabe-Kopfzeile der Maske. Der Starter (`codex::KEY_START`) liest
-  `/etc/humanitl/codex/llm-api-key` und exportiert `OPENAI_API_KEY`; der
-  Schlüssel steht in keinem `argv` und keiner Variable des Plans.
-  `CODEX_API_KEY` der Doku gilt nur für `exec` und SDK, deshalb `env_key`.
-  Ohne Schlüssel und Endpunkt bleibt der eingebaute Anbieter mit
-  `ChatGPT`-Anmeldung; seine Inferenz geht an
-  `https://chatgpt.com/backend-api/codex` (`to_api_provider`).
-- Durchreiche: `POST` und `GET` genau auf `<basis>/responses` und
-  `<basis>/models` (`codex-rs/codex-api`: `RESPONSES_PATH`,
-  `endpoint/models.rs`), als eine Regel: Ein Adapter gibt genau eine
-  Durchreichregel (`AgentAdapter::llm_passthrough`, feste Id), deren Matcher
-  Methode und Pfad nicht paart, und der eingebaute Anbieter braucht `GET
-  <basis>/responses` für sein WebSocket-Upgrade
-  (`codex-api/src/endpoint/responses_websocket/connector.rs`). `POST
-  /models` und für den eigenen Anbieter `GET /responses` gehen deshalb mit
-  durch, an dieselbe Origin wie die Inferenz (Review, teilweise übernommen;
-  Kandidat für ein eigenes Issue: Durchreiche mit Methode je Pfad); Basis `https://api.openai.com/v1` mit Schlüssel, die
-  OpenAI-Fläche von `llm.endpoint` (`…/v1`, Loopback über den Alias-Namen)
-  oder die `ChatGPT`-Basis. Hinweis HUM-516 nennt den aufgelösten Anbieter
-  (`api.openai.com`, `chatgpt.com`, keinen für einen lokalen Endpunkt).
-- **`sandbox_mode = "danger-full-access"`, mit Beleg:** Die Linux-Sandbox von
-  Codex ist bubblewrap mit `--unshare-user`
-  (`codex-rs/linux-sandbox/README.md`, „Current Behavior"; die Doku
-  `/docs/sandboxing`: Codex nimmt das erste `bwrap` im `PATH`). Humanitl
-  startet jede Sitzung mit `--disable-userns`. Messung am 2026-11-20 mit
-  bubblewrap 0.13.1 als Stellvertreter: `bwrap --unshare-user …` innerhalb
-  von `bwrap --disable-userns --cap-drop ALL …` endet mit „Creating new
-  namespace failed: nesting depth or /proc/sys/user/max_*_namespaces
-  exceeded (ENOSPC)", ohne `--disable-userns` läuft dasselbe. Der Test im
-  echten Sandbox-Lauf belegt es bei jedem Lauf (`unshare --user true` wird
-  abgelehnt, `nested_userns=refused`). `allowed_sandbox_modes` muss
-  `read-only` enthalten (`codex-rs/config/src/config_requirements.rs`), ein
-  Erzwingen über die Anforderungen geht also nicht; der Wert steht in der
-  `config.toml`, und das Briefing sagt, dass die äußere Grenze Humanitl ist.
-- Briefing unter Linux als `additional_developer_instructions` in
-  `/etc/codex/requirements.toml` (config-reference: „Managed developer
-  instructions"; alle vier Schlüssel der Datei sind Felder von
-  `ConfigRequirementsToml` in `codex-rs/config/src/config_requirements.rs`), Skill als Admin-Skill `/etc/codex/skills/humanitl/SKILL.md`
-  (build-skills); beide gelten auch im Depot. Unter macOS `AGENTS.md` in
-  `CODEX_HOME` (agents-md) und ein Nutzer-Skill unter `~/.agents/skills`.
-- Depot (`depot/recipe.rs`, `CODEX_RECIPE`): `config_env = "CODEX_HOME"`,
-  Zugangsdatei `auth.json`, Format `CODEX_AUTH_JSON` aus dem Quelltext
-  (`AuthDotJson` in `codex-rs/login/src/auth/storage.rs`, `TokenData` in
-  `codex-rs/login/src/token_data.rs`): `OPENAI_API_KEY` und
-  `tokens.account_id` immer geschrieben, nach einer Anmeldung ohne
-  Schlüssel `null` (neue Formen `TokenOrNull`, `TextOrNull` im Wächter);
-  `last_refresh` ist RFC 3339, der Ablauf steht im JWT, also kein `Expiry`
-  (der Wächter nimmt dann nur aus einer Sitzung zurück, die auf der
-  gespeicherten Datei begann); Konto `tokens.account_id`, das die Anmeldung
-  aus dem Claim `chatgpt_account_id` des `id_token` kopiert
-  (`codex-rs/login/src/server.rs`), der JWT selbst wird nicht gelesen.
-  Nach dem Review: Wo das Objekt mit dem Konto steht (`tokens`), muss das
-  Konto ein nicht leerer Text sein, sonst lehnt der Wächter die Datei ab,
-  auch bei der Anmeldung; zwei Dateien ohne benanntes Konto gelten nie als
-  dasselbe Konto (vorher war `null` gleich `null`, und eine Sitzung hätte
-  Tokens eines anderen Kontos einsetzen können; K-36). Eine Anmeldung, deren
-  `id_token` kein `chatgpt_account_id` trägt, scheitert damit geschlossen.
-  Neues Feld `CredentialFormat::one_of`: für Codex muss
-  `OPENAI_API_KEY` oder `tokens` einen Wert tragen, `{"OPENAI_API_KEY":
-  null}` ist keine Anmeldung. Eine Datei nur mit API-Schlüssel nennt kein
-  Konto und wird daher nie aus einer Sitzung zurückgeschrieben.
-  Nach dem Delta-Review: `auth_mode` nur `apikey` oder `chatgpt` (neue Form
-  `ValueForm::OneOf`; die beiden Arten, die Codex' eigene Anmeldungen
-  speichern, `AuthMode` in `codex-rs/protocol/src/auth.rs` mit
-  `rename_all = "lowercase"`; `headers` lehnt der Lader ab, die übrigen
-  gehören zu anderen Quellen), `chatgpt` verlangt `tokens`, `apikey`
-  verlangt `OPENAI_API_KEY` (neues Feld `CredentialFormat::requires`, wie
-  `CodexAuth::from_auth_dot_json` in `codex-rs/login/src/auth/manager.rs`),
-  und eine spätere Rückschrift behält `auth_mode` der gespeicherten Datei
-  (neues Feld `CredentialFormat::fixed`; die Erneuerung `persist_tokens`
-  lehnt jede andere Art als `chatgpt` ab und lässt `auth_mode` stehen).
-  `agent_identity`, `personal_access_token` und Bedrock-Felder gehören zu
-  anderen Anmeldearten und werden abgelehnt. Anmeldelauf `codex login
-  --device-auth` gegen `auth.openai.com` (`DEFAULT_ISSUER`, `deviceauth/*`,
-  Bestätigungs-URL `<issuer>/codex/device`), Einstellung des Geräte-Flusses
-  aus `/docs/auth` als `device_flow_setting`. Schlüssel mit Befehlen:
-  `notify`, `mcp_servers`, `model_providers`, `hooks`, `desktop`,
-  `shell_environment_policy`, `profiles`.
-
-Tests: `daemon/crates/sandbox/tests/codex_adapter.rs` (Register, Kommando,
-Env-Kit, `CODEX_HOME` nach dem Home der Sandbox, `config.toml`, Anbieter nach
-Schlüssel und Endpunkt, Anforderungen samt Briefing, Starter, Dateien,
-Durchreiche, Hinweis, Vorprüfung, Rezept, und im echten bwrap ein
-Stellvertreter hinter dem Starter neben einem gefälschten Host-Home mit
-`~/.codex/auth.json` und `config.toml`: Schlüssel in der Umgebung, nicht in
-`argv` oder der Umgebung des Plans, `config.toml` mit Update-Prüfung aus und
-`env_key`, CA lesbar, Anforderungen und Skill da, in `CODEX_HOME` nur die
-`config.toml`, Markierung des Host-Logins nirgends unter `/home`, `/etc`,
-`/tmp`, `/work`, `/run`, `CODEX_HOME` schreibbar, `config.toml` und
-Schlüsseldatei nur lesbar, verschachtelter Nutzer-Namensraum abgelehnt),
-`depot/recipe.rs` (Format nimmt die Datei, die die Anmeldung schreibt, auch
-mit `null`, lehnt fremde Anmeldearten, fehlende Token und falsche Typen ab),
-`ipc` (Schlüssel als Datei und über den Starter, Maske `Authorization` an
-`api.openai.com:443`, Durchreiche), Widget-Test der Wahl in den Einstellungen,
-Katalog und erzeugter Katalog der App, Widget-Test der Wahl mit fünf
-Agenten bei kleinster Fenstergröße (`agent_row_width_test.dart`, en und
-de, Linux und macOS). Mutationsbeweise, jeder rot:
-Host-`CODEX_HOME` (Wert vom Host-Home), Host-Login als Datei in `CODEX_HOME`
-kopiert, `CODEX_CA_CERTIFICATE` entfernt, `check_for_update_on_startup =
-true`, Schlüssel als `OPENAI_API_KEY` in der Umgebung des Plans,
-`TokenOrNull` wie `Token` geprüft, aufgelöste Basis ohne Schlüsselbezug
-(Maske an `chatgpt.com`, ipc-Test rot), Kontovergleich mit `None` gleich
-`None`, Pflicht des benannten Kontos entfernt, `one_of` entfernt, `OneOf`
-nimmt jeden Text, `requires` entfernt, `fixed` entfernt, dreimal so lange
-Beschriftung für Codex (Überlauf der Zeile). Angepasst: drei Tests, die `codex`
-als Agenten ohne Rezept nahmen, nehmen jetzt `agy`; die Registerlisten in
-`opencode_adapter.rs` und `pi_adapter.rs`.
-
-Abweichungen und offen:
-- **Kein Installationsrezept fürs Depot** (`install: None`, `agents install
-  codex` antwortet `AGENT_015`; Review Codex „blocking", nicht übernommen:
-  Akzeptanzkriterium 1 gilt mit einer Host-Installation, das Depot für ein
-  Paket aus mehreren Dateien wird HUM-566): Das Paket des Herstellers
-  (`codex-package-<target>.tar.gz`, `scripts/install/install.sh`) trägt
-  `bin/codex` neben `bin/codex-code-mode-host`, `codex-path/rg` und
-  `codex-resources/bwrap`, und der Installer startet es über einen Verweis
-  `codex -> bin/codex`; das Depot startet `program/<version>/<program>` und
-  nimmt dort nur eine reguläre Datei. Ob `codex` außerhalb von `bin/` neben
-  seinen Helfern läuft, ist weder dokumentiert noch gemessen; die
-  Integrität ist eine SHA-256-Liste aus demselben Release, keine Signatur.
-  Messpunkt in HUM-553 Punkt 4. Kandidat für ein eigenes Issue:
-  Installationsrezept für Codex, gegebenenfalls mit einem Depot, das ein
-  Programm über einen Verweis im Baum starten darf.
-- **Kein Rückfall mit eingefügter Callback-URL** (`callback: None`): Der
-  Anmeldelauf ist der Geräte-Fluss, der keinen Listener öffnet. Der
-  Browser-Fluss von `codex login` leitet laut Quelltext auf
-  `http://127.0.0.1:<port>/auth/callback` um (`codex-rs/login/src/server.rs`),
-  nicht auf `localhost` wie in der Doku; `login_url.rs` nimmt nur
-  `http://localhost:…`. Kandidat für ein eigenes Issue: Anmeldelauf mit
-  Browser-Fluss als Rückfall, mit der Adresse aus dem Quelltext.
-- **Depot-Sitzung ohne `sandbox_mode` und `analytics`:** Beide stehen nur in
-  der `config.toml` einer Host-Sitzung; in einer Depot-Sitzung gilt die
-  `config.toml` der Kopie, und keine Anforderung erzwingt
-  `danger-full-access` (siehe oben) oder `analytics` (kein Schlüssel der
-  Anforderungen). Statsig wird dann gehalten wie jede Anfrage; eine
-  Depot-Sitzung mit Codex' eigener Sandbox scheitert bei jedem Befehl, bis
-  der Konfigurationslauf `sandbox_mode` setzt. Ohne Installationsrezept
-  gibt es noch keine Depot-Sitzung. Kandidat für ein eigenes Issue:
-  Vorgaben eines Adapters in die Konfigurationskopie einer Depot-Sitzung.
-- **`ChatGPT`-Anmeldung in einer Host-Sitzung:** möglich (Anmeldehost wird
-  gehalten, `auth.json` liegt im tmpfs und verschwindet mit der Sitzung),
-  aber die Inferenz des eingebauten Anbieters nutzt WebSocket; ob der
-  Proxy das Upgrade durchreicht, ist nicht geprüft (HUM-553 Punkt 4).
-- Kein Ende-zu-Ende-Lauf gegen einen Stellvertreter-Endpunkt mit dem echten
-  `codex` und keiner mit einem Stellvertreter-Endpunkt hinter dem Proxy:
-  wie HUM-514 ist der Weg mit dem Stellvertreter-Programm im echten bwrap
-  belegt; der echte Lauf steht in HUM-553 Punkt 4. Kandidat wie in HUM-514:
-  CI-Job mit `npm install -g @openai/codex` und `codex exec` gegen einen
-  Stellvertreter.
-- Wie bei Claude Code startet der Shim mit Schlüssel `/bin/sh`, nicht
-  `codex`: Ein fehlendes Programm endet mit 127 der Shell; die Vorprüfung
-  (`AGENT_001`) fängt den Fall vorher.
-- Unter macOS nicht gegengeprüft: `AGENTS.md` in `CODEX_HOME` und Skill
-  unter `~/.agents/skills`, keine Anforderungsdatei.
-
 ---
 
 ## HUM-517 · Agent-Adapter Antigravity CLI (`agy`, Gemini)
@@ -6173,36 +5970,6 @@ Durchgang mit der KI über die ganze Liste.
      Prüfung der Domain von WebFetch auf `api.anthropic.com` (nicht in der
      Durchreiche) gehalten erscheint, und ob die Warnung „ignored all of
      the NODE_EXTRA_CA_CERTS file" ausbleibt.
-4. HUM-515, Codex: am echten Programm (`npm install -g @openai/codex`)
-   nachmessen, was der Adapter aus Doku und Quelltext (Commit
-   `a0a30c40`) ableitet; nichts davon lief hier gegen das echte `codex`:
-   - `humanitl go` mit Codex und einem echten API-Schlüssel aus dem
-     Schlüsselbund bis zum Prompt (Akzeptanzkriterium 1), dabei: ob der
-     eigene Anbieter `humanitl` mit `env_key = "OPENAI_API_KEY"` ohne
-     Anmeldebildschirm startet, ob `CODEX_CA_CERTIFICATE` reicht (keine
-     TLS-Fehler gegen den Proxy), welche Anfragen außer `POST
-     /v1/responses` und `GET /v1/models` gehalten erscheinen (etwa
-     `chatgpt.com`, Statsig, Plugin-Abgleich);
-   - ob Codex mit nur lesbarer `config.toml` (der Adapter legt sie als
-     Datei an) ohne Fehlermeldung startet und was es beim Versuch, sie zu
-     schreiben (Modellwahl, Hinweise), anzeigt; ob `trust_level =
-     "untrusted"` für `/work` die Frage nach dem Vertrauen unterdrückt;
-   - ob `/etc/codex/requirements.toml` mit `additional_developer_instructions`
-     angenommen wird und das Briefing als Entwicklernachricht erscheint;
-   - ob Codex mit `sandbox_mode = "danger-full-access"` keine Warnung zu
-     `bwrap` zeigt und Befehle ausführt;
-   - Anmeldung ohne Schlüssel in einer Sitzung (`codex login
-     --device-auth`, Host `auth.openai.com`) und danach die Inferenz über
-     `chatgpt.com/backend-api/codex` mit WebSocket-Transport
-     (`supports_websockets` des eingebauten Anbieters): ob der Proxy das
-     Upgrade durchreicht; Ergebnis als Satz zum Fall „ChatGPT-Konto" in die
-     Doku;
-   - für das Depot: Größe von `access_token` und `id_token` in einer echten
-     `auth.json` (der Wächter nimmt Token bis 8192 Zeichen), ob die Datei
-     nach einer Erneuerung dieselben Schlüssel trägt, und ob `codex` aus
-     `program/<version>/codex` startet, wenn es nicht unter `bin/` neben
-     `codex-code-mode-host` und `codex-path/rg` liegt (Voraussetzung für ein
-     Installationsrezept).
 
 Weitere Punkte hängen spätere Issues hier an.
 
@@ -6665,6 +6432,51 @@ Mitglied ohne Wert, Segmente gesperrt), dort kommt der Fokus nicht zurück.
 ### Akzeptanzkriterien
 1. Eine Wahl per Tastatur lässt den Fokus in der Wahl, in Zeile und
    Abschnitt.
+
+### Stand nach der Umsetzung (2026-11-20)
+Neu `SandboxBackendSegments` in `core/ui/sandbox_backend_choice.dart`: die
+Segmente der Backend-Wahl samt dem Fokusknoten um sie, gemeinsam für die
+Zeile `sandbox.backend` der Einstellungen und `SandboxBackendSection` im
+Reiter Isolation. Der Baustein merkt sich beim Übergang von bedienbar zu
+gesperrt, ob die Segmente den Fokus hatten (die Segmente bauen erst nach
+seinem `didUpdateWidget` gesperrt und halten ihn bis dahin), und gibt ihn
+beim Entsperren nach dem nächsten Bild dem gewählten Segment zurück; wer
+woanders war, wird nicht hineingezogen. Er hängt nicht mehr an einem
+Provider, sondern nur am Wert `enabled`, den beide Aufrufer schon aus
+`sandboxBackendsOutdated` und dem fehlenden Wert des neuen Mitglieds
+ableiten. Die Logik aus HUM-510 ist aus der Zeile in den Baustein gezogen;
+die Zeile ist wieder ein `ConsumerWidget`.
+
+**Tests.** sandbox: Wahl von Container per Enter, Liste für Container
+zurückgehalten, Segmente gesperrt und ohne Fokus, nach der Antwort Fokus auf
+dem Segment Container; Wechsel des Projekts ohne Fokus in der Wahl lässt ihn
+draußen. Je unter Linux und macOS. Die Tests der Zeile aus HUM-510 bleiben
+unverändert und grün. Mutationsbeweise: Merken als `false` macht die Tests
+der Tastaturwahl in Abschnitt und Zeile rot, als `true` die Tests „nicht
+hineingezogen“ in Abschnitt und Zeile. Keine Goldens geändert: Ein
+Fokusknoten ohne eigenen Fokus zeichnet nichts.
+
+**Nach dem Review.** Codex: Wer nach der Wahl per Enter während der Sperre
+ein anderes Bedienelement fokussiert (Klick, Tab), bekam den Fokus beim
+Entsperren trotzdem in die Wahl zurückgezogen. Der Baustein hält jetzt fest,
+auf welchen Knoten der Fokus fiel, als die Sperre ihn den Segmenten nahm
+(Listener am umschließenden Knoten, nach dem Setzen des neuen Fokus), und
+gibt ihn nur zurück, wenn er beim Entsperren noch dort steht. Tests: in
+Abschnitt und Zeile ein anderes Bedienelement während der Sperre fokussiert,
+danach bleibt der Fokus dort, je unter Linux und macOS, rot mit einer
+Rückgabe ohne den Vergleich. Sonnet als Ersatz: Test, dass eine während der
+Sperre verschwundene Wahl (Start einer Sitzung) keine Ausnahme wirft und den
+Fokus nicht bewegt. Codex im Delta: Wer den Fokus während der Sperre
+fortbewegt und ihn vor dem Entsperren dorthin zurückbringt, wohin die Sperre
+ihn schob, bekam ihn trotzdem in die Wahl gezogen, weil nur beim Entsperren
+verglichen wurde. Der Baustein hängt sich während der Sperre an den
+Fokus-Manager und hebt die Rückgabe bei der ersten Bewegung weg von diesem
+Knoten endgültig auf. Tests: Fokus fort und zurück in Abschnitt und Zeile,
+je unter Linux und macOS, rot mit einem Vergleich nur beim Entsperren.
+
+Offen als Kandidat: Die Sperre schiebt den Fokus auf den Wurzelbereich der
+Ansicht, oberhalb der `Shortcuts` der App; dort bewegt Tab ihn nicht weiter,
+bis die Sperre endet.
 
 ---
 
