@@ -1632,3 +1632,82 @@ deutschen Übersetzung.
    Tabellenzeile; ein kleiner Test oder eine Prüfung in `lint-docs` hält das
    fest (`check-translations` vergleicht keine Tabellenzeilen).
 
+
+---
+
+## Wünsche des Eigentümers während Sprint 8
+
+Am 2026-11-21 beim gemeinsamen Durchgang (HUM-553) aufgekommen. Nicht Teil des
+Sprintziels; der Eigentümer entscheidet, wann es drankommt.
+
+| ID | Titel | Größe | Abhängigkeiten |
+|---|---|---|---|
+| HUM-584 | Entscheidungs-Proxy mit einem Klick: Burp mit den passenden Einstellungen starten, CA übernehmen | M | HUM-524 |
+
+## HUM-584 · Entscheidungs-Proxy mit einem Klick: Burp mit den passenden Einstellungen starten, CA übernehmen
+
+### Kontext
+Beim Durchgang am 2026-11-21 musste der Eigentümer Burp von Hand mit
+`--config-file ~/burp/humanitl.json` starten, die Datei vorher aus der
+Anleitung (`docs/guides/decision-proxy-burp.md`) anlegen, die CA in Burp
+exportieren und danach vier `config set` und einen Neustart des Daemons
+ausführen. Zweimal liefen dabei zwei Burp-Instanzen, eine davon ohne die
+Datei, und die belegte 8080. Wunsch des Eigentümers: ein Knopf „Burp
+starten", der alles mit den richtigen Argumenten erledigt, nach dem Prinzip
+„it just works".
+
+Beobachtet im Durchgang: Der Starter des nativen Installers
+(`~/BurpSuiteCommunity/BurpSuite`, Burp 2026.11.2) nimmt `--config-file`
+an; die Einstellungen aus der Datei galten danach.
+
+### Spezifikation
+1. **Der Daemon plant, der Client führt aus** (ADR-018): Ein RPC
+   (`Egress.decision_proxy_plan`, Name im Issue festlegen) liefert
+   - den gefundenen Starter (bekannte Orte des nativen Installers unter
+     Linux und macOS, dazu ein Wert `egress.decision_proxy.launcher` für
+     einen eigenen Pfad); kein Fund heißt ein Diagnostic mit Link auf die
+     Anleitung,
+   - die Argumentliste (`--config-file=<Pfad>`), nie eine Shell-Zeile,
+   - den Pfad der Einstellungsdatei, die der Daemon aus derselben Vorlage
+     schreibt, die die Anleitung zeigt (eine Quelle für beide; die Anleitung
+     wird daraus erzeugt oder ein Test vergleicht sie),
+   - ob am Listener (`egress.proxy`) schon etwas lauscht. Lauscht dort
+     schon etwas, startet der Knopf nichts, sondern sagt das: kein zweites
+     Burp auf demselben Port.
+   App und CLI (`humanitl egress burp start`) starten genau diese
+   Argumentliste losgelöst vom eigenen Prozess. Der Daemon selbst startet
+   kein Programm auf dem Desktop.
+2. **CA übernehmen:** Ein zweiter Schritt holt die CA des laufenden Burp
+   über den Listener (`http://burp/cert`, DER), zeigt Fingerabdruck SHA-256
+   und Antragsteller und schreibt sie als PEM erst nach Bestätigung durch
+   den Menschen; danach `egress.proxy`, `egress.proxy_ca`,
+   `egress.proxy_resolve` in einem Schritt setzen (Werte wie in der
+   Anleitung) und `egress check` anstoßen. Eine Vertrauensquelle, die ohne
+   Bestätigung übernommen wird, gibt es nicht.
+3. **App:** In den Einstellungen unter „Entscheidungs-Proxy" ein Knopf
+   „Burp starten" und danach „CA übernehmen", mit dem Ergebnis von
+   „Verbindung prüfen" darunter. Texte nur über ARB.
+4. **Anleitung:** `docs/guides/decision-proxy-burp.md` (en und de) nennt
+   den Knopf und den CLI-Befehl als ersten Weg, den Weg von Hand als
+   zweiten.
+
+### Tests
+- Plan: kein Starter gefunden, Starter gefunden, Port belegt. Mutation:
+  Prüfung des Ports entfernt färbt den Fall „belegt" rot.
+- CA: abgelehnte Bestätigung schreibt nichts und setzt nichts.
+  Mutation: Schreiben vor der Bestätigung färbt den Test rot.
+- Vorlage und Anleitung stimmen überein.
+
+### Fallstricke
+- Die CA einer laufenden Anwendung zu holen heißt, einer Antwort über
+  Loopback zu vertrauen. Deshalb Bestätigung mit Fingerabdruck, und
+  `docs/SECURITY.md` und `docs/THREAT-MODEL.md` im selben Commit.
+- Burp lädt beim Start mit `--config-file` die Projekteinstellungen;
+  Projekttyp „Temporary project in memory" bleibt eine Frage von Burp, die
+  der Mensch beantwortet.
+- Kein Produktname in Code außerhalb dieses Adapters (`check_coupling`).
+
+### Akzeptanzkriterien
+1. Ohne Handarbeit an Dateien läuft Burp mit den Einstellungen der
+   Anleitung, und Humanitl spricht nach einer bestätigten CA über ihn.
+2. Ein zweiter Klick startet kein zweites Burp auf demselben Port.
