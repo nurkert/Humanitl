@@ -1,0 +1,85 @@
+# Labels of this repository, as code. .github/workflows/labels.yml applies
+# this file on every push to main through tools/sync_labels.py: it creates
+# missing labels and updates colour and description of existing ones. It never
+# deletes a label that is missing here (Dependabot and GitHub add their own).
+#
+# Format, one entry per label, nothing else: `name`, `color` (six hex digits,
+# no `#`), `description` (at most 100 characters) and optionally `aliases`, a
+# flow list of former names. A label that still carries a former name is
+# renamed, so the issues that carry it keep it.
+#
+# GitHub issue types need an organisation; the type is therefore a label.
+
+- name: "type:feature"
+  color: "1d76db"
+  description: "New capability or a change in behaviour"
+  aliases: [enhancement]
+- name: "type:bug"
+  color: "d73a4a"
+  description: "Something does not work as documented"
+  aliases: [bug]
+- name: "type:docs"
+  color: "0075ca"
+  description: "Documentation only"
+  aliases: [documentation]
+- name: "type:chore"
+  color: "c5def5"
+  description: "Maintenance: tooling, CI, dependencies, refactoring"
+- name: "type:security"
+  color: "b60205"
+  description: "Hardening or a fix that touches the security statement"
+
+- name: "area:daemon"
+  color: "5319e7"
+  description: "humanitld: state, RPC, recorder, rules"
+- name: "area:proxy"
+  color: "5319e7"
+  description: "The moderating MITM proxy"
+- name: "area:sandbox"
+  color: "5319e7"
+  description: "Sandbox backends, shim, seccomp"
+- name: "area:cli"
+  color: "5319e7"
+  description: "The humanitl command line client"
+- name: "area:app"
+  color: "5319e7"
+  description: "The Flutter desktop app"
+- name: "area:packaging"
+  color: "5319e7"
+  description: ".deb, RPM, AppImage, AUR, macOS bundle, install script"
+- name: "area:ci"
+  color: "5319e7"
+  description: "Workflows and the tools under tools/"
+- name: "area:docs"
+  color: "5319e7"
+  description: "Pages under docs/ and the README"
+- name: "area:website"
+  color: "5319e7"
+  description: "The project website under website/"
+
+- name: "size:S"
+  color: "c2e0c6"
+  description: "A few hours"
+- name: "size:M"
+  color: "7bcc8f"
+  description: "About a day"
+- name: "size:L"
+  color: "2e8b57"
+  description: "Several days; consider splitting"
+
+- name: "status:blocked"
+  color: "e99695"
+  description: "Waits for another issue or an outside change"
+- name: "status:needs-decision"
+  color: "fbca04"
+  description: "Needs a decision by the owner before work starts"
+- name: "status:needs-info"
+  color: "fef2c0"
+  description: "Needs more information from the reporter"
+- name: "status:owner-walkthrough"
+  color: "d4c5f9"
+  description: "Collected for the joint walkthrough with the owner"
+
+- name: "sprint:8"
+  color: "ededed"
+  description: "Planned for sprint 8"

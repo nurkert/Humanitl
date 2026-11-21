@@ -55,7 +55,8 @@ even if the diff looks small.
 | What are we building, and why these decisions | `BACKLOG.md` sections 0 to 5, ADR-001 to ADR-018 |
 | Layering, ports, what code may depend on what | `docs/ARCHITECTURE.md`, `tools/deps-allow.toml` |
 | Binding names, types, paths, defaults | `backlog/CONVENTIONS.md` — **section 4 overrides section 3** |
-| The specification of the issue under review | `backlog/sprint-N.md`, heading `## HUM-xxx` |
+| The specification of the issue under review | GitHub issue `#N`: the Markdown file the request names, written by `tools/issue-spec.sh N`; for an issue without a GitHub number (`HUM-xxx`), `backlog/sprint-N.md`, heading `## HUM-xxx` |
+| How issues, labels and pull requests work | `docs/guides/maintaining.md` |
 | Threat model and what the audit chain does and does not prove | `docs/SECURITY.md`, `docs/THREAT-MODEL.md` |
 | Definition of done | `CONTRIBUTING.md`, `backlog/CONVENTIONS.md` section 3.12 |
 | Diagnostic code register | `daemon/crates/core-types/src/diagnostics/codes.rs`, `docs/DIAGNOSTICS.md` |
@@ -68,7 +69,11 @@ English. Read the German; do not ask for a translation.
 ## How to review
 
 - Start from the issue specification, not from the diff. Check the acceptance
-  criteria one by one against the code that is actually there.
+  criteria one by one against the code that is actually there. Since sprint 8
+  the specification is a GitHub issue; the request names it as `#N` together
+  with the path of a file that holds its title, labels and body, so a review
+  without network reads the same text. Do not try to fetch the issue
+  yourself when that file is given.
 - Inspect the whole working tree, not only tracked modifications: run
   `git status --short`, then `git diff HEAD` for tracked files and read every
   new file from `git ls-files --others --exclude-standard`. A diff review that
@@ -77,7 +82,8 @@ English. Read the German; do not ask for a translation.
   whole gate: the tests of the affected crates and packages, fmt and clippy
   on them, `make flutter-analyze` for app changes, and the mutation proofs the
   issue names. The full run happens once, in CI on the issue branch, before
-  anything reaches main (HUM-237); do not start `make check` or
+  anything reaches main (HUM-237; with a pull request, its required check
+  `ci-ok` is that run); do not start `make check` or
   `tools/verify-commit.sh` on this machine. `make check` stays the complete
   local gate for humans who want it; reviewers run only the pieces below
   that the issue touches:
@@ -122,7 +128,10 @@ English. Read the German; do not ask for a translation.
   - Ideas beyond the scope of the issue are not findings. List them
     separately under "out of scope" as candidates for a new issue.
 - Stay read-only unless the request explicitly asks you to change files. Never
-  run git commands that change state.
+  run git commands that change state, and never comment on, label, open or
+  merge issues and pull requests on GitHub: the author lands the change and
+  puts your findings, each marked taken or not taken, into the review section
+  of the pull request.
 
 ## What a good finding looks like
 

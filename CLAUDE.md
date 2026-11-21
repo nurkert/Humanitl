@@ -7,15 +7,26 @@ für den Arbeitsablauf, `CONVENTIONS.md` für Namen und Typen.
 
 ## Woran wir arbeiten
 
-Der Plan steht in `BACKLOG.md`, die Issue-Spezifikationen in
-`backlog/sprint-N.md`, das Architektur-Leitbild in `docs/ARCHITECTURE.md`.
-Bearbeitungsreihenfolge ist die Tabellenreihenfolge im Sprint-File, nicht die
+Der Plan steht in `BACKLOG.md`, das Architektur-Leitbild in
+`docs/ARCHITECTURE.md`. Seit Sprint 8 stehen die offenen Issues als
+GitHub-Issues im Repository, jedes mit seiner vollständigen Spezifikation;
+`tools/issue-spec.sh N -o <datei>` schreibt Titel, Labels und Text von Issue
+`#N` in eine Markdown-Datei, aus der Agenten und Reviewer ohne Netz lesen.
+Ältere Sprints und erledigte Issues bleiben als Geschichte in
+`backlog/sprint-N.md`; ein Issue ohne GitHub-Nummer hat seine Spezifikation
+weiter dort. Bearbeitungsreihenfolge ist die Reihenfolge im Tracking-Issue des
+Sprints (bis Sprint 7 die Tabellenreihenfolge im Sprint-File), nicht die
 Issue-Nummer. Vor dem ersten Issue eines Sprints: `BACKLOG.md` Abschnitte 2 bis
 6 und `backlog/CONVENTIONS.md` lesen, dort gilt Abschnitt 4 vor Abschnitt 3.
+Issues und Pull Requests werden auf Englisch geschrieben und nennen nie private
+Bezüge. Wie Formulare, Labels und Auto-Merge eingerichtet sind, steht in
+`docs/guides/maintaining.md`.
 
 ## Ablauf pro Issue
 
 1. Spezifikation des Issues vollständig lesen, dann den Code, der schon da ist.
+   Für ein GitHub-Issue zuerst `tools/issue-spec.sh N -o <scratchpad>/issue-N.md`;
+   dieselbe Datei geht an die Reviewer in Schritt 4.
 2. Umsetzen inklusive der im Issue genannten Tests und der Fallstricke.
 3. Gezielte Prüfungen grün, kein volles `make check`: die Tests der berührten
    Crates und Pakete (`cargo test -p <crate>`, `flutter test <datei>`),
@@ -38,8 +49,8 @@ Issue-Nummer. Vor dem ersten Issue eines Sprints: `BACKLOG.md` Abschnitte 2 bis
    verweist). Der Auftrag an sie nennt immer konkret, was zu prüfen ist, nach
    dieser Vorlage:
 
-   > Read-only review of the working-tree diff for issue HUM-xxx "<Titel>".
-   > Specification: `backlog/sprint-N.md` heading `## HUM-xxx`. Check every
+   > Read-only review of the working-tree diff for issue #N "<Titel>".
+   > Specification: `<pfad der Datei aus tools/issue-spec.sh N>`. Check every
    > acceptance criterion against the code, run the tests of the affected
    > crates and packages, then report confirmed defects only, ranked
    > blocking/major/minor, with file, line and concrete fix. Severity
@@ -51,6 +62,10 @@ Issue-Nummer. Vor dem ersten Issue eines Sprints: `BACKLOG.md` Abschnitte 2 bis
    > issue. Focus on: <die zwei bis drei heikelsten Punkte des Issues>.
    > Do not modify files.
 
+   Für ein Issue ohne GitHub-Nummer heißen die ersten beiden Sätze wie bisher
+   `... for issue HUM-xxx "<Titel>". Specification: backlog/sprint-N.md heading
+   ## HUM-xxx.`
+
    Jeden Befund einzeln bewerten: zutreffend, teilweise, nicht zutreffend, mit
    einem Satz Begründung. Dabei gilt dieselbe Schwelle wie im Auftrag:
    - **blocking/major** nur, wenn ein Akzeptanzkriterium oder die
@@ -59,23 +74,58 @@ Issue-Nummer. Vor dem ersten Issue eines Sprints: `BACKLOG.md` Abschnitte 2 bis
      egal wie ihn der Reviewer eingestuft hat.
    - **minor**: Strenge eines Tests, Wortlaut, Namen, Kommentare.
    - **außerhalb des Umfangs**: Ideen, die über das Issue hinausgehen, werden
-     kein Befund, sondern ein eigenes Issue im Sprint-File.
+     kein Befund, sondern ein eigenes GitHub-Issue (Formular `task.yml`, bis
+     Sprint 7 ein Eintrag im Sprint-File).
 
    Zutreffende blocking/major-Befunde vor dem Commit beheben, dann die
    gezielten Prüfungen aus Schritt 3 erneut. Zutreffende minor-Befunde, auch
    die aus dem Delta einer zweiten Runde, behebt der Autor ohne neue
    Review-Runde. Nicht übernommene Befunde kurz im Commit-Body nennen, damit
-   die Entscheidung nachvollziehbar bleibt.
+   die Entscheidung nachvollziehbar bleibt. Die Zusammenfassung steht dort als
+   eigener Absatz, der mit `Review:` beginnt; `--pr` setzt ihn in den Abschnitt
+   „Review" des Pull Requests und verweigert einen Body ohne ihn.
 
    Fällt einer der externen Reviewer aus (Usage-Limit, Auth, Netz), ersetzt
    ein eigener, frischer Review-Subagent mit demselben Auftrag und `AGENTS.md`
    als Briefing diesen Reviewer, damit kein Commit blockiert. Nur dann, und nur
    bis der externe Reviewer wieder antwortet; die Ersatzquelle steht im
    Commit-Body.
-5. Commit auf eigenem Branch `hum-xxx-kurztitel`, Push des Branches, CI auf
-   genau diesem Commit, und erst bei grüner CI Merge mit `--no-ff` nach
-   `main` und Push. `tools/commit-issue.sh --ci` macht alles in einem Schritt;
-   es braucht die Dateipfade als Argumente und den Commit-Body auf stdin:
+5. **Landen über einen Pull Request**, für jedes Issue mit GitHub-Nummer.
+   Ein Issue, ein Pull Request. `tools/commit-issue.sh --pr N` baut den
+   Commit genau wie `--ci` (unten), pusht den Branch `issue-N-kurztitel`,
+   öffnet mit `gh` den Pull Request (Titel aus der Betreffzeile, Text aus
+   `.github/pull_request_template.md` mit `Closes #N`, dem Commit-Body und
+   dem `Review:`-Absatz) und wartet mit `tools/ci-gate.sh` auf den
+   `pull_request`-Lauf genau dieses Commits (für `issue-*` gibt es keinen
+   Push-Lauf), bei Release-Pfaden auch auf den Probelauf. Erst wenn alle Tore
+   grün sind, verlangt es Auto-Merge mit Merge-Commit für genau diesen Commit
+   (`--match-head-commit`); vor jedem neuen Push schaltet es ein
+   eingeschaltetes Auto-Merge ab und pusht nicht, wenn das scheitert. Ohne
+   Regel auf `main`, die `ci-ok` auf einem aktuellen Branch verlangt, bricht
+   es vorher ab. GitHub merged und schließt das Issue; das Skript wartet auf
+   diesen Merge und nennt den Merge-Commit. Merged GitHub binnen der Frist
+   nicht, sagt das Skript es und hört auf. Nie daran vorbei mergen. Der
+   Commit-Body schließt kein eigenes Issue (`Fixes #M` wird verweigert).
+
+   ```sh
+   tools/commit-issue.sh --pr 42 burp-launch "feat(cli): start Burp with the right settings" \
+     daemon/crates/cli docs/guides/decision-proxy-burp.md <<'EOF'
+   What was built, in two to four sentences.
+
+   Review: Codex 2 findings (1 taken, 1 not taken: ...), Antigravity 1 finding (taken).
+   EOF
+   ```
+
+   Rot, bewegtes `main` und Probelauf des Releases verhalten sich wie unten
+   beschrieben; `--land issue-N-kurztitel` nimmt den offenen Pull Request
+   wieder auf. Commit-Texte und Pull Requests sind Englisch.
+
+   **Der direkte Weg ohne Pull Request**, nur noch für Issues ohne
+   GitHub-Nummer: Commit auf eigenem Branch `hum-xxx-kurztitel`, Push des
+   Branches, CI auf genau diesem Commit, und erst bei grüner CI Merge mit
+   `--no-ff` nach `main` und Push. `tools/commit-issue.sh --ci` macht alles
+   in einem Schritt; es braucht die Dateipfade als Argumente und den
+   Commit-Body auf stdin:
 
    ```sh
    tools/commit-issue.sh --ci HUM-022 rules-engine "feat(rules): label glob matching" \
@@ -126,8 +176,9 @@ Issue-Nummer. Vor dem ersten Issue eines Sprints: `BACKLOG.md` Abschnitte 2 bis
    (lokaler Merge), aber erst nach grünem `tools/verify-commit.sh` folgt
    `git push origin main`.
 
-   Ein Issue, ein Implementierungs-Commit plus ein Merge-Commit. Nie mehrere
-   Issues in einem Commit.
+   Ein Issue, ein Implementierungs-Commit plus ein Merge-Commit, auf dem Weg
+   über `--pr` in einem Pull Request. Nie mehrere Issues in einem Commit oder
+   einem Pull Request.
 6. Nach dem Push: kurze Zusammenfassung an den Nutzer, was gebaut wurde, was
    die Reviewer fanden, was davon übernommen wurde.
 
