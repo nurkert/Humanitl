@@ -60,10 +60,16 @@
 //! `SIGKILL` liegt deshalb ein Fenster, in dem der Agent läuft, die Brücke
 //! steht und der Proxy annimmt — Millisekunden im Normalfall, im Fall
 //! `SANDBOX_015` mit genau dem zweiten Socket, den die Prüfung beanstandet.
-//! Die obere Schranke ist die Summe zweier Fristen: `REPORT_TIMEOUT` (5 s),
-//! bis ein ausbleibender Bericht als ausgeblieben gilt, plus `KILL_GRACE`
-//! (5 s), die `terminate` nach dem `SIGKILL` auf das Einsammeln wartet —
-//! zusammen **bis zu 10 s**.
+//! Die obere Schranke ist beim Prozess-Backend die Summe zweier Fristen:
+//! `REPORT_TIMEOUT` (5 s), bis ein ausbleibender Bericht als ausgeblieben
+//! gilt, plus `KILL_GRACE` (5 s), die `terminate` nach dem `SIGKILL` auf das
+//! Einsammeln wartet — zusammen **bis zu 10 s**. Beendet ein Dienstverwalter
+//! oder eine Container-Engine die Sandbox, kommen die Fristen ihrer Befehle
+//! hinzu, als Budget und nicht als Schranke (`docs/SECURITY.md` Abschnitt 4:
+//! 40 s auf der Kernel-Stufe, etwa 95 s mit einer Container-Engine): Ein Befehl, der über
+//! seine Frist hängt, wird danach ohne Grenze abgewartet. Ohne belegtes Ende
+//! bleibt die Sandbox registriert
+//! (`kill_verdict`).
 //!
 //! Das Fenster wird hier so klein wie möglich gehalten (der Dienst tötet ohne
 //! Gnadenfrist und wartet nur einmal), aber es wird hier nicht geschlossen:
@@ -266,6 +272,10 @@ pub static VISIBLE_ENV: &[&str] = &[
 
 /// Die Variable, die allein die Sitzung kennt.
 const ENV_SESSION: &str = "HUMANITL_SESSION";
+
+/// Was [`Inner::kill_and_fail`] hinterlässt: die Protokollzeile des Stopps,
+/// den Zustand `failed` und die Befunde des Abbaus.
+type KilledAfterCheck = (Option<String>, v1::sandbox_event::Status, Vec<Diagnostic>);
 
 /// So viele Ereignisse darf ein Sandbox-Strom puffern, bevor der Erzeuger
 /// wartet. Ein Start schickt eine Handvoll; die Reserve fängt einen Client
@@ -673,6 +683,11 @@ struct Inner {
     paths: humanitl_config::Paths,
     session: SessionId,
     running: Mutex<Option<Running>>,
+    /// Der Befund, an dem [`Inner::kill_and_fail`] den laufenden Start
+    /// beendet hat, bis [`Inner::accompany`] ihn in die Zusammenfassung legt.
+    /// Er gehört in die Aufzeichnung, denn der Ereignisstrom bringt ihn nur
+    /// dem, der noch liest.
+    stopped_by: Mutex<Option<Diagnostic>>,
     pending: Mutex<Pending>,
     /// Der Regelspeicher der Sitzung, falls einer geführt wird.
     ///
@@ -928,6 +943,7 @@ impl SandboxService {
                 paths,
                 session,
                 running: Mutex::new(None),
+                stopped_by: Mutex::new(None),
                 pending: Mutex::new(Pending::default()),
                 rules: ports.rules,
                 settings: ports.settings,
@@ -2353,10 +2369,24 @@ impl Inner {
         let watch = run.watch;
         let sandbox = run.sandbox;
         let disposable = run.disposable;
+        let work_dir = lock(&self.running)
+            .as_ref()
+            .map(|running| running.work_dir.clone());
+        // Ein Rest aus einem Lauf ohne Zusammenfassung (Wartung des Depots)
+        // gehört nicht zu diesem.
+        lock(&self.stopped_by).take();
         self.attend(plan, Some(project), output, llm, tx).await;
-        match disposable {
-            Some(waiting) => self.settle_disposable(waiting, tx).await,
-            None => self.summarize(watch, sandbox, tx).await,
+        // Der Befund, an dem dieser Lauf beendet wurde, geht in die
+        // Aufzeichnung, gleich ob noch jemand am Strom liest.
+        let stopped = lock(&self.stopped_by)
+            .take()
+            .map(|diagnostic| humanitl_sandbox::StopFinding::of(&diagnostic));
+        if let Some(mut waiting) = disposable {
+            waiting.stopped_by = stopped;
+            self.settle_disposable(waiting, tx).await;
+        } else {
+            let stopped = stopped.map(|finding| (finding, work_dir.unwrap_or_default()));
+            self.summarize(watch, sandbox, stopped, tx).await;
         }
     }
 
@@ -2424,6 +2454,10 @@ impl Inner {
     ///
     /// `llm` ist der Zuhörer der Durchreiche, angemeldet vor dem Start des
     /// Agenten; ein früher Ausstieg lässt ihn fallen, und das leert den Stand.
+    ///
+    /// Kein Schritt hier hängt daran, ob der Client seinen Strom noch liest:
+    /// Garantien, Projektregister, `running` und das Lesen der Ausgabe laufen
+    /// für einen geschlossenen Strom genauso, nur ohne Ereignisse.
     async fn attend(
         self: &Arc<Self>,
         plan: &v1::sandbox_request::Plan,
@@ -2882,7 +2916,25 @@ impl Inner {
     /// `enforce_isolation` auf der Kommandozeile. Zum Fenster zwischen `exec`
     /// und `SIGKILL` siehe die Modulbeschreibung.
     ///
-    /// Antwortet `false`, wenn der Aufrufer nichts mehr senden soll.
+    /// **Die Zustellung eines Ereignisses entscheidet nie über das Ergebnis.**
+    /// Das Urteil fällt an den gemessenen Ergebnissen, und eine rote oder
+    /// fehlende Garantie beendet die Sandbox, bevor das erste Ergebnis in den
+    /// Strom geht. Ob der Client noch liest, ob er seinen Strom geschlossen
+    /// hat oder ob sein Puffer voll ist, ändert daran nichts; das Senden ist
+    /// danach nur noch der Versuch, es ihm zu sagen. Der Befund geht zudem in
+    /// die Zusammenfassung des Laufs ([`Inner::accompany`]), damit ihn auch
+    /// findet, wer nicht mehr zugehört hat.
+    ///
+    /// Kommt der Faden, der beendet, nicht zurück, beendet
+    /// [`Inner::kill_again`] die Sandbox ein zweites Mal an dem Griff, der
+    /// vorher gemerkt wurde. Ist ihr Ende danach nicht belegt (kein
+    /// Exit-Status, und `/proc` kennt den Prozess noch oder lässt sich nicht
+    /// lesen), auf beiden Wegen, ist `SANDBOX_029` blockierend, und der Griff
+    /// bleibt in `running`, bis ein Stopp ihn räumt ([`kill_verdict`]).
+    ///
+    /// Antwortet `true`, wenn der Start weitergehen darf, und `false`, wenn
+    /// die Sandbox nicht mehr läuft (rot, nicht gemessen oder zwischendurch
+    /// gestoppt). Mit dem Strom des Clients hat die Antwort nichts zu tun.
     async fn check_isolation_or_kill(
         self: &Arc<Self>,
         plan: &v1::sandbox_request::Plan,
@@ -2896,7 +2948,12 @@ impl Inner {
             // Befund zu machen hieße, dem Menschen einen Fehler zu melden,
             // den er selbst ausgelöst hat.
             Ok(None) => return false,
-            Ok(Some(results)) => results,
+            // Dasselbe, wenn der Stopp während der Messung kam: Dann fehlen
+            // dem Bericht womöglich Zeilen, und das ist kein Befund über die
+            // Sandbox. Sie ist dann nicht mehr die laufende und endet durch
+            // den Stopp.
+            Ok(Some((handle, _))) if !self.holds(&handle) => return false,
+            Ok(Some((_, results))) => results,
             // Der Faden selbst kam nicht durch. Gemessen ist damit nichts, und
             // nichts gemessen heißt hier nicht bestanden.
             Err(error) => {
@@ -2905,15 +2962,24 @@ impl Inner {
                 return false;
             }
         };
-        for result in &results {
-            if tx.send(check_event(result)).await.is_err() {
-                return false;
+        // Erst das Urteil und das Beenden, dann die Ereignisse: So hängt
+        // weder das eine noch das andere an einem Client, der nicht mehr
+        // liest, und das Fenster bis zum `SIGKILL` wartet auf keinen Strom.
+        let killed = match first_failure(&results) {
+            Some(diagnostic) => {
+                let closed = self.kill_after_failed_check(plan, &diagnostic).await;
+                Some((diagnostic, closed))
             }
+            None => None,
+        };
+        for result in &results {
+            // Nach bestem Bemühen, wie die Ausgabe in `stream_output`.
+            let _ = tx.send(check_event(result)).await;
         }
-        let Some(diagnostic) = first_failure(&results) else {
+        let Some((diagnostic, closed)) = killed else {
             return true;
         };
-        self.stop_after_failed_check(plan, &diagnostic, tx).await;
+        self.report_failed_check(&diagnostic, closed, tx).await;
         false
     }
 
@@ -2924,31 +2990,134 @@ impl Inner {
         diagnostic: &Diagnostic,
         tx: &mpsc::Sender<v1::SandboxEvent>,
     ) {
+        let closed = self.kill_after_failed_check(plan, diagnostic).await;
+        self.report_failed_check(diagnostic, closed, tx).await;
+    }
+
+    /// Beendet die Sandbox nach einer roten Prüfung, ohne Ereignisstrom:
+    /// [`Inner::kill_and_fail`] auf einem eigenen Faden, und
+    /// [`Inner::kill_again`], wenn dieser Faden nicht zurückkommt.
+    ///
+    /// Das Ergebnis liegt auf dem Heap: Es wartet über die Sendungen in
+    /// [`Inner::check_isolation_or_kill`], und `clippy::large_futures` zählt
+    /// den Zustand darin in jeden Aufrufer bis hinauf zu [`Inner::start`].
+    async fn kill_after_failed_check(
+        self: &Arc<Self>,
+        plan: &v1::sandbox_request::Plan,
+        diagnostic: &Diagnostic,
+    ) -> Box<KilledAfterCheck> {
+        // Vorher gemerkt: Kommt der Faden nicht zurück, ist offen, wie weit
+        // er kam, und der zweite Griff braucht die Sandbox, auch wenn sie
+        // schon aus `running` verschwunden ist.
+        let handle = self.running_handle();
         let this = Arc::clone(self);
         let owned_plan = plan.clone();
         let owned_diagnostic = diagnostic.clone();
-        let closed =
+        let joined =
             tokio::task::spawn_blocking(move || this.kill_and_fail(&owned_plan, &owned_diagnostic))
                 .await;
+        let killed = match joined {
+            Ok(killed) => killed,
+            Err(error) => self.kill_again(handle, plan, diagnostic, &error).await,
+        };
+        Box::new(killed)
+    }
+
+    /// Der zweite Griff, wenn der Faden von [`Inner::kill_and_fail`] nicht
+    /// zurückkam (Panik oder Abbruch der Laufzeit), womöglich vor dem
+    /// `SIGKILL`.
+    ///
+    /// Zuerst geht sofort ein `SIGKILL` an den gestarteten Prozess
+    /// ([`SandboxHandle::kill_now`]), ohne zu warten und ohne Befehl an einen
+    /// Dienstverwalter oder eine Engine: Das blockiert die Ereignisschleife
+    /// nicht. Das begrenzte Beenden über das Backend und das Warten auf das
+    /// Ende laufen danach auf einem eigenen Faden ([`end_after_failed_check`]).
+    ///
+    /// Belegt ist das Ende nur mit Exit-Status oder wenn `/proc` den Prozess
+    /// nicht mehr kennt. Sonst, und auch wenn dieser zweite Faden scheitert,
+    /// bleibt der Griff in `running`, `SANDBOX_029` ist blockierend, und es
+    /// steht keine Zeile „stopped" im Protokoll: Solange der Prozess leben
+    /// könnte, nimmt der Daemon keinen neuen Start an (`CLI_005`), und erst
+    /// ein `Sandbox(Stop)` räumt den Griff ([`Inner::stop`]).
+    async fn kill_again(
+        self: &Arc<Self>,
+        handle: Option<Arc<SandboxHandle>>,
+        plan: &v1::sandbox_request::Plan,
+        diagnostic: &Diagnostic,
+        error: &tokio::task::JoinError,
+    ) -> KilledAfterCheck {
+        tracing::error!(
+            session = %self.session,
+            error = %error,
+            "the thread that stops a sandbox after a failed check did not return; stopping it again"
+        );
+        self.record_stop(diagnostic);
+        let mut teardown = vec![joined_failed(error)];
+        let Some(handle) = handle else {
+            return (None, self.failed_status(plan, diagnostic), teardown);
+        };
+        handle.kill_now();
+        let waiting = Arc::clone(&handle);
+        let ended = tokio::task::spawn_blocking(move || end_after_failed_check(&waiting)).await;
+        let confirmed = match ended {
+            Ok((confirmed, findings)) => {
+                teardown.extend(findings);
+                confirmed
+            }
+            Err(second) => {
+                tracing::error!(
+                    session = %self.session,
+                    sandbox = %handle.id,
+                    error = %second,
+                    "the second thread that stops a sandbox did not return either; it stays registered"
+                );
+                teardown.push(joined_failed(&second));
+                teardown.push(end_not_confirmed(handle.id, handle.pid));
+                false
+            }
+        };
+        let stopped = if confirmed && self.holds(&handle) {
+            let line = self.stopped_line();
+            self.clear_running();
+            line
+        } else {
+            None
+        };
+        (stopped, self.failed_status(plan, diagnostic), teardown)
+    }
+
+    /// Hält den Befund fest, an dem der laufende Start beendet wird: im
+    /// Protokoll des Daemons und für die Zusammenfassung des Laufs.
+    fn record_stop(&self, diagnostic: &Diagnostic) {
+        tracing::warn!(
+            session = %self.session,
+            code = %diagnostic.code,
+            why = %diagnostic.why,
+            "a starting sandbox was stopped"
+        );
+        *lock(&self.stopped_by) = Some(diagnostic.clone());
+    }
+
+    /// Sagt dem Client, was [`Inner::kill_after_failed_check`] getan hat.
+    /// Jedes `send` ist ein Versuch; das Beenden ist zu diesem Zeitpunkt
+    /// schon geschehen, und was daran scheiterte, steht in den Befunden.
+    async fn report_failed_check(
+        &self,
+        diagnostic: &Diagnostic,
+        closed: Box<KilledAfterCheck>,
+        tx: &mpsc::Sender<v1::SandboxEvent>,
+    ) {
         // Erst der Befund, dann der Zustand: Der Client trägt die Befunde des
         // laufenden Vorgangs am Zustand mit.
         let _ = tx.send(diagnostic_event(diagnostic)).await;
-        match closed {
-            Ok((stopped, status, teardown)) => {
-                for warning in &teardown {
-                    let _ = tx.send(diagnostic_event(warning)).await;
-                }
-                if let Some(line) = stopped {
-                    let _ = tx.send(log_event(line)).await;
-                }
-                let _ = tx.send(status_event(status)).await;
-            }
-            Err(_) => {
-                let _ = tx
-                    .send(status_event(self.failed_status(plan, diagnostic)))
-                    .await;
-            }
+        let (stopped, status, teardown) = *closed;
+        for warning in &teardown {
+            let _ = tx.send(diagnostic_event(warning)).await;
         }
+        if let Some(line) = stopped {
+            let _ = tx.send(log_event(line)).await;
+        }
+        let _ = tx.send(status_event(status)).await;
     }
 
     /// Beendet die Sandbox und liefert ihre Protokollzeile und den Zustand
@@ -2963,25 +3132,26 @@ impl Inner {
         &self,
         plan: &v1::sandbox_request::Plan,
         diagnostic: &Diagnostic,
-    ) -> (Option<String>, v1::sandbox_event::Status, Vec<Diagnostic>) {
+    ) -> KilledAfterCheck {
+        // Zuerst festgehalten: Was danach auch scheitert, der Befund steht.
+        self.record_stop(diagnostic);
         let mut teardown = Vec::new();
+        let mut confirmed = true;
         if let Some(handle) = self.running_handle() {
-            // Ohne Gnadenfrist. `kill()` schickt `SIGTERM` und wartet
-            // [`KILL_GRACE`] auf ein geordnetes Ende — fünf Sekunden, in denen
-            // der Agent weiterläuft, die Brücke steht und der Proxy annimmt.
-            // Eine Sandbox, deren Isolation nicht belegt ist, hat nichts
-            // aufzuräumen, das diese Zeit wert wäre; `terminate(ZERO)`
-            // eskaliert sofort auf `SIGKILL`.
-            // Und nur einmal warten: `terminate` kehrt zurück, wenn der
-            // Prozess weg ist oder [`KILL_GRACE`] nach dem `SIGKILL`
-            // abgelaufen ist. Ein zweites, unbegrenztes `wait()` verdoppelte
-            // die obere Schranke des Fensters und nähme dem Client bei einem
-            // Prozess im D-Zustand auch noch den Befund.
-            handle.terminate(Duration::ZERO);
-            teardown = teardown_findings(&handle);
+            // Ohne Gnadenfrist und nur einmal gewartet; siehe
+            // [`end_after_failed_check`].
+            (confirmed, teardown) = end_after_failed_check(&handle);
         }
-        let stopped = self.stopped_line();
-        self.clear_running();
+        // „stopped" und das Räumen von `running` nur nach einem belegten
+        // Ende. Ohne Beleg bleibt der Griff stehen: Ein neuer Start wäre
+        // sonst angenommen, während der erste Prozess womöglich noch läuft.
+        let stopped = if confirmed {
+            let line = self.stopped_line();
+            self.clear_running();
+            line
+        } else {
+            None
+        };
         let status = self
             .snapshot_with(plan, Some(v1::SandboxState::Failed))
             .unwrap_or_else(|_| self.failed_status(plan, diagnostic));
@@ -3018,9 +3188,21 @@ impl Inner {
     /// nichts bekommen" und ist [`first_failure`] ein Grund, den Start zu
     /// beenden. Dass zwischen Start und Messung jemand gestoppt hat, ist
     /// etwas anderes und darf nicht als Fehlschlag der Sandbox erscheinen.
-    fn measure_isolation(&self) -> Option<Vec<CheckResult>> {
-        self.running_parts()
-            .map(|(backend, handle)| backend.isolation_check(&handle))
+    ///
+    /// Mit den Ergebnissen kommt der Griff, an dem gemessen wurde: Ob er
+    /// danach noch der laufende ist, entscheidet [`Inner::holds`].
+    fn measure_isolation(&self) -> Option<(Arc<SandboxHandle>, Vec<CheckResult>)> {
+        self.running_parts().map(|(backend, handle)| {
+            let results = backend.isolation_check(&handle);
+            (handle, results)
+        })
+    }
+
+    /// Ob `handle` noch die laufende Sandbox dieses Dienstes ist.
+    fn holds(&self, handle: &Arc<SandboxHandle>) -> bool {
+        lock(&self.running)
+            .as_ref()
+            .is_some_and(|running| Arc::ptr_eq(&running.handle, handle))
     }
 
     /// Beendet die laufende Sandbox und meldet `stopping`, dann `stopped`.
@@ -3121,42 +3303,42 @@ impl Inner {
     /// Nachricht selbst, weil `GetSessionSummary` keinen Ereignisstrom hat und
     /// dieselbe Auskunft geben muss. Gerechnet werden sie an einer Stelle,
     /// [`SessionSummary::diagnostics`].
+    ///
+    /// `stopped` ist der Befund, an dem der Daemon den Lauf beendet hat, mit
+    /// dem Projektverzeichnis. Er steht in der Zusammenfassung
+    /// ([`SessionSummary::stopped_by`]), und ohne Blick auf den Baum (ein nur
+    /// lesbar eingehängtes Projekt) oder wenn der Blick scheitert, entsteht
+    /// eine Zusammenfassung, die nur ihn trägt: Wer den Strom geschlossen
+    /// hatte, findet ihn sonst nirgends.
     async fn summarize(
         self: &Arc<Self>,
         watch: Option<SummaryWatch>,
         sandbox: SandboxId,
+        stopped: Option<(humanitl_sandbox::StopFinding, PathBuf)>,
         tx: &mpsc::Sender<v1::SandboxEvent>,
     ) {
-        let Some(watch) = watch else {
-            return;
+        let built = match watch {
+            Some(watch) => self.build_summary(watch, sandbox, tx).await,
+            None => None,
         };
-        let settings = match crate::summary::findings_settings(&self.config()) {
-            Ok(settings) => settings,
-            Err(diagnostic) => {
-                let _ = tx.send(diagnostic_event(&diagnostic)).await;
-                return;
+        let summary = match (built, stopped) {
+            (Some(mut summary), stopped) => {
+                summary.stopped_by = stopped.map(|(finding, _)| finding);
+                summary
             }
-        };
-        let session = self.session;
-        // Der zweite Schnappschuss läuft über den Baum und liest Dateien; das
-        // gehört auf einen eigenen Faden.
-        let built =
-            tokio::task::spawn_blocking(move || watch.finish(session, sandbox, &settings)).await;
-        let summary = match built {
-            Ok(Ok(summary)) => summary,
-            Ok(Err(diagnostic)) => {
-                let _ = tx.send(diagnostic_event(&diagnostic)).await;
-                return;
+            (None, Some((finding, work_dir))) => {
+                let mut summary = SessionSummary::new(self.session, sandbox, &work_dir);
+                summary.stopped_by = Some(finding);
+                summary
             }
-            Err(error) => {
-                let _ = tx.send(diagnostic_event(&joined_failed(&error))).await;
-                return;
-            }
+            (None, None) => return,
         };
         // Erst ablegen, dann senden: Ein Client, der das Ereignis sieht und
         // sofort `GetSessionSummary` ruft, soll die Zeile schon finden.
         self.store_summary(&summary, tx).await;
-        for diagnostic in &summary.diagnostics() {
+        // Den Befund des Beendens hat der Strom schon getragen, als er
+        // entstand; hier nur die aus dem Projektverzeichnis.
+        for diagnostic in &summary.worktree_diagnostics() {
             if tx.send(diagnostic_event(diagnostic)).await.is_err() {
                 return;
             }
@@ -3168,6 +3350,39 @@ impl Inner {
                 )),
             })
             .await;
+    }
+
+    /// Der zweite Schnappschuss über das Projekt und der Fundscan; `None`
+    /// nach einem Befund, der dann im Strom steht.
+    async fn build_summary(
+        &self,
+        watch: SummaryWatch,
+        sandbox: SandboxId,
+        tx: &mpsc::Sender<v1::SandboxEvent>,
+    ) -> Option<SessionSummary> {
+        let settings = match crate::summary::findings_settings(&self.config()) {
+            Ok(settings) => settings,
+            Err(diagnostic) => {
+                let _ = tx.send(diagnostic_event(&diagnostic)).await;
+                return None;
+            }
+        };
+        let session = self.session;
+        // Der zweite Schnappschuss läuft über den Baum und liest Dateien; das
+        // gehört auf einen eigenen Faden.
+        let built =
+            tokio::task::spawn_blocking(move || watch.finish(session, sandbox, &settings)).await;
+        match built {
+            Ok(Ok(summary)) => Some(summary),
+            Ok(Err(diagnostic)) => {
+                let _ = tx.send(diagnostic_event(&diagnostic)).await;
+                None
+            }
+            Err(error) => {
+                let _ = tx.send(diagnostic_event(&joined_failed(&error))).await;
+                None
+            }
+        }
     }
 
     /// Legt die Zusammenfassung in der Aufzeichnung ab, wenn es eine gibt.
@@ -3429,6 +3644,7 @@ impl Inner {
             handle,
             child_start,
             guard,
+            stopped_by: None,
         })
     }
 
@@ -5610,6 +5826,70 @@ fn farewell_finding(
     } else {
         finding.build()
     })
+}
+
+/// Beendet die Sandbox nach einer roten oder fehlenden Garantie und sagt, ob
+/// ihr Ende belegt ist, mit den Befunden dazu. Blockierend.
+///
+/// Ohne Gnadenfrist: `kill()` schickte `SIGTERM` und wartete [`KILL_GRACE`]
+/// auf ein geordnetes Ende, Sekunden, in denen der Agent weiterläuft, die
+/// Brücke steht und der Proxy annimmt; `terminate(ZERO)` eskaliert sofort auf
+/// `SIGKILL`. Und nur einmal gewartet: `terminate` kehrt zurück, wenn der
+/// Prozess weg ist oder [`KILL_GRACE`] nach dem `SIGKILL` abgelaufen ist; ein
+/// zweites, unbegrenztes `wait()` nähme dem Client bei einem Prozess im
+/// D-Zustand auch noch den Befund. Das Urteil fällt [`kill_verdict`].
+fn end_after_failed_check(handle: &SandboxHandle) -> (bool, Vec<Diagnostic>) {
+    let started = Instant::now();
+    let ended = handle.terminate(Duration::ZERO);
+    let took = u64::try_from(started.elapsed().as_millis()).unwrap_or(u64::MAX);
+    let alive = (!ended.ended()).then(|| handle.process_alive()).flatten();
+    log_farewell(handle.id, handle.pid, ended, took, alive);
+    let (confirmed, finding) = kill_verdict(handle.id, handle.pid, ended, took, alive);
+    let mut findings: Vec<Diagnostic> = finding.into_iter().collect();
+    findings.extend(teardown_findings(handle));
+    (confirmed, findings)
+}
+
+/// Ob das Beenden nach einer roten Prüfung belegt ist, und der Befund, wenn
+/// es keinen Exit-Status gab.
+///
+/// Belegt ist es mit Exit-Status oder, ohne ihn, wenn `/proc` den Prozess
+/// nicht mehr kennt (`alive == Some(false)`, nur der Status blieb aus; dann
+/// bleibt `SANDBOX_029` eine Warnung). Lebt er noch oder lässt sich das nicht
+/// lesen, ist das Ende nicht belegt und `SANDBOX_029` blockierend: Eine
+/// Sandbox mit unbelegter Isolation, deren Ende auch nicht belegt ist, darf
+/// nicht als beendet gelten.
+fn kill_verdict(
+    sandbox: SandboxId,
+    pid: u32,
+    ended: Termination,
+    took: u64,
+    alive: Option<bool>,
+) -> (bool, Option<Diagnostic>) {
+    if ended.ended() {
+        return (true, None);
+    }
+    let confirmed = alive == Some(false);
+    let finding = farewell_finding(sandbox, pid, ended, took, alive).map(|mut finding| {
+        if !confirmed {
+            finding.severity = Severity::Blocking;
+        }
+        finding
+    });
+    (confirmed, finding)
+}
+
+/// `SANDBOX_029`, blockierend, wenn nicht einmal feststeht, ob das zweite
+/// Beenden durchkam: Der Faden, der darauf wartet, kam nicht zurück.
+fn end_not_confirmed(sandbox: SandboxId, pid: u32) -> Diagnostic {
+    Diagnostic::builder(codes::SANDBOX_029, Severity::Blocking)
+        .why(format!(
+            "sandbox {sandbox} (pid {pid}) was sent SIGKILL after a failed isolation check, but \
+             whether it ended could not be confirmed: the thread that waits for its end did not \
+             return. It stays registered, so no new start is accepted until a stop ends it"
+        ))
+        .fix(FixAction::CopyCommand(format!("ps -o stat= -p {pid}")))
+        .build()
 }
 
 /// Der Exit-Code eines Prozesses: sein eigener, oder `128 + Signal`.
@@ -7903,6 +8183,51 @@ mod tests {
             .collect();
         assert_eq!(codes, ["SANDBOX_029", "SANDBOX_041"]);
         assert!(Farewell::default().events().is_empty());
+    }
+
+    /// Nach einer roten Prüfung gilt eine Sandbox nur mit Beleg als beendet:
+    /// mit Exit-Status, oder ohne ihn, wenn `/proc` den Prozess nicht mehr
+    /// kennt. Sonst bleibt der Griff stehen, und `SANDBOX_029` ist
+    /// blockierend, auch wenn sich der Zustand nicht lesen ließ.
+    #[test]
+    fn a_kill_after_a_failed_check_counts_only_when_its_end_is_proven() {
+        let sandbox = SandboxId::nil();
+        for ended in [
+            Termination::AlreadyEnded,
+            Termination::Term,
+            Termination::Kill,
+        ] {
+            assert_eq!(
+                kill_verdict(sandbox, 7, ended, 5, None),
+                (true, None),
+                "{ended:?} has an exit status"
+            );
+        }
+
+        let (confirmed, finding) = kill_verdict(sandbox, 7, Termination::Stuck, 5_004, Some(true));
+        assert!(!confirmed, "a process that is still there is not stopped");
+        let finding = finding.expect("a survivor is a finding");
+        assert_eq!(finding.code.as_str(), "SANDBOX_029");
+        assert_eq!(finding.severity, Severity::Blocking);
+
+        let (confirmed, finding) = kill_verdict(sandbox, 7, Termination::Stuck, 5_004, None);
+        assert!(!confirmed, "an unreadable state is no proof of an end");
+        assert_eq!(
+            finding.map(|finding| finding.severity),
+            Some(Severity::Blocking),
+            "and it blocks, unlike after an ordinary stop"
+        );
+
+        let (confirmed, finding) = kill_verdict(sandbox, 7, Termination::Stuck, 5_004, Some(false));
+        assert!(confirmed, "gone from /proc; only the status is missing");
+        assert_eq!(
+            finding.map(|finding| finding.severity),
+            Some(Severity::Warning)
+        );
+
+        let unknown = end_not_confirmed(sandbox, 7);
+        assert_eq!(unknown.code.as_str(), "SANDBOX_029");
+        assert_eq!(unknown.severity, Severity::Blocking);
     }
 
     #[test]

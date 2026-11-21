@@ -379,11 +379,21 @@ The shim reports the three guarantees and starts the agent right after; it enfor
 sandbox whose isolation is not proven yet: the bridge stands, the proxy accepts, an `allow` rule
 forwards without a human, the passthrough streams. In the case of `SANDBOX_015` the second socket
 the check complains about is usable in that window. The daemon reads the report at once and kills
-without grace; the upper bound is 10 s in the daemon and 15 s for `humanitl sandbox run` and
-`escape-launch`. Every request no rule decides still waits for a human. Closing it means the proxy
+without grace; the upper bound is 10 s in the daemon with bubblewrap or Seatbelt and 15 s for
+`humanitl sandbox run` and `escape-launch`. At the kernel level and with the container backend the
+budget is 40 s and about 95 s, the sum of their command timeouts; it is not a bound, because a
+`systemctl` or engine command stuck in uninterruptible sleep extends it
+([`SECURITY.md`](SECURITY.md#the-window-between-exec-and-sigkill)). Every request no rule decides still waits for a human. Closing it means the proxy
 refuses connections until the isolation is proven, a separate issue. `a_second_socket_in_the_project_stops_the_start`
 in `daemon/crates/ipc/tests/sandbox_start.rs` proves the session is stopped and never reported as
-running; that nothing leaves in the window is **not** proven.
+running; that nothing leaves in the window is **not** proven. The verdict and the stop do not
+depend on the starting client: the daemon stops the sandbox before it sends the results, so a
+client that closes its event stream after `Status(starting)` leaves no sandbox running with a red
+result, and the finding is recorded in the session summary (`stopped_by`)
+(`a_client_that_leaves_does_not_keep_a_red_sandbox_running` in the same file). If the stopping
+thread fails, a second `SIGKILL` goes through the kept handle. On both paths, a process without an
+exit status that `/proc` still lists, or whose state cannot be read, is reported as a blocking
+`SANDBOX_029`, not as stopped, and stays registered, so no new start is accepted until a stop.
 
 ### K-16 Recording outage
 
@@ -1333,6 +1343,7 @@ These attackers are not defended against, and Humanitl does not claim to:
 | 2026-11-20 | K-38: a flow whose `Failed` event falls into a gap of the audit sink has no `flow.failed`; `Recorded` names only the flow, the reason stays in the recording | HUM-565 |
 | 2026-11-20 | K-36: an install may take a vendor's package of several files (Codex): the recipe lists the files it expects, the daemon starts the program through a link of its own and checks a vendor's list of checksums on its own copy (release metadata, list, archive); residual: only TLS to the vendor's host vouches for the metadata, and the unpacked tree is bound to the archive by the run, not the daemon. `agy` gets no install: its manifest offers no chosen version, points at a shared storage host and carries its only checksum itself | HUM-566 |
 | 2026-11-20 | K-02: the passthrough pairs each method with its paths: an adapter gives one rule per set of methods (fixed ids `…00ff`, `…00fe`, `…00fd`). Codex passes `POST` only on `/responses` and `GET` only on `/models`; `agy` `POST` only on `models/{model}:generateContent` and `:streamGenerateContent` and `GET` only on the model list; Claude Code `POST` only on the Messages endpoints; OpenCode and pi `POST` on the endpoints that compute and `GET` on `/v1/models`, `/api/tags`, `/api/ps`, `/api/version`. `POST /models`, `GET /responses` and `GET` on an inference endpoint are now held. A path a human writes into `llm.passthrough_paths` keeps both methods. Narrows, weakens nothing | HUM-568 |
+| 2026-11-21 | K-15: the verdict on the three guarantees and the stop after a red or missing result no longer depend on the starting client. Before, a client that closed its event stream after `Status(starting)` ended the check before the verdict, and a sandbox with a red result kept running; the folder check and the register entry of a green start were skipped the same way. The daemon now stops the sandbox before it sends the results, records the finding in the session summary (`stopped_by`) and stops it a second time if the stopping thread fails | HUM-585 |
 
 Every security-relevant change to the shim, the mount allowlist, the filter or the passthrough gets
 a line here. Vulnerabilities are reported as described in

@@ -1711,3 +1711,29 @@ an; die Einstellungen aus der Datei galten danach.
 1. Ohne Handarbeit an Dateien läuft Burp mit den Einstellungen der
    Anleitung, und Humanitl spricht nach einer bestätigten CA über ihn.
 2. Ein zweiter Klick startet kein zweites Burp auf demselben Port.
+
+## HUM-585 · Isolationsprüfung: Urteil und Anhalten hängen nicht am startenden Client
+
+Am 2026-11-21 in der Review von HUM-537 gefunden und sofort behoben (Wunsch
+des Eigentümers: erst beheben, dann veröffentlichen). Schloss ein Client
+seinen Ereignisstrom nach `Status(starting)`, bevor die Ergebnisse der drei
+Garantien gesendet waren, kehrte `check_isolation_or_kill` vor der Auswertung
+zurück; eine Sandbox mit rotem oder fehlendem Ergebnis (etwa `SANDBOX_015`)
+lief dann ungeprüft weiter, und `settle_project` entfiel.
+
+### Stand nach der Umsetzung
+- Das Urteil fällt vor jedem Senden, das Anhalten nach Rot ebenso; Senden ist
+  nur noch ein Versuch.
+- Der Befund, der einen Lauf anhielt, steht in der Sitzungszusammenfassung
+  (`stopped_by`), auch ohne zuhörenden Client.
+- „Angehalten" und das Austragen des Laufs nur nach bewiesenem Ende; sonst
+  blockierendes `SANDBOX_029`, und der Lauf bleibt eingetragen.
+- Ein zweiter Versuch nach einem gescheiterten Kill-Faden schickt sofort
+  `SIGKILL` über den Griff, ohne die Ereignisschleife zu blockieren; kein
+  Signal an einen schon eingesammelten Prozess.
+- `docs/SECURITY.md` und `docs/THREAT-MODEL.md` (K-15, en und de): Grenzen je
+  Backend, für Kernel-Ebene und Podman als Budgets.
+- Folgearbeiten (eigene Issues): `Stop` trägt ohne bewiesenes Ende aus;
+  Nachweis des Endes je Backend (Unit, Container); unbegrenztes `child.wait()`
+  nach einer Zeitüberschreitung; Wartungsläufe des Depots ohne
+  Zusammenfassung; `interrupt` ohne Prüfung auf Einsammeln.

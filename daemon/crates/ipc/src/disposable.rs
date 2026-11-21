@@ -48,6 +48,9 @@ pub(crate) struct Waiting {
     pub(crate) child_start: Option<u64>,
     /// Die Grenze der Schicht, solange die Sandbox läuft.
     pub(crate) guard: Option<SizeGuard>,
+    /// Der Befund, an dem der Daemon den Lauf beendet hat; er geht mit der
+    /// Entscheidung in die Aufzeichnung ([`SessionSummary::stopped_by`]).
+    pub(crate) stopped_by: Option<humanitl_sandbox::StopFinding>,
 }
 
 /// Was eine Übernahme ergab.
@@ -366,6 +369,7 @@ impl Waiting {
     pub(crate) fn summary(&self, session: SessionId, record: DisposableRecord) -> SessionSummary {
         let mut summary = SessionSummary::new(session, self.sandbox, &self.work_dir);
         summary.disposable = Some(record);
+        summary.stopped_by.clone_from(&self.stopped_by);
         summary
     }
 }

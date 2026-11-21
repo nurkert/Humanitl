@@ -406,6 +406,52 @@ pub struct SessionSummary {
     /// (HUM-350); `None` für jeden anderen Lauf.
     #[serde(default, skip_serializing_if = "Option::is_none")]
     pub disposable: Option<crate::disposable::DisposableRecord>,
+    /// Der Befund, an dem der Daemon diesen Lauf beendet hat: eine rote
+    /// oder fehlende Garantie, ein getauschter Projektordner, ein Start, der
+    /// nicht ins Register kam. `None` für einen Lauf, der nicht beendet
+    /// wurde.
+    ///
+    /// Er steht hier, weil der Ereignisstrom des Starts ihn nur dem bringt,
+    /// der noch liest. Wer den Strom geschlossen hat, findet ihn mit
+    /// `GetSessionSummary` in der Aufzeichnung.
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub stopped_by: Option<StopFinding>,
+}
+
+/// Code und Grund des Befunds, an dem ein Lauf beendet wurde
+/// ([`SessionSummary::stopped_by`]).
+///
+/// Nur die beiden Teile, die nicht im Register stehen: Überschrift und Anker
+/// kommen beim Lesen wieder aus dem Register, und ein Lauf, der beendet
+/// wurde, ist immer ein blockierender Befund.
+#[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize)]
+pub struct StopFinding {
+    /// Der Code, zum Beispiel `SANDBOX_015`.
+    pub code: String,
+    /// Der Grund mit den Werten dieses Falls.
+    pub why: String,
+}
+
+impl StopFinding {
+    /// Hält Code und Grund eines Befunds fest.
+    #[must_use]
+    pub fn of(diagnostic: &Diagnostic) -> Self {
+        Self {
+            code: diagnostic.code.as_str().to_owned(),
+            why: diagnostic.why.clone(),
+        }
+    }
+
+    /// Der Befund zurück, blockierend; `None` für einen Code, den dieses
+    /// Register nicht mehr kennt.
+    #[must_use]
+    pub fn diagnostic(&self) -> Option<Diagnostic> {
+        humanitl_core::diagnostics::codes::lookup_str(&self.code).map(|info| {
+            Diagnostic::builder(info.code, Severity::Blocking)
+                .why(self.why.clone())
+                .build()
+        })
+    }
 }
 
 impl SessionSummary {
@@ -423,6 +469,7 @@ impl SessionSummary {
             scanned_bytes: 0,
             truncated: false,
             disposable: None,
+            stopped_by: None,
         }
     }
 
@@ -592,6 +639,24 @@ impl SessionSummary {
 
     /// Die Befunde, die ein Mensch zu dieser Zusammenfassung sehen soll.
     ///
+    /// Zuerst der Befund, an dem der Lauf beendet wurde
+    /// ([`SessionSummary::stopped_by`]), dann die aus dem Projektverzeichnis
+    /// ([`SessionSummary::worktree_diagnostics`]).
+    #[must_use]
+    pub fn diagnostics(&self) -> Vec<Diagnostic> {
+        let mut out: Vec<Diagnostic> = self
+            .stopped_by
+            .iter()
+            .filter_map(StopFinding::diagnostic)
+            .collect();
+        out.extend(self.worktree_diagnostics());
+        out
+    }
+
+    /// Die Befunde aus dem Projektverzeichnis allein, ohne
+    /// [`SessionSummary::stopped_by`]: Den hat der Strom des Starts schon als
+    /// eigenes Ereignis getragen, als er entstand.
+    ///
     /// `SANDBOX_022` je Symlink, dessen Ziel aus `/work` hinausführt,
     /// `SANDBOX_023` einmal, wenn mögliche Geheimnisse in geänderten Dateien
     /// stecken, `SANDBOX_026` einmal, wenn der Lauf eine Datei hinterlassen
@@ -605,7 +670,7 @@ impl SessionSummary {
     /// Agent geschrieben hat, als „mögliches Geheimnis" zu melden, wäre eine
     /// falsche Auskunft über beide Zahlen.
     #[must_use]
-    pub fn diagnostics(&self) -> Vec<Diagnostic> {
+    pub fn worktree_diagnostics(&self) -> Vec<Diagnostic> {
         let mut out = self.symlink_diagnostics();
         out.extend(self.unprotected_diagnostic());
         out.extend(self.secret_diagnostic());
@@ -973,8 +1038,8 @@ mod tests {
     use humanitl_core::{Finding, FindingKind, FindingLocation, FixAction, Tier};
 
     use super::{
-        ChangeKind, SessionSummary, SummaryFinding, copy_command, display_path, executable_on_host,
-        line_of, looks_like_text,
+        ChangeKind, SessionSummary, StopFinding, SummaryFinding, copy_command, display_path,
+        executable_on_host, line_of, looks_like_text,
     };
 
     fn summary() -> SessionSummary {
@@ -991,6 +1056,40 @@ mod tests {
             .iter()
             .map(|diagnostic| diagnostic.code.as_str())
             .collect()
+    }
+
+    /// Der Befund, an dem ein Lauf beendet wurde, übersteht die Aufzeichnung
+    /// und steht vor den Befunden aus dem Projekt, aber nicht unter ihnen:
+    /// Den Strom hat er schon als eigenes Ereignis erreicht.
+    #[test]
+    fn the_finding_that_stopped_the_run_is_kept() {
+        let mut stopped = summary();
+        let finding = humanitl_core::Diagnostic::builder(
+            humanitl_core::diagnostics::codes::SANDBOX_015,
+            humanitl_core::Severity::Blocking,
+        )
+        .why("a second socket /work/agent.sock")
+        .build();
+        stopped.stopped_by = Some(StopFinding::of(&finding));
+
+        let json = serde_json::to_string(&stopped).unwrap();
+        let back: SessionSummary = serde_json::from_str(&json).unwrap();
+        assert_eq!(back, stopped);
+        let first = back.diagnostics().into_iter().next().unwrap();
+        assert_eq!(first.code.as_str(), "SANDBOX_015");
+        assert_eq!(first.why, finding.why);
+        assert_eq!(first.severity, humanitl_core::Severity::Blocking);
+        assert!(back.worktree_diagnostics().is_empty());
+
+        // Eine Zeile aus der Zeit vor dem Feld liest sich weiter.
+        let old: SessionSummary =
+            serde_json::from_str(&serde_json::to_string(&summary()).unwrap()).unwrap();
+        assert!(old.stopped_by.is_none());
+        assert!(
+            !serde_json::to_string(&summary())
+                .unwrap()
+                .contains("stopped_by")
+        );
     }
 
     #[test]
