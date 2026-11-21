@@ -246,8 +246,8 @@ pub use crate::refusals::{
 };
 pub use crate::shell::{ENDED_WITH_SANDBOX, MAX_SHELLS, Shell, ShellDoor};
 pub use crate::summary::{
-    ChangeKind, FileChangeRecord, SCAN_MAX_BYTES, SessionSummary, SummaryFinding, SymlinkEscape,
-    executable_on_host, looks_like_text,
+    ChangeKind, FileChangeRecord, SCAN_MAX_BYTES, SessionSummary, StopFinding, SummaryFinding,
+    SymlinkEscape, executable_on_host, looks_like_text,
 };
 pub use crate::work_dir::{
     CHOOSE_PROJECT_FOLDER, WORK_DIR_KEY, WorkDirSource, check_project_dir, choose_folder_fix,

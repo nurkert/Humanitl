@@ -759,18 +759,44 @@ enforcement happens on the host (`CONVENTIONS.md` 4.12). The host therefore read
 when the agent is already running, and stops the sandbox afterwards. In between lies a window
 in which the bridge stands, the proxy accepts, and an `allow` rule forwards without a human.
 
-Normally that is milliseconds. The **upper bound** is the sum of the deadlines:
+Normally that is milliseconds. With bubblewrap or Seatbelt the **upper bound** is the sum of two
+deadlines; with a service manager or a container engine the figure is a **budget** made of their
+command timeouts, not a bound:
 
 | Path | Report missing after | Stopping | Bound |
 |---|---|---|---|
-| daemon (`SandboxService`) | `REPORT_TIMEOUT` 5 s | `SIGKILL` at once, `KILL_GRACE` 5 s to reap | **10 s** |
+| daemon (`SandboxService`), bubblewrap or Seatbelt | `REPORT_TIMEOUT` 5 s | `SIGKILL` at once, `KILL_GRACE` 5 s to reap | **10 s** |
+| daemon, kernel level (systemd unit) | `REPORT_TIMEOUT` 5 s | `systemctl stop` (timeout 10 s), then `systemctl kill` and `systemctl stop` (timeout 10 s each), then `KILL_GRACE` 5 s to reap | budget **40 s** |
+| daemon, container (Podman) | `REPORT_TIMEOUT` 5 s | the engine's `kill`, `rm` and `container exists` (timeout 10 s each) and the unit stop request (timeout 5 s), before and after `KILL_GRACE` 5 s; a removal already running after the client ended is awaited first (at most 40 s) | budget **about 95 s** |
 | `humanitl sandbox run`, `escape-launch` | `REPORT_TIMEOUT` 5 s | `SIGTERM`, `KILL_GRACE` 5 s, then `SIGKILL`, `KILL_GRACE` 5 s | **15 s** |
+
+The two budgets are the sum of the command timeouts of the service manager or the container
+engine; the sandbox normally ends with the first of these commands. They are not upper bounds: when
+a command runs past its timeout, the daemon kills it and then waits for it without a limit, so a
+`systemctl` or engine command stuck in uninterruptible sleep extends them. The 10 s of bubblewrap
+and Seatbelt involve only signals and bounded waits. When no exit status follows,
+the session is not reported as stopped: `SANDBOX_029` is blocking, the daemon keeps the sandbox
+registered and accepts no new start until a stop ends it.
 
 No path into the sandbox is exempt, and the escape tests say nothing about this window: they
 measure from inside. Closing it means the proxy refuses connections while the isolation of the
 running session is not proven; that is a separate issue and not built. Until then: a red
 isolation check **stops** the session, it does not **prevent** it (K-15 in
 [`THREAT-MODEL.md`](THREAT-MODEL.md#k-15-the-window-between-exec-and-sigkill)).
+
+The stop does not depend on the client that started the session. The daemon decides on the
+measured results and stops the sandbox before it sends them; whether the client still reads its
+event stream only decides whether it sees the results. A client that closes the stream after
+`Status(starting)` changes neither the verdict nor the stop, and after three green results the
+folder check and the register entry of the start run as for a client that stays
+(`a_client_that_leaves_does_not_keep_a_red_sandbox_running` and
+`a_client_that_leaves_still_gets_its_start_registered` in
+`daemon/crates/ipc/tests/sandbox_start.rs`). The finding that stopped the run also goes into the
+session summary in the recording (`stopped_by`, returned by `GetSessionSummary`) and into the
+daemon log, so a client that was not listening still finds it. If the thread that stops the
+sandbox does not return, the daemon sends `SIGKILL` at once through the handle it kept and stops
+it through the backend on a separate thread; without a proven end it stays registered as in the
+table above.
 
 ## 5. Declared side channels
 

@@ -2073,15 +2073,21 @@ fn supervise(
     }
     let _ = tx.send(Ok(child.id()));
 
-    let status = loop {
-        match child.wait() {
-            Ok(status) => break status,
-            Err(err) if err.kind() == std::io::ErrorKind::Interrupted => {}
-            // Ein anderer Fehler beim Warten auf das eigene Kind gibt es
-            // nicht; sollte er kommen, gilt die Sandbox als beendet.
-            Err(_) => break ExitStatus::default(),
+    // Erst das Ende abwarten, ohne einzusammeln, dann unter dem Schloss
+    // einsammeln, gegen das jedes Signal an die Nummer prüft: Nach dem
+    // Einsammeln könnte sie einem fremden Prozess gehören.
+    let exited = crate::handle::wait_until_exited(child.id());
+    let status = shared.reap(exited, || {
+        loop {
+            match child.wait() {
+                Ok(status) => break status,
+                Err(err) if err.kind() == std::io::ErrorKind::Interrupted => {}
+                // Ein anderer Fehler beim Warten auf das eigene Kind gibt es
+                // nicht; sollte er kommen, gilt die Sandbox als beendet.
+                Err(_) => break ExitStatus::default(),
+            }
         }
-    };
+    });
     // Im Strom-Modus meldet der Shim den Exit-Code des Agenten über den
     // Strom (HUM-443). Unter der Kernel-Stufe ist das gestartete Programm
     // `systemd-run`, dessen Status nur sagt, wie die Unit endete; der Code

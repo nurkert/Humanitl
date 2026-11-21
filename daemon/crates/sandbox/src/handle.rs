@@ -269,6 +269,13 @@ impl std::fmt::Debug for CleanupHooks {
 #[derive(Debug, Default)]
 pub(crate) struct Shared {
     exit: Mutex<Option<ExitStatus>>,
+    /// Ob der gestartete Prozess eingesammelt ist ([`Shared::reap`]).
+    ///
+    /// Signale an seine Nummer gehen nur unter diesem Schloss und nur,
+    /// solange hier `false` steht ([`SandboxHandle::kill_now`]): Bis zum
+    /// Einsammeln hält der Prozess seine Nummer, auch als Zombie, und danach
+    /// könnte sie einem fremden Prozess gehören.
+    reaped: Mutex<bool>,
     /// Was mit dem Ende der Sandbox verschwindet (HUM-368): das Verzeichnis
     /// der Sitzung und seit HUM-518 der Arbeitsordner des Agent-Depots.
     session_dir: Mutex<Vec<PathBuf>>,
@@ -866,6 +873,43 @@ impl Shared {
         *lock(&self.capturing) = true;
     }
 
+    /// Sammelt den gestarteten Prozess mit `wait` ein und vermerkt es.
+    ///
+    /// `exited` sagt, ob schon feststeht, dass der Prozess beendet ist
+    /// ([`wait_until_exited`]): Dann kehrt `wait` sofort zurück, und das
+    /// Schloss liegt darüber, sodass kein Signal zwischen dem Einsammeln und
+    /// dem Vermerk an die Nummer geht. Steht es nicht fest, wartet `wait`
+    /// ohne das Schloss, damit ein Signal nicht auf das Ende warten muss;
+    /// das Fenster bis zum Vermerk ist dann das alte.
+    pub(crate) fn reap<T>(&self, exited: bool, wait: impl FnOnce() -> T) -> T {
+        if exited {
+            let mut reaped = lock(&self.reaped);
+            let out = wait();
+            *reaped = true;
+            out
+        } else {
+            let out = wait();
+            *lock(&self.reaped) = true;
+            out
+        }
+    }
+
+    /// Schickt `signal` an `pid`, solange der Prozess nicht eingesammelt ist;
+    /// `false`, wenn er es schon ist und nichts hinausging.
+    fn signal_unreaped(&self, pid: u32, signal: Signal) -> bool {
+        let reaped = lock(&self.reaped);
+        if *reaped {
+            return false;
+        }
+        // ESRCH heißt: schon weg, und ein anderer Fehler ist bei einem eigenen
+        // Kind nicht möglich (EPERM bräuchte eine fremde UID).
+        if let Some(pid) = Pid::from_raw(i32::try_from(pid).unwrap_or(0)) {
+            let _ = kill_process(pid, signal);
+        }
+        drop(reaped);
+        true
+    }
+
     /// Wartet, bis der Exit-Status da ist, höchstens `timeout`.
     pub(crate) fn wait_exit(&self, timeout: Option<Duration>) -> Option<ExitStatus> {
         let deadline = timeout.map(|t| Instant::now() + t);
@@ -1230,6 +1274,25 @@ impl SandboxHandle {
         self.shared.wait_exit(Some(grace)).is_some()
     }
 
+    /// `SIGKILL` an den gestarteten Prozess, sofort, ohne zu warten und ohne
+    /// Befehl an einen Dienstverwalter oder eine Engine.
+    ///
+    /// Der erste Griff eines Notfalls, der die Ereignisschleife nicht
+    /// blockieren darf. Unter bwrap endet mit dem Prozess der ganze
+    /// PID-Namensraum (`--die-with-parent`); bei einer Unit oder einem
+    /// Container trifft das Signal nur den Client, und das Beenden über das
+    /// Backend bleibt [`SandboxHandle::terminate`].
+    ///
+    /// Nach dem Einsammeln des Prozesses geht kein Signal mehr hinaus: Seine
+    /// Nummer könnte dann einem fremden Prozess gehören. Das gilt, solange
+    /// `waitid` mit `NOWAIT` das Ende meldet und der Startfaden unter der
+    /// Sperre einsammelt. Scheitert `waitid`, sammelt der Rückfall ohne die
+    /// Sperre ein, und zwischen dem Einsammeln und dem Merker bleibt das
+    /// alte, schmale Fenster.
+    pub fn kill_now(&self) {
+        self.signal(Signal::KILL);
+    }
+
     /// Wie [`SandboxHandle::kill`], mit eigener Frist zwischen den Signalen.
     ///
     /// Die Frist ist der Punkt: Ein Agent, der `SIGTERM` selbst abfängt — ein
@@ -1350,20 +1413,16 @@ impl SandboxHandle {
     }
 
     fn signal(&self, signal: Signal) {
-        // ESRCH heißt: schon weg, und ein anderer Fehler ist bei einem eigenen
-        // Kind nicht möglich (EPERM bräuchte eine fremde UID).
-        //
-        // **Eine neu vergebene Nummer ist nicht ausgeschlossen, nur sehr
-        // unwahrscheinlich.** Der wartende Faden sammelt das Kind ein und setzt
-        // den Exit-Status erst danach; dazwischen steht `try_wait` noch auf
-        // `None`, während die Nummer schon frei ist. Wer sie danach bekäme,
-        // müsste den ganzen PID-Zähler umlaufen haben, und das Signal ginge
-        // dann an einen Prozess desselben Nutzers. Dasselbe Fenster ist es,
-        // gegen das [`alive_from_stat`] die Startzeit prüft — dort kostet es
-        // nichts, hier ließe es sich nur mit einem pidfd schließen.
-        if let Some(pid) = Pid::from_raw(i32::try_from(self.pid).unwrap_or(0)) {
-            let _ = kill_process(pid, signal);
-        }
+        // **Nie nach dem Einsammeln.** Der wartende Faden sammelt das Kind
+        // ein und setzt den Exit-Status erst danach; dazwischen steht
+        // `try_wait` noch auf `None`, während die Nummer schon frei ist. Das
+        // Signal geht deshalb nur unter dem Schloss, unter dem der Faden
+        // einsammelt ([`Shared::reap`]), und nur, solange er es nicht getan
+        // hat. Kann der Faden das Ende nicht vorher ohne Einsammeln abwarten
+        // ([`wait_until_exited`] scheitert), bleibt das alte Fenster bis zum
+        // Vermerk; dann müsste ein anderer die Nummer nach einem vollen Umlauf
+        // des PID-Zählers bekommen haben.
+        let _ = self.shared.signal_unreaped(self.pid, signal);
     }
 
     /// Was der Shim bis jetzt gemeldet hat, ohne zu warten.
@@ -1661,6 +1720,30 @@ impl SandboxHandle {
             stdout: lock(&self.shared.stdout).clone(),
             stderr: lock(&self.shared.stderr).clone(),
         })
+    }
+}
+
+/// Wartet, bis das Kind `pid` beendet ist, ohne es einzusammeln
+/// (`waitid` mit `WNOWAIT`); `true`, wenn das feststeht.
+///
+/// Danach hält der Zombie seine Nummer, bis [`Shared::reap`] ihn unter dem
+/// Schloss einsammelt, gegen das jedes Signal prüft. `false` nach einem
+/// anderen Fehler als `EINTR`; der Aufrufer sammelt dann ohne diese Zusage ein.
+pub(crate) fn wait_until_exited(pid: u32) -> bool {
+    use rustix::process::{WaitId, WaitIdOptions, waitid};
+
+    let Some(pid) = Pid::from_raw(i32::try_from(pid).unwrap_or(0)) else {
+        return false;
+    };
+    loop {
+        match waitid(
+            WaitId::Pid(pid),
+            WaitIdOptions::EXITED | WaitIdOptions::NOWAIT,
+        ) {
+            Ok(_) => return true,
+            Err(rustix::io::Errno::INTR) => {}
+            Err(_) => return false,
+        }
     }
 }
 
@@ -2391,5 +2474,45 @@ mod tests {
         shared.finish_removal(None);
         assert!(!depot.in_use());
         depot.remove().unwrap();
+    }
+
+    /// Nach dem Einsammeln geht kein Signal mehr an die Nummer des Kindes,
+    /// davor schon: Bis dahin hält es sie als Zombie, danach könnte sie einem
+    /// fremden Prozess gehören.
+    #[test]
+    fn no_signal_reaches_a_number_after_its_child_was_reaped() {
+        // Davor: ein Kind, das lebt, bekommt das Signal und endet daran.
+        let shared = Shared::default();
+        let mut alive = std::process::Command::new("/bin/sleep")
+            .arg("30")
+            .spawn()
+            .expect("sleep starts");
+        assert!(
+            shared.signal_unreaped(alive.id(), rustix::process::Signal::KILL),
+            "an unreaped child gets the signal"
+        );
+        assert!(super::wait_until_exited(alive.id()));
+        let status = shared.reap(true, || alive.wait().expect("the child is reaped"));
+        assert_eq!(status.signal(), Some(9), "{status:?}");
+
+        // Danach: dieselbe Nummer bekommt nichts mehr.
+        assert!(
+            !shared.signal_unreaped(alive.id(), rustix::process::Signal::KILL),
+            "a reaped child gets no signal"
+        );
+
+        // Auch ein Kind, das von selbst endete, ohne Fehler.
+        let shared = Shared::default();
+        let mut done = std::process::Command::new("/bin/sh")
+            .args(["-c", "exit 0"])
+            .spawn()
+            .expect("sh starts");
+        assert!(
+            super::wait_until_exited(done.id()),
+            "the end is seen without reaping"
+        );
+        let status = shared.reap(true, || done.wait().expect("the zombie is reaped"));
+        assert!(status.success());
+        assert!(!shared.signal_unreaped(done.id(), rustix::process::Signal::KILL));
     }
 }

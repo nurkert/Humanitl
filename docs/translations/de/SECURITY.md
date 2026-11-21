@@ -806,18 +806,44 @@ Bericht deshalb, wenn der Agent schon läuft, und hält die Sandbox danach an. D
 ein Fenster, in dem die Bridge steht, der Proxy annimmt und eine `allow`-Regel ohne Menschen
 weiterleitet.
 
-Normalerweise sind das Millisekunden. Die **Obergrenze** ist die Summe der Fristen:
+Normalerweise sind das Millisekunden. Mit bubblewrap oder Seatbelt ist die **Obergrenze** die Summe
+zweier Fristen; mit einem Dienstverwalter oder einer Container-Engine ist die Zahl ein **Budget** aus
+den Fristen ihrer Befehle, keine Obergrenze:
 
 | Weg | Bericht fehlt nach | Anhalten | Grenze |
 |---|---|---|---|
-| Daemon (`SandboxService`) | `REPORT_TIMEOUT` 5 s | `SIGKILL` sofort, `KILL_GRACE` 5 s zum Einsammeln | **10 s** |
+| Daemon (`SandboxService`), bubblewrap oder Seatbelt | `REPORT_TIMEOUT` 5 s | `SIGKILL` sofort, `KILL_GRACE` 5 s zum Einsammeln | **10 s** |
+| Daemon, Kernel-Stufe (systemd-Unit) | `REPORT_TIMEOUT` 5 s | `systemctl stop` (Frist 10 s), dann `systemctl kill` und `systemctl stop` (Frist je 10 s), dann `KILL_GRACE` 5 s zum Einsammeln | Budget **40 s** |
+| Daemon, Container (Podman) | `REPORT_TIMEOUT` 5 s | `kill`, `rm` und `container exists` der Engine (Frist je 10 s) und der Anstoß zum Stopp der Unit (Frist 5 s), vor und nach `KILL_GRACE` 5 s; ein Entfernen, das nach dem Ende des Clients schon läuft, wird vorher abgewartet (höchstens 40 s) | Budget **etwa 95 s** |
 | `humanitl sandbox run`, `escape-launch` | `REPORT_TIMEOUT` 5 s | `SIGTERM`, `KILL_GRACE` 5 s, dann `SIGKILL`, `KILL_GRACE` 5 s | **15 s** |
+
+Die beiden Budgets sind die Summe der Fristen der Befehle an Dienstverwalter oder
+Container-Engine; im Normalfall endet die Sandbox mit dem ersten dieser Befehle. Obergrenzen sind
+sie nicht: Läuft ein Befehl über seine Frist, beendet der Daemon ihn und wartet danach ohne Grenze
+auf ihn, sodass ein `systemctl`- oder Engine-Befehl im ununterbrechbaren Schlaf sie verlängert. Die
+10 s von bubblewrap und Seatbelt bestehen nur aus Signalen und begrenzten Wartezeiten. Folgt kein
+Exit-Status, gilt die Session nicht als angehalten: `SANDBOX_029` ist blockierend, der Daemon hält
+die Sandbox weiter registriert und nimmt keinen neuen Start an, bis ein Stopp sie beendet.
 
 Kein Weg in die Sandbox ist ausgenommen, und die Escape-Tests sagen über dieses Fenster nichts:
 Sie messen von innen. Es zu schließen hieße, dass der Proxy Verbindungen verweigert, solange die
 Isolation der laufenden Session nicht bewiesen ist; das ist ein eigenes Issue und nicht gebaut.
 Bis dahin gilt: Eine rote Isolationsprüfung **hält** die Session **an**, sie **verhindert** sie
 nicht (K-15 in [`THREAT-MODEL.md`](THREAT-MODEL.md#k-15-the-window-between-exec-and-sigkill)).
+
+Das Anhalten hängt nicht an dem Client, der die Session gestartet hat. Der Daemon entscheidet an
+den gemessenen Ergebnissen und hält die Sandbox an, bevor er sie sendet; ob der Client seinen
+Ereignisstrom noch liest, entscheidet nur, ob er die Ergebnisse sieht. Ein Client, der den Strom
+nach `Status(starting)` schließt, ändert weder das Urteil noch das Anhalten, und nach drei grünen
+Ergebnissen laufen die Ordnerprüfung und der Registereintrag des Starts wie für einen Client, der
+bleibt (`a_client_that_leaves_does_not_keep_a_red_sandbox_running` und
+`a_client_that_leaves_still_gets_its_start_registered` in
+`daemon/crates/ipc/tests/sandbox_start.rs`). Der Befund, an dem der Lauf beendet wurde, steht
+zudem in der Zusammenfassung der Session in der Aufzeichnung (`stopped_by`, geliefert von
+`GetSessionSummary`) und im Protokoll des Daemons; ein Client, der nicht zugehört hat, findet ihn
+dort. Kommt der Faden, der die Sandbox beendet, nicht zurück, schickt der Daemon sofort `SIGKILL`
+über den gemerkten Griff und beendet sie über das Backend auf einem eigenen Faden; ohne belegtes
+Ende bleibt sie registriert wie oben beschrieben.
 
 ## 5. Erklärte Seitenkanäle
 

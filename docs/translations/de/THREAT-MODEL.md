@@ -402,12 +402,24 @@ Agent in einer Sandbox, deren Isolation noch nicht belegt ist: Die Bridge steht,
 eine `allow`-Regel leitet ohne Menschen weiter, die Durchleitung reicht durch. Im Fall von
 `SANDBOX_015` ist der zweite Socket, den die Prüfung bemängelt, in diesem Zeitfenster benutzbar. Der
 Daemon liest den Bericht sofort und beendet ohne Schonfrist; die Obergrenze liegt bei 10 s im
-Daemon und 15 s für `humanitl sandbox run` und `escape-launch`. Jede Anfrage, über die keine Regel
+Daemon mit bubblewrap oder Seatbelt und 15 s für `humanitl sandbox run` und `escape-launch`. Auf
+der Kernel-Stufe und mit dem Container-Backend ist das Budget 40 s und etwa 95 s, die Summe der
+Fristen ihrer Befehle; eine Obergrenze ist es nicht, denn ein `systemctl`- oder Engine-Befehl im
+ununterbrechbaren Schlaf verlängert es
+([`SECURITY.md`](SECURITY.md#the-window-between-exec-and-sigkill)). Jede Anfrage, über die keine Regel
 entscheidet, wartet weiterhin auf einen Menschen. Das Fenster zu schließen hieße, dass der Proxy
 Verbindungen verweigert, bis die Isolation belegt ist; das ist ein eigenes Issue.
 `a_second_socket_in_the_project_stops_the_start`
 in `daemon/crates/ipc/tests/sandbox_start.rs` belegt, dass die Session gestoppt und nie als laufend
-gemeldet wird; dass im Zeitfenster nichts hinausgeht, ist **nicht** belegt.
+gemeldet wird; dass im Zeitfenster nichts hinausgeht, ist **nicht** belegt. Urteil und Anhalten
+hängen nicht am startenden Client: Der Daemon hält die Sandbox an, bevor er die Ergebnisse sendet,
+und ein Client, der seinen Ereignisstrom nach `Status(starting)` schließt, lässt keine Sandbox mit
+rotem Ergebnis laufen, und der Befund steht in der Zusammenfassung der Session (`stopped_by`)
+(`a_client_that_leaves_does_not_keep_a_red_sandbox_running` in derselben Datei). Scheitert der
+Faden, der beendet, geht ein zweites `SIGKILL` über den gemerkten Griff. Auf beiden Wegen wird ein
+Prozess ohne Exit-Status, den `/proc` noch kennt oder dessen Zustand sich nicht lesen lässt, als
+blockierendes `SANDBOX_029` gemeldet und nicht als beendet, und er bleibt registriert: Bis zu einem
+Stopp nimmt der Daemon keinen neuen Start an.
 
 ### K-16 Ausfall der Aufzeichnung
 
@@ -1339,6 +1351,7 @@ Gegen diese Angreifer gibt es keine Abwehr, und Humanitl behauptet das auch nich
 | 2026-11-20 | K-38: Ein Flow, dessen Ereignis `Failed` in eine Lücke des Audit-Sinks fällt, hat kein `flow.failed`; `Recorded` nennt nur den Flow, der Grund bleibt in der Aufzeichnung | HUM-565 |
 | 2026-11-20 | K-36: Eine Installation darf ein Paket des Anbieters aus mehreren Dateien übernehmen (Codex): Das Rezept nennt die erwarteten Dateien, der Daemon startet das Programm über einen eigenen Verweis und prüft eine Liste von Prüfsummen des Anbieters an seiner eigenen Kopie (Release-Metadaten, Liste, Archiv); Restrisiko: für die Metadaten bürgt nur TLS zum Host des Anbieters, und an das Archiv bindet den ausgepackten Baum der Lauf, nicht der Daemon. `agy` wird nicht installiert: sein Manifest bietet keine gewählte Version, zeigt auf einen geteilten Speicher-Host und trägt seine einzige Prüfsumme selbst | HUM-566 |
 | 2026-11-20 | K-02: Die Durchleitung paart jede Methode mit ihren Pfaden: Ein Adapter gibt je Satz von Methoden eine Regel (feste IDs `…00ff`, `…00fe`, `…00fd`). Codex reicht `POST` nur an `/responses` und `GET` nur an `/models` durch; `agy` `POST` nur an `models/{model}:generateContent` und `:streamGenerateContent` und `GET` nur an die Modellliste; Claude Code `POST` nur an die Messages-Endpunkte; OpenCode und pi `POST` an die Endpunkte, die rechnen, und `GET` an `/v1/models`, `/api/tags`, `/api/ps`, `/api/version`. `POST /models`, `GET /responses` und `GET` an einen Inferenz-Endpunkt werden jetzt angehalten. Ein Pfad, den ein Mensch in `llm.passthrough_paths` schreibt, behält beide Methoden. Verengt, schwächt nichts | HUM-568 |
+| 2026-11-21 | K-15: Das Urteil über die drei Garantien und das Anhalten nach einem roten oder fehlenden Ergebnis hängen nicht mehr am startenden Client. Bisher beendete ein Client, der seinen Ereignisstrom nach `Status(starting)` schloss, die Prüfung vor dem Urteil, und eine Sandbox mit rotem Ergebnis lief weiter; Ordnerprüfung und Registereintrag eines grünen Starts entfielen auf demselben Weg. Der Daemon hält die Sandbox jetzt an, bevor er die Ergebnisse sendet, hält den Befund in der Zusammenfassung der Session fest (`stopped_by`) und beendet sie ein zweites Mal, wenn der Faden, der beendet, scheitert | HUM-585 |
 
 Jede sicherheitsrelevante Änderung am Shim, an der Mount-Erlaubnisliste, am Filter oder an der
 Durchleitung bekommt hier eine Zeile. Schwachstellen werden gemeldet, wie in

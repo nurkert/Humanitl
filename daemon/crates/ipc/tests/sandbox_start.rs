@@ -476,6 +476,177 @@ async fn a_second_socket_in_the_project_stops_the_start() {
     );
 }
 
+/// Liest einen Start bis `Status(starting)` und schließt dann den Strom, wie
+/// ein Client, der nach `Ctrl+C` oder einem Absturz nicht mehr liest.
+async fn leave_after_starting(service: &SandboxService, request: v1::SandboxRequest) {
+    let mut stream = service.stream(request);
+    let starting = tokio::time::timeout(SETTLE_LIMIT, async {
+        while let Some(event) = stream.next().await {
+            if matches!(&event.event, Some(v1::sandbox_event::Event::Status(status))
+                if status.state == v1::SandboxState::Starting as i32)
+            {
+                return true;
+            }
+        }
+        false
+    })
+    .await;
+    // Der Strom geht hier mit `stream` zu.
+    assert_eq!(
+        starting.ok(),
+        Some(true),
+        "the start reports starting within {SETTLE_LIMIT:?}"
+    );
+}
+
+/// Fragt `probe`, bis es `true` sagt oder [`SETTLE_LIMIT`] um ist.
+async fn within<F, Fut>(mut probe: F) -> bool
+where
+    F: FnMut() -> Fut,
+    Fut: std::future::Future<Output = bool>,
+{
+    let deadline = std::time::Instant::now() + SETTLE_LIMIT;
+    while std::time::Instant::now() < deadline {
+        if probe().await {
+            return true;
+        }
+        tokio::time::sleep(std::time::Duration::from_millis(100)).await;
+    }
+    false
+}
+
+/// So lange darf ein Start ohne Client brauchen, bis er sein Ende erreicht.
+/// Großzügig: Die obere Schranke des Fensters bis zum `SIGKILL` ist 10 s.
+const SETTLE_LIMIT: std::time::Duration = std::time::Duration::from_secs(30);
+
+/// Ein Client, der nach `Status(starting)` geht, entscheidet nichts über die
+/// Garantien: Die rote Garantie beendet die Sandbox trotzdem.
+///
+/// Gewartet wird auf die Zusammenfassung des Laufs in der Aufzeichnung. Sie
+/// entsteht erst, nachdem `Inner::attend` zurückgekehrt ist, also nach dem
+/// Urteil über die Garantien; danach darf nichts mehr laufen. Kehrte die
+/// Prüfung beim ersten gescheiterten `send` zurück, stünde die
+/// Zusammenfassung ebenfalls da, aber die Sandbox liefe weiter, und
+/// `IsolationCheck` mäße sie.
+#[tokio::test(flavor = "multi_thread")]
+async fn a_client_that_leaves_does_not_keep_a_red_sandbox_running() {
+    let fixture = Fixture::new();
+    if !usable(&fixture) {
+        return;
+    }
+    let _second = UnixListener::bind(fixture.work.join("agent.sock"))
+        .expect("bind a second socket in the project directory");
+    let service = fixture.service();
+
+    leave_after_starting(&service, fixture.start()).await;
+    let ended = within(|| async {
+        fixture
+            .recorder
+            .list_session_summaries(fixture.session)
+            .await
+            .is_ok_and(|rows| !rows.is_empty())
+    })
+    .await;
+    // Der Befund steht in der Aufzeichnung, denn den Strom liest niemand.
+    let stopped_by: Vec<serde_json::Value> = fixture
+        .recorder
+        .list_session_summaries(fixture.session)
+        .await
+        .expect("the summaries read")
+        .iter()
+        .map(|row| {
+            let stored: serde_json::Value =
+                serde_json::from_str(&row.json).expect("the stored text is the summary as JSON");
+            stored["stopped_by"].clone()
+        })
+        .collect();
+    let after = events(
+        &service,
+        v1::SandboxRequest {
+            op: Some(v1::sandbox_request::Op::IsolationCheck(())),
+        },
+    )
+    .await;
+    let running = service.project_activity().is_some_and(|run| run.running);
+    // Aufräumen vor den Zusicherungen, damit ein roter Lauf keine Sandbox
+    // zurücklässt.
+    let _ = events(
+        &service,
+        v1::SandboxRequest {
+            op: Some(v1::sandbox_request::Op::Stop(())),
+        },
+    )
+    .await;
+
+    assert!(ended, "the start without a client reaches its summary");
+    assert_eq!(
+        stopped_by
+            .iter()
+            .map(|finding| finding["code"].as_str())
+            .collect::<Vec<_>>(),
+        vec![Some("SANDBOX_015")],
+        "the finding that stopped the run is recorded: {stopped_by:?}"
+    );
+    assert!(
+        stopped_by[0]["why"]
+            .as_str()
+            .is_some_and(|why| why.contains("agent.sock")),
+        "{stopped_by:?}"
+    );
+    assert!(
+        checks(&after).is_empty(),
+        "a sandbox with a red guarantee is gone even if nobody listened: {after:?}"
+    );
+    assert!(
+        !states(&after).contains(&v1::SandboxState::Running),
+        "{after:?}"
+    );
+    assert!(!running, "the register sees no running sandbox");
+}
+
+/// Mit drei grünen Garantien läuft die Sitzung ohne Client weiter, und der
+/// Start steht im Projektregister: Ordnerprüfung und Eintrag hängen nicht am
+/// Strom des Clients (HUM-532).
+#[tokio::test(flavor = "multi_thread")]
+async fn a_client_that_leaves_still_gets_its_start_registered() {
+    let fixture = Fixture::new();
+    if !usable(&fixture) {
+        return;
+    }
+    let service = fixture.service();
+
+    leave_after_starting(&service, fixture.start()).await;
+    let registered = within(|| async {
+        service
+            .project_activity()
+            .is_some_and(|activity| activity.running)
+    })
+    .await;
+    let projects = fixture
+        .recorder
+        .list_projects(10, 0)
+        .await
+        .expect("the register reads");
+    let _ = events(
+        &service,
+        v1::SandboxRequest {
+            op: Some(v1::sandbox_request::Op::Stop(())),
+        },
+    )
+    .await;
+
+    assert!(
+        registered,
+        "the session runs and knows its project without a client"
+    );
+    let work = fixture.work.canonicalize().expect("the project folder");
+    let row = projects
+        .iter()
+        .find(|row| Path::new(&row.path).canonicalize().ok().as_ref() == Some(&work))
+        .unwrap_or_else(|| panic!("the start is in the register: {projects:?}"));
+    assert_eq!(row.runs, 1, "{row:?}");
+}
+
 /// Die Ausgabe des Agenten erreicht den Client, gefiltert, und sein
 /// Exit-Code steht als eigenes Ereignis dahinter.
 ///
