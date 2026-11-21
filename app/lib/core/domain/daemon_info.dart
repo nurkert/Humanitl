@@ -82,6 +82,12 @@ abstract class DaemonInfo with _$DaemonInfo {
   /// start in the stored folder; the app then sends the folder instead.
   bool get startsByProjectId => isFake || (protoMajor == 1 && protoMinor >= 58);
 
+  /// Whether `Projects.save_choice` takes a folder the register does not
+  /// know yet (`SaveChoice.path`, contract 1.59, HUM-538). Without it the
+  /// first-start screen cannot keep the choice of a new folder, and the app
+  /// says how the daemon restarts instead of starting without it.
+  bool get savesFolderChoice => isFake || (protoMajor == 1 && protoMinor >= 59);
+
   /// True when a session is running.
   bool get hasSession => sessionId.isNotEmpty;
 

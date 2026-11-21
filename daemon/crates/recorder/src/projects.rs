@@ -87,6 +87,18 @@ pub struct ProjectStart {
     pub at: SystemTime,
 }
 
+/// Ein Ordner, für den die Projektwahl vor seinem ersten Start gespeichert
+/// wird (HUM-538): der Erststart-Bildschirm speichert, bevor er startet.
+#[derive(Debug, Clone, PartialEq, Eq)]
+pub struct ProjectFolder {
+    /// Der kanonische Pfad.
+    pub path: String,
+    /// Gerät des Ordners.
+    pub dev: u64,
+    /// Inode des Ordners.
+    pub ino: u64,
+}
+
 /// Was `register_start` getan hat.
 #[derive(Debug, Clone, PartialEq, Eq)]
 pub struct Registered {
@@ -313,22 +325,101 @@ pub fn save_choice(
     })
 }
 
+/// Speichert die Projektwahl des Ordners `folder`, in einer Transaktion,
+/// und trägt ihn ins Register ein, wenn es ihn noch nicht kennt (HUM-538).
+///
+/// Die Zeile entsteht ohne Start: `runs` 0, kein `last_started`, kein
+/// Agent. Der erste Start findet sie dann an Pfad, Gerät und Inode, lädt
+/// ihre Wahl und zählt hoch wie bei jedem bekannten Projekt. Liegt am Pfad
+/// eine aktuelle Zeile mit anderem Paar, ist der Ordner ein anderes Projekt
+/// am alten Ort, wie beim Start: Die alte Zeile wird Verlauf und behält ihre
+/// Wahl, die neue bekommt diese.
+///
+/// # Errors
+///
+/// [`RecorderError::Storage`], wenn eine Anweisung scheitert; dann ist nichts
+/// geschrieben.
+pub fn save_folder_choice(
+    conn: &Connection,
+    folder: &ProjectFolder,
+    choice: Option<&str>,
+    at: SystemTime,
+) -> Result<ProjectRow, RecorderError> {
+    in_transaction(conn, "save the choice of a folder", || {
+        let identity = (folder.dev, folder.ino);
+        let id = match current_at(conn, &folder.path, Some(identity))? {
+            Some(row) if row.dev.zip(row.ino).is_some_and(|known| known != identity) => {
+                mark_replaced(conn, row.id, millis(at))?;
+                insert_unstarted(conn, folder, at)?
+            }
+            Some(row) => {
+                conn.execute(
+                    "UPDATE projects SET dev = COALESCE(dev, ?2), ino = COALESCE(ino, ?3) \
+                     WHERE id = ?1",
+                    rusqlite::params![row.id.to_string(), to_sql(folder.dev), to_sql(folder.ino)],
+                )
+                .map_err(|err| {
+                    storage_failed(format!("could not read the folder of {} ({err})", row.id))
+                })?;
+                row.id
+            }
+            None => insert_unstarted(conn, folder, at)?,
+        };
+        conn.execute(
+            "UPDATE projects SET choice = ?2, choice_saved_at = ?3, version = version + 1 \
+             WHERE id = ?1",
+            rusqlite::params![id.to_string(), choice, millis(at)],
+        )
+        .map_err(|err| {
+            storage_failed(format!(
+                "could not save the choice of the project {id} ({err})"
+            ))
+        })?;
+        get(conn, id)?
+            .ok_or_else(|| storage_failed(format!("the project {id} is gone right after saving")))
+    })
+}
+
+/// Markiert eine Zeile als ersetzt: Ein anderer Ordner liegt an ihrem Pfad.
+fn mark_replaced(conn: &Connection, id: ProjectId, at: i64) -> Result<(), RecorderError> {
+    conn.execute(
+        "UPDATE projects SET replaced_at = ?2, version = version + 1 WHERE id = ?1",
+        rusqlite::params![id.to_string(), at],
+    )
+    .map_err(|err| storage_failed(format!("could not mark the project {id} replaced ({err})")))?;
+    Ok(())
+}
+
+/// Eine neue aktuelle Zeile ohne Start.
+fn insert_unstarted(
+    conn: &Connection,
+    folder: &ProjectFolder,
+    at: SystemTime,
+) -> Result<ProjectId, RecorderError> {
+    let id = ProjectId::new();
+    conn.execute(
+        "INSERT INTO projects (id, path, dev, ino, display_name, first_seen, runs) \
+         VALUES (?1, ?2, ?3, ?4, ?5, ?6, 0)",
+        rusqlite::params![
+            id.to_string(),
+            folder.path,
+            to_sql(folder.dev),
+            to_sql(folder.ino),
+            folder_name(&folder.path),
+            millis(at),
+        ],
+    )
+    .map_err(|err| storage_failed(format!("could not register the project {id} ({err})")))?;
+    Ok(id)
+}
+
 fn register_inside(conn: &Connection, start: &ProjectStart) -> Result<Registered, RecorderError> {
     let identity = (start.dev, start.ino);
     let at = millis(start.at);
     let current = current_at(conn, &start.path, Some(identity))?;
     let (id, created, replaced) = match current {
         Some(row) if row.dev.zip(row.ino).is_some_and(|known| known != identity) => {
-            conn.execute(
-                "UPDATE projects SET replaced_at = ?2, version = version + 1 WHERE id = ?1",
-                rusqlite::params![row.id.to_string(), at],
-            )
-            .map_err(|err| {
-                storage_failed(format!(
-                    "could not mark the project {} replaced ({err})",
-                    row.id
-                ))
-            })?;
+            mark_replaced(conn, row.id, at)?;
             (insert(conn, start)?, true, Some(row.id))
         }
         Some(row) => {
@@ -525,6 +616,29 @@ impl crate::Recorder {
         });
         answer.await.map_err(|_closed| {
             storage_failed("the recorder thread ended before it could save the project choice")
+        })?
+    }
+
+    /// Speichert die Projektwahl eines Ordners und trägt ihn ein, wenn das
+    /// Register ihn nicht kennt (`save_folder_choice`, HUM-538).
+    ///
+    /// # Errors
+    ///
+    /// [`RecorderError::Storage`] bei einem Fehler der Datenbank.
+    pub async fn save_folder_choice(
+        &self,
+        folder: ProjectFolder,
+        choice: Option<String>,
+    ) -> Result<ProjectRow, RecorderError> {
+        let (reply, answer) = tokio::sync::oneshot::channel();
+        self.send(crate::writer::WriterCmd::SaveFolderChoice {
+            folder: Box::new(folder),
+            choice,
+            at: SystemTime::now(),
+            reply,
+        });
+        answer.await.map_err(|_closed| {
+            storage_failed("the recorder thread ended before it could save the folder choice")
         })?
     }
 

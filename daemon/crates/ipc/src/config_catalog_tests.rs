@@ -102,6 +102,7 @@ async fn save_choice(server: &IpcServer, project: &ProjectRow, mode: &str) {
                         key: "sandbox.mode".to_owned(),
                         value: mode.to_owned(),
                     }],
+                    ..Default::default()
                 },
             )),
         }))
@@ -490,6 +491,7 @@ async fn save_choice_refuses_a_locked_key_even_with_the_locked_value() {
                         key: "sandbox.mode".to_owned(),
                         value: "direct".to_owned(),
                     }],
+                    ..Default::default()
                 },
             )),
         }))

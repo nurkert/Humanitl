@@ -17,6 +17,7 @@ import '../domain/domain.dart';
 import 'client_diagnostics.dart';
 import 'daemon_client.dart';
 import 'fake/generated/settings_catalog.dart';
+import 'fake/start_proposal.dart';
 
 /// One step of a script: after [after] from the start of the subscription,
 /// [build] produces the event, or null when the state no longer calls for it
@@ -98,7 +99,8 @@ class FakeDaemonClient
         FakeEgress,
         FakeCloudInference,
         FakeAgents,
-        FakeProjects
+        FakeProjects,
+        FakeStartProposal
     implements DaemonClient {
   /// Creates a fake that answers `GetInfo` with [info] (or [defaultInfo]),
   /// or throws [infoFailure] when given, and replays [script] (or

@@ -13,6 +13,8 @@
 /// session running (`core/ui/session_view.dart`).
 library;
 
+import 'dart:async';
+
 import 'package:flutter/widgets.dart';
 import 'package:flutter_riverpod/flutter_riverpod.dart';
 
@@ -21,6 +23,7 @@ import '../../core/ui/app_mark.dart';
 import '../../core/ui/ui.dart';
 import '../../l10n/l10n.dart';
 import 'providers/cleanup.dart';
+import 'providers/first_start.dart';
 import 'widgets/cleanup_pane.dart';
 import 'widgets/project_list.dart';
 
@@ -39,17 +42,31 @@ enum StartTab {
 /// Width of the rail with the tabs.
 const double startRailWidth = 224;
 
+/// Builds the question on cloud inference (`CloudConfirmDialog`) for the
+/// first-start screen: [onCancel] closes it, [onConfirm] confirms and
+/// starts.
+typedef CloudConfirmBuilder = Widget Function(
+  CloudInference cloud,
+  VoidCallback onCancel,
+  VoidCallback onConfirm,
+);
+
 /// The start window.
 class StartScreen extends ConsumerStatefulWidget {
   /// Creates the window with [settings] as the content of its settings tab.
   const StartScreen({
     required this.settings,
+    required this.cloudConfirm,
     this.initialTab = StartTab.projects,
     super.key,
   });
 
   /// The settings tab (`SettingsTab`), built by the shell.
   final Widget settings;
+
+  /// The question on cloud inference, built by the shell: it belongs to the
+  /// sandbox feature, and no feature imports another one (HUM-538).
+  final CloudConfirmBuilder cloudConfirm;
 
   /// The tab shown first.
   final StartTab initialTab;
@@ -67,6 +84,8 @@ class _StartScreenState extends ConsumerState<StartScreen> {
     final CleanupPlan? plan = ref.watch(
       cleanupProvider.select((CleanupState s) => s.plan),
     );
+    final FirstStart? firstStart = ref.watch(firstStartProvider);
+    final CloudInference? cloud = firstStart?.proposal?.cloudInference;
     return Stack(
       children: <Widget>[
         Positioned.fill(
@@ -92,6 +111,16 @@ class _StartScreenState extends ConsumerState<StartScreen> {
           ),
         ),
         if (plan != null) Positioned.fill(child: CleanupConfirm(plan: plan)),
+        if (cloud != null && (firstStart?.askingCloud ?? false))
+          Positioned.fill(
+            child: widget.cloudConfirm(
+              cloud,
+              ref.read(firstStartProvider.notifier).dismissCloud,
+              () => unawaited(
+                ref.read(firstStartProvider.notifier).confirmCloud(),
+              ),
+            ),
+          ),
       ],
     );
   }

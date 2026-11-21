@@ -11,7 +11,9 @@
 //!   layer.
 //! - `save_choice`: replaces the choice of a current entry. A key outside the
 //!   allow-list, a locked value or a lowered `sandbox.min_isolation` is
-//!   `CONFIG_024`, and nothing is saved.
+//!   `CONFIG_024`, and nothing is saved. Named by its folder instead of its
+//!   id, a folder the register does not know gets its entry without a start
+//!   (HUM-538: the first-start screen saves before the first start).
 //!
 //! Two more delete, and only through a plan (HUM-533, limit 3 of sprint 8,
 //! `cleanup.rs`):
@@ -319,6 +321,14 @@ async fn save_choice(
     recorder: &Recorder,
     save: v1::projects_request::SaveChoice,
 ) -> Result<v1::ProjectsResponse, Diagnostic> {
+    if save.project_id.trim().is_empty() {
+        return save_folder_choice(ctx, recorder, save).await;
+    }
+    if !save.path.is_empty() {
+        return Err(refused(
+            "save_choice names a project by its id or by its folder, not both".to_owned(),
+        ));
+    }
     let row = lookup(recorder, &save.project_id).await?;
     if row.replaced_at.is_some() {
         return Err(refused(format!(
@@ -344,6 +354,61 @@ async fn save_choice(
         .await
         .map_err(humanitl_recorder::RecorderError::into_diagnostic)?
         .ok_or_else(|| unknown(&row.id.to_string()))?;
+    detail(ctx, saved).await
+}
+
+/// `save_choice` with a folder instead of an id (HUM-538): the first-start
+/// screen saves before the first start, when the register does not know the
+/// folder yet. The folder must exist; it is recognised by canonical path,
+/// device and inode like a start, and a folder the register does not know
+/// gets its entry here, without a start. The choice is checked exactly as
+/// for a known project, and nothing is written when it fails.
+async fn save_folder_choice(
+    ctx: Context,
+    recorder: &Recorder,
+    save: v1::projects_request::SaveChoice,
+) -> Result<v1::ProjectsResponse, Diagnostic> {
+    // Der Pfad, wie er kam: `repo ` und `repo` sind zwei Ordner.
+    let asked = save.path.as_str();
+    if asked.is_empty() || !Path::new(asked).is_absolute() {
+        return Err(refused(
+            "save_choice names a project by its id or by an absolute folder".to_owned(),
+        ));
+    }
+    let identity = ProjectIdentity::of(Path::new(asked)).map_err(|err| {
+        refused(format!(
+            "the folder {} cannot be read as a project folder ({err})",
+            sanitize_note(asked)
+        ))
+    })?;
+    let choice = ProjectChoice::from_pairs(
+        save.values
+            .into_iter()
+            .map(|value| (value.key.trim().to_owned(), value.value)),
+    )?;
+    let (paths, locks, path) = (ctx.paths.clone(), ctx.locks.clone(), identity.path_text());
+    let (checked, folder) = (choice.clone(), PathBuf::from(asked));
+    blocking("Projects", move || {
+        // Derselbe Ordner-Test wie beim Start (`check_work_dir`): Das
+        // Heimatverzeichnis selbst, was darüber liegt, die Verzeichnisse von
+        // Humanitl und alles außerhalb der Projekte kommen nicht ins
+        // Register, auch nicht ohne Start.
+        check_project_folder(&paths, &locks, &folder)?;
+        check_for(&paths, &locks, &path, &checked).map(|_resolved| ())
+    })
+    .await??;
+    let stored = (!choice.is_empty()).then(|| choice.to_json());
+    let saved = recorder
+        .save_folder_choice(
+            humanitl_recorder::ProjectFolder {
+                path: identity.path_text(),
+                dev: identity.dev,
+                ino: identity.ino,
+            },
+            stored,
+        )
+        .await
+        .map_err(humanitl_recorder::RecorderError::into_diagnostic)?;
     detail(ctx, saved).await
 }
 
@@ -443,6 +508,32 @@ pub fn entry(row: &ProjectRow, activity: Option<&ProjectActivity>) -> v1::Projec
 /// so that its project profile applies even when `config.toml` names
 /// another folder. The locks of a company policy are the top layer
 /// (HUM-534).
+/// The folder test of a start (`check_work_dir`) for a folder that comes in
+/// through `Projects` (HUM-538): measured against the `sandbox.work_dir` the
+/// daemon really has configured, from its own layers without the folder of
+/// the request. [`resolve_at`] puts the asked folder in as `sandbox.work_dir`
+/// to resolve its project profile; checked against that, every folder would
+/// count as declared, also one outside the home directory.
+///
+/// # Errors
+///
+/// `SANDBOX_006` with the reason, as a start would answer; the findings of
+/// loading the configuration.
+pub(crate) fn check_project_folder(
+    paths: &Paths,
+    locks: &PolicyLocks,
+    folder: &Path,
+) -> Result<(), Diagnostic> {
+    let configured = resolve_at(paths, locks, "", None)?;
+    crate::work_dir::check_requested(
+        paths,
+        configured.config.sandbox.work_dir.as_deref(),
+        folder,
+        &humanitl_sandbox::WorkDirSource::Request,
+    )
+    .map(|_folder| ())
+}
+
 fn resolve_at(
     paths: &Paths,
     locks: &PolicyLocks,

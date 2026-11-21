@@ -2603,13 +2603,20 @@ impl v1::humanitl_server::Humanitl for IpcServer {
     ) -> Result<Response<v1::ProjectsResponse>, Status> {
         let deadline = crate::deadline::search_deadline(request.metadata(), Instant::now());
         let request = request.into_inner();
-        let saved = match &request.op {
-            Some(v1::projects_request::Op::SaveChoice(save)) => Some(save.project_id.clone()),
-            _ => None,
-        };
+        let saving = matches!(&request.op, Some(v1::projects_request::Op::SaveChoice(_)));
         let response = crate::projects::answer(self.projects_context(deadline), request)
             .await
             .map_err(|diagnostic| diagnostic_to_status(&diagnostic))?;
+        // Das Projekt aus der Antwort, nicht aus der Anfrage: Eine Wahl, die
+        // an ihrem Ordner gespeichert wurde, trägt keine Kennung (HUM-538).
+        let saved = if saving {
+            response
+                .project
+                .as_ref()
+                .map(|project| project.project_id.clone())
+        } else {
+            None
+        };
         publish_project_changes(&self.config_events, saved.as_deref(), &response);
         Ok(Response::new(response))
     }

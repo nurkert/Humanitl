@@ -1465,3 +1465,80 @@ extension CleanupResultToDomain on pb.CleanupResult {
     ),
   );
 }
+
+/// [ChoiceValue] on the wire and back (HUM-538).
+extension ChoiceValueToProto on ChoiceValue {
+  /// The wire pair.
+  pb.ChoiceValue toProto() => pb.ChoiceValue(key: key, value: value);
+}
+
+/// `ChoiceValue` to [ChoiceValue] (HUM-538).
+extension ChoiceValueToDomain on pb.ChoiceValue {
+  /// The domain pair.
+  ChoiceValue toDomain() => ChoiceValue(key, value);
+}
+
+List<Diagnostic> _diagnostics(Iterable<pb.Diagnostic> found) =>
+    List<Diagnostic>.unmodifiable(found.map((pb.Diagnostic d) => d.toDomain()));
+
+List<ChoiceValue> _choice(Iterable<pb.ChoiceValue> pairs) =>
+    List<ChoiceValue>.unmodifiable(
+      pairs.map((pb.ChoiceValue v) => v.toDomain()),
+    );
+
+/// `StartProposal` as the first-start screen shows it (HUM-538).
+extension StartProposalToDomain on pb.StartProposal {
+  /// The domain proposal.
+  StartProposal toDomain() => StartProposal(
+    path: path,
+    displayName: displayName,
+    projectId: projectId,
+    hasChoice: hasChoice,
+    fields: List<ProposalField>.unmodifiable(
+      fields.map((pb.ProposalField field) => field.toDomain()),
+    ),
+    choice: _choice(choice),
+    defaultsLine: defaultsLine,
+    diagnostics: _diagnostics(diagnostics),
+    cloudInference: hasCloudInference() ? cloudInference.toDomain() : null,
+  );
+}
+
+/// `ProposalField` to [ProposalField] (HUM-538).
+extension ProposalFieldToDomain on pb.ProposalField {
+  /// The domain field.
+  ProposalField toDomain() => ProposalField(
+    id: id,
+    keys: List<String>.unmodifiable(keys),
+    value: value,
+    origin: origin,
+    lock: hasLock()
+        ? SettingsLock(lockedBy: lock.lockedBy, reason: lock.reason)
+        : null,
+    options: List<ProposalOption>.unmodifiable(
+      options.map(
+        (pb.ProposalOption option) => ProposalOption(
+          value: option.value,
+          label: option.label,
+          available: option.available,
+          reasons: _diagnostics(option.reasons),
+          choice: _choice(option.choice),
+          source: option.source,
+          sources: List<AgentSourceOption>.unmodifiable(
+            option.sources.map(
+              (pb.AgentSourceOption source) => AgentSourceOption(
+                source: source.source,
+                available: source.available,
+                reasons: _diagnostics(source.reasons),
+                selected: source.selected,
+              ),
+            ),
+          ),
+          cloudInference: option.hasCloudInference()
+              ? option.cloudInference.toDomain()
+              : null,
+        ),
+      ),
+    ),
+  );
+}

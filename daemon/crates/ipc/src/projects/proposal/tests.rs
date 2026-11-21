@@ -553,6 +553,7 @@ async fn the_fields_come_in_screen_order_and_their_choice_saves() {
                 v1::projects_request::SaveChoice {
                     project_id: row.id.to_string(),
                     values: proposal.choice.clone(),
+                    ..Default::default()
                 },
             )),
         },
@@ -988,4 +989,41 @@ async fn a_session_value_the_start_refuses_is_config_003() {
     .await
     .unwrap_err();
     assert_eq!(refused.code.as_str(), "CONFIG_003", "{}", refused.why);
+}
+
+/// The folder exactly as asked: `repo ` (trailing space) is another folder
+/// than the known `repo`, so its proposal names no project (HUM-538).
+///
+/// Mutation proof: trimming `Proposal.path` in `target` again finds the
+/// known `repo` and makes this test red.
+#[tokio::test]
+async fn a_folder_name_ending_in_a_space_is_its_own_folder() {
+    let fixture = Fixture::new("");
+    let known = fixture.known("repo", None).await;
+    let spaced = fixture.folder("repo ");
+    let ctx = || fixture.context(PolicyLocks::none(), nothing_missing);
+
+    let proposal = propose(ctx(), ask(&spaced, &[])).await;
+    assert_eq!(proposal.project_id, "", "{proposal:?}");
+    let same = propose(ctx(), ask(std::path::Path::new(&known.path), &[])).await;
+    assert_eq!(same.project_id, known.id.to_string());
+}
+
+/// The proposal for an undeclared folder outside the home directory names
+/// the refusal of a start (`SANDBOX_006`), so the screen says it before
+/// "Start" (HUM-538).
+#[tokio::test]
+async fn an_undeclared_folder_outside_home_is_named_in_the_proposal() {
+    let fixture = Fixture::new("");
+    let outside = tempfile::tempdir().unwrap();
+    let proposal = propose(
+        fixture.context(PolicyLocks::none(), nothing_missing),
+        ask(outside.path(), &[]),
+    )
+    .await;
+    assert!(
+        codes(&proposal.diagnostics).contains(&"SANDBOX_006"),
+        "{:?}",
+        proposal.diagnostics
+    );
 }
