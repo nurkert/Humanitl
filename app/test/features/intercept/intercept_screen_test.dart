@@ -25,6 +25,7 @@ import 'package:humanitl/core/ipc/client_providers.dart';
 import 'package:humanitl/features/shell/providers/connection.dart';
 
 import '../../harness/ui_state.dart';
+import '../../harness/session_view.dart';
 import 'fixtures.dart';
 
 /// Ein Fake mit stehender Uhr: seine Ereignisse tragen dieselbe Zeit wie
@@ -46,6 +47,7 @@ Future<void> pumpIntercept(
     ProviderScope(
       overrides: <Override>[
         uiState ?? uiStateOverride(),
+        inSessionView(),
         daemonClientProvider.overrideWithValue(client),
         connectionHeartbeatProvider.overrideWithValue(null),
         nowProvider.overrideWith(() => FixedNow(testStart)),

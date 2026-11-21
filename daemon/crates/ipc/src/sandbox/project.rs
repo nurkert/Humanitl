@@ -19,7 +19,9 @@
 use std::time::SystemTime;
 
 use humanitl_config::{PolicyLocks, ProjectChoice};
-use humanitl_core::diagnostics::codes::{RECORDER_003, SANDBOX_042, SANDBOX_053};
+use humanitl_core::diagnostics::codes::{
+    CONFIG_003, IPC_006, RECORDER_003, SANDBOX_042, SANDBOX_053,
+};
 use humanitl_core::{Diagnostic, FixAction, ProjectId, Severity};
 use humanitl_recorder::{ProjectStart, RecorderError};
 use tokio::sync::mpsc;
@@ -113,6 +115,76 @@ impl Inner {
             _ => None,
         };
         Ok(StartProject { identity, choice })
+    }
+
+    /// Ein Start an der Kennung eines Projekts (`Start.project_id`,
+    /// HUM-537): Der Ordner kommt aus der Zeile des Registers, so wie er dort
+    /// steht, und wird zu `work_dir` des Starts. Der Pfad, den `Projects`
+    /// zeigt, ist für die Anzeige gesäubert (`sanitize_note`); ein Client,
+    /// der ihn zurückschickte, startete bei zwei Leerzeichen oder einem
+    /// Steuerzeichen im Namen einen anderen Ordner.
+    ///
+    /// Ohne Kennung bleibt der Start, wie er ist.
+    ///
+    /// # Errors
+    ///
+    /// `CONFIG_003`, wenn der Start zugleich einen Ordner nennt, für eine
+    /// unbekannte Kennung und für eine Zeile, die ein anderer Ordner am
+    /// selben Pfad ersetzt hat; `IPC_006` ohne Aufzeichnung. Ein Ordner, der
+    /// fehlt, scheitert danach an der Prüfung des Ordners wie jeder andere
+    /// (`SANDBOX_006`).
+    pub(super) async fn resolve_project_id(
+        &self,
+        start: &mut v1::sandbox_request::Start,
+    ) -> Result<(), Diagnostic> {
+        let id = start.project_id.trim().to_owned();
+        if id.is_empty() {
+            return Ok(());
+        }
+        if !start.work_dir.trim().is_empty() {
+            return Err(project_refused(
+                "the start names both a project id and a work_dir; send one of them".to_owned(),
+            ));
+        }
+        let Some(recorder) = self.recorder.as_ref() else {
+            return Err(Diagnostic::builder(IPC_006, Severity::Error)
+                .why(
+                    "this daemon runs without a recording, so it keeps no project register to \
+                     start a project id from"
+                        .to_owned(),
+                )
+                .build());
+        };
+        // Eine unbekannte Kennung bekommt den Ausweg; ein Fehler der
+        // Aufzeichnung bleibt, was er ist.
+        let row = crate::projects::lookup(recorder, &id)
+            .await
+            .map_err(|found| {
+                if found.code == CONFIG_003 {
+                    project_refused(found.why)
+                } else {
+                    found
+                }
+            })?;
+        // Ersetzt ist die Zeile auch, wenn das Register es noch nicht weiß:
+        // Liegt am Pfad ein anderer Ordner als beim ersten Start (Gerät und
+        // Inode), startete die Kennung sonst diesen fremden Ordner und trüge
+        // ihn unter dem alten Projekt ein. Ein Ordner, der fehlt, scheitert
+        // danach an der Prüfung des Ordners (`SANDBOX_006`).
+        let swapped = match (row.dev, row.ino) {
+            (Some(dev), Some(ino)) => ProjectIdentity::of(std::path::Path::new(&row.path))
+                .is_ok_and(|now| now.dev != dev || now.ino != ino),
+            _ => false,
+        };
+        if row.replaced_at.is_some() || swapped {
+            return Err(project_refused(format!(
+                "the project {id:?} was replaced by another folder at the same path; start the \
+                 current project there"
+            )));
+        }
+        start.work_dir = row.path;
+        start.work_dir_source = None;
+        Ok(())
     }
 
     /// [`Inner::start_project`], und bei einem Befund: Befund und
@@ -243,6 +315,14 @@ fn unregistered(why: &str) -> Diagnostic {
         .build()
 }
 
+/// `CONFIG_003` für einen Start an einer Projektkennung, die nicht gilt.
+fn project_refused(why: String) -> Diagnostic {
+    Diagnostic::builder(CONFIG_003, Severity::Error)
+        .why(why)
+        .fix(FixAction::CopyCommand("humanitl projects ls".to_owned()))
+        .build()
+}
+
 /// `SANDBOX_053`: der Start nennt keinen Projektordner.
 fn no_project_folder() -> Diagnostic {
     Diagnostic::builder(SANDBOX_053, Severity::Blocking)
@@ -266,7 +346,7 @@ mod tests {
     use std::time::SystemTime;
 
     use humanitl_config::{AskMode, Config, Env, Paths};
-    use humanitl_core::SessionId;
+    use humanitl_core::{ProjectId, SessionId};
     use humanitl_recorder::{ProjectStart, Recorder, RecorderSettings, SessionMeta};
     use tokio_stream::StreamExt as _;
 
@@ -959,5 +1039,163 @@ mod tests {
         )
         .await;
         assert_eq!(codes, ["SANDBOX_006"], "{codes:?}");
+    }
+
+    /// Ein Start an der Kennung eines Projekts nimmt den Ordner aus der
+    /// Zeile des Registers, nicht den Pfad der Anzeige (HUM-537). Der Ordner
+    /// trägt zwei Leerzeichen im Namen; `Projects` zeigt ihn gesäubert mit
+    /// einem, und ein Start mit diesem Pfad träfe einen anderen Ordner.
+    ///
+    /// Mutationsbeweis: `start.work_dir = sanitize_note(&row.path)` in
+    /// [`super::Inner::resolve_project_id`] färbt den Test rot.
+    #[tokio::test]
+    async fn a_start_by_project_id_takes_the_stored_folder_not_the_display_path() {
+        let fixture = Fixture::new();
+        let service = fixture.service();
+        let dir = known(&fixture, "two  spaces", "{}").await;
+        let row = fixture
+            .recorder
+            .list_projects(10, 0)
+            .await
+            .unwrap()
+            .into_iter()
+            .next()
+            .expect("the folder is registered");
+        // Das Register hält den kanonischen Pfad; unter macOS ist das
+        // Temp-Verzeichnis ein Link (`/var` nach `/private/var`).
+        let dir = dir.canonicalize().expect("the folder exists");
+        let shown = humanitl_core::block::sanitize_note(&row.path);
+        assert_ne!(shown, dir.display().to_string(), "the display path differs");
+
+        let mut start = v1::sandbox_request::Start {
+            project_id: row.id.to_string(),
+            ..v1::sandbox_request::Start::default()
+        };
+        service.inner.resolve_project_id(&mut start).await.unwrap();
+        assert_eq!(start.work_dir, dir.display().to_string());
+        assert!(start.work_dir_source.is_none());
+
+        // Beides zugleich, eine unbekannte Kennung: `CONFIG_003` mit Ausweg.
+        let mut both = v1::sandbox_request::Start {
+            project_id: row.id.to_string(),
+            work_dir: shown.clone(),
+            ..v1::sandbox_request::Start::default()
+        };
+        let refused = service
+            .inner
+            .resolve_project_id(&mut both)
+            .await
+            .unwrap_err();
+        assert_eq!(refused.code.as_str(), "CONFIG_003");
+        assert!(refused.fix.is_some());
+        assert_eq!(both.work_dir, shown, "nothing taken from the register");
+        let mut unknown = v1::sandbox_request::Start {
+            project_id: ProjectId::new().to_string(),
+            ..v1::sandbox_request::Start::default()
+        };
+        let refused = service
+            .inner
+            .resolve_project_id(&mut unknown)
+            .await
+            .unwrap_err();
+        assert_eq!(refused.code.as_str(), "CONFIG_003");
+        assert!(unknown.work_dir.is_empty());
+
+        // Eine ersetzte Zeile: ein anderer Ordner am selben Pfad, gestartet.
+        let other = fixture.folder("elsewhere");
+        std::fs::rename(&other, &dir).unwrap();
+        let identity = ProjectIdentity::of(&dir).unwrap();
+        fixture
+            .recorder
+            .register_project_start(ProjectStart {
+                session: fixture.session,
+                path: identity.path_text(),
+                dev: identity.dev,
+                ino: identity.ino,
+                agent: "opencode".to_owned(),
+                at: SystemTime::now(),
+            })
+            .await
+            .unwrap();
+        let mut replaced = v1::sandbox_request::Start {
+            project_id: row.id.to_string(),
+            ..v1::sandbox_request::Start::default()
+        };
+        let refused = service
+            .inner
+            .resolve_project_id(&mut replaced)
+            .await
+            .unwrap_err();
+        assert_eq!(refused.code.as_str(), "CONFIG_003", "{refused:?}");
+        assert!(replaced.work_dir.is_empty());
+    }
+
+    /// Ein Projekt, dessen Ordner weggezogen und durch einen anderen am
+    /// selben Pfad ersetzt wurde, ohne dass das Register es schon weiß: Der
+    /// Start an der alten Kennung lehnt durch den Strom des Dienstes mit
+    /// `CONFIG_003` und `Status(failed)` ab, statt den fremden Ordner zu
+    /// starten und unter dem alten Projekt einzutragen (HUM-537).
+    ///
+    /// Mutationsbeweise: Der Vergleich von Gerät und Inode in
+    /// [`super::Inner::resolve_project_id`] entfernt, oder der Aufruf in
+    /// `Inner::start` entfernt, färbt den Test rot.
+    #[tokio::test]
+    async fn a_start_by_id_of_a_swapped_folder_is_refused_through_the_stream() {
+        let fixture = Fixture::new();
+        let service = fixture.service();
+        let dir = known(&fixture, "moved", "{}").await;
+        let row = fixture
+            .recorder
+            .list_projects(10, 0)
+            .await
+            .unwrap()
+            .into_iter()
+            .next()
+            .expect("the folder is registered");
+        // A zieht weg, B entsteht am selben Pfad; das Register sieht B nie.
+        std::fs::rename(&dir, fixture.home.path().join("moved-away")).unwrap();
+        std::fs::create_dir_all(&dir).unwrap();
+
+        let start = v1::SandboxRequest {
+            op: Some(v1::sandbox_request::Op::Start(v1::sandbox_request::Start {
+                profile: "default".to_owned(),
+                command: vec!["/bin/true".to_owned()],
+                sandbox_mode: "direct".to_owned(),
+                project_id: row.id.to_string(),
+                ..v1::sandbox_request::Start::default()
+            })),
+        };
+        let events: Vec<v1::SandboxEvent> = service.stream(start).collect().await;
+
+        let codes: Vec<String> = events
+            .iter()
+            .filter_map(|event| match &event.event {
+                Some(v1::sandbox_event::Event::Diagnostic(found)) => Some(found.code.clone()),
+                _ => None,
+            })
+            .collect();
+        assert_eq!(codes, ["CONFIG_003"], "{events:?}");
+        assert!(
+            events.iter().any(|event| matches!(
+                &event.event,
+                Some(v1::sandbox_event::Event::Status(status))
+                    if status.state == v1::SandboxState::Failed as i32
+            )),
+            "the start reports failed: {events:?}"
+        );
+        assert!(
+            !events.iter().any(|event| matches!(
+                &event.event,
+                Some(v1::sandbox_event::Event::Status(status))
+                    if status.state == v1::SandboxState::Starting as i32
+                        || status.state == v1::SandboxState::Running as i32
+            )),
+            "no sandbox: {events:?}"
+        );
+        assert_eq!(
+            fixture.recorder.list_projects(10, 0).await.unwrap().len(),
+            1,
+            "B is not registered"
+        );
     }
 }

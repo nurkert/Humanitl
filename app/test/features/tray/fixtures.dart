@@ -19,6 +19,8 @@ import 'package:humanitl/features/shell/providers/connection.dart';
 import 'package:humanitl/features/tray/desktop_ports.dart';
 import 'package:humanitl/features/tray/providers/attention.dart';
 
+import '../../harness/session_view.dart';
+
 /// Die Session, zu der jeder Test-Flow gehört.
 const SessionId traySession = SessionId('018f0001-0000-7000-8000-000000000009');
 
@@ -481,6 +483,7 @@ Future<ProviderContainer> pumpTrayShell(
   final ProviderContainer container = ProviderContainer(
     overrides: <Override>[
       uiStateFileProvider.overrideWithValue(uiState),
+      inSessionView(),
       daemonClientProvider.overrideWithValue(FakeDaemonClient.empty()),
       connectionHeartbeatProvider.overrideWithValue(null),
       desktopPortsProvider.overrideWithValue(desktop.ports),

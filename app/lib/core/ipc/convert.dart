@@ -1382,3 +1382,86 @@ extension AgentsStatusToDomain on pb.AgentsStatus {
         : null,
   );
 }
+
+/// `ProjectEntry` as the start window draws it (HUM-537).
+extension ProjectEntryToDomain on pb.ProjectEntry {
+  /// The domain entry.
+  ProjectEntry toDomain() => ProjectEntry(
+    projectId: projectId,
+    path: path,
+    displayName: displayName,
+    lastStarted: hasLastStarted() ? _dateTime(lastStarted) : null,
+    lastAgent: lastAgent,
+    runs: runs.toInt(),
+    running: running,
+    sessionId: sessionId,
+    changesWaiting: changesWaiting,
+    missing: missing,
+    replaced: replaced,
+    hasChoice: hasChoice,
+  );
+}
+
+/// [CleanupSelection] on the wire (HUM-537).
+extension CleanupSelectionToProto on CleanupSelection {
+  /// The wire selection.
+  pb.CleanupSelection toProto() => pb.CleanupSelection()
+    ..projectIds.addAll(projectIds)
+    ..all = all
+    ..unassigned = unassigned
+    ..includeWaitingChanges = includeWaitingChanges;
+}
+
+/// `CleanupSelection` back from a plan (HUM-537).
+///
+/// The plan returns the selection in the form `cleanup` takes back; paths
+/// are already project ids there. `before` and `older_than_days` the app
+/// never sends, so they are not carried.
+extension CleanupSelectionToDomain on pb.CleanupSelection {
+  /// The domain selection.
+  CleanupSelection toDomain() => CleanupSelection(
+    projectIds: List<String>.unmodifiable(projectIds),
+    all: all,
+    unassigned: unassigned,
+    includeWaitingChanges: includeWaitingChanges,
+  );
+}
+
+/// `CleanupPlanView` as the confirmation shows it (HUM-537).
+extension CleanupPlanToDomain on pb.CleanupPlanView {
+  /// The domain plan.
+  CleanupPlan toDomain() => CleanupPlan(
+    items: List<CleanupItem>.unmodifiable(
+      items.map(
+        (pb.CleanupItem item) => CleanupItem(
+          kind: item.kind,
+          projectId: item.projectId,
+          path: item.path,
+          description: item.description,
+          bytes: item.bytes.toInt(),
+          count: item.count.toInt(),
+          warning: item.warning,
+        ),
+      ),
+    ),
+    digest: digest,
+    notDeleted: notDeleted,
+    selection: selection.toDomain(),
+    kept: List<String>.unmodifiable(kept),
+  );
+}
+
+/// `CleanupResult` as the start window reports it (HUM-537).
+extension CleanupResultToDomain on pb.CleanupResult {
+  /// The domain result.
+  CleanupResult toDomain() => CleanupResult(
+    deleted: outcomes.where((pb.CleanupOutcome o) => o.deleted).length,
+    failed: outcomes.where((pb.CleanupOutcome o) => !o.deleted).length,
+    bytesFreed: bytesFreed.toInt(),
+    reasons: List<String>.unmodifiable(
+      outcomes
+          .where((pb.CleanupOutcome o) => o.reason.isNotEmpty)
+          .map((pb.CleanupOutcome o) => o.reason),
+    ),
+  );
+}

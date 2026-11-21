@@ -1254,6 +1254,13 @@ message SandboxRequest {
     // entscheidet an der ganz aufgeloesten Konfiguration des Starts,
     // `cli_overrides` eingeschlossen.
     CloudNoticeFor cloud_notice_shown = 12;
+    // Das Projekt des Starts an seiner Kennung (`ProjectEntry.project_id`,
+    // HUM-537), statt seines Ordners: Der Daemon nimmt den Pfad aus der
+    // Zeile des Registers, nie den gesaeuberten Pfad der Anzeige. Nur mit
+    // leerem `work_dir`; beide gesetzt ist `CONFIG_003`, ebenso eine
+    // unbekannte Kennung und eine ersetzte Zeile. Ein Daemon vor Minor 58
+    // kennt das Feld nicht und nimmt den gespeicherten Ordner.
+    string project_id = 13;
   }
 
   // Ein Konfigurationswert, den der Client fuer diese Sitzung setzt.

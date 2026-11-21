@@ -317,6 +317,8 @@ class TestDaemonClient implements DaemonClient {
     WorkMode? workMode,
     SandboxMode? sandboxMode,
     String? backend,
+    String? workDir,
+    String? projectId,
   }) => const Stream<SandboxUpdate>.empty();
 
   // Die Wegwerf-Sandbox (HUM-351): Dieser Client nennt die Fähigkeit nicht,
@@ -417,6 +419,26 @@ class TestDaemonClient implements DaemonClient {
   // Kein Agent dieses Clients schickt Inferenz hinaus (HUM-516).
   @override
   Future<void> acknowledgeCloudInference(String agent, String provider) async {}
+
+  // Das Register (HUM-537) gehört dem Startfenster; dieser Client kennt kein
+  // Projekt, und aufräumen lässt sich bei ihm nichts.
+  @override
+  Future<List<ProjectEntry>> listProjects() async => const <ProjectEntry>[];
+
+  @override
+  Future<CleanupPlan> projectsCleanupPlan(CleanupSelection selection) async =>
+      CleanupPlan(
+        items: const <CleanupItem>[],
+        digest: '',
+        notDeleted: '',
+        selection: selection,
+      );
+
+  @override
+  Future<CleanupResult> projectsCleanup(
+    CleanupSelection selection,
+    String digest,
+  ) async => const CleanupResult(deleted: 0, failed: 0, bytesFreed: 0);
 
   // Der Doctor und die Endpunkt-Probe (HUM-075, HUM-044) gehören dem
   // Setup-Bildschirm. Der leere Bericht ist hier die ehrliche Antwort: nicht

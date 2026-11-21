@@ -32,6 +32,7 @@ import 'package:humanitl/features/tray/widgets/attention_notice.dart';
 import 'package:humanitl/features/tray/widgets/return_banner.dart';
 
 import '../../harness/ui_state.dart';
+import '../../harness/session_view.dart';
 import 'fixtures.dart';
 
 /// Lässt die Fenster ablaufen, die eine Entscheidung hinterlässt: das
@@ -68,6 +69,7 @@ Future<ProviderContainer> pumpDesktop(
       // Das Schliessen des Banners schreibt seit HUM-276 in den Speicher der
       // Oberflaeche; nie in den des Menschen, der den Test faehrt.
       uiStateOverride(),
+      inSessionView(),
       daemonClientProvider.overrideWithValue(client),
       connectionHeartbeatProvider.overrideWithValue(null),
       desktopPortsProvider.overrideWithValue(desktop.ports),

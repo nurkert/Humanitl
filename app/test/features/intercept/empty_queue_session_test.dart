@@ -28,6 +28,7 @@ import 'package:humanitl/features/shell/providers/navigation.dart';
 import 'package:humanitl/features/shell/section.dart';
 
 import '../../harness/ui_state.dart';
+import '../../harness/session_view.dart';
 import 'fixtures.dart';
 import 'harness.dart';
 
@@ -111,12 +112,16 @@ class SessionClient extends FakeDaemonClient {
     WorkMode? workMode,
     SandboxMode? sandboxMode,
     String? backend,
+    String? workDir,
+    String? projectId,
   }) async* {
     yield* super.startSandbox(
       profile: profile,
       workMode: workMode,
       sandboxMode: sandboxMode,
       backend: backend,
+      workDir: workDir,
+      projectId: projectId,
     );
     final Completer<void>? end = agentEnd;
     if (end != null) {
@@ -308,6 +313,7 @@ void main() {
         connectionHeartbeatProvider.overrideWithValue(null),
         nowProvider.overrideWith(() => FixedNow(testStart)),
         uiStateOverride(),
+        inSessionView(),
       ],
     );
     final SandboxStatus known = await container.read(
@@ -565,6 +571,7 @@ void main() {
           daemonClientProvider.overrideWithValue(SessionClient()),
           connectionHeartbeatProvider.overrideWithValue(null),
           uiStateOverride(),
+          inSessionView(),
         ],
         child: Directionality(
           textDirection: TextDirection.ltr,

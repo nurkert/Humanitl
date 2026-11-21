@@ -14,6 +14,7 @@ import '../../core/ipc/flow_reveal.dart';
 import '../../core/ipc/sandbox_mode_feed.dart';
 import '../../core/shortcuts/intents.dart';
 import '../../core/ui/h_notice_layer.dart';
+import '../../core/ui/session_view.dart';
 import '../../core/ui/settings_opener.dart';
 import '../../core/ui/terminal_placement.dart';
 import '../../core/ui/terminal_zoom.dart';
@@ -491,6 +492,14 @@ class _ShellScreenState extends ConsumerState<ShellScreen> {
               .read(uiScaleProvider.notifier)
               .step(step, limit: UiScaleScope.limitOf(context)),
         ),
+      // Der Rückweg ins Startfenster (HUM-537): Die Sitzung läuft weiter und
+      // steht dort unter „Laufend". Am Ende, damit die Zeilen davor ihren
+      // Platz unter den ersten zwölf behalten.
+      PaletteCommand(
+        id: 'start-window',
+        label: l10n.startPaletteOpen,
+        run: ref.read(sessionViewProvider.notifier).detach,
+      ),
     ];
   }
 

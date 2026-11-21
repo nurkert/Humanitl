@@ -23,6 +23,7 @@ import 'package:humanitl/features/shell/providers/theme.dart';
 
 import '../features/intercept/fixtures.dart';
 import '../harness/ui_state.dart';
+import '../harness/session_view.dart';
 
 /// Die Uhr aller Goldens: 40 Sekunden nach dem Anhalten.
 final DateTime goldenNow = testStart.add(const Duration(seconds: 40));
@@ -72,6 +73,7 @@ List<Override> overridesFor(
   }
   return <Override>[
     uiStateOverride(),
+    inSessionView(),
     daemonClientProvider.overrideWithValue(client),
     connectionHeartbeatProvider.overrideWithValue(null),
     nowProvider.overrideWith(() => FixedNow(goldenNow)),

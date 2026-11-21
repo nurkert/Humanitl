@@ -97,7 +97,8 @@ class FakeDaemonClient
         FakeImagePull,
         FakeEgress,
         FakeCloudInference,
-        FakeAgents
+        FakeAgents,
+        FakeProjects
     implements DaemonClient {
   /// Creates a fake that answers `GetInfo` with [info] (or [defaultInfo]),
   /// or throws [infoFailure] when given, and replays [script] (or
@@ -1209,10 +1210,45 @@ class FakeDaemonClient
     WorkMode? workMode,
     SandboxMode? sandboxMode,
     String? backend,
+    String? workDir,
+    String? projectId,
   }) async* {
     _check();
     startModes.add(sandboxMode);
     startBackends.add(backend);
+    startWorkDirs.add(workDir);
+    startProjectIds.add(projectId);
+    // Wie der Daemon ab 1.58 (HUM-537): ein Projekt an seiner Kennung, der
+    // Ordner aus dem Register.
+    final (String? folder, Diagnostic? unknown) = startFolder(
+      workDir,
+      projectId,
+    );
+    if (unknown != null) {
+      yield SandboxUpdate.diagnostic(unknown);
+      return;
+    }
+    // Wie der Daemon (ADR-0024 Punkt 12): eine Sitzung je Daemon; ein
+    // zweiter Start bekommt `CLI_005`, und die laufende bleibt, wie sie ist.
+    if (sandbox.isUp) {
+      final Diagnostic refusal = Diagnostic(
+        code: 'CLI_005',
+        severity: Severity.blocking,
+        why:
+            'a session is already running in this daemon (sandbox '
+            '${sandbox.sandboxId ?? 'unknown'}); it keeps its own project '
+            'directory, and a second one would not get it. End it where it '
+            'was started, or watch it in the app.',
+      );
+      yield SandboxUpdate.diagnostic(refusal);
+      yield SandboxUpdate.status(sandbox);
+      return;
+    }
+    // Das Projekt geht mit dem Start (HUM-537): mitgeschickt gilt sein
+    // Ordner, wie beim Daemon, statt `sandbox.work_dir`.
+    if (folder != null) {
+      sandbox = sandbox.copyWith(workDirHost: folder);
+    }
     await for (final SandboxUpdate update in planSandbox(
       profile: profile,
       workMode: workMode,
@@ -1278,6 +1314,12 @@ class FakeDaemonClient
       SandboxLogLine(at: _clock(), text: 'sandbox started, pid 4711 (fake)'),
     );
     yield SandboxUpdate.status(sandbox);
+    // Wie der Daemon hält der Strom eines Starts auf Wunsch offen, solange
+    // die Sitzung läuft (HUM-537); ein Test gibt ihn frei.
+    final Completer<void>? hold = startStreamHold;
+    if (hold != null) {
+      await hold.future;
+    }
   }
 
   @override
@@ -6699,6 +6741,205 @@ mixin FakeAgents {
         for (final AgentDepot each in agentsStatus.agents)
           _copy(each, credentialsEncrypted: on && each.loggedIn),
       ],
+    );
+  }
+}
+
+// --- Projects (HUM-537) ----------------------------------------------------
+//
+// Das Register spielt der Fake als Liste, die ein Test setzt; der Plan einer
+// Auswahl nennt je gewaehltem Projekt seine aufgezeichneten Fluesse und
+// seinen Registereintrag, mit der festen Zeile des Daemons. `cleanup` loescht
+// wie der Daemon nur bei gleichem Digest und antwortet sonst `SANDBOX_054`.
+
+/// `Projects` without a daemon (HUM-537).
+mixin FakeProjects {
+  /// What `Projects(list)` answers, in this order: the daemon sorts, the app
+  /// does not.
+  List<ProjectEntry> projects = <ProjectEntry>[
+    ProjectEntry(
+      projectId: '7d0f3c1e-0000-4000-8000-000000000001',
+      path: '/home/dev/project',
+      displayName: 'project',
+      lastStarted: DateTime.utc(2026, 11, 20, 9),
+      lastAgent: 'claude',
+      runs: 4,
+      hasChoice: true,
+    ),
+  ];
+
+  /// Every `Projects` operation asked for, in order: `list`, `cleanup_plan`
+  /// or `cleanup <digest>`.
+  final List<String> projectsCalls = <String>[];
+
+  /// The `work_dir` of every `Sandbox(Start)`, in order; null where the
+  /// start sent none.
+  final List<String?> startWorkDirs = <String?>[];
+
+  /// The `project_id` of every `Sandbox(Start)`, in order; null where the
+  /// start sent none.
+  final List<String?> startProjectIds = <String?>[];
+
+  /// When set, the stream of a start stays open after `running` until it
+  /// completes, as the daemon keeps it open for the whole session.
+  Completer<void>? startStreamHold;
+
+  /// The folder of a start: [workDir], or the stored path of [projectId] in
+  /// [projects]; `CONFIG_003` for both at once and for an unknown or
+  /// replaced project, as the daemon answers from 1.58.
+  (String?, Diagnostic?) startFolder(String? workDir, String? projectId) {
+    if (projectId == null || projectId.isEmpty) {
+      return (workDir, null);
+    }
+    Diagnostic refused(String why) =>
+        Diagnostic(code: 'CONFIG_003', severity: Severity.error, why: why);
+    if (workDir != null && workDir.isNotEmpty) {
+      return (
+        null,
+        refused('the start names both a project id and a work_dir'),
+      );
+    }
+    for (final ProjectEntry entry in projects) {
+      if (entry.projectId == projectId && !entry.replaced) {
+        return (projectFolders[projectId] ?? entry.path, null);
+      }
+    }
+    return (null, refused('no project "$projectId" is known to this daemon'));
+  }
+
+  /// The stored folder of a project where it differs from the path the list
+  /// shows (`ProjectEntry.path` is cleaned for display), by project id.
+  Map<String, String> projectFolders = <String, String>{};
+
+  /// When set, `cleanup` answers only once it completes.
+  Completer<void>? cleanupHold;
+
+  /// Every selection `cleanup` got, with its digest.
+  final List<(CleanupSelection, String)> cleanupRequests =
+      <(CleanupSelection, String)>[];
+
+  /// What `Projects(list)` throws instead of answering, when set.
+  Diagnostic? projectsListFailure;
+
+  /// Bytes the recorded flows of a project take in the plan, by project id;
+  /// 1 MB for every other one.
+  Map<String, int> projectBytes = <String, int>{};
+
+  /// The plan [projectsCleanupPlan] handed out last.
+  CleanupPlan? lastCleanupPlan;
+
+  /// How many plans were handed out; the digest carries the number.
+  int _plans = 0;
+
+  /// The fixed line of the daemon (`projects::NOT_DELETED`).
+  static const String notDeletedLine =
+      'Not deleted: the project folder, the audit log, rules, the global '
+      'configuration and the agent depot (humanitl agents remove).';
+
+  /// `Projects(list)`.
+  Future<List<ProjectEntry>> listProjects() async {
+    projectsCalls.add('list');
+    final Diagnostic? failure = projectsListFailure;
+    if (failure != null) {
+      throw DaemonException(failure);
+    }
+    return List<ProjectEntry>.unmodifiable(projects);
+  }
+
+  /// `Projects(cleanup_plan)`: per chosen project its recorded flows and its
+  /// register entry; a running one stays and is named under `kept`.
+  Future<CleanupPlan> projectsCleanupPlan(CleanupSelection selection) async {
+    projectsCalls.add('cleanup_plan');
+    final List<ProjectEntry> chosen = <ProjectEntry>[
+      for (final ProjectEntry entry in projects)
+        if (selection.all || selection.projectIds.contains(entry.projectId))
+          entry,
+    ];
+    final List<CleanupItem> items = <CleanupItem>[];
+    final List<String> kept = <String>[];
+    for (final ProjectEntry entry in chosen) {
+      if (entry.running) {
+        kept.add('The running session in ${entry.path} and its requests stay.');
+        continue;
+      }
+      items
+        ..add(
+          CleanupItem(
+            kind: 'recorded_flows',
+            projectId: entry.projectId,
+            path: entry.path,
+            description:
+                '12 recorded requests with responses and bodies from '
+                '${entry.runs} sessions of ${entry.path}',
+            bytes: projectBytes[entry.projectId] ?? 1000000,
+            count: 12,
+          ),
+        )
+        ..add(
+          CleanupItem(
+            kind: 'register_entry',
+            projectId: entry.projectId,
+            path: entry.path,
+            description:
+                'The register entry of ${entry.path}; its ${entry.runs} '
+                'sessions stay without a project',
+            count: 1,
+          ),
+        );
+    }
+    final CleanupPlan plan = CleanupPlan(
+      items: List<CleanupItem>.unmodifiable(items),
+      digest: 'fake-plan-${++_plans}',
+      notDeleted: notDeletedLine,
+      selection: CleanupSelection(
+        projectIds: <String>[
+          for (final ProjectEntry entry in chosen) entry.projectId,
+        ],
+        includeWaitingChanges: selection.includeWaitingChanges,
+      ),
+      kept: List<String>.unmodifiable(kept),
+    );
+    lastCleanupPlan = plan;
+    return plan;
+  }
+
+  /// `Projects(cleanup)`: deletes the last plan when [digest] is its digest,
+  /// and refuses with `SANDBOX_054` otherwise, as the daemon does.
+  Future<CleanupResult> projectsCleanup(
+    CleanupSelection selection,
+    String digest,
+  ) async {
+    projectsCalls.add('cleanup $digest');
+    cleanupRequests.add((selection, digest));
+    final Completer<void>? hold = cleanupHold;
+    if (hold != null) {
+      await hold.future;
+    }
+    final CleanupPlan? plan = lastCleanupPlan;
+    if (plan == null || digest.isEmpty || digest != plan.digest) {
+      throw const DaemonException(
+        Diagnostic(
+          code: 'SANDBOX_054',
+          severity: Severity.error,
+          why:
+              'the cleanup plan is out of date or was not confirmed; '
+              'nothing was deleted',
+        ),
+      );
+    }
+    final Set<String> gone = <String>{
+      for (final CleanupItem item in plan.items)
+        if (item.kind == 'register_entry') item.projectId,
+    };
+    projects = <ProjectEntry>[
+      for (final ProjectEntry entry in projects)
+        if (!gone.contains(entry.projectId)) entry,
+    ];
+    lastCleanupPlan = null;
+    return CleanupResult(
+      deleted: plan.items.length,
+      failed: 0,
+      bytesFreed: plan.totalBytes,
     );
   }
 }

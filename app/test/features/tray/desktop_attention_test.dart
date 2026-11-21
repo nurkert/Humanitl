@@ -21,6 +21,7 @@ import 'package:humanitl/features/tray/providers/attention.dart';
 
 import 'fixtures.dart';
 import '../../harness/ui_state.dart';
+import '../../harness/session_view.dart';
 
 /// Die App über [client] und [desktop]; [focused] falsch nimmt dem Fenster
 /// den Fokus, bevor die erste Anfrage eintrifft.
@@ -35,6 +36,7 @@ Future<void> pumpDesktop(
   final ProviderContainer container = ProviderContainer(
     overrides: <Override>[
       uiStateOverride(),
+      inSessionView(),
       daemonClientProvider.overrideWithValue(client),
       connectionHeartbeatProvider.overrideWithValue(null),
       desktopPortsProvider.overrideWithValue(desktop.ports),

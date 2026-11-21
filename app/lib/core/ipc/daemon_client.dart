@@ -158,11 +158,24 @@ abstract class DaemonClient {
   /// of the names `SandboxBackends` lists or `auto`. Null sends no entry, and
   /// the daemon takes `sandbox.backend` from its configuration. Whether the
   /// backend may start, the daemon decides.
+  ///
+  /// [workDir] is the project the session starts in (`Start.work_dir`,
+  /// HUM-537). The app sends it on every start it makes: the project goes
+  /// with the start, and `sandbox.work_dir` is no silent "current project"
+  /// (ADR-0024 point 2). The daemon loads the project choice of that folder
+  /// and refuses a start without any folder with `SANDBOX_053`.
+  ///
+  /// [projectId] names a project of the register instead
+  /// (`Start.project_id`, contract 1.58): the daemon takes the folder from
+  /// the register row, never the cleaned path `Projects` shows. Send one of
+  /// [workDir] and [projectId]; both is `CONFIG_003`.
   Stream<SandboxUpdate> startSandbox({
     String? profile,
     WorkMode? workMode,
     SandboxMode? sandboxMode,
     String? backend,
+    String? workDir,
+    String? projectId,
   });
 
   /// `Sandbox(Changes)`: the changes of a disposable run that wait for a
@@ -554,6 +567,24 @@ abstract class DaemonClient {
   /// host that is none, and with `CLI_004` from a daemon before contract
   /// 1.43, which does not know the operation.
   Future<void> acknowledgeCloudInference(String agent, String provider);
+
+  /// `Projects(list)`: the known projects, the newest start first, with the
+  /// running session (HUM-532). Throws a [DaemonException] for a refusal,
+  /// and `UNIMPLEMENTED` from a daemon before the register.
+  Future<List<ProjectEntry>> listProjects();
+
+  /// `Projects(cleanup_plan)`: what a cleanup of [selection] would delete,
+  /// item by item with its size, and what stays (HUM-533). Deletes nothing.
+  Future<CleanupPlan> projectsCleanupPlan(CleanupSelection selection);
+
+  /// `Projects(cleanup)`: deletes exactly the plan the person confirmed,
+  /// [selection] and [digest] as that plan returned them (HUM-533). The
+  /// daemon computes the plan again in the deleting transaction and refuses
+  /// with `SANDBOX_054` when the digest no longer matches.
+  Future<CleanupResult> projectsCleanup(
+    CleanupSelection selection,
+    String digest,
+  );
 
   /// Releases the transport. The client is unusable afterwards.
   Future<void> close();

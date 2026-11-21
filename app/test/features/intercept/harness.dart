@@ -17,6 +17,7 @@ import 'package:humanitl/features/intercept/providers/now.dart';
 import 'package:humanitl/features/shell/providers/connection.dart';
 
 import '../../harness/ui_state.dart';
+import '../../harness/session_view.dart';
 import 'fixtures.dart';
 
 /// Ein Fake mit stehender Uhr.
@@ -106,6 +107,7 @@ Future<void> pumpIntercept(
         // Overrides desselben Providers, und ein Test, der den Hinweis pruefen
         // will, muss diesen hier ersetzen koennen.
         uiState ?? uiStateOverride(),
+        inSessionView(),
         ...overrides,
       ],
       child: MediaQuery(

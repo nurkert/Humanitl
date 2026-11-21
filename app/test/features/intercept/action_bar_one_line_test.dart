@@ -31,6 +31,7 @@ import 'package:humanitl/features/shell/providers/connection.dart';
 
 import '../../harness/layout_fonts.dart';
 import '../../harness/ui_state.dart';
+import '../../harness/session_view.dart';
 import 'fixtures.dart';
 
 /// A window the bar is measured in.
@@ -90,6 +91,7 @@ Future<void> pumpBar(
     ProviderScope(
       overrides: <Override>[
         uiStateOverride(railExpanded: window.railExpanded),
+        inSessionView(),
         daemonClientProvider.overrideWithValue(
           FakeDaemonClient(
             script: holdScript(<FlowDetail>[request(findings: findings)]),

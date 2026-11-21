@@ -22,6 +22,7 @@ import 'package:humanitl/features/shell/providers/navigation.dart';
 import 'package:humanitl/features/shell/section.dart';
 
 import '../../harness/ui_state.dart';
+import '../../harness/session_view.dart';
 
 void main() {
   testWidgets('the history does not take the focus back out of the rail', (
@@ -33,6 +34,7 @@ void main() {
     final ProviderContainer container = ProviderContainer(
       overrides: [
         uiStateOverride(),
+        inSessionView(),
         daemonClientProvider.overrideWithValue(client),
         connectionHeartbeatProvider.overrideWithValue(null),
       ],
@@ -90,6 +92,7 @@ void main() {
     final ProviderContainer container = ProviderContainer(
       overrides: [
         uiStateOverride(),
+        inSessionView(),
         daemonClientProvider.overrideWithValue(client),
         connectionHeartbeatProvider.overrideWithValue(null),
       ],
@@ -139,6 +142,7 @@ void main() {
     final ProviderContainer container = ProviderContainer(
       overrides: [
         uiStateOverride(),
+        inSessionView(),
         daemonClientProvider.overrideWithValue(client),
         connectionHeartbeatProvider.overrideWithValue(null),
       ],
@@ -195,6 +199,7 @@ void main() {
     final ProviderContainer container = ProviderContainer(
       overrides: [
         uiStateOverride(),
+        inSessionView(),
         daemonClientProvider.overrideWithValue(client),
         connectionHeartbeatProvider.overrideWithValue(null),
       ],

@@ -28,6 +28,7 @@ import 'package:humanitl/l10n/l10n.dart';
 
 import '../../harness/layout_fonts.dart';
 import '../../harness/ui_state.dart';
+import '../../harness/session_view.dart';
 import 'fixtures.dart';
 
 final AppLocalizations de = lookupAppLocalizations(const Locale('de'));
@@ -57,6 +58,7 @@ Future<void> pumpGerman(WidgetTester tester, FlowDetail detail) async {
     ProviderScope(
       overrides: <Override>[
         uiStateOverride(),
+        inSessionView(),
         daemonClientProvider.overrideWithValue(
           FakeDaemonClient(
             script: holdScript(<FlowDetail>[detail]),

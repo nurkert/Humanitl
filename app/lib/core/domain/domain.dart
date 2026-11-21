@@ -20,6 +20,7 @@ export 'ids.dart';
 export 'intercept.dart';
 export 'llm.dart';
 export 'llm_servers.dart';
+export 'projects.dart';
 export 'server_address.dart';
 export 'rule.dart';
 export 'sandbox.dart';

@@ -47,6 +47,8 @@ class StallingStartClient extends FakeDaemonClient {
     WorkMode? workMode,
     SandboxMode? sandboxMode,
     String? backend,
+    String? workDir,
+    String? projectId,
   }) async* {
     startCalls++;
     sandbox = sandbox.copyWith(state: SandboxState.starting);
@@ -92,6 +94,8 @@ class StallingRefusedStartClient extends FakeDaemonClient {
     WorkMode? workMode,
     SandboxMode? sandboxMode,
     String? backend,
+    String? workDir,
+    String? projectId,
   }) async* {
     sandbox = sandbox.copyWith(state: SandboxState.starting);
     yield SandboxUpdate.status(sandbox);
@@ -101,6 +105,8 @@ class StallingRefusedStartClient extends FakeDaemonClient {
       workMode: workMode,
       sandboxMode: sandboxMode,
       backend: backend,
+      workDir: workDir,
+      projectId: projectId,
     );
   }
 }
