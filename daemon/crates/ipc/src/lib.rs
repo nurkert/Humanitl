@@ -51,7 +51,12 @@ pub const PROTO_MAJOR: u32 = 1;
 /// Minor-Version des Vertrags. Steigt bei jeder additiven Änderung
 /// (`Info.proto_minor`).
 ///
-/// `59` seit dem Speichern der Projektwahl an einem Ordner (HUM-538):
+/// `60` seit der Bitte an die verbundene App (HUM-539):
+/// `ProjectsRequest.open_in_app` gibt einen Ordner als
+/// `FlowEvent.open_in_app` an jeden Strom mit `SubscribeRequest.desktop_app`
+/// und sagt in `ProjectsResponse.app_reached`, ob einer da war;
+/// `humanitl app` startet sonst die App selbst.
+/// `59` war das Speichern der Projektwahl an einem Ordner (HUM-538):
 /// `ProjectsRequest.SaveChoice.path` nennt den Ordner statt der Kennung, und
 /// ein Ordner, den das Register nicht kennt, bekommt seinen Eintrag ohne
 /// Start; der Erststart-Bildschirm speichert so vor dem ersten Start.
@@ -329,7 +334,7 @@ pub const PROTO_MAJOR: u32 = 1;
 /// Spiegelung in `app/lib/core/ipc/proto_version.dart` darf nachziehen: eine
 /// abweichende Minor ist verabredetermaßen kein Grund, die Verbindung
 /// abzulehnen (`docs/PROTOCOL.md`).
-pub const PROTO_MINOR: u32 = 59;
+pub const PROTO_MINOR: u32 = 60;
 
 /// Metadata-Schlüssel für das Session-Token aus
 /// `$XDG_RUNTIME_DIR/humanitl/token` (CONVENTIONS.md 3.6).
@@ -353,6 +358,7 @@ pub mod v1 {
 }
 
 pub mod agents;
+pub mod app_requests;
 pub mod audit;
 pub mod auth;
 pub mod body;

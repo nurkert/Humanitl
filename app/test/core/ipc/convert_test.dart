@@ -376,6 +376,18 @@ void main() {
     expect(domain.flowId, flow.id);
   });
 
+  test('FlowEvent.open_in_app carries the folder and belongs to no flow '
+      '(HUM-539)', () {
+    final FlowEvent? domain =
+        (pb.FlowEvent()
+              ..at = Timestamp.fromDateTime(DateTime.utc(2026, 11, 21))
+              ..openInApp = (pb.FlowEvent_OpenInApp()..path = '/home/dev/api'))
+            .toDomain();
+    expect(domain, isA<FlowEventOpenInApp>());
+    expect((domain! as FlowEventOpenInApp).path, '/home/dev/api');
+    expect(domain.flowId, isNull);
+  });
+
   test('an unset event is null, an unknown method keeps its raw token', () {
     expect(pb.FlowEvent().toDomain(), isNull);
     final Flow flow =

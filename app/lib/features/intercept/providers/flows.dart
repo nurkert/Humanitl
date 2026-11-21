@@ -233,7 +233,8 @@ class Flows extends _$Flows {
           FlowEventRulesChanged() ||
           FlowEventAgentAsk() ||
           FlowEventInterceptChanged() ||
-          FlowEventConfigChanged():
+          FlowEventConfigChanged() ||
+          FlowEventOpenInApp():
         break;
     }
   }

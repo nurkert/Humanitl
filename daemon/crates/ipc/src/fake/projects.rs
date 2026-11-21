@@ -82,6 +82,11 @@ pub(super) fn answer(
                 .build())
         }
         Some(v1::projects_request::Op::Proposal(asked)) => proposal(project, &asked),
+        // Der Fake beantwortet die Bitte an die App vor dem Register, wie der
+        // Daemon (HUM-539).
+        Some(v1::projects_request::Op::OpenInApp(_)) => Err(refused(
+            "open_in_app goes to the connected app, not to the register",
+        )),
         None => Err(refused("the request names no operation")),
     }
 }

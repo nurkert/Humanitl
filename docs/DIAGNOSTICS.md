@@ -1582,6 +1582,14 @@ Es läuft schon eine Sitzung
 
 **Fix.** Kein Fix: Wer sie gestartet hat, beendet sie dort.
 
+#### CLI_007
+
+Desktop app not installed or not starting
+
+**Auslöser.** `humanitl app` hands the folder to a desktop app that is connected to the daemon, and otherwise starts the app: `humanitl-app` next to the own program or on `PATH`, on macOS `open -a Humanitl`. No app was connected, and the app was not found there or did not start; the text names where it looked and what the system said.
+
+**Fix.** `OpenUrl` on the installation guide; the desktop app comes with the package `humanitl` (Linux) or the `Humanitl.app` from the release (macOS).
+
 ### Bereich ui
 
 #### UI_002

@@ -162,7 +162,10 @@ abstract final class ProtoVersion {
   /// Raised to 59 with the first-start screen: "Start" saves the choice of
   /// a folder the register does not know yet by its path
   /// (`SaveChoice.path`) before the first start (HUM-538).
-  static const int minor = 59;
+  /// Raised to 60 with `humanitl app`: the event stream of the app carries
+  /// `SubscribeRequest.desktop_app`, and the start window preselects the
+  /// folder of `FlowEvent.open_in_app` (HUM-539).
+  static const int minor = 60;
 
   /// `major.minor` as text.
   static const String text = '$major.$minor';

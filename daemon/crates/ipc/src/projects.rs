@@ -161,6 +161,11 @@ pub async fn answer(
         Some(v1::projects_request::Op::Proposal(asked)) => {
             proposal::answer(&ctx, &recorder, asked).await
         }
+        // Der Dienst beantwortet die Bitte an die App selbst, vor dem
+        // Register (HUM-539, `crate::app_requests`).
+        Some(v1::projects_request::Op::OpenInApp(_)) => Err(refused(
+            "open_in_app goes to the connected app, not to the register".to_owned(),
+        )),
         None => Err(refused("the request names no operation".to_owned())),
     }
 }

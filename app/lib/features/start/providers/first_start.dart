@@ -139,6 +139,16 @@ class FirstStartNotifier extends Notifier<FirstStart?> {
     state = opening.copyWith(proposal: proposal, asking: false);
   }
 
+  /// The screen for a folder the register does not know, with the
+  /// [proposal] the daemon already gave for it: `humanitl app PATH`
+  /// preselected it (HUM-539). Unlike [openFolder] nothing starts from
+  /// here, not even for a known folder; that is the caller's business, and
+  /// it marks a known one in the list instead.
+  void show(String path, StartProposal proposal) {
+    _asked++;
+    state = FirstStart(path: path, proposal: proposal);
+  }
+
   /// "Change start choice" on [entry]: the screen for a project the
   /// register knows, with its stored choice as the defaults.
   Future<void> openProject(ProjectEntry entry) async {

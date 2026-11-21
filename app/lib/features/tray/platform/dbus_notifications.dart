@@ -134,6 +134,32 @@ class DBusNotificationPort implements NotificationPort {
     if (_broken) {
       return;
     }
+    await _notify(
+      notification.summary,
+      notification.body,
+      actions: notification.actions,
+      flowId: notification.flowId,
+    );
+  }
+
+  /// Without buttons: there is no request a press could name, and a server
+  /// that draws a default action sends no key this port knows.
+  @override
+  Future<void> announce(String summary, String body) async {
+    if (_broken) {
+      return;
+    }
+    await _notify(summary, body);
+  }
+
+  /// `Notify`, replacing the message that stands; buttons only where the
+  /// server draws them and a request is named.
+  Future<void> _notify(
+    String summary,
+    String body, {
+    List<NotificationAction> actions = const <NotificationAction>[],
+    FlowId? flowId,
+  }) async {
     try {
       // The capability question first, and only then the subscription: it is
       // the one call that finds out whether this bus can be reached at all,
@@ -142,10 +168,10 @@ class DBusNotificationPort implements NotificationPort {
       final bool buttons = await _serverDrawsButtons();
       await _listen();
       final List<DBusValue> pairs = <DBusValue>[];
-      if (buttons) {
-        for (final NotificationAction action in notification.actions) {
+      if (buttons && flowId != null) {
+        for (final NotificationAction action in actions) {
           pairs
-            ..add(DBusString(actionKey(action.kind, notification.flowId)))
+            ..add(DBusString(actionKey(action.kind, flowId)))
             ..add(DBusString(action.label));
         }
       }
@@ -158,8 +184,8 @@ class DBusNotificationPort implements NotificationPort {
           const DBusString(_appName),
           DBusUint32(_id),
           const DBusString(''),
-          DBusString(notification.summary),
-          DBusString(notification.body),
+          DBusString(summary),
+          DBusString(body),
           DBusArray(DBusSignature('s'), pairs),
           // `DBusDict.stringVariant` wraps each value in a `DBusVariant`
           // itself, so the values handed to it are the bare ones. A

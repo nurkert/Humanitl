@@ -108,6 +108,7 @@ step, is described in [`docs/cli.md`](../cli.md); which RPC each subcommand serv
 - [`humanitl projects clean`](#humanitl-projects-clean) Clean up: the daemon lists every item it would delete (recorded requests with their bodies, waiting changes of a disposable run, project choices, register entries) with size, and asks. Without a folder every project except what is in use. The project folder and the audit log are never deleted. Without a terminal it deletes only with --yes and otherwise ends with exit 1 and the plan
 - [`humanitl projects forget`](#humanitl-projects-forget) Forget a project: its stored project choice and its register entry, shown as a plan and asked first. Recorded requests stay
 - [`humanitl projects proposal`](#humanitl-projects-proposal) Show the start proposal for a folder: every field of the first-start screen (agent and its source, folder mode, isolation, ask mode, model server, profile) with its options, the default, and why an option is not available. The defaults are the start that would happen without a screen. Nothing is saved
+- [`humanitl app`](#humanitl-app) Open the start window of the desktop app, with a folder preselected
 
 ## Configuration flags
 
@@ -233,6 +234,7 @@ Commands:
   egress     The decision proxy behind Humanitl (`egress.proxy`): show it, check the connection, store its credentials
   agents     The agent depot: where each agent comes from (host or depot), its installed version and login; set the source, install or update an agent in a maintenance sandbox, remove a depot
   projects   The project register: the projects the daemon knows with their last start, agent and runs, and what was chosen for one of them
+  app        Open the start window of the desktop app, with a folder preselected
   help       Print this message or the help of the given subcommand(s)
 
 Options:
@@ -3615,5 +3617,40 @@ Options:
 
   -h, --help
           Print help
+```
+
+## humanitl app
+
+```text
+Open the start window of the desktop app, with a folder preselected.
+
+When an app is connected to the daemon, the daemon hands it the folder and the app brings its window forward; otherwise this starts the app (`humanitl-app --project PATH` next to this program or on PATH, on macOS `open -a Humanitl`). A known project is marked under "Recent", a new folder gets the first-start screen. Nothing starts before "Start" in the window.
+
+Limits: on macOS an app that already runs without a daemon connection only comes forward, without the folder preselected; on Linux such an app is not seen, and a second one starts.
+
+Usage: humanitl app [OPTIONS] [PATH]
+
+Arguments:
+  [PATH]
+          The folder to preselect; `.` is the current directory. Without it, the start window without a preselection
+
+Options:
+      --json
+          Machine-readable output: one JSON value on stdout, diagnostics included
+
+      --config <PATH>
+          Read this config file instead of the one in the user's config directory
+
+  -v, --verbose...
+          Explain what is happening; repeat for more
+
+  -q, --quiet
+          Only the result, no notes
+
+      --profile <NAME>
+          Use this profile for the session; falls back to the sandbox profile of that name when no session profile exists
+
+  -h, --help
+          Print help (see a summary with '-h')
 ```
 

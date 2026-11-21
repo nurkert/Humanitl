@@ -2089,6 +2089,15 @@ registry! {
     AGENT_020 => "agent", "Credential encryption not possible", "#agent_020",
         "With agents.encrypt_credentials = true the credential files of the depot lie encrypted with ChaCha20-Poly1305, and the key lies only in the system keyring (Secret Service on Linux, the login Keychain on macOS), never in a file next to the data. Either the keyring did not answer, so the setting was refused, or an encrypted file did not open with the key from the keyring: another key, a damaged file or a format this daemon does not know. Nothing was changed, and no file was written in plain text instead.",
         "`CopyCommand` with the package of `secret-tool` when it is missing, or `humanitl agents login <id>` when a file does not open with the stored key; otherwise none, unlock the keyring and try again.";
+
+    // HUM-539: `humanitl app [PATH]`.
+    /// `humanitl app` found no desktop app to start, or the start failed:
+    /// no app was connected to the daemon, and neither `humanitl-app` next to
+    /// the own program nor on `PATH` (macOS: `Humanitl.app` through `open`)
+    /// could be started. Nothing was started (HUM-539).
+    CLI_007 => "cli", "Desktop app not installed or not starting", "#cli_007",
+        "`humanitl app` hands the folder to a desktop app that is connected to the daemon, and otherwise starts the app: `humanitl-app` next to the own program or on `PATH`, on macOS `open -a Humanitl`. No app was connected, and the app was not found there or did not start; the text names where it looked and what the system said.",
+        "`OpenUrl` on the installation guide; the desktop app comes with the package `humanitl` (Linux) or the `Humanitl.app` from the release (macOS).";
 }
 
 /// Sucht einen Code im Register.

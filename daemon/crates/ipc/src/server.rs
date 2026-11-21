@@ -177,6 +177,9 @@ pub struct IpcServer {
     /// Die Änderungen der Konfiguration für `FlowEvent.config_changed`
     /// (HUM-534).
     config_events: crate::config_events::ConfigEvents,
+    /// Die Bitten von `humanitl app` an die verbundene Desktop-App
+    /// (HUM-539, `Projects.open_in_app`).
+    app_requests: crate::app_requests::AppRequests,
     /// Die Sperren einer Firmenvorgabe; `None` heißt die Vorgabe an den
     /// Pfaden dieses Dienstes ([`humanitl_config::PolicyLocks::of_policy`]).
     /// Tests setzen eine.
@@ -357,6 +360,7 @@ impl IpcServer {
             intercept: None,
             egress: crate::egress::route(&config.egress),
             config_events: crate::config_events::ConfigEvents::new(),
+            app_requests: crate::app_requests::AppRequests::new(),
             policy_locks: None,
         }
     }
@@ -969,6 +973,14 @@ impl IpcServer {
         // wie die der Regeln: ein Abonnement je Client.
         let merged: Pin<Box<dyn tokio_stream::Stream<Item = Vec<_>> + Send>> =
             Box::pin(merged.merge(self.config_events.stream().map(|event| vec![event])));
+        // Die Bitten von `humanitl app` (HUM-539) bekommt nur der Strom der
+        // Desktop-App; sein Empfänger zählt sie als verbunden.
+        let merged: Pin<Box<dyn tokio_stream::Stream<Item = Vec<_>> + Send>> =
+            if request.desktop_app {
+                Box::pin(merged.merge(self.app_requests.stream().map(|event| vec![event])))
+            } else {
+                merged
+            };
         Box::pin(tokio_stream::iter(self.backlog(request)).chain(Flatten::new(merged)))
     }
 
@@ -2603,6 +2615,15 @@ impl v1::humanitl_server::Humanitl for IpcServer {
     ) -> Result<Response<v1::ProjectsResponse>, Status> {
         let deadline = crate::deadline::search_deadline(request.metadata(), Instant::now());
         let request = request.into_inner();
+        // Die Bitte an die App braucht weder Aufzeichnung noch Register
+        // (HUM-539).
+        if let Some(v1::projects_request::Op::OpenInApp(asked)) = &request.op {
+            return self
+                .app_requests
+                .open_in_app(asked)
+                .map(Response::new)
+                .map_err(|diagnostic| diagnostic_to_status(&diagnostic));
+        }
         let saving = matches!(&request.op, Some(v1::projects_request::Op::SaveChoice(_)));
         let response = crate::projects::answer(self.projects_context(deadline), request)
             .await
@@ -5023,5 +5044,56 @@ api_key_ref = "file:cloud"
 
         let unknown = server.probe_key(&home, "", true, "nope").await.unwrap_err();
         assert_eq!(unknown.code, codes::CONFIG_021);
+    }
+
+    /// `humanitl app` (HUM-539): Nur ein Strom mit `desktop_app` gilt als
+    /// verbundene App und bekommt die Bitte; ein anderer Abonnent, etwa das
+    /// CLI unter `--ask`, weder das eine noch das andere. Ohne Aufzeichnung,
+    /// denn die Bitte braucht das Register nicht.
+    #[tokio::test]
+    async fn open_in_app_reaches_only_a_desktop_app_stream() {
+        use tokio_stream::StreamExt as _;
+
+        let limits = Limits::default();
+        let queue = Arc::new(HoldQueue::with_registry(
+            &limits,
+            Arc::new(FlowRegistry::new(&limits)),
+        ));
+        let server = IpcServer::new(Arc::clone(&queue), &Config::default(), None);
+        let ask = |path: &str| v1::ProjectsRequest {
+            op: Some(v1::projects_request::Op::OpenInApp(
+                v1::projects_request::OpenInApp {
+                    path: path.to_owned(),
+                },
+            )),
+        };
+
+        let _cli = server.event_stream(&v1::SubscribeRequest::default());
+        let alone = server.projects(Request::new(ask("/home/dev/api"))).await;
+        assert!(
+            !alone.unwrap().into_inner().app_reached,
+            "a stream without desktop_app is no app"
+        );
+
+        let mut app = server.event_stream(&v1::SubscribeRequest {
+            desktop_app: true,
+            ..v1::SubscribeRequest::default()
+        });
+        let reached = server.projects(Request::new(ask("/home/dev/api"))).await;
+        assert!(reached.unwrap().into_inner().app_reached);
+        let event = tokio::time::timeout(std::time::Duration::from_secs(5), async {
+            loop {
+                let event = app.next().await.unwrap().unwrap();
+                if let Some(v1::flow_event::Event::OpenInApp(open)) = event.event {
+                    return open.path;
+                }
+            }
+        })
+        .await
+        .unwrap();
+        assert_eq!(event, "/home/dev/api");
+
+        let relative = server.projects(Request::new(ask("api"))).await.unwrap_err();
+        assert_eq!(relative.code(), tonic::Code::InvalidArgument);
     }
 }

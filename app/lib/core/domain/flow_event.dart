@@ -153,6 +153,15 @@ sealed class FlowEvent with _$FlowEvent {
     @Default('') String projectId,
   }) = FlowEventConfigChanged;
 
+  /// `humanitl app [PATH]` asks this app to bring its start window forward
+  /// with [path] preselected (HUM-539); empty [path] means no preselection.
+  /// Only the stream of the desktop app carries it. Belongs to no flow and
+  /// starts nothing: a start still needs "Start" in the window.
+  const factory FlowEvent.openInApp({
+    required DateTime at,
+    @Default('') String path,
+  }) = FlowEventOpenInApp;
+
   const FlowEvent._();
 
   /// The flow this event is about, or null for session-wide events.
@@ -178,7 +187,8 @@ sealed class FlowEvent with _$FlowEvent {
     FlowEventRulesChanged() ||
     FlowEventAgentAsk() ||
     FlowEventInterceptChanged() ||
-    FlowEventConfigChanged() => null,
+    FlowEventConfigChanged() ||
+    FlowEventOpenInApp() => null,
   };
 }
 

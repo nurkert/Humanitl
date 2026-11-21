@@ -104,6 +104,11 @@ class FakeWindow implements WindowPort {
   @override
   Future<void> reveal() async => reveals++;
 
+  /// Ob der Schreibtisch das Fenster selbst nach vorn holen lässt; falsch
+  /// spielt Wayland (HUM-539).
+  @override
+  bool raisesItself = true;
+
   @override
   Future<void> quit() async {
     quits++;
@@ -182,6 +187,13 @@ class FakeNotifications implements NotificationPort {
 
   @override
   Future<void> withdraw() async => withdrawals++;
+
+  /// Jede Meldung ohne Anfrage, als `(summary, body)` (HUM-539).
+  final List<(String, String)> announcements = <(String, String)>[];
+
+  @override
+  Future<void> announce(String summary, String body) async =>
+      announcements.add((summary, body));
 
   @override
   Future<void> dispose() async {

@@ -54,6 +54,18 @@ class MacNotificationPort implements NotificationPort {
   @override
   Future<void> withdraw() => _quietly('withdraw');
 
+  /// Without a request and without buttons: a press on it names no request,
+  /// and the Runner's answer is dropped for the empty `flowId`. macOS lets
+  /// the window come forward by itself, so the shell rarely asks for it.
+  @override
+  Future<void> announce(String summary, String body) =>
+      _quietly('post', <String, Object>{
+        'flowId': '',
+        'title': summary,
+        'body': body,
+        'actions': const <Map<String, String>>[],
+      });
+
   @override
   Future<void> dispose() async {
     _channel.setMethodCallHandler(null);
