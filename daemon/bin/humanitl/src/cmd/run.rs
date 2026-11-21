@@ -217,8 +217,8 @@ pub(crate) async fn launch(
         llm_server: run_server(ctx, info.proto_minor)?,
         // Was der Mensch zum Hinweis auf Cloud-Inferenz gesagt hat, setzt
         // `cloud::prepare_start` (HUM-516).
-        acknowledge_cloud_inference: None,
-        cloud_notice_shown: None,
+        // `project_id` bleibt leer: `humanitl run` startet mit dem Ordner.
+        ..v1::sandbox_request::Start::default()
     };
 
     let session = session_value(ctx, args, &work_dir, config);

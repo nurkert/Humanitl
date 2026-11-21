@@ -45,6 +45,7 @@ import 'package:flutter_riverpod/flutter_riverpod.dart';
 import 'package:flutter_riverpod/misc.dart';
 import 'package:flutter_test/flutter_test.dart';
 import 'package:humanitl/app.dart';
+import 'package:humanitl/core/ui/session_view.dart';
 import 'package:humanitl/core/domain/domain.dart';
 import 'package:humanitl/core/ipc/client_providers.dart';
 import 'package:humanitl/core/ipc/connection.dart';
@@ -139,7 +140,16 @@ void main() {
     final LaunchOptions options = LaunchOptions.resolve(const <String>[]);
     await tester.pumpWidget(
       ProviderScope(
-        overrides: <Override>[launchOptionsProvider.overrideWithValue(options)],
+        overrides: <Override>[
+          launchOptionsProvider.overrideWithValue(options),
+          // Die App in der Ansicht einer Sitzung (HUM-537): Dieser Test
+          // handelt von der Shell, nicht vom Startfenster davor.
+          sessionViewProvider.overrideWith(
+            () => SessionViewNotifier(
+              const SessionView(projectPath: '/fake/project'),
+            ),
+          ),
+        ],
         child: RepaintBoundary(key: screenshotKey, child: const HumanitlApp()),
       ),
     );

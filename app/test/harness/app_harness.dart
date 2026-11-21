@@ -12,9 +12,14 @@ import 'package:humanitl/core/ipc/daemon_client.dart';
 import 'package:humanitl/core/ipc/client_providers.dart';
 import 'package:humanitl/features/shell/providers/connection.dart';
 
+import 'session_view.dart';
 import 'ui_state.dart';
 
 /// Baut die App über [client] und pumpt, bis das Verbindungs-Gate steht.
+///
+/// Die App steht dabei in der Ansicht einer Sitzung ([inSessionView]); mit
+/// [startWindow] öffnet sie wie beim echten Start ins Startfenster
+/// (HUM-537).
 Future<void> pumpApp(
   WidgetTester tester, {
   required DaemonClient client,
@@ -23,6 +28,7 @@ Future<void> pumpApp(
   List<Override> overrides = const <Override>[],
   Override? uiState,
   Size size = const Size(1280, 800),
+  bool startWindow = false,
 }) async {
   await tester.binding.setSurfaceSize(size);
   addTearDown(() => tester.binding.setSurfaceSize(null));
@@ -35,6 +41,7 @@ Future<void> pumpApp(
         // den Zwei-Sekunden-Takt pruefen will, setzt ihn (HUM-044).
         connectionReconnectProvider.overrideWithValue(reconnect),
         uiState ?? uiStateOverride(),
+        if (!startWindow) inSessionView(),
         ...overrides,
       ],
       child: const HumanitlApp(),

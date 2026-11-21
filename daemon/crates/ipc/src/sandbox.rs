@@ -2162,11 +2162,48 @@ impl Inner {
     /// Konfiguration dieser Sitzung. Erst wenn beides durchkommt, gelten die
     /// Regeln der Sitzung, ihre Haltefrist und ihre Durchreiche; ein halb
     /// übernommener Wunsch hinterließe einen Zustand, den niemand gewählt hat.
+    /// Löst `project_id` eines Starts in den Ordner des Registers auf
+    /// (HUM-537). Lehnt der Daemon ab, schickt er Befund und
+    /// `Status(failed)` wie bei einem Ordner, den der Start ablehnt, und die
+    /// Antwort ist `false`.
+    async fn resolve_project_id_or_refuse(
+        &self,
+        start: &mut v1::sandbox_request::Start,
+        tx: &mpsc::Sender<v1::SandboxEvent>,
+    ) -> bool {
+        let Err(diagnostic) = self.resolve_project_id(start).await else {
+            return true;
+        };
+        self.refuse_before_plan(&diagnostic, tx).await;
+        false
+    }
+
+    /// Ein Start, den der Daemon ablehnt, bevor es einen Plan gibt: der
+    /// Befund, dann `Status(failed)`.
+    async fn refuse_before_plan(
+        &self,
+        diagnostic: &Diagnostic,
+        tx: &mpsc::Sender<v1::SandboxEvent>,
+    ) {
+        let _ = tx.send(diagnostic_event(diagnostic)).await;
+        let _ = tx
+            .send(status_event(self.failed_status(
+                &v1::sandbox_request::Plan::default(),
+                diagnostic,
+            )))
+            .await;
+    }
+
     async fn start(
         self: Arc<Self>,
-        start: v1::sandbox_request::Start,
+        mut start: v1::sandbox_request::Start,
         tx: mpsc::Sender<v1::SandboxEvent>,
     ) {
+        // Ein Projekt an seiner Kennung (HUM-537): erst der Ordner aus dem
+        // Register, dann alles Weitere wie bei einem Start mit Ordner.
+        if !self.resolve_project_id_or_refuse(&mut start, &tx).await {
+            return;
+        }
         let plan = plan_of(&start);
         // `direct` or `disposable` (HUM-350); a word that is neither ends the
         // start before it claims anything. The buffer is empty here.
@@ -2206,13 +2243,7 @@ impl Inner {
         let work_dir = match self.remember(&plan) {
             Ok(work_dir) => work_dir,
             Err(diagnostic) => {
-                let _ = tx.send(diagnostic_event(&diagnostic)).await;
-                let _ = tx
-                    .send(status_event(self.failed_status(
-                        &v1::sandbox_request::Plan::default(),
-                        &diagnostic,
-                    )))
-                    .await;
+                self.refuse_before_plan(&diagnostic, &tx).await;
                 return;
             }
         };

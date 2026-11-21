@@ -56,6 +56,8 @@ class StallingSecondStartClient extends SandboxTestClient {
     WorkMode? workMode,
     SandboxMode? sandboxMode,
     String? backend,
+    String? workDir,
+    String? projectId,
   }) async* {
     startCount++;
     if (startCount > 1) {
@@ -71,6 +73,8 @@ class StallingSecondStartClient extends SandboxTestClient {
       workMode: workMode,
       sandboxMode: sandboxMode,
       backend: backend,
+      workDir: workDir,
+      projectId: projectId,
     );
   }
 }

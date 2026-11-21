@@ -77,6 +77,11 @@ abstract class DaemonInfo with _$DaemonInfo {
   bool get knowsCloudInference =>
       isFake || (protoMajor == 1 && protoMinor >= 43);
 
+  /// Whether a start can name a project by its id (`Start.project_id`,
+  /// contract 1.58, HUM-537). An older daemon ignores the field and would
+  /// start in the stored folder; the app then sends the folder instead.
+  bool get startsByProjectId => isFake || (protoMajor == 1 && protoMinor >= 58);
+
   /// True when a session is running.
   bool get hasSession => sessionId.isNotEmpty;
 

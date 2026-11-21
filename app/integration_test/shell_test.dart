@@ -7,6 +7,7 @@
 import 'package:flutter_riverpod/flutter_riverpod.dart';
 import 'package:flutter_test/flutter_test.dart';
 import 'package:humanitl/app.dart';
+import 'package:humanitl/core/ui/session_view.dart';
 import 'package:humanitl/core/ipc/fake_daemon_client.dart';
 import 'package:humanitl/core/ipc/client_providers.dart';
 import 'package:humanitl/features/shell/section.dart';
@@ -22,7 +23,16 @@ void main() {
   ) async {
     await tester.pumpWidget(
       ProviderScope(
-        overrides: [daemonClientProvider.overrideWithValue(FakeDaemonClient())],
+        overrides: [
+          daemonClientProvider.overrideWithValue(FakeDaemonClient()),
+          // Die App in der Ansicht einer Sitzung (HUM-537): Dieser Test
+          // handelt von der Shell, nicht vom Startfenster davor.
+          sessionViewProvider.overrideWith(
+            () => SessionViewNotifier(
+              const SessionView(projectPath: FakeDaemonClient.defaultWorkDir),
+            ),
+          ),
+        ],
         child: const HumanitlApp(),
       ),
     );

@@ -280,4 +280,21 @@ abstract final class ClientDiagnostics {
       fix: FixAction.copyCommand(command: runInFolderCommand),
     );
   }
+
+  /// The command that restarts the background service after an update.
+  static const String daemonRestartCommand = 'humanitl daemon restart';
+
+  /// A start of a known project against a daemon before contract 1.58
+  /// (HUM-537): it cannot take the project by its id, and the path the
+  /// register shows is cleaned for display, so sending it could start
+  /// another folder. Nothing starts; the fix restarts the daemon.
+  static Diagnostic projectStartDaemonTooOld(String version) => Diagnostic(
+    code: 'CLI_004',
+    severity: Severity.error,
+    why:
+        'the background service speaks contract $version and cannot start '
+        'a project by its id (that needs 1.58); the daemon is older than the '
+        'app, restart it with `$daemonRestartCommand` after the update',
+    fix: const FixAction.copyCommand(command: daemonRestartCommand),
+  );
 }

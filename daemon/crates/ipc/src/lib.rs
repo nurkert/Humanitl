@@ -51,7 +51,11 @@ pub const PROTO_MAJOR: u32 = 1;
 /// Minor-Version des Vertrags. Steigt bei jeder additiven Änderung
 /// (`Info.proto_minor`).
 ///
-/// `57` seit den Werten der Sitzung für Vorschlag, Kommandozeile und Ziehen
+/// `58` seit dem Start an der Kennung eines Projekts (HUM-537):
+/// `SandboxRequest.Start.project_id` nennt das Projekt statt seines
+/// Ordners, und der Daemon nimmt den Pfad aus der Zeile des Registers; das
+/// Startfenster der App schickt nie den gesäuberten Pfad der Anzeige zurück.
+/// `57` waren die Werte der Sitzung für Vorschlag, Kommandozeile und Ziehen
 /// (HUM-567): `ProjectsRequest.Proposal.cli_overrides` trägt dieselben Werte
 /// wie `Start.cli_overrides`, die neue Operation `SandboxRequest.argv_plan`
 /// die Kommandozeile eines Starts mit einem `Plan`, und `argv`,
@@ -321,7 +325,7 @@ pub const PROTO_MAJOR: u32 = 1;
 /// Spiegelung in `app/lib/core/ipc/proto_version.dart` darf nachziehen: eine
 /// abweichende Minor ist verabredetermaßen kein Grund, die Verbindung
 /// abzulehnen (`docs/PROTOCOL.md`).
-pub const PROTO_MINOR: u32 = 57;
+pub const PROTO_MINOR: u32 = 58;
 
 /// Metadata-Schlüssel für das Session-Token aus
 /// `$XDG_RUNTIME_DIR/humanitl/token` (CONVENTIONS.md 3.6).

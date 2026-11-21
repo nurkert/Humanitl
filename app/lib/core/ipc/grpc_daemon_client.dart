@@ -319,6 +319,8 @@ class GrpcDaemonClient implements DaemonClient {
     WorkMode? workMode,
     SandboxMode? sandboxMode,
     String? backend,
+    String? workDir,
+    String? projectId,
   }) {
     final pb.SandboxRequest_Plan plan = _plan(profile, workMode);
     return _sandbox(
@@ -326,6 +328,9 @@ class GrpcDaemonClient implements DaemonClient {
         ..start = (pb.SandboxRequest_Start()
           ..profile = plan.profile
           ..workMode = plan.workMode
+          // Das Projekt geht mit dem Start (HUM-537, ADR-0024 Punkt 2).
+          ..workDir = workDir ?? ''
+          ..projectId = projectId ?? ''
           // Leer heißt: `sandbox.mode` aus der Konfiguration (HUM-350).
           ..sandboxMode = sandboxMode?.wire ?? ''
           // Das Backend nur dieser Sitzung (HUM-440); ohne Wahl kein
@@ -1148,6 +1153,45 @@ class GrpcDaemonClient implements DaemonClient {
       ),
     );
   }
+
+  @override
+  Future<List<ProjectEntry>> listProjects() async {
+    final pb.ProjectsResponse response = await _projects(
+      pb.ProjectsRequest()..list = pb.ProjectsRequest_List(),
+    );
+    return List<ProjectEntry>.unmodifiable(
+      response.projects.map((pb.ProjectEntry entry) => entry.toDomain()),
+    );
+  }
+
+  @override
+  Future<CleanupPlan> projectsCleanupPlan(CleanupSelection selection) async {
+    final pb.ProjectsResponse response = await _projects(
+      pb.ProjectsRequest()
+        ..cleanupPlan = (pb.ProjectsRequest_CleanupPlan()
+          ..selection = selection.toProto()),
+    );
+    return response.plan.toDomain();
+  }
+
+  @override
+  Future<CleanupResult> projectsCleanup(
+    CleanupSelection selection,
+    String digest,
+  ) async {
+    final pb.ProjectsResponse response = await _projects(
+      pb.ProjectsRequest()
+        ..cleanup = (pb.ProjectsRequest_Cleanup()
+          ..selection = selection.toProto()
+          ..digest = digest),
+    );
+    return response.cleaned.toDomain();
+  }
+
+  /// One `Projects` call (HUM-537).
+  Future<pb.ProjectsResponse> _projects(pb.ProjectsRequest request) => _unary(
+    (CallOptions options) => _stub.projects(request, options: options),
+  );
 
   @override
   Future<void> close() => _channel.shutdown();

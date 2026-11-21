@@ -56,6 +56,8 @@ class RefusingClient extends SandboxTestClient {
     WorkMode? workMode,
     SandboxMode? sandboxMode,
     String? backend,
+    String? workDir,
+    String? projectId,
   }) async* {
     starts++;
     sandbox = sandbox.copyWith(

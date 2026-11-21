@@ -45,12 +45,14 @@ import 'package:humanitl/features/setup/providers/discover_provider.dart';
 import 'package:humanitl/features/shell/section.dart';
 
 import '../harness/ui_state.dart';
+import '../harness/session_view.dart';
 import 'support/golden_variants.dart';
 
 /// Die App über [client], im Theme [mode].
 Widget setup(HThemeMode mode, FakeDaemonClient client) => ProviderScope(
   overrides: <Override>[
     uiStateOverride(),
+    inSessionView(),
     daemonClientProvider.overrideWithValue(client),
     connectionHeartbeatProvider.overrideWithValue(null),
     connectionReconnectProvider.overrideWithValue(null),
@@ -66,6 +68,7 @@ Widget setupVariant(GoldenVariant variant, FakeDaemonClient client) =>
     ProviderScope(
       overrides: <Override>[
         uiStateOverride(),
+        inSessionView(),
         daemonClientProvider.overrideWithValue(client),
         connectionHeartbeatProvider.overrideWithValue(null),
         connectionReconnectProvider.overrideWithValue(null),
@@ -264,6 +267,7 @@ void main() {
       builder: () => ProviderScope(
         overrides: <Override>[
           uiStateOverride(),
+          inSessionView(),
           daemonClientProvider.overrideWithValue(
             FakeDaemonClient()..doctorReport = fakeDoctorOk(),
           ),

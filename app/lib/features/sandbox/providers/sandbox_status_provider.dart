@@ -12,10 +12,12 @@ import 'dart:async';
 import 'package:riverpod_annotation/riverpod_annotation.dart';
 
 import '../../../core/domain/domain.dart';
+import '../../../core/ipc/client_diagnostics.dart';
 import '../../../core/ipc/client_providers.dart';
 import '../../../core/ipc/config_providers.dart';
 import '../../../core/ipc/connection.dart';
 import '../../../core/ipc/daemon_client.dart';
+import '../../../core/ui/session_view.dart';
 
 import 'backend_choice.dart';
 import 'closed_failures.dart';
@@ -271,6 +273,9 @@ class SandboxStatusNotifier extends _$SandboxStatusNotifier {
     if (mine != _chooses) {
       return;
     }
+    // Der gewählte Ordner ist das Projekt des nächsten Starts dieser
+    // Sitzungsansicht (HUM-537).
+    ref.read(sessionViewProvider.notifier).retarget(workDir);
     _plannedWorkDir = workDir;
     await _apply(
       (DaemonClient client) => client.planSandbox(backend: _backend),
@@ -315,11 +320,26 @@ class SandboxStatusNotifier extends _$SandboxStatusNotifier {
   /// The backend chosen on the screen goes along the same way
   /// ([sandboxBackendOverride], HUM-440): only when it differs from
   /// `sandbox.backend`, as `Start.cli_overrides`.
-  Future<void> start() {
+  Future<void> start() async {
+    final SessionView? view = ref.read(sessionViewProvider);
+    final bool fromRegister = view != null && view.projectId.isNotEmpty;
+    DaemonInfo? info = ref.read(daemonInfoProvider).value;
+    // Ein Projekt des Registers startet nur an seiner Kennung (HUM-537);
+    // ob der Daemon sie kennt, steht erst mit `GetInfo` fest. Bis dahin
+    // wartet der Start, statt auf den Pfad zurückzufallen.
+    if (fromRegister && info == null) {
+      try {
+        info = await ref.read(daemonInfoProvider.future);
+      } on Object {
+        info = null;
+      }
+      if (!ref.mounted) {
+        return;
+      }
+    }
     // Ein Daemon vor 1.43 (nach einem Update noch nicht neu gestartet) kennt
     // weder den Hinweis auf Cloud-Inferenz noch sein Tor; gegen ihn startet
     // die App keine Sitzung, sie sagt, wie er neu startet (HUM-516, Review).
-    final DaemonInfo? info = ref.read(daemonInfoProvider).value;
     if (info != null && !info.knowsCloudInference) {
       final SandboxStatus now = state.value ?? const SandboxStatus();
       state = AsyncValue<SandboxStatus>.data(
@@ -330,7 +350,25 @@ class SandboxStatusNotifier extends _$SandboxStatusNotifier {
           ],
         ),
       );
-      return Future<void>.value();
+      return;
+    }
+    // Ein Daemon vor 1.58 kennt `Start.project_id` nicht. Der Pfad aus
+    // `Projects` ist für die Anzeige gesäubert und träfe womöglich einen
+    // anderen Ordner; die App sagt deshalb, wie der Daemon neu startet,
+    // und startet nichts (HUM-537, Review).
+    if (fromRegister && !(info?.startsByProjectId ?? false)) {
+      final SandboxStatus now = state.value ?? const SandboxStatus();
+      state = AsyncValue<SandboxStatus>.data(
+        now.copyWith(
+          diagnostics: <Diagnostic>[
+            ...now.diagnostics,
+            ClientDiagnostics.projectStartDaemonTooOld(
+              info?.protoVersion ?? '?',
+            ),
+          ],
+        ),
+      );
+      return;
     }
     final bool offered = info?.offersDisposable ?? false;
     final SandboxMode? choice = offered
@@ -345,9 +383,19 @@ class SandboxStatusNotifier extends _$SandboxStatusNotifier {
     // `sandbox.backend` abweicht und wählbar ist, geht als `cli_overrides`
     // mit, dieselbe, die der Schnappschuss als `Plan.backend` trägt.
     final String? backend = _backend;
+    // Das Projekt geht mit dem Start (HUM-537, ADR-0024 Punkt 2): das der
+    // Sitzungsansicht, nie still `sandbox.work_dir`. Ein Projekt des
+    // Registers an seiner Kennung, denn sein Pfad aus `Projects` ist für die
+    // Anzeige gesäubert; ein Ordner aus dem Ordnerdialog als sein Pfad.
+    final String? workDir = fromRegister ? null : view?.projectPath;
+    final String? projectId = fromRegister ? view.projectId : null;
     return _apply(
-      (DaemonClient client) =>
-          client.startSandbox(sandboxMode: mode, backend: backend),
+      (DaemonClient client) => client.startSandbox(
+        sandboxMode: mode,
+        backend: backend,
+        workDir: workDir,
+        projectId: projectId,
+      ),
       call: SandboxCall.start,
     );
   }

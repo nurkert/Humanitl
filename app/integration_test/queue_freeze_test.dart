@@ -63,6 +63,7 @@ import 'package:flutter_riverpod/flutter_riverpod.dart';
 import 'package:flutter_riverpod/misc.dart';
 import 'package:flutter_test/flutter_test.dart';
 import 'package:humanitl/app.dart';
+import 'package:humanitl/core/ui/session_view.dart';
 import 'package:humanitl/core/ipc/client_providers.dart';
 import 'package:humanitl/core/ipc/connection.dart';
 import 'package:humanitl/core/ipc/launch_options.dart';
@@ -419,6 +420,13 @@ void main() {
         overrides: <Override>[
           launchOptionsProvider.overrideWithValue(
             LaunchOptions(socketPath: socket),
+          ),
+          // Die App in der Ansicht einer Sitzung (HUM-537): Dieser Test
+          // handelt von der Shell, nicht vom Startfenster davor.
+          sessionViewProvider.overrideWith(
+            () => SessionViewNotifier(
+              const SessionView(projectPath: '/fake/project'),
+            ),
           ),
         ],
         child: const HumanitlApp(),

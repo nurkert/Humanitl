@@ -32,6 +32,7 @@ import 'package:humanitl/features/tray/providers/notice.dart';
 
 import '../tray/fixtures.dart';
 import '../../harness/ui_state.dart';
+import '../../harness/session_view.dart';
 
 /// Baut die App über [client] und [desktop], ohne Fokus, damit eine Meldung
 /// hinausgeht.
@@ -51,6 +52,7 @@ Future<ProviderContainer> pumpNotified(
   final ProviderContainer container = ProviderContainer(
     overrides: <Override>[
       uiStateOverride(),
+      inSessionView(),
       daemonClientProvider.overrideWithValue(client),
       connectionHeartbeatProvider.overrideWithValue(heartbeat),
       connectionReconnectProvider.overrideWithValue(null),

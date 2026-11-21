@@ -6,6 +6,7 @@ import 'package:humanitl/features/shell/providers/connection.dart';
 import 'package:humanitl/main.dart';
 
 import 'harness/ui_state.dart';
+import 'harness/session_view.dart';
 
 void main() {
   testWidgets('app boots', (tester) async {
@@ -13,6 +14,7 @@ void main() {
       ProviderScope(
         overrides: [
           uiStateOverride(),
+          inSessionView(),
           daemonClientProvider.overrideWithValue(FakeDaemonClient()),
           connectionHeartbeatProvider.overrideWithValue(null),
         ],

@@ -52,6 +52,8 @@ class NeverRanClient extends SandboxTestClient {
     WorkMode? workMode,
     SandboxMode? sandboxMode,
     String? backend,
+    String? workDir,
+    String? projectId,
   }) async* {
     // Der Daemon nimmt die Momentaufnahme `running` erst nach der
     // Isolationsprüfung; ein `exec`, das nach Millisekunden scheitert, ist
@@ -59,6 +61,8 @@ class NeverRanClient extends SandboxTestClient {
     await for (final SandboxUpdate update in super.startSandbox(
       profile: profile,
       workMode: workMode,
+      workDir: workDir,
+      projectId: projectId,
     )) {
       if (update is SandboxUpdateStatus &&
           update.status.state == SandboxState.running) {

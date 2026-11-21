@@ -34,6 +34,7 @@ import 'package:humanitl/features/shell/providers/connection.dart';
 import '../features/intercept/fixtures.dart';
 import '../features/sandbox/harness.dart';
 import '../harness/ui_state.dart';
+import '../harness/session_view.dart';
 import 'intercept_golden_test.dart' as intercept;
 import 'support/golden_variants.dart';
 
@@ -45,6 +46,7 @@ Widget app(
 }) => ProviderScope(
   overrides: <Override>[
     uiStateOverride(),
+    inSessionView(),
     daemonClientProvider.overrideWithValue(client),
     connectionHeartbeatProvider.overrideWithValue(null),
     connectionReconnectProvider.overrideWithValue(null),
@@ -150,6 +152,7 @@ void main() {
         variant: variant,
         overrides: <Override>[
           uiStateOverride(),
+          inSessionView(),
           daemonClientProvider.overrideWithValue(client),
           connectionHeartbeatProvider.overrideWithValue(null),
           nowProvider.overrideWith(() => FixedNow(intercept.goldenNow)),

@@ -118,6 +118,8 @@ class SandboxTestClient extends FakeDaemonClient {
     WorkMode? workMode,
     SandboxMode? sandboxMode,
     String? backend,
+    String? workDir,
+    String? projectId,
   }) {
     starts++;
     return super.startSandbox(
@@ -125,6 +127,8 @@ class SandboxTestClient extends FakeDaemonClient {
       workMode: workMode,
       sandboxMode: sandboxMode,
       backend: backend,
+      workDir: workDir,
+      projectId: projectId,
     );
   }
 

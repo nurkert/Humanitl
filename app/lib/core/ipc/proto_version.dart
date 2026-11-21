@@ -156,7 +156,10 @@ abstract final class ProtoVersion {
   /// section "Agents" shows `AgentsStatus.encryption` as a switch and calls
   /// `AgentsRequest.set_encryption`, and each card says whether its
   /// credential file is encrypted (HUM-523). 55 has no reader here.
-  static const int minor = 56;
+  /// Raised to 58 with the start window: a start of a known project sends
+  /// `Start.project_id`, and the daemon takes the folder from its register
+  /// instead of the cleaned display path (HUM-537). 57 has no reader here.
+  static const int minor = 58;
 
   /// `major.minor` as text.
   static const String text = '$major.$minor';

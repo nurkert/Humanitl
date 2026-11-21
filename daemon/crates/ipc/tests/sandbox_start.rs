@@ -179,6 +179,7 @@ impl Fixture {
                 llm_server: String::new(),
                 acknowledge_cloud_inference: None,
                 cloud_notice_shown: None,
+                project_id: String::new(),
             })),
         }
     }

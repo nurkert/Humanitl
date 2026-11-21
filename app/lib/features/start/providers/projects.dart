@@ -1,0 +1,201 @@
+/// The projects of the start window and the starts made from it (HUM-537).
+///
+/// Everything here is a call to the daemon and its answer (ADR-018): the list
+/// is `Projects(list)` in the daemon's order, a start is `Sandbox(Start)` with
+/// the project's folder, and whether it may start the daemon decides
+/// (`CLI_005` while a session runs, `SANDBOX_053` without a folder). The
+/// window only switches to the session view once the daemon reports the
+/// session running.
+library;
+
+import 'package:flutter_riverpod/flutter_riverpod.dart';
+
+import '../../../core/domain/domain.dart';
+import '../../../core/ipc/client_diagnostics.dart';
+import '../../../core/ipc/client_providers.dart';
+import '../../../core/ipc/connection.dart';
+import '../../../core/ipc/daemon_client.dart';
+import '../../../core/ui/session_view.dart';
+
+/// `Projects(list)`, newest start first, as the daemon sorted it.
+///
+/// Disposed with the start window: coming back from a session view reads
+/// the list again, with the session that runs now.
+final AsyncNotifierProvider<ProjectsNotifier, List<ProjectEntry>>
+projectsProvider =
+    AsyncNotifierProvider.autoDispose<ProjectsNotifier, List<ProjectEntry>>(
+      ProjectsNotifier.new,
+    );
+
+/// The notifier behind [projectsProvider].
+class ProjectsNotifier extends AsyncNotifier<List<ProjectEntry>> {
+  @override
+  Future<List<ProjectEntry>> build() =>
+      ref.watch(daemonClientProvider).listProjects();
+
+  /// Reads the list again: after a start, after a cleanup (a deleted
+  /// project must not stay in an open list) and on "Try again".
+  Future<void> reload() async {
+    state = await AsyncValue.guard(
+      () => ref.read(daemonClientProvider).listProjects(),
+    );
+  }
+}
+
+/// What a start from the start window is doing.
+final class StartLaunch {
+  /// Creates the state.
+  const StartLaunch({
+    this.busyPath,
+    this.diagnostics = const <Diagnostic>[],
+    this.endedSilently = false,
+  });
+
+  /// The folder a start is under way for, or null.
+  final String? busyPath;
+
+  /// What the daemon said against the last start.
+  final List<Diagnostic> diagnostics;
+
+  /// True when the last start ended without a running session and without
+  /// a finding of the daemon; the window says so instead of nothing.
+  final bool endedSilently;
+}
+
+/// The starts of the start window.
+final NotifierProvider<StartLaunchNotifier, StartLaunch> startLaunchProvider =
+    NotifierProvider.autoDispose<StartLaunchNotifier, StartLaunch>(
+      StartLaunchNotifier.new,
+    );
+
+/// The notifier behind [startLaunchProvider].
+class StartLaunchNotifier extends Notifier<StartLaunch> {
+  @override
+  StartLaunch build() => const StartLaunch();
+
+  /// Opens the session view of the running session in [entry].
+  void attach(ProjectEntry entry) {
+    state = const StartLaunch();
+    ref
+        .read(sessionViewProvider.notifier)
+        .attach(
+          SessionView(projectPath: entry.path, projectId: entry.projectId),
+        );
+  }
+
+  /// Starts a session in the recent project [entry], with its project
+  /// choice: the daemon loads it for the folder of the start.
+  ///
+  /// The project goes out by its id (`Start.project_id`, contract 1.58):
+  /// [ProjectEntry.path] is cleaned for display, and a folder with two
+  /// spaces or a control character in its name would come back as another
+  /// folder. A daemon before 1.58 ignores the id; against it nothing
+  /// starts, and the window says how the daemon restarts. While `GetInfo`
+  /// has not answered yet, the start waits for it rather than guess.
+  Future<void> startRecent(ProjectEntry entry) async {
+    if (!entry.startable || state.busyPath != null) {
+      return;
+    }
+    DaemonInfo? info = ref.read(daemonInfoProvider).value;
+    if (info == null) {
+      state = StartLaunch(busyPath: entry.path);
+      try {
+        info = await ref.read(daemonInfoProvider.future);
+      } on Object {
+        info = null;
+      }
+      if (!ref.mounted) {
+        return;
+      }
+      state = const StartLaunch();
+    }
+    if (!(info?.startsByProjectId ?? false)) {
+      state = StartLaunch(
+        diagnostics: <Diagnostic>[
+          ClientDiagnostics.projectStartDaemonTooOld(info?.protoVersion ?? '?'),
+        ],
+      );
+      return;
+    }
+    return _start(entry.path, projectId: entry.projectId, sendPath: false);
+  }
+
+  /// The hand-off for a folder chosen under "New project" (HUM-537).
+  ///
+  /// HUM-538 puts the first-start screen here: the proposal of the daemon
+  /// for the folder, "Start" with the focus, details behind "Customise".
+  /// Until then the folder starts with exactly the defaults that screen
+  /// would preselect, the resolution of a start without a project choice,
+  /// which is what `Projects.proposal` returns for a folder the register
+  /// does not know. The daemon registers the folder with that first start.
+  /// [path] is the folder exactly as the dialog returned it.
+  Future<void> startNew(String path) => _start(path, sendPath: true);
+
+  /// Starts and switches to the session view as soon as the daemon reports
+  /// the session running.
+  ///
+  /// The daemon keeps the stream of a start open for the whole session
+  /// (`accompany` in `daemon/crates/ipc/src/sandbox.rs`); waiting for its
+  /// end would leave the window on "Starting…" until the agent exits. The
+  /// first `running` without a refusing finding before it is the answer,
+  /// and leaving the loop cancels the subscription. The session does not
+  /// depend on this stream.
+  Future<void> _start(
+    String path, {
+    String projectId = '',
+    required bool sendPath,
+  }) async {
+    if (state.busyPath != null) {
+      return;
+    }
+    state = StartLaunch(busyPath: path);
+    final DaemonClient client = ref.read(daemonClientProvider);
+    final List<Diagnostic> said = <Diagnostic>[];
+    bool running = false;
+    bool refused() => said.any(
+      (Diagnostic d) =>
+          d.severity == Severity.error || d.severity == Severity.blocking,
+    );
+    try {
+      await for (final SandboxUpdate update in client.startSandbox(
+        workDir: sendPath ? path : null,
+        projectId: sendPath || projectId.isEmpty ? null : projectId,
+      )) {
+        switch (update) {
+          case SandboxUpdateDiagnostic(:final Diagnostic diagnostic):
+            said.add(diagnostic);
+          // Ein Befund, der den Start aufhält, hält auch den Wechsel auf:
+          // Bei `CLI_005` meldet der Daemon nach dem Befund den Zustand der
+          // Sitzung, die schon läuft, und die ist nicht die dieses Projekts.
+          case SandboxUpdateStatus(:final SandboxStatus status)
+              when status.state == SandboxState.running && !refused():
+            running = true;
+          default:
+            break;
+        }
+        if (running) {
+          break;
+        }
+      }
+    } on DaemonException catch (error) {
+      said.add(error.diagnostic);
+    }
+    if (!ref.mounted) {
+      return;
+    }
+    if (running) {
+      state = const StartLaunch();
+      ref
+          .read(sessionViewProvider.notifier)
+          .attach(SessionView(projectPath: path, projectId: projectId));
+      return;
+    }
+    state = StartLaunch(
+      diagnostics: List<Diagnostic>.unmodifiable(said),
+      endedSilently: said.isEmpty,
+    );
+  }
+
+  /// Forgets the findings of the last start.
+  void dismiss() => state = const StartLaunch();
+}
