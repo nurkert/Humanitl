@@ -159,7 +159,10 @@ abstract final class ProtoVersion {
   /// Raised to 58 with the start window: a start of a known project sends
   /// `Start.project_id`, and the daemon takes the folder from its register
   /// instead of the cleaned display path (HUM-537). 57 has no reader here.
-  static const int minor = 58;
+  /// Raised to 59 with the first-start screen: "Start" saves the choice of
+  /// a folder the register does not know yet by its path
+  /// (`SaveChoice.path`) before the first start (HUM-538).
+  static const int minor = 59;
 
   /// `major.minor` as text.
   static const String text = '$major.$minor';

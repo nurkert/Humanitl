@@ -586,6 +586,27 @@ abstract class DaemonClient {
     String digest,
   );
 
+  /// `Projects(proposal)`: the first-start screen as data for the folder
+  /// [path] or the project [projectId] (HUM-536, HUM-538). [values] is a
+  /// partial choice laid over the stored one; the proposal comes back
+  /// computed with it, and nothing is saved.
+  Future<StartProposal> projectsProposal({
+    String? path,
+    String? projectId,
+    List<ChoiceValue> values = const <ChoiceValue>[],
+  });
+
+  /// `Projects(save_choice)`: replaces the project choice of [projectId],
+  /// or of the folder [path] (contract 1.59), which the daemon registers
+  /// without a start when it does not know it yet (HUM-538). Send one of
+  /// both. Throws a [DaemonException] with `CONFIG_024` for a choice the
+  /// daemon refuses; nothing is saved then.
+  Future<ProjectEntry> projectsSaveChoice({
+    String? projectId,
+    String? path,
+    required List<ChoiceValue> values,
+  });
+
   /// Releases the transport. The client is unusable afterwards.
   Future<void> close();
 }

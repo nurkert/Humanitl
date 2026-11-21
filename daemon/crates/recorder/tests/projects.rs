@@ -7,7 +7,7 @@ use std::path::{Path, PathBuf};
 use std::time::{Duration, SystemTime, UNIX_EPOCH};
 
 use humanitl_core::{ProjectId, SessionId};
-use humanitl_recorder::{ProjectStart, Recorder, RecorderSettings, SessionMeta};
+use humanitl_recorder::{ProjectFolder, ProjectStart, Recorder, RecorderSettings, SessionMeta};
 
 const DAY: Duration = Duration::from_secs(24 * 60 * 60);
 
@@ -435,4 +435,99 @@ fn seed_v12(
         rusqlite::params![sessions[flowing].0.to_string()],
     )
     .unwrap();
+}
+
+fn folder(path: &str, inode: u64) -> ProjectFolder {
+    ProjectFolder {
+        path: path.to_owned(),
+        dev: 7,
+        ino: inode,
+    }
+}
+
+/// Der Erststart-Bildschirm speichert vor dem ersten Start (HUM-538): Ein
+/// unbekannter Ordner bekommt eine Zeile ohne Start und mit der Wahl; ein
+/// zweites Speichern ändert dieselbe Zeile; der erste Start findet sie,
+/// zählt hoch und lässt die Wahl stehen.
+///
+/// Mutationsbeweis: `insert_unstarted` statt der Suche mit `current_at`
+/// legte beim zweiten Speichern eine zweite aktuelle Zeile an, der
+/// Teilindex lehnt sie ab, und der Test wird rot.
+#[tokio::test]
+async fn a_choice_for_an_unknown_folder_registers_it_without_a_start() {
+    let data = data();
+    let recorder = open(&data);
+    let saved = recorder
+        .save_folder_choice(
+            folder("/home/u/fresh", 31),
+            Some(r#"{"sandbox.mode":"disposable"}"#.to_owned()),
+        )
+        .await
+        .unwrap();
+    assert_eq!(saved.runs, 0);
+    assert_eq!(saved.last_started, None);
+    assert_eq!(saved.last_agent, None);
+    assert_eq!(saved.display_name, "fresh");
+    assert!(saved.choice_saved_at.is_some());
+
+    let again = recorder
+        .save_folder_choice(
+            folder("/home/u/fresh", 31),
+            Some(r#"{"hold.ask_mode":"app"}"#.to_owned()),
+        )
+        .await
+        .unwrap();
+    assert_eq!(again.id, saved.id);
+    assert_eq!(again.choice.as_deref(), Some(r#"{"hold.ask_mode":"app"}"#));
+
+    let daemon = session(&recorder, at(0));
+    let started = recorder
+        .register_project_start(start(daemon, "/home/u/fresh", 31, "claude", at(10)))
+        .await
+        .unwrap();
+    assert!(!started.created);
+    assert_eq!(started.project.id, saved.id);
+    assert_eq!(started.project.runs, 1);
+    assert_eq!(
+        started.project.choice.as_deref(),
+        Some(r#"{"hold.ask_mode":"app"}"#)
+    );
+    assert_eq!(
+        rows(&data.db, "SELECT COUNT(*) FROM projects"),
+        1,
+        "one row for the folder"
+    );
+}
+
+/// Ein anderer Ordner am Pfad eines bekannten Projekts: Speichern ersetzt
+/// die alte Zeile wie ein Start, und die alte behält ihre Wahl.
+#[tokio::test]
+async fn a_choice_for_a_replaced_folder_makes_a_new_project() {
+    let data = data();
+    let recorder = open(&data);
+    let daemon = session(&recorder, at(0));
+    let old = recorder
+        .register_project_start(start(daemon, "/home/u/repo", 100, "claude", at(10)))
+        .await
+        .unwrap()
+        .project;
+    recorder
+        .save_project_choice(old.id, Some(r#"{"hold.ask_mode":"app"}"#.to_owned()))
+        .await
+        .unwrap();
+    let new = recorder
+        .save_folder_choice(
+            folder("/home/u/repo", 200),
+            Some(r#"{"sandbox.mode":"direct"}"#.to_owned()),
+        )
+        .await
+        .unwrap();
+    assert_ne!(new.id, old.id);
+    assert_eq!(new.runs, 0);
+    let history = recorder.get_project(old.id).await.unwrap().unwrap();
+    assert!(history.replaced_at.is_some());
+    assert_eq!(
+        history.choice.as_deref(),
+        Some(r#"{"hold.ask_mode":"app"}"#)
+    );
 }

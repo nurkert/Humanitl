@@ -51,7 +51,11 @@ pub const PROTO_MAJOR: u32 = 1;
 /// Minor-Version des Vertrags. Steigt bei jeder additiven Änderung
 /// (`Info.proto_minor`).
 ///
-/// `58` seit dem Start an der Kennung eines Projekts (HUM-537):
+/// `59` seit dem Speichern der Projektwahl an einem Ordner (HUM-538):
+/// `ProjectsRequest.SaveChoice.path` nennt den Ordner statt der Kennung, und
+/// ein Ordner, den das Register nicht kennt, bekommt seinen Eintrag ohne
+/// Start; der Erststart-Bildschirm speichert so vor dem ersten Start.
+/// `58` war der Start an der Kennung eines Projekts (HUM-537):
 /// `SandboxRequest.Start.project_id` nennt das Projekt statt seines
 /// Ordners, und der Daemon nimmt den Pfad aus der Zeile des Registers; das
 /// Startfenster der App schickt nie den gesäuberten Pfad der Anzeige zurück.
@@ -325,7 +329,7 @@ pub const PROTO_MAJOR: u32 = 1;
 /// Spiegelung in `app/lib/core/ipc/proto_version.dart` darf nachziehen: eine
 /// abweichende Minor ist verabredetermaßen kein Grund, die Verbindung
 /// abzulehnen (`docs/PROTOCOL.md`).
-pub const PROTO_MINOR: u32 = 58;
+pub const PROTO_MINOR: u32 = 59;
 
 /// Metadata-Schlüssel für das Session-Token aus
 /// `$XDG_RUNTIME_DIR/humanitl/token` (CONVENTIONS.md 3.6).

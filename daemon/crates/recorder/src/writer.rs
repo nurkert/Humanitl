@@ -240,6 +240,18 @@ pub enum WriterCmd {
         /// Wohin die Zeile danach geht; `None`, wenn es keine aktuelle gibt.
         reply: oneshot::Sender<Result<Option<ProjectRow>, RecorderError>>,
     },
+    /// Die Projektwahl eines Ordners, den das Register vielleicht noch
+    /// nicht kennt (HUM-538).
+    SaveFolderChoice {
+        /// Der Ordner.
+        folder: Box<crate::projects::ProjectFolder>,
+        /// Die Wahl als JSON-Text; `None` leert sie.
+        choice: Option<String>,
+        /// Wann.
+        at: SystemTime,
+        /// Wohin die Zeile danach geht.
+        reply: oneshot::Sender<Result<ProjectRow, RecorderError>>,
+    },
     /// Einen Aufräumplan berechnen (HUM-533), nach dem offenen Bündel.
     CleanupPlan {
         /// Die Auswahl.
@@ -415,6 +427,20 @@ impl Writer {
                     self.commit();
                     let _ignored = reply.send(crate::projects::register_start(&self.conn, &start));
                 }
+                WriterCmd::SaveFolderChoice {
+                    folder,
+                    choice,
+                    at,
+                    reply,
+                } => {
+                    self.commit();
+                    let _ignored = reply.send(crate::projects::save_folder_choice(
+                        &self.conn,
+                        &folder,
+                        choice.as_deref(),
+                        at,
+                    ));
+                }
                 WriterCmd::SaveProjectChoice {
                     id,
                     choice,
@@ -536,6 +562,7 @@ impl Writer {
             | WriterCmd::Analyze(_)
             | WriterCmd::RegisterProject { .. }
             | WriterCmd::SaveProjectChoice { .. }
+            | WriterCmd::SaveFolderChoice { .. }
             | WriterCmd::CleanupPlan { .. }
             | WriterCmd::Cleanup { .. } => Ok(()),
         };

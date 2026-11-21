@@ -192,7 +192,8 @@ void main() {
   );
 
   testWidgets(
-    'a new project goes through the folder dialog and starts in that folder',
+    'a new project goes through the folder dialog and the first-start '
+    'screen, and starts in that folder by the id the saved choice got',
     (WidgetTester tester) async {
       final FakeDaemonClient client = _client();
       await pumpApp(
@@ -213,8 +214,17 @@ void main() {
       await tester.pump();
       await tester.pump();
 
-      expect(client.startWorkDirs, <String?>['/home/dev/fresh']);
-      expect(client.startProjectIds, <String?>[null]);
+      // Ein unbekannter Ordner bekommt den Erststart-Bildschirm (HUM-538).
+      expect(find.byKey(const Key('first-start')), findsOneWidget);
+      expect(client.startProjectIds, isEmpty);
+      await tester.tap(find.byKey(const Key('first-start-start')));
+      await tester.pump();
+      await tester.pump();
+      await tester.pump();
+
+      expect(client.savedChoices.single.$2, '/home/dev/fresh');
+      expect(client.startWorkDirs, <String?>[null]);
+      expect(client.startProjectIds, <String?>['fake-project-1']);
       expect(find.byType(ShellScreen), findsOneWidget);
     },
   );
@@ -451,7 +461,8 @@ void main() {
   );
   testWidgets(
     'against a daemon before 1.58 a recent project does not start and its '
-    'display path is never sent; a picked folder still starts',
+    'display path is never sent; a picked folder does not start either, '
+    'because the daemon cannot keep its choice',
     (WidgetTester tester) async {
       // Mutationsbeweis: der Rückfall auf `ProjectEntry.path` in
       // `StartLaunchNotifier.startRecent` färbt den Test rot.
@@ -491,8 +502,15 @@ void main() {
       await tester.pump();
       await tester.pump();
       await tester.pump();
-      expect(client.startWorkDirs, <String?>['/home/dev/fresh']);
-      expect(client.startProjectIds, <String?>[null]);
+      await tester.tap(find.byKey(const Key('first-start-start')));
+      await tester.pump();
+      await tester.pump();
+      // Ohne `SaveChoice.path` (1.59) startet der Bildschirm nicht ohne die
+      // Wahl, sondern sagt, wie der Daemon neu startet (HUM-538).
+      expect(client.savedChoices, isEmpty);
+      expect(client.startWorkDirs, isEmpty);
+      expect(client.startProjectIds, isEmpty);
+      expect(find.byKey(const Key('start-diagnostic-CLI_004')), findsOneWidget);
     },
   );
 

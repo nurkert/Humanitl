@@ -137,6 +137,7 @@ fn save(project: &ProjectRow, mode: &str) -> v1::ProjectsRequest {
                     key: "sandbox.work_mode".to_owned(),
                     value: mode.to_owned(),
                 }],
+                ..Default::default()
             },
         )),
     }

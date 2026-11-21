@@ -297,4 +297,19 @@ abstract final class ClientDiagnostics {
         'app, restart it with `$daemonRestartCommand` after the update',
     fix: const FixAction.copyCommand(command: daemonRestartCommand),
   );
+
+  /// The daemon cannot keep the choice of a folder its register does not
+  /// know yet (`SaveChoice.path`, contract 1.59, HUM-538). The first-start
+  /// screen then starts nothing rather than start without the choice the
+  /// person made.
+  static Diagnostic folderChoiceDaemonTooOld(String version) => Diagnostic(
+    code: 'CLI_004',
+    severity: Severity.error,
+    why:
+        'the background service speaks contract $version and cannot keep '
+        'the start choice of a new folder (that needs 1.59); the daemon is '
+        'older than the app, restart it with `$daemonRestartCommand` after '
+        'the update',
+    fix: const FixAction.copyCommand(command: daemonRestartCommand),
+  );
 }

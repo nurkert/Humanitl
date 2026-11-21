@@ -440,6 +440,29 @@ class TestDaemonClient implements DaemonClient {
     String digest,
   ) async => const CleanupResult(deleted: 0, failed: 0, bytesFreed: 0);
 
+  // Der Erststart-Bildschirm (HUM-538) gehört ebenso dem Startfenster.
+  @override
+  Future<StartProposal> projectsProposal({
+    String? path,
+    String? projectId,
+    List<ChoiceValue> values = const <ChoiceValue>[],
+  }) async => StartProposal(
+    path: path ?? '',
+    displayName: '',
+    fields: const <ProposalField>[],
+  );
+
+  @override
+  Future<ProjectEntry> projectsSaveChoice({
+    String? projectId,
+    String? path,
+    required List<ChoiceValue> values,
+  }) async => ProjectEntry(
+    projectId: projectId ?? '',
+    path: path ?? '',
+    displayName: '',
+  );
+
   // Der Doctor und die Endpunkt-Probe (HUM-075, HUM-044) gehören dem
   // Setup-Bildschirm. Der leere Bericht ist hier die ehrliche Antwort: nicht
   // elf grüne Zeilen, sondern gar keine, denn dieser Client hat nichts

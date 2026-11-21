@@ -22,9 +22,11 @@ library;
 import 'package:flutter/widgets.dart';
 import 'package:flutter_riverpod/flutter_riverpod.dart';
 
+import '../../core/domain/domain.dart';
 import '../../core/ui/session_view.dart';
 import '../../core/ui/ui.dart';
 import '../../l10n/l10n.dart';
+import '../sandbox/widgets/cloud_confirm_dialog.dart';
 import '../settings/settings_tab.dart';
 import '../start/start_screen.dart';
 import 'providers/connection.dart';
@@ -66,6 +68,16 @@ class ConnectionGate extends ConsumerWidget {
         ConnectionFrozen(:final info) ||
         ConnectionConnected(:final info) when !inSession => WindowFramed(
           child: StartScreen(
+            cloudConfirm:
+                (
+                  CloudInference cloud,
+                  VoidCallback onCancel,
+                  VoidCallback onConfirm,
+                ) => CloudConfirmDialog(
+                  cloud: cloud,
+                  onCancel: onCancel,
+                  onConfirm: onConfirm,
+                ),
             settings: SettingsTab(
               daemonRestart: DaemonRestartControl(
                 daemonMinor: info.protoMinor,

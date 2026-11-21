@@ -2,9 +2,13 @@
 /// (HUM-537).
 ///
 /// One card per group, one row per project, and every row the same columns:
-/// a tile with the initial, name over path, agent, time, and one button at
-/// the right edge. The columns have fixed widths so that agent, time and
-/// button stand under each other from row to row.
+/// a tile with the initial, name over path, agent, time, "Start choice…"
+/// and one button at the right edge. The columns have fixed widths so that
+/// agent, time and buttons stand under each other from row to row.
+///
+/// "New project" opens the first-start screen for the chosen folder in
+/// place of the lists (HUM-538); a folder the register knows starts without
+/// it. "Start choice…" opens the same screen for a recent project.
 library;
 
 import 'dart:async';
@@ -23,8 +27,10 @@ import '../../../core/ui/ui.dart';
 import '../../../core/ui/untranslated_wording.dart';
 import '../../../core/ui/work_dir_picker.dart';
 import '../../../l10n/l10n.dart';
+import '../providers/first_start.dart';
 import '../providers/projects.dart';
 import '../start_text.dart';
+import 'first_start_pane.dart';
 import 'start_page.dart';
 
 /// Width of the agent column.
@@ -39,6 +45,11 @@ const double _nameLine = 26;
 /// Width of the button column.
 const double _buttonColumn = 104;
 
+/// Width added to the button column for "Start choice…"; on a running
+/// project it stays empty, so the other columns stand under each other in
+/// both cards.
+const double _choiceColumn = 120;
+
 /// The projects tab.
 class ProjectsPane extends ConsumerWidget {
   /// Creates the tab.
@@ -50,6 +61,11 @@ class ProjectsPane extends ConsumerWidget {
     final AppLocalizations l10n = context.l10n;
     final AsyncValue<List<ProjectEntry>> projects = ref.watch(projectsProvider);
     final StartLaunch launch = ref.watch(startLaunchProvider);
+    // Der Erststart-Bildschirm steht an der Stelle der Liste (HUM-538).
+    final FirstStart? firstStart = ref.watch(firstStartProvider);
+    if (firstStart != null) {
+      return FirstStartPane(state: firstStart);
+    }
     final List<ProjectEntry> all = projects.value ?? const <ProjectEntry>[];
     final List<ProjectEntry> running = runningProjects(all);
     final List<ProjectEntry> recent = recentProjects(all);
@@ -70,7 +86,7 @@ class ProjectsPane extends ConsumerWidget {
                 chooseWorkDir(
                   ref,
                   (String path) => unawaited(
-                    ref.read(startLaunchProvider.notifier).startNew(path),
+                    ref.read(firstStartProvider.notifier).openFolder(path),
                   ),
                 ),
               ),
@@ -357,19 +373,51 @@ class _ProjectRow extends ConsumerWidget {
               style: tokens.typography.ui12.tinted(tokens.colors.fg2),
             ),
           ),
+          // „Startwahl…" und der Knopf stehen rechtsbündig in einer Spalte
+          // fester Breite: Agent und Zeit fluchten so in beiden Karten, und
+          // zwischen den beiden Knöpfen bleibt nur der übliche Abstand.
           SizedBox(
-            width: _buttonColumn,
-            child: Align(
-              alignment: Alignment.centerRight,
-              child: entry.missing || oldDaemon
-                  ? HoverLabel(
-                      label: entry.missing
-                          ? l10n.startMissingWhy
-                          : l10n.startDaemonTooOld,
-                      side: HoverLabelSide.below,
-                      child: button,
-                    )
-                  : button,
+            width: _choiceColumn + _buttonColumn,
+            child: Row(
+              mainAxisAlignment: MainAxisAlignment.end,
+              children: <Widget>[
+                if (!entry.running) ...<Widget>[
+                  // Schmal geworden (große Schrift, längere Übersetzung)
+                  // kürzt sich die Beschriftung, der Startknopf nie.
+                  Flexible(
+                    child: HButton(
+                      key: Key('start-choice-${entry.projectId}'),
+                      variant: HButtonVariant.ghost,
+                      semanticsLabel: l10n.firstStartChangeChoiceLabel(
+                        entry.displayName,
+                      ),
+                      onPressed: entry.startable && !busy && !oldDaemon
+                          ? () => unawaited(
+                              ref
+                                  .read(firstStartProvider.notifier)
+                                  .openProject(entry),
+                            )
+                          : null,
+                      child: Text(
+                        l10n.firstStartChangeChoice,
+                        maxLines: 1,
+                        overflow: TextOverflow.ellipsis,
+                      ),
+                    ),
+                  ),
+                  SizedBox(width: tokens.spacing.x2),
+                ],
+                if (entry.missing || oldDaemon)
+                  HoverLabel(
+                    label: entry.missing
+                        ? l10n.startMissingWhy
+                        : l10n.startDaemonTooOld,
+                    side: HoverLabelSide.below,
+                    child: button,
+                  )
+                else
+                  button,
+              ],
             ),
           ),
         ],

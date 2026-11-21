@@ -1188,6 +1188,38 @@ class GrpcDaemonClient implements DaemonClient {
     return response.cleaned.toDomain();
   }
 
+  @override
+  Future<StartProposal> projectsProposal({
+    String? path,
+    String? projectId,
+    List<ChoiceValue> values = const <ChoiceValue>[],
+  }) async {
+    final pb.ProjectsResponse response = await _projects(
+      pb.ProjectsRequest()
+        ..proposal = (pb.ProjectsRequest_Proposal()
+          ..path = path ?? ''
+          ..projectId = projectId ?? ''
+          ..values.addAll(values.map((ChoiceValue v) => v.toProto()))),
+    );
+    return response.proposal.toDomain();
+  }
+
+  @override
+  Future<ProjectEntry> projectsSaveChoice({
+    String? projectId,
+    String? path,
+    required List<ChoiceValue> values,
+  }) async {
+    final pb.ProjectsResponse response = await _projects(
+      pb.ProjectsRequest()
+        ..saveChoice = (pb.ProjectsRequest_SaveChoice()
+          ..projectId = projectId ?? ''
+          ..path = path ?? ''
+          ..values.addAll(values.map((ChoiceValue v) => v.toProto()))),
+    );
+    return response.project.toDomain();
+  }
+
   /// One `Projects` call (HUM-537).
   Future<pb.ProjectsResponse> _projects(pb.ProjectsRequest request) => _unary(
     (CallOptions options) => _stub.projects(request, options: options),

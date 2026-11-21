@@ -3272,6 +3272,13 @@ message ProjectsRequest {
   message SaveChoice {
     string project_id = 1;
     repeated ChoiceValue values = 2;
+    // Sonst der Ordner, absolut und vorhanden (HUM-538): Der
+    // Erststart-Bildschirm speichert vor dem ersten Start. Kennt das Register
+    // den Ordner nicht (Pfad, Geraet und Inode wie beim Start), legt der
+    // Daemon den Eintrag ohne Start an. Beides zugleich ist `CONFIG_003`.
+    // Ein Daemon vor Minor 59 kennt das Feld nicht und lehnt die Anfrage
+    // ohne Kennung mit `CONFIG_003` ab.
+    string path = 3;
   }
   // Einen Aufraeumplan berechnen (HUM-533). Loescht nichts.
   message CleanupPlan {

@@ -18,6 +18,7 @@ class StartPage extends StatelessWidget {
     required this.title,
     required this.children,
     this.action,
+    this.subtitle,
     this.intro,
     super.key,
   });
@@ -27,6 +28,9 @@ class StartPage extends StatelessWidget {
 
   /// The one action of the tab, at the right end of the title row.
   final Widget? action;
+
+  /// A widget right under the title, such as the folder of a project.
+  final Widget? subtitle;
 
   /// A line under the title, when the tab needs one.
   final String? intro;
@@ -38,6 +42,7 @@ class StartPage extends StatelessWidget {
   Widget build(BuildContext context) {
     final HTokens tokens = HTheme.of(context);
     final String? intro = this.intro;
+    final Widget? subtitle = this.subtitle;
     return ColoredBox(
       color: tokens.colors.bg0,
       child: SingleChildScrollView(
@@ -65,6 +70,10 @@ class StartPage extends StatelessWidget {
                     ?action,
                   ],
                 ),
+                if (subtitle != null) ...<Widget>[
+                  SizedBox(height: tokens.spacing.x1),
+                  subtitle,
+                ],
                 if (intro != null) ...<Widget>[
                   SizedBox(height: tokens.spacing.x2),
                   Text(

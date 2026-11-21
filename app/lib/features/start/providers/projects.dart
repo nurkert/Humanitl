@@ -2,7 +2,9 @@
 ///
 /// Everything here is a call to the daemon and its answer (ADR-018): the list
 /// is `Projects(list)` in the daemon's order, a start is `Sandbox(Start)` with
-/// the project's folder, and whether it may start the daemon decides
+/// the project's id in the register (a new folder gets its entry from the
+/// first-start screen first, `first_start.dart`, HUM-538), and whether it may
+/// start the daemon decides
 /// (`CLI_005` while a session runs, `SANDBOX_053` without a folder). The
 /// window only switches to the session view once the daemon reports the
 /// session running.
@@ -93,12 +95,22 @@ class StartLaunchNotifier extends Notifier<StartLaunch> {
   /// starts, and the window says how the daemon restarts. While `GetInfo`
   /// has not answered yet, the start waits for it rather than guess.
   Future<void> startRecent(ProjectEntry entry) async {
-    if (!entry.startable || state.busyPath != null) {
+    if (!entry.startable) {
+      return;
+    }
+    return startKnown(entry.projectId, entry.path);
+  }
+
+  /// Starts the project [projectId] of the register, whose folder the list
+  /// shows as [path], with its project choice; the daemon takes the folder
+  /// from the register row (contract 1.58).
+  Future<void> startKnown(String projectId, String path) async {
+    if (state.busyPath != null) {
       return;
     }
     DaemonInfo? info = ref.read(daemonInfoProvider).value;
     if (info == null) {
-      state = StartLaunch(busyPath: entry.path);
+      state = StartLaunch(busyPath: path);
       try {
         info = await ref.read(daemonInfoProvider.future);
       } on Object {
@@ -117,19 +129,8 @@ class StartLaunchNotifier extends Notifier<StartLaunch> {
       );
       return;
     }
-    return _start(entry.path, projectId: entry.projectId, sendPath: false);
+    return _start(path, projectId: projectId);
   }
-
-  /// The hand-off for a folder chosen under "New project" (HUM-537).
-  ///
-  /// HUM-538 puts the first-start screen here: the proposal of the daemon
-  /// for the folder, "Start" with the focus, details behind "Customise".
-  /// Until then the folder starts with exactly the defaults that screen
-  /// would preselect, the resolution of a start without a project choice,
-  /// which is what `Projects.proposal` returns for a folder the register
-  /// does not know. The daemon registers the folder with that first start.
-  /// [path] is the folder exactly as the dialog returned it.
-  Future<void> startNew(String path) => _start(path, sendPath: true);
 
   /// Starts and switches to the session view as soon as the daemon reports
   /// the session running.
@@ -140,11 +141,7 @@ class StartLaunchNotifier extends Notifier<StartLaunch> {
   /// first `running` without a refusing finding before it is the answer,
   /// and leaving the loop cancels the subscription. The session does not
   /// depend on this stream.
-  Future<void> _start(
-    String path, {
-    String projectId = '',
-    required bool sendPath,
-  }) async {
+  Future<void> _start(String path, {required String projectId}) async {
     if (state.busyPath != null) {
       return;
     }
@@ -158,8 +155,7 @@ class StartLaunchNotifier extends Notifier<StartLaunch> {
     );
     try {
       await for (final SandboxUpdate update in client.startSandbox(
-        workDir: sendPath ? path : null,
-        projectId: sendPath || projectId.isEmpty ? null : projectId,
+        projectId: projectId,
       )) {
         switch (update) {
           case SandboxUpdateDiagnostic(:final Diagnostic diagnostic):

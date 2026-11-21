@@ -214,7 +214,8 @@ async fn target(
         let path = row.path.clone();
         return Ok((Some(row), path));
     }
-    let given = asked.path.trim();
+    // Der Pfad, wie er kam: `repo ` und `repo` sind zwei Ordner (HUM-538).
+    let given = asked.path.as_str();
     if given.is_empty() || !Path::new(given).is_absolute() {
         return Err(refused(
             "a proposal is for a project id or an absolute folder".to_owned(),
@@ -286,10 +287,17 @@ fn propose(
         BackendFacts::Searches { searches, deadline } => Some((searches, *deadline)),
         BackendFacts::Given(_) => None,
     };
-    let plan = ctx.sandbox.as_ref().map_or_else(
-        || assumed_plan(config),
-        |sandbox| sandbox.proposal_plan(config, Path::new(path), searched),
-    );
+    // Der Ordner-Test eines Starts gegen den wirklich erklärten
+    // `sandbox.work_dir`: Die Auflösung oben trägt den gefragten Ordner
+    // selbst als `sandbox.work_dir`, und gegen sie gälte jeder Ordner als
+    // erklärt (HUM-538).
+    let plan =
+        super::check_project_folder(&ctx.paths, &ctx.locks, Path::new(path)).and_then(|()| {
+            ctx.sandbox.as_ref().map_or_else(
+                || assumed_plan(config),
+                |sandbox| sandbox.proposal_plan(config, Path::new(path), searched),
+            )
+        });
     let profile_backend = match (&ctx.sandbox, &plan) {
         (Some(sandbox), Ok(plan)) => sandbox
             .profile_backend(&plan.profile)

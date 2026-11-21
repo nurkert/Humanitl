@@ -97,6 +97,7 @@ fn save(project: &ProjectRow, pairs: &[(&str, &str)]) -> v1::ProjectsRequest {
                         value: (*value).to_owned(),
                     })
                     .collect(),
+                ..Default::default()
             },
         )),
     }
@@ -354,4 +355,190 @@ async fn control_characters_in_a_folder_name_are_cleaned() {
         shown.display_name
     );
     assert!(!shown.path.contains('\u{1b}'), "{:?}", shown.path);
+}
+
+fn save_folder(path: &std::path::Path, pairs: &[(&str, &str)]) -> v1::ProjectsRequest {
+    v1::ProjectsRequest {
+        op: Some(v1::projects_request::Op::SaveChoice(
+            v1::projects_request::SaveChoice {
+                path: path.display().to_string(),
+                values: pairs
+                    .iter()
+                    .map(|(key, value)| v1::ChoiceValue {
+                        key: (*key).to_owned(),
+                        value: (*value).to_owned(),
+                    })
+                    .collect(),
+                ..Default::default()
+            },
+        )),
+    }
+}
+
+/// Der Erststart-Bildschirm speichert vor dem ersten Start (HUM-538): Die
+/// Wahl eines Ordners, den das Register nicht kennt, legt seinen Eintrag ohne
+/// Start an; ein zweites Speichern am selben Ordner trifft dieselbe Zeile.
+///
+/// Mutationsbeweis: `save_choice` ohne den Zweig für den Ordner sucht die
+/// leere Kennung, antwortet `CONFIG_003`, und der Test wird rot.
+#[tokio::test]
+async fn a_choice_by_folder_registers_an_unknown_folder() {
+    let fixture = Fixture::new("");
+    let dir = fixture.home.path().join("fresh");
+    std::fs::create_dir_all(&dir).unwrap();
+    let saved = answer(
+        fixture.context(PolicyLocks::none(), None),
+        save_folder(&dir, &[("hold.ask_mode", "none")]),
+    )
+    .await
+    .unwrap();
+    let entry = saved.project.expect("the project comes back");
+    assert!(entry.has_choice);
+    assert_eq!(entry.runs, 0);
+    assert_eq!(entry.last_started, None);
+    assert_eq!(entry.display_name, "fresh");
+
+    let again = answer(
+        fixture.context(PolicyLocks::none(), None),
+        save_folder(&dir, &[("hold.ask_mode", "terminal")]),
+    )
+    .await
+    .unwrap();
+    assert_eq!(again.project.unwrap().project_id, entry.project_id);
+    let identity = ProjectIdentity::of(&dir).unwrap();
+    let row = fixture
+        .recorder
+        .current_project_at(identity.path_text(), Some((identity.dev, identity.ino)))
+        .await
+        .unwrap()
+        .expect("the folder is known now");
+    assert_eq!(
+        row.choice.as_deref(),
+        Some(r#"{"hold.ask_mode":"terminal"}"#)
+    );
+}
+
+/// Eine Wahl, die nicht gilt, legt auch für einen unbekannten Ordner nichts
+/// an; ein fehlender Ordner und Kennung neben Ordner sind `CONFIG_003`.
+#[tokio::test]
+async fn a_refused_choice_by_folder_registers_nothing() {
+    let fixture = Fixture::new("[sandbox]\nmin_isolation = \"namespaces\"\n");
+    let dir = fixture.home.path().join("fresh");
+    std::fs::create_dir_all(&dir).unwrap();
+    let refused = answer(
+        fixture.context(PolicyLocks::none(), None),
+        save_folder(&dir, &[("sandbox.min_isolation", "policy")]),
+    )
+    .await
+    .expect_err("below the floor");
+    assert_eq!(refused.code.as_str(), "CONFIG_024");
+    assert!(
+        fixture
+            .recorder
+            .list_projects(10, 0)
+            .await
+            .unwrap()
+            .is_empty()
+    );
+
+    let missing = answer(
+        fixture.context(PolicyLocks::none(), None),
+        save_folder(&fixture.home.path().join("gone"), &[]),
+    )
+    .await
+    .expect_err("no folder");
+    assert_eq!(missing.code.as_str(), "CONFIG_003");
+
+    let project = fixture.project("repo").await;
+    let mut both = save(&project, &[]);
+    if let Some(v1::projects_request::Op::SaveChoice(save)) = both.op.as_mut() {
+        save.path = dir.display().to_string();
+    }
+    let refused = answer(fixture.context(PolicyLocks::none(), None), both)
+        .await
+        .expect_err("id and folder");
+    assert_eq!(refused.code.as_str(), "CONFIG_003");
+}
+
+/// The folder exactly as sent: a choice for `repo ` (trailing space) is a
+/// project of its own, not the one at `repo` (HUM-538).
+///
+/// Mutation proof: trimming `SaveChoice.path` in `save_folder_choice`
+/// again saves onto the row of `repo` and makes this test red.
+#[tokio::test]
+async fn a_folder_name_ending_in_a_space_gets_its_own_entry() {
+    let fixture = Fixture::new("");
+    let project = fixture.project("repo").await;
+    let spaced = fixture.home.path().join("repo ");
+    std::fs::create_dir_all(&spaced).unwrap();
+    let saved = answer(
+        fixture.context(PolicyLocks::none(), None),
+        save_folder(&spaced, &[("hold.ask_mode", "none")]),
+    )
+    .await
+    .unwrap()
+    .project
+    .expect("the project comes back");
+    assert_ne!(saved.project_id, project.id.to_string());
+    let untouched = fixture
+        .recorder
+        .get_project(project.id)
+        .await
+        .unwrap()
+        .unwrap();
+    assert_eq!(untouched.choice, None);
+}
+
+/// The same folder test as a start (`check_work_dir`) runs before anything
+/// is written: the home folder itself is `SANDBOX_006`, and the register
+/// stays empty (HUM-538).
+///
+/// Mutation proof: without the call of `work_dir::check_requested` in
+/// `save_folder_choice` the home folder is registered and this test is red.
+#[tokio::test]
+async fn a_choice_for_the_home_folder_is_refused_like_a_start() {
+    let fixture = Fixture::new("");
+    let refused = answer(
+        fixture.context(PolicyLocks::none(), None),
+        save_folder(fixture.home.path(), &[]),
+    )
+    .await
+    .expect_err("the home folder is no project");
+    assert_eq!(refused.code.as_str(), "SANDBOX_006", "{}", refused.why);
+    assert!(
+        fixture
+            .recorder
+            .list_projects(10, 0)
+            .await
+            .unwrap()
+            .is_empty()
+    );
+}
+
+/// A folder outside the home directory that the configuration does not
+/// declare is `SANDBOX_006`, as a start answers, and nothing is registered:
+/// the folder of the request does not declare itself (HUM-538).
+///
+/// Mutation proof: checking against the resolution of the asked folder
+/// (`check_for(..)?.config.sandbox.work_dir`) instead of the configured
+/// `sandbox.work_dir` lets the folder through and makes this test red.
+#[tokio::test]
+async fn an_undeclared_folder_outside_home_is_refused_like_a_start() {
+    let fixture = Fixture::new("");
+    let outside = tempfile::tempdir().unwrap();
+    let refused = answer(
+        fixture.context(PolicyLocks::none(), None),
+        save_folder(outside.path(), &[]),
+    )
+    .await
+    .expect_err("an undeclared folder outside home is no project");
+    assert_eq!(refused.code.as_str(), "SANDBOX_006", "{}", refused.why);
+    assert!(
+        fixture
+            .recorder
+            .list_projects(10, 0)
+            .await
+            .unwrap()
+            .is_empty()
+    );
 }
