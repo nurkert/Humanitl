@@ -17,8 +17,83 @@ section here and list their commits instead.
 
 ## [Unreleased]
 
+## [0.5.0] - 2026-11-21
+
+Claude Code, Codex and the Antigravity CLI as agents, an agent depot that
+installs and logs in agents inside a sandbox instead of on the host, and a
+project register that keeps each folder's sessions and a stored project
+choice. The passthrough for the model API now pairs each method with its
+paths, and the audit log records failed requests and the events it lost
+when it fell behind; a failed request lost in such a gap is counted, not
+recorded. The protocol (1.57) and the
+configuration gain fields, and a few values the daemon used to accept are
+now refused, so this is a minor version; read the upgrade notes.
+
 ### Added
 
+- Claude Code (`agent.adapter = "claude"`), Codex (`agent.adapter = "codex"`)
+  and the Antigravity CLI (`agent.adapter = "agy"`) as built-in agents next
+  to OpenCode and pi, each with its own home on a tmpfs, updates and
+  telemetry turned off where the vendor documents a switch, and the sandbox
+  CA. An API key from the keyring reaches the agent through a file and a
+  small launcher, never through its command line or a variable of the plan.
+  Codex and agy run with their own sandbox off, because it cannot start
+  inside Humanitl's; the briefing tells the agent so. Codex from the depot
+  reads the depot's copy of its `config.toml`, which does not yet carry
+  `sandbox_mode = "danger-full-access"`; until it does, commands of the
+  agent can fail, and `humanitl agents config codex` sets the key. agy keeps
+  its own login in the system keyring, which never enters a sandbox, so it
+  runs with a Gemini API key only (`humanitl llm key set`).
+- Agent depot: `humanitl agents install|update <agent> [--version V]`
+  downloads an agent in a maintenance run inside a sandbox, with no project,
+  where only the recipe's hosts pass without a hold and every other
+  request is held for your decision; the daemon checks the result itself
+  and switches to the new version atomically, and a failed run leaves the
+  depot as it was. Claude Code comes from `downloads.claude.ai`, its signed
+  manifest verified with the host's `gpg`; Codex as the vendor's whole
+  package from `releases.openai.com`, checked against the vendor's checksum
+  list (not signed); see the note on Codex's `sandbox_mode` above. agy,
+  OpenCode and pi have no install recipe (`AGENT_015` names why).
+  `humanitl agents login`, `agents callback` and `agents config` run a
+  login or a configuration run of the depot program; only the credential
+  file comes back, through a guard that checks its format, size, account
+  and expiry. `humanitl agents login claude` answers
+  `AGENT_014` until the vendor's credential format is measured, so Claude
+  Code from the depot runs with an API key or a gateway. Install, update,
+  login and configuration runs are refused under the kernel level and on
+  macOS (`AGENT_015`). See
+  [`docs/guides/agent-depot.md`](docs/guides/agent-depot.md).
+- `agents.<id>.credential_writeback` (default on) lets a running session
+  hand a refreshed credential file back to the depot, through the same
+  guard; `agents.encrypt_credentials` (default off, closed to project
+  profiles) encrypts the depot's credential files with a key kept only in
+  the system keyring (`AGENT_020` without one). The daemon decrypts them for
+  every session.
+- The app's settings gain the category "Agents": host or depot per agent,
+  installed version and signature, install, update, log in, configure and
+  remove, the write-back and encryption switches.
+- Project register: the daemon keeps each project folder with its sessions
+  and a stored project choice, shown with
+  `humanitl projects ls|show|clean|forget|proposal`. The daemon can store a
+  choice (`Projects.save_choice`), but neither the CLI nor the app saves one
+  yet. `clean` and `forget` show a plan of everything they would delete and
+  ask first, never touching the project folder or the audit log; `proposal`
+  shows the options and defaults a first start of a folder would offer. A
+  project choice never lowers `sandbox.min_isolation` (`CONFIG_024`).
+- Settings catalog: the daemon describes every setting the app shows, with
+  its category, texts, origin and lock; settings kept in the file only, such
+  as `limits.registry_max_finished_flows`, are left out. The app's settings
+  are built from it, and
+  `humanitl config catalog [--project PATH] [--language en|de]` prints it.
+- One install script for every system:
+  `curl -fsSL https://humanitl.de/install | sh` (Debian and Ubuntu through
+  the APT repository, Fedora and RHEL through the `.rpm`, Arch through an
+  AUR helper, other Linux through the tarball into `~/.local`, macOS
+  through the `.dmg`). It checks every download before the first `sudo`,
+  shows its plan and asks once before it runs the steps (`--yes`,
+  `--dry-run`), and on macOS never removes
+  the quarantine: you allow the app with "Open Anyway". aarch64 Linux and
+  Windows are not covered.
 - `curl -fsSL https://humanitl.de/uninstall | sh` removes Humanitl the way
   it came: it finds the package, the archive of the install script or the
   macOS app, stops while an agent session runs, removes the background
@@ -27,15 +102,157 @@ section here and list their commits instead.
   lists every location with its size and asks first.
 - `humanitl config paths` prints the directories that hold your data, the
   list `--purge` deletes from.
+- New audit record kinds: `flow.failed` (a request whose way to the target
+  failed, with its `upstream_*` reason and nothing of the request),
+  `audit.events_dropped` (the audit sink fell behind and lost events; counts
+  only; a failed request lost in such a gap leaves no `flow.failed`, only
+  this count), `sandbox.door_capped` (the kernel level's connection cap was
+  hit), `agent.credential_writeback` (with the SHA-256 of both files, never
+  their content) and `projects.cleaned`. The kernel level's host check now also
+  lands in the audit log as `isolation.check`.
+- `limits.registry_max_finished_flows` (default 10,000, closed to project
+  profiles) bounds the finished requests the daemon keeps in memory; held
+  and running requests never count.
+- `humanitl doctor` gains the line `rules`, which names every rule of
+  `rules.yaml` that could not be read.
+- `SANDBOX_055`: the kernel level's vsock device stopped answering, named
+  instead of the generic `SANDBOX_013`.
 
 ### Changed
 
+- The passthrough for the agent's model API pairs each method with its
+  paths instead of allowing every listed method on every listed path:
+  Claude Code POST on `/v1/messages` and `/v1/messages/count_tokens`; Codex
+  POST on `/responses` and GET on `/models`; agy POST on
+  `models/{id}:generateContent` and `:streamGenerateContent` and GET on the
+  model list; OpenCode and pi POST on the inference endpoints and GET on
+  `/v1/models` and Ollama's `tags`, `ps` and `version`, and both methods
+  only on paths you add with `llm.passthrough_paths`. The security
+  statement only narrows.
+- One unreadable rule in `rules.yaml` no longer discards every rule: the
+  others apply, and the bad entry is reported with field, line and reason
+  (start log, Rules screen, `humanitl rules list`, `humanitl doctor`) and
+  kept in place on every write. It fails closed, in two cases. If the
+  error lies elsewhere (`expires`, `id`, an unknown key) and the rule's
+  action and match can be read, the rule keeps its action with exactly its
+  match, so a `block` still blocks. If the action or the match cannot be
+  read, a `block`, `ask` or `redact` rule becomes `ask` for its host, or for
+  every host and address when the host cannot be read. Only an unreadable
+  `allow` rule is left out. A file that cannot be read as a whole (YAML,
+  top-level key, `version`, `disabled_bundled`) is still rejected entirely.
+- When the decision proxy or the target behind it closes the connection
+  without an answer, the agent's 502 says so (reason
+  `upstream_proxy_closed`) instead of reporting a Humanitl block with
+  `upstream_connect`. A proxy's own answer, such as Burp's 200 page for a
+  dropped request, still cannot be told apart from a relayed one.
 - `resolver.test_ca` must be an absolute path whenever it is set, with or
   without `--allow-test-ca`; a relative path now stops the daemon from
   starting (`CONFIG_012`) instead of being ignored with a warning.
-  `humanitl config set` and the settings in the app refuse such a value, and
+  `humanitl config set` and the settings in the app now refuse such a value
+  before writing, and so a `resolver.nameserver` that is no address or
+  `address:port` (`CONFIG_003`), which already stopped the start. They
   refuse any other key while the file holds a value the daemon cannot start
-  with, except the repair of that very key.
+  with, except the repair of that very key. A URL with a reserved example
+  host (such as `https://api.example.com/v1`) is written with a warning
+  that it will not answer without `resolver.overrides`.
+- A start without a project folder is refused with `SANDBOX_053`; the
+  daemon no longer falls back to its own working directory.
+- `humanitl run` and `humanitl go` send work, ask and sandbox mode only when
+  given on that call, so the folder's project choice applies otherwise.
+  `--sandbox-min-isolation` (also from the environment or a `--config`
+  file) reaches the daemon and can only raise the floor.
+- `humanitl sandbox plan` and `humanitl projects proposal` apply the same
+  session values and project choice as the start, so the preview shows the
+  plan the start would take or refuses as the start would. The project
+  choice also applies to `humanitl sandbox image pull`.
+- In an interface language other than English, the app shows the
+  translated cause of a finding; the daemon's English sentence stays
+  available under "Original message (untranslated)".
+- A suggested fix that changes a setting always carries a value
+  `humanitl config set` accepts; where only you can supply the value, the
+  app opens the field instead.
+- The kernel level's helpers run only their own programs: its unit
+  executes nothing outside a list of files, and each helper's jail refuses
+  new user namespaces, `execveat` and executable memory files (the
+  emulator keeps its guest memory). The
+  bubblewrap prerequisite of the kernel level now asks for
+  `--disable-userns`, `--remount-ro` and `--seccomp`.
+- A disposable session on the kernel level lays the profile's masks over
+  the project inside the guest as the namespace level does, and the layer's
+  file service accepts only `user.overlay.*` extended attributes.
+- Dates and times are handled by `jiff` instead of `chrono`. Stored data
+  keeps its format; error texts for a time the CLI cannot parse change, and
+  instants beyond the year 9999 show as `-`.
+
+### Fixed
+
+- On macOS, a name that the case-insensitive volume folds to a masked path
+  (a Kelvin sign for `k`, for example) no longer escapes the mask of a
+  disposable clone.
+- The kernel level removes its `humanitl-vm-*` directories under
+  `$XDG_RUNTIME_DIR` when a session ends and sweeps those of ended daemons
+  at start.
+- The flow registry and the audit queue no longer grow without bound over
+  a long session; a full audit queue makes the sender wait, it never drops
+  a record.
+- The history no longer loses a request that arrived while a page was
+  loading.
+- `humanitl doctor` shows `virtio_fs` as not measured when the kernel image
+  is missing, instead of repeating the kernel line's failure.
+- The settings' backend row shows a stale list as pending after a project
+  change, gives reasons and commands the full row width, and keyboard focus
+  and Tab keep working while the backend choice is locked.
+
+### Security
+
+- The README's side-channel table and `docs/SECURITY.md` name the depot's
+  credential file as a declared side channel; the threat model (K-36)
+  covers the depot's maintenance runs, the write-back guard and the
+  encryption, whose limit is that the daemon decrypts for every session.
+- A Codex package is bound to its checked archive by the maintenance run,
+  not by the daemon, which has no tar reader of its own yet; documented in
+  `docs/SECURITY.md` and K-36.
+- The kernel level still lets code that a taken-over helper already runs in
+  its own memory do what that helper may do; documented in K-33.
+- `proxy_resolve = "humanitl"` binds only a decision proxy that connects to
+  the address in `CONNECT`; Burp Suite resolves the name again, so the Burp
+  guide recommends `"proxy"`. The guide now rests on a trial with Burp Suite
+  Community Edition 2026.11.2.
+- `doctor-probe.json` stores a hash of the stored probe start instead of
+  the program's path, which could name a private folder.
+- `chrono` (RUSTSEC-2026-0543, unmaintained) is no longer a dependency, and
+  its exception is gone.
+
+### Upgrade notes
+
+- Restart the daemon after upgrading:
+  `systemctl --user restart humanitld.service`, `humanitl daemon install`
+  for archive and AppImage installs, or `humanitl daemon restart` after
+  replacing the macOS app. A CLI that needs a newer daemon names
+  the restart (`CLI_004`).
+- A relative `resolver.test_ca` now stops the daemon from starting. Fix it
+  with `humanitl config set resolver.test_ca /absolute/path` or remove the
+  key.
+- A `rules.yaml` with an unreadable entry now loads its readable rules,
+  where 0.4 discarded the whole file. Check `humanitl doctor` (line
+  `rules`): until the entry is repaired, an unreadable rule whose action
+  and match can be read keeps its action, one whose action or match cannot
+  be read holds its host (or every host) for a decision, and a change that
+  would put a rule above it is refused with `RULES_009`.
+- The narrower passthrough holds a request that 0.4 passed only because
+  its method was allowed on another listed path, such as POST on
+  `/v1/models` with OpenCode or pi. If an agent needs such a request, add
+  its path to `llm.passthrough_paths` or decide it with a rule.
+- A start without a project folder (`SANDBOX_053`), such as the app opened
+  from a launcher, now needs a folder: run `humanitl go` or `humanitl run`
+  in the folder, or pass `--work DIR`.
+- The kernel level needs a bubblewrap with `--disable-userns`,
+  `--remount-ro` and `--seccomp`; `humanitl doctor` names a missing one.
+  Empty `humanitl-vm-*` directories left by earlier versions carry no lock
+  and are never swept; remove them once with
+  `rmdir /run/user/$(id -u)/humanitl-vm-*`.
+- The recorder database gains the project register and is migrated on the
+  first start.
 
 ## [0.4.1] - 2026-11-17
 
