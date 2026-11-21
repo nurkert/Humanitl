@@ -8,6 +8,7 @@
 library;
 
 import 'dart:async';
+import 'dart:io' show Platform;
 
 import 'package:flutter/services.dart' show MissingPluginException;
 import 'package:window_manager/window_manager.dart';
@@ -46,6 +47,22 @@ class WindowManagerPort with WindowListener implements WindowPort {
   Future<void> reveal() async {
     await _quietly(windowManager.show());
     await _quietly(windowManager.focus());
+  }
+
+  /// Wayland lets no program bring its own window forward without an
+  /// activation token, and GTK uses Wayland whenever `WAYLAND_DISPLAY` is
+  /// set and `GDK_BACKEND` does not ask for X11 first. macOS and X11 do.
+  @override
+  bool get raisesItself =>
+      raisesItselfIn(Platform.isLinux, Platform.environment);
+
+  /// [raisesItself] for a platform and an environment; for tests.
+  static bool raisesItselfIn(bool linux, Map<String, String> environment) {
+    if (!linux || (environment['WAYLAND_DISPLAY'] ?? '').isEmpty) {
+      return true;
+    }
+    final String backend = (environment['GDK_BACKEND'] ?? '').trim();
+    return backend.startsWith('x11');
   }
 
   @override

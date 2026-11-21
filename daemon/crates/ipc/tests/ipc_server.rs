@@ -179,6 +179,7 @@ fn event_name(event: &v1::FlowEvent) -> &'static str {
         Some(Event::Failed(_)) => "failed",
         Some(Event::Intercept(_)) => "intercept",
         Some(Event::ConfigChanged(_)) => "config_changed",
+        Some(Event::OpenInApp(_)) => "open_in_app",
         None => "none",
     }
 }

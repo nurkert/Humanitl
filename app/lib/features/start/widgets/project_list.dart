@@ -28,6 +28,7 @@ import '../../../core/ui/untranslated_wording.dart';
 import '../../../core/ui/work_dir_picker.dart';
 import '../../../l10n/l10n.dart';
 import '../providers/first_start.dart';
+import '../providers/preselection.dart';
 import '../providers/projects.dart';
 import '../start_text.dart';
 import 'first_start_pane.dart';
@@ -95,6 +96,10 @@ class ProjectsPane extends ConsumerWidget {
       children: <Widget>[
         for (final Diagnostic diagnostic in <Diagnostic>[
           ?ref.watch(folderDialogFailureProvider),
+          // Ein Pfad aus `humanitl app`, der kein Ordner ist (HUM-539).
+          ?ref.watch(
+            preselectionProvider.select((Preselection? p) => p?.finding),
+          ),
           ...launch.diagnostics,
         ])
           Padding(
@@ -294,7 +299,17 @@ class _ProjectRow extends ConsumerWidget {
                 : null,
             child: Text(busy ? l10n.startStarting : l10n.startStart),
           );
-    return Padding(
+    // Der Ordner aus `humanitl app` (HUM-539): markiert wie der gewählte
+    // Reiter der Leiste, mit Fläche und Balken in der Farbe der Marke.
+    // Gestartet wird erst mit dem Knopf der Zeile.
+    final bool preselected =
+        entry.projectId.isNotEmpty &&
+        ref.watch(
+          preselectionProvider.select(
+            (Preselection? p) => p?.projectId == entry.projectId,
+          ),
+        );
+    final Widget row = Padding(
       key: Key('start-project-${entry.projectId}'),
       padding: EdgeInsets.symmetric(
         horizontal: tokens.spacing.x4,
@@ -325,6 +340,14 @@ class _ProjectRow extends ConsumerWidget {
                               .tinted(primary),
                         ),
                       ),
+                      if (preselected) ...<Widget>[
+                        SizedBox(width: tokens.spacing.x2),
+                        HBadge(
+                          key: Key('start-preselected-${entry.projectId}'),
+                          text: l10n.startPreselected,
+                          color: tokens.colors.accent,
+                        ),
+                      ],
                       if (entry.missing) ...<Widget>[
                         SizedBox(width: tokens.spacing.x2),
                         HBadge(
@@ -422,6 +445,16 @@ class _ProjectRow extends ConsumerWidget {
           ),
         ],
       ),
+    );
+    if (!preselected) {
+      return row;
+    }
+    return DecoratedBox(
+      decoration: BoxDecoration(
+        color: tokens.colors.bg2,
+        border: Border(left: BorderSide(color: tokens.colors.accent, width: 3)),
+      ),
+      child: row,
     );
   }
 }

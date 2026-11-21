@@ -117,4 +117,29 @@ void main() {
       isNull,
     );
   });
+
+  test('--project preselects a folder in the start window (HUM-539)', () {
+    expect(
+      resolve(const <String>['--project', '/home/dev/api']).projectPath,
+      '/home/dev/api',
+    );
+    expect(
+      resolve(const <String>['--project=/home/dev/api']).projectPath,
+      '/home/dev/api',
+    );
+    // Ohne Wert und ohne Schalter: Startfenster ohne Vorwahl, wie ein Start
+    // aus dem Starter.
+    expect(resolve(const <String>['--project']).projectPath, isNull);
+    expect(resolve(const <String>[]).projectPath, isNull);
+    expect(resolve(const <String>['--project', '']).projectPath, isNull);
+    // Der Pfad bleibt, wie er kam: Ein Ordner `repo ` ist nicht `repo`.
+    expect(
+      resolve(const <String>['--project', '/home/dev/repo ']).projectPath,
+      '/home/dev/repo ',
+    );
+    expect(
+      resolve(const <String>['--project= /home/dev/repo']).projectPath,
+      ' /home/dev/repo',
+    );
+  });
 }

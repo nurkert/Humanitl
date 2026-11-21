@@ -4766,5 +4766,17 @@
   "firstStartSourceReady": "{source}: ready",
   "@firstStartSourceReady": {"description": "First-start screen (HUM-538): the other source of the chosen agent has the program as well; the start uses the source named above.", "placeholders": {"source": {"type": "String", "example": "Agent depot"}}},
   "firstStartOtherStartBusy": "Another start is under way. Wait until it has finished, then press Start again.",
-  "@firstStartOtherStartBusy": {"description": "First-start screen (HUM-538): Start was pressed while another start of the start window was still running; nothing was saved."}
+  "@firstStartOtherStartBusy": {"description": "First-start screen (HUM-538): Start was pressed while another start of the start window was still running; nothing was saved."},
+  "diagCLI007Title": "Desktop app not installed or not starting",
+  "@diagCLI007Title": {"description": "Title of the diagnostic CLI_007 (docs/DIAGNOSTICS.md). Shown instead of the daemon's register title (DiagnosticL10n.resolve, HUM-052)."},
+  "diagCLI007Why": "No desktop app was connected to the daemon, and humanitl app could neither find nor start it.",
+  "@diagCLI007Why": {"description": "Generic cause of CLI_007. Stands in the cause slot only when the diagnostic carries no sentence of its own (docs/UX.md 4.4, HUM-052)."},
+  "startPreselected": "Preselected",
+  "@startPreselected": {"description": "Start window (HUM-539): badge on the project that humanitl app PATH preselected; it starts only with its Start button."},
+  "startAppRequestNotice": "The start window is ready",
+  "@startAppRequestNotice": {"description": "Start window (HUM-539): title of the desktop notification when humanitl app asked the running app to come forward and the desktop (Wayland) does not let it do so by itself."},
+  "startAppRequestNoticeFolder": "{folder} is preselected. Switch to the Humanitl window.",
+  "@startAppRequestNoticeFolder": {"description": "Start window (HUM-539): body of the notification for humanitl app PATH on a desktop where the window cannot come forward by itself.", "placeholders": {"folder": {"type": "String", "example": "/home/dev/api"}}},
+  "startAppRequestNoticePlain": "Switch to the Humanitl window.",
+  "@startAppRequestNoticePlain": {"description": "Start window (HUM-539): body of the notification for humanitl app without a folder on a desktop where the window cannot come forward by itself."}
 }

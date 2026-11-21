@@ -192,6 +192,12 @@ abstract interface class WindowPort {
   /// Brings the window forward and gives it the keyboard.
   Future<void> reveal();
 
+  /// False where the desktop does not let a program bring its own window
+  /// forward: on Wayland a window may only be activated with a token the
+  /// compositor hands out, and [reveal] then does nothing visible. A caller
+  /// that must be seen posts a notification instead (HUM-539).
+  bool get raisesItself;
+
   /// Ends the program the way the tray menu asks for it.
   Future<void> quit();
 
@@ -229,6 +235,11 @@ abstract interface class NotificationPort {
 
   /// Takes the notification off the screen.
   Future<void> withdraw();
+
+  /// Shows a message without buttons that names no request, replacing the
+  /// one that stands: the start window waits where the window could not
+  /// come forward by itself (HUM-539, [WindowPort.raisesItself]).
+  Future<void> announce(String summary, String body);
 
   /// The buttons a person pressed, each with the request it was about.
   Stream<NotificationAnswer> get actions;
@@ -307,6 +318,9 @@ class _InertWindow implements WindowPort {
   Future<void> reveal() async {}
 
   @override
+  bool get raisesItself => true;
+
+  @override
   Future<void> quit() async {}
 
   @override
@@ -335,6 +349,9 @@ class _InertNotifications implements NotificationPort {
 
   @override
   Future<void> withdraw() async {}
+
+  @override
+  Future<void> announce(String summary, String body) async {}
 
   @override
   Future<void> dispose() async {}

@@ -20,10 +20,12 @@ import 'package:flutter_riverpod/flutter_riverpod.dart';
 
 import '../../core/domain/domain.dart';
 import '../../core/ui/app_mark.dart';
+import '../../core/ui/project_request.dart';
 import '../../core/ui/ui.dart';
 import '../../l10n/l10n.dart';
 import 'providers/cleanup.dart';
 import 'providers/first_start.dart';
+import 'providers/preselection.dart';
 import 'widgets/cleanup_pane.dart';
 import 'widgets/project_list.dart';
 
@@ -81,6 +83,19 @@ class _StartScreenState extends ConsumerState<StartScreen> {
   @override
   Widget build(BuildContext context) {
     final HTokens tokens = HTheme.of(context);
+    // `humanitl app PATH` (HUM-539): Die Vorwahl lebt so lange wie das
+    // Fenster, und jede neue Bitte zeigt den Reiter der Projekte, wo sie
+    // markiert oder der Erststart-Bildschirm steht.
+    ref
+      ..listen<Preselection?>(preselectionProvider, (_, _) {})
+      ..listen<ProjectRequest?>(projectRequestProvider, (
+        ProjectRequest? previous,
+        ProjectRequest? next,
+      ) {
+        if (next != null && _tab != StartTab.projects) {
+          setState(() => _tab = StartTab.projects);
+        }
+      });
     final CleanupPlan? plan = ref.watch(
       cleanupProvider.select((CleanupState s) => s.plan),
     );

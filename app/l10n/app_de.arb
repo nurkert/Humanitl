@@ -2078,5 +2078,11 @@
   "firstStartSourceNameHost": "Host",
   "firstStartSourceNameDepot": "Agent-Depot",
   "firstStartSourceReady": "{source}: bereit",
-  "firstStartOtherStartBusy": "Ein anderer Start läuft noch. Warte, bis er fertig ist, und drücke dann noch einmal Starten."
+  "firstStartOtherStartBusy": "Ein anderer Start läuft noch. Warte, bis er fertig ist, und drücke dann noch einmal Starten.",
+  "diagCLI007Title": "Desktop-App nicht installiert oder startet nicht",
+  "diagCLI007Why": "Keine Desktop-App war mit dem Daemon verbunden, und humanitl app konnte sie weder finden noch starten.",
+  "startPreselected": "Vorgewählt",
+  "startAppRequestNotice": "Das Startfenster ist bereit",
+  "startAppRequestNoticeFolder": "{folder} ist vorgewählt. Wechsle zum Fenster von Humanitl.",
+  "startAppRequestNoticePlain": "Wechsle zum Fenster von Humanitl."
 }

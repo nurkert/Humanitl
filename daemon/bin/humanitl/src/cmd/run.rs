@@ -711,6 +711,8 @@ async fn open_moderation(
         .subscribe(v1::SubscribeRequest {
             since_flow_id: String::new(),
             include_passthrough: false,
+            // Das CLI ist nicht die Desktop-App (HUM-539).
+            desktop_app: false,
         })
         .await
         .map_err(|status| crate::cmd::moderate::subscribe_failed(&status))?

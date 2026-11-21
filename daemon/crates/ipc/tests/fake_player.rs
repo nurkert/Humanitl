@@ -40,6 +40,7 @@ fn subscribe(daemon: &Arc<FakeDaemon>) -> BoxStream<v1::FlowEvent> {
     daemon.subscribe(v1::SubscribeRequest {
         since_flow_id: String::new(),
         include_passthrough: true,
+        desktop_app: false,
     })
 }
 
@@ -64,6 +65,7 @@ fn name(event: &v1::FlowEvent) -> &'static str {
         Some(Event::AgentAsk(_)) => "agent_ask",
         Some(Event::Intercept(_)) => "intercept",
         Some(Event::ConfigChanged(_)) => "config_changed",
+        Some(Event::OpenInApp(_)) => "open_in_app",
         None => "empty",
     }
 }

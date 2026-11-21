@@ -594,6 +594,11 @@ message SubscribeRequest {
   // Ab welchem Flow nachgeliefert wird. Leer bedeutet: ab jetzt.
   string since_flow_id = 1;
   bool include_passthrough = 2;
+  // Dieser Abonnent ist die Desktop-App (HUM-539): Nur ein solcher Strom
+  // traegt `FlowEvent.open_in_app`, und nur an einem solchen erkennt der
+  // Daemon, dass eine App verbunden ist (`Projects.open_in_app`). Ein Daemon
+  // vor Minor 60 kennt das Feld nicht und schickt kein solches Ereignis.
+  bool desktop_app = 3;
 }
 
 // Ein Ereignis des Stroms. Bodies reisen nie mit.
@@ -633,6 +638,19 @@ message FlowEvent {
     // `Egress` oder `Agents`, und wenn sich `config.toml` auf der Platte
     // geaendert hat. Kein Flow; wer es sieht, laedt mit `GetConfig` neu.
     ConfigChanged config_changed = 18;
+    // `humanitl app [PATH]` bittet die verbundene App, ihr Startfenster mit
+    // diesem Ordner vorgewaehlt nach vorne zu holen (HUM-539). Nur in einem
+    // Strom mit `SubscribeRequest.desktop_app`. Kein Flow und kein Start:
+    // Gestartet wird erst nach der Bestaetigung im Fenster.
+    OpenInApp open_in_app = 19;
+  }
+
+  // Die Bitte von `Projects.open_in_app` an die App.
+  message OpenInApp {
+    // Der Ordner, absolut, wie das CLI ihn kanonisiert hat; leer heisst
+    // Startfenster ohne Vorwahl. Nur eine Vorwahl: Ob es ein Ordner ist,
+    // sagt der Daemon der App ueber `Projects.proposal`.
+    string path = 1;
   }
 
   // Was sich an der Konfiguration geaendert hat.
@@ -3315,6 +3333,18 @@ message ProjectsRequest {
     // vor Minor 57 kennt das Feld nicht und rechnet ohne sie.
     repeated SandboxRequest.CliOverride cli_overrides = 4;
   }
+  // Die Bitte an die verbundene Desktop-App, ihr Startfenster mit diesem
+  // Ordner vorgewaehlt zu zeigen (HUM-539, ADR-0024 Punkt 5). Der Daemon
+  // gibt sie als `FlowEvent.open_in_app` an jeden Strom mit
+  // `SubscribeRequest.desktop_app` und sagt in
+  // `ProjectsResponse.app_reached`, ob einer da war. Startet nichts und
+  // speichert nichts. Ein Daemon vor Minor 60 kennt die Operation nicht und
+  // lehnt die Anfrage mit `CONFIG_003` ab.
+  message OpenInApp {
+    // Der Ordner, absolut; leer heisst Startfenster ohne Vorwahl. Ein
+    // relativer Pfad ist `CONFIG_003`.
+    string path = 1;
+  }
   oneof op {
     List list = 1;
     Get get = 2;
@@ -3322,6 +3352,7 @@ message ProjectsRequest {
     CleanupPlan cleanup_plan = 4;
     Cleanup cleanup = 5;
     Proposal proposal = 6;
+    OpenInApp open_in_app = 7;
   }
 }
 
@@ -3475,6 +3506,9 @@ message ProjectsResponse {
   CleanupResult cleaned = 7;
   // `proposal`: der Startvorschlag.
   StartProposal proposal = 8;
+  // `open_in_app`: wahr, wenn mindestens eine verbundene Desktop-App die
+  // Bitte bekommen hat; sonst startet der Aufrufer die App selbst.
+  bool app_reached = 9;
 }
 
 // Der Startvorschlag fuer ein Projekt (HUM-536, ADR-0024 Punkt 3): alles,

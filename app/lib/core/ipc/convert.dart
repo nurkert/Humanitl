@@ -420,6 +420,10 @@ extension FlowEventToDomain on pb.FlowEvent {
         keys: List<String>.unmodifiable(configChanged.keys),
         projectId: configChanged.projectId,
       ),
+      pb.FlowEvent_Event.openInApp => FlowEvent.openInApp(
+        at: when,
+        path: openInApp.path,
+      ),
       pb.FlowEvent_Event.notSet => null,
     };
   }

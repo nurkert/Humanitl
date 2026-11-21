@@ -862,6 +862,14 @@ const FLOW_EVENT_FIELDS: &FieldTable = &[
         ".humanitl.v1.FlowEvent.ConfigChanged",
         Some("event"),
     ),
+    // HUM-539: `humanitl app` bittet die verbundene App um ihr
+    // Startfenster mit einem vorgewählten Ordner; kein Flow, kein Start.
+    (
+        "open_in_app",
+        19,
+        ".humanitl.v1.FlowEvent.OpenInApp",
+        Some("event"),
+    ),
 ];
 
 /// `DecideRequest` vollstaendig, vor allem die drei Entscheidungen in

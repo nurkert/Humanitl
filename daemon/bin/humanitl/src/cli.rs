@@ -230,6 +230,28 @@ pub enum Cmd {
         #[command(subcommand)]
         cmd: ProjectsCmd,
     },
+
+    /// Open the start window of the desktop app, with a folder preselected.
+    ///
+    /// When an app is connected to the daemon, the daemon hands it the folder
+    /// and the app brings its window forward; otherwise this starts the app
+    /// (`humanitl-app --project PATH` next to this program or on PATH, on macOS
+    /// `open -a Humanitl`). A known project is marked under "Recent", a new
+    /// folder gets the first-start screen. Nothing starts before "Start" in
+    /// the window.
+    ///
+    /// Limits: on macOS an app that already runs without a daemon connection
+    /// only comes forward, without the folder preselected; on Linux such an
+    /// app is not seen, and a second one starts.
+    App(AppArgs),
+}
+
+/// Die Argumente von `humanitl app` (HUM-539).
+#[derive(Debug, Args)]
+pub struct AppArgs {
+    /// The folder to preselect; `.` is the current directory. Without it, the
+    /// start window without a preselection.
+    pub path: Option<PathBuf>,
 }
 
 /// Die Unterkommandos von `humanitl projects` (HUM-532, ADR-0024).

@@ -231,6 +231,7 @@ abstract final class DiagnosticL10n {
   'CLI_004' => (l10n.diagCLI004Title, l10n.diagCLI004Why),
   'CLI_005' => (l10n.diagCLI005Title, l10n.diagCLI005Why),
   'CLI_006' => (l10n.diagCLI006Title, l10n.diagCLI006Why),
+  'CLI_007' => (l10n.diagCLI007Title, l10n.diagCLI007Why),
   'CONFIG_001' => (l10n.diagCONFIG001Title, l10n.diagCONFIG001Why),
   'CONFIG_002' => (l10n.diagCONFIG002Title, l10n.diagCONFIG002Why),
   'CONFIG_003' => (l10n.diagCONFIG003Title, l10n.diagCONFIG003Why),

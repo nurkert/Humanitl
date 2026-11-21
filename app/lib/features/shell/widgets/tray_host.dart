@@ -24,6 +24,7 @@ import '../../../core/ipc/config_providers.dart';
 import '../../../core/ipc/connection.dart';
 import '../../../core/ipc/flow_events.dart';
 import '../../../core/recorder/recorder_health.dart';
+import '../../../core/ui/project_request.dart';
 import '../../../l10n/l10n.dart';
 import '../../intercept/providers/decision.dart';
 import '../../intercept/providers/flows.dart';
@@ -130,7 +131,38 @@ class _TrayHostState extends ConsumerState<TrayHost> {
     ) {
       _push(next);
     });
+    ref.listen<ProjectRequest?>(projectRequestProvider, (
+      ProjectRequest? previous,
+      ProjectRequest? next,
+    ) {
+      if (next != null) {
+        unawaited(_bringForward(next));
+      }
+    });
     return widget.child;
+  }
+
+  /// `humanitl app` reached this app (HUM-539): the window comes forward.
+  /// Where the desktop does not let a program do that by itself (Wayland),
+  /// a notification says that the start window waits, instead of nothing;
+  /// unless the person switched notifications off.
+  Future<void> _bringForward(ProjectRequest request) async {
+    final WindowPort window = _ports.window;
+    await window.reveal();
+    if (window.raisesItself ||
+        !mounted ||
+        !ref.read(notificationsEnabledProvider)) {
+      return;
+    }
+    final AppLocalizations l10n = context.l10n;
+    await _ports.notifications.announce(
+      l10n.startAppRequestNotice,
+      request.path.isEmpty
+          ? l10n.startAppRequestNoticePlain
+          : l10n.startAppRequestNoticeFolder(
+              plainNotificationText(request.path),
+            ),
+    );
   }
 
   Future<void> _seed() async {

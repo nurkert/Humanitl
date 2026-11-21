@@ -984,6 +984,7 @@ async fn held_flow(daemon: &Arc<FakeDaemon>) -> String {
     let mut stream = daemon.subscribe(v1::SubscribeRequest {
         since_flow_id: String::new(),
         include_passthrough: true,
+        desktop_app: false,
     });
     daemon.start();
     let deadline = tokio::time::Instant::now() + std::time::Duration::from_secs(30);

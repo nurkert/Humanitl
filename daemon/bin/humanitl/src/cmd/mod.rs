@@ -16,6 +16,7 @@
 //! gerade nicht laufen muss (HUM-070).
 
 pub mod agents;
+pub mod app;
 pub mod attach;
 pub mod audit;
 pub mod backends;

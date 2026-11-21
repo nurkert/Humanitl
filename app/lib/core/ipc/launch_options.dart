@@ -32,6 +32,7 @@ class LaunchOptions {
     this.scenario,
     this.socketPath,
     this.harExportPath,
+    this.projectPath,
   });
 
   /// The value of `--dart-define=HUMANITL_FAKE=...`, empty when unset.
@@ -46,6 +47,11 @@ class LaunchOptions {
   /// Command line flag that names the socket: `--socket PATH` or
   /// `--socket=PATH`.
   static const String socketFlag = '--socket';
+
+  /// Command line flag that preselects a folder in the start window:
+  /// `--project PATH` or `--project=PATH` (HUM-539). `humanitl app [PATH]`
+  /// starts the app with it; the desktop entry starts it without.
+  static const String projectFlag = '--project';
 
   /// The values of `HUMANITL_FAKE` that mean "the Rust fake daemon".
   static const Set<String> fakeDaemonValues = <String>{'1', 'default', 'true'};
@@ -89,7 +95,10 @@ class LaunchOptions {
     }
     fake = fake.trim().toLowerCase();
 
-    String socket = _socketFromArgs(args) ?? '';
+    // Nie getrimmt: Ein Ordner darf auf ein Leerzeichen enden (HUM-539,
+    // Review). Nur ein leeres Argument heißt keine Vorwahl.
+    final String project = _valueOf(projectFlag, args) ?? '';
+    String socket = _valueOf(socketFlag, args) ?? '';
     if (socket.isEmpty) {
       socket = socketDefine;
     }
@@ -115,6 +124,7 @@ class LaunchOptions {
       scenario: scenario,
       socketPath: socket.isEmpty ? null : socket,
       harExportPath: harExport.isEmpty ? null : harExport,
+      projectPath: project.isEmpty ? null : project,
     );
   }
 
@@ -132,17 +142,22 @@ class LaunchOptions {
   /// Null heißt: der Export fragt den Schreibtisch, wohin er darf.
   final String? harExportPath;
 
+  /// The folder `--project` preselects in the start window, or null. Only a
+  /// preselection: nothing starts before "Start" in the window (HUM-539).
+  final String? projectPath;
+
   /// True when a fake of either kind is in use.
   bool get isFake => mode != ClientMode.daemon;
 
-  static String? _socketFromArgs(List<String> args) {
+  /// The value of [flag] in [args]: `FLAG VALUE` or `FLAG=VALUE`.
+  static String? _valueOf(String flag, List<String> args) {
     for (int i = 0; i < args.length; i++) {
       final String arg = args[i];
-      if (arg == socketFlag && i + 1 < args.length) {
+      if (arg == flag && i + 1 < args.length) {
         return args[i + 1];
       }
-      if (arg.startsWith('$socketFlag=')) {
-        return arg.substring(socketFlag.length + 1);
+      if (arg.startsWith('$flag=')) {
+        return arg.substring(flag.length + 1);
       }
     }
     return null;
@@ -151,5 +166,5 @@ class LaunchOptions {
   @override
   String toString() =>
       'LaunchOptions(mode: $mode, scenario: $scenario, socket: $socketPath, '
-      'harExport: $harExportPath)';
+      'harExport: $harExportPath, project: $projectPath)';
 }

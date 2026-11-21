@@ -105,6 +105,9 @@ pub struct FakeDaemon {
     /// und eine Bombe im Skript fiele erst gegen den Daemon auf (HUM-119).
     decode_cap_bytes: usize,
     max_decompress_ratio: u32,
+    /// Die Bitten von `humanitl app` an eine verbundene App, wie im Daemon
+    /// (HUM-539).
+    app_requests: crate::app_requests::AppRequests,
 }
 
 impl FakeDaemon {
@@ -246,6 +249,7 @@ impl FakeDaemon {
             decode_cap_bytes: usize::try_from(humanitl_config::Limits::default().preview_cap_bytes)
                 .unwrap_or(usize::MAX),
             max_decompress_ratio: humanitl_config::Limits::default().max_decompress_ratio,
+            app_requests: crate::app_requests::AppRequests::new(),
         }
     }
 
@@ -417,6 +421,11 @@ impl DaemonApi for FakeDaemon {
                 Err(BroadcastStreamRecvError::Lagged(dropped)) => Some(lagged_event(dropped)),
             });
         let backlog = self.backlog(&request);
+        // Die Bitten von `humanitl app` nur an den Strom einer App (HUM-539).
+        if request.desktop_app {
+            let asked = self.app_requests.stream().filter_map(Result::ok);
+            return Box::pin(tokio_stream::iter(backlog).chain(live.merge(asked)));
+        }
         Box::pin(tokio_stream::iter(backlog).chain(live))
     }
 
@@ -923,6 +932,9 @@ impl DaemonApi for FakeDaemon {
         &self,
         request: v1::ProjectsRequest,
     ) -> Result<v1::ProjectsResponse, Diagnostic> {
+        if let Some(v1::projects_request::Op::OpenInApp(asked)) = &request.op {
+            return self.app_requests.open_in_app(asked);
+        }
         projects::answer(&self.state.session(), request)
     }
 
@@ -1714,7 +1726,8 @@ fn event_flow_id(event: &v1::FlowEvent) -> Option<FlowId> {
         | Event::RulesChanged(_)
         | Event::AgentAsk(_)
         | Event::Intercept(_)
-        | Event::ConfigChanged(_) => {
+        | Event::ConfigChanged(_)
+        | Event::OpenInApp(_) => {
             return None;
         }
     };

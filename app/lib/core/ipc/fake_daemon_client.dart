@@ -2236,7 +2236,8 @@ class FakeDaemonClient
           FlowEventRulesChanged() ||
           FlowEventAgentAsk() ||
           FlowEventInterceptChanged() ||
-          FlowEventConfigChanged():
+          FlowEventConfigChanged() ||
+          FlowEventOpenInApp():
         break;
     }
   }

@@ -122,7 +122,10 @@ class GrpcDaemonClient implements DaemonClient {
     final CallOptions options = await _options(timeout: null);
     final pb.SubscribeRequest request = pb.SubscribeRequest()
       ..sinceFlowId = since?.value ?? ''
-      ..includePassthrough = includePassthrough;
+      ..includePassthrough = includePassthrough
+      // Dieser Client ist die Desktop-App, und `flowEventsProvider` ist sein
+      // einziges Abonnement: Nur so erreicht ihn `humanitl app` (HUM-539).
+      ..desktopApp = true;
     try {
       await for (final pb.FlowEvent event in _stub.subscribe(
         request,

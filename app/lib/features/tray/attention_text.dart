@@ -119,3 +119,38 @@ DesktopNotification notificationFor(AppLocalizations l10n, HeldNotice notice) {
     ],
   );
 }
+
+/// [text] safe for the body of a desktop notification (HUM-539): control
+/// characters out, and `&`, `<` and `>` as entities. The notification
+/// specification lets a server read the body as markup, so a folder named
+/// `<b>x</b>` would otherwise be drawn bold, and a line break would split
+/// one path into two lines.
+String plainNotificationText(String text) {
+  final StringBuffer out = StringBuffer();
+  for (final int rune in text.runes) {
+    if (rune < 0x20 || (rune >= 0x7f && rune < 0xa0) || _invisible(rune)) {
+      continue;
+    }
+    switch (rune) {
+      case 0x26:
+        out.write('&amp;');
+      case 0x3c:
+        out.write('&lt;');
+      case 0x3e:
+        out.write('&gt;');
+      default:
+        out.writeCharCode(rune);
+    }
+  }
+  return out.toString();
+}
+
+/// Zeichen, die ohne sichtbares Zeichen die Anzeige umbrechen oder umordnen:
+/// Zeilen- und Absatztrenner sowie die Steuerzeichen der Schreibrichtung.
+bool _invisible(int rune) =>
+    rune == 0x2028 ||
+    rune == 0x2029 ||
+    rune == 0x200e ||
+    rune == 0x200f ||
+    (rune >= 0x202a && rune <= 0x202e) ||
+    (rune >= 0x2066 && rune <= 0x2069);
