@@ -61,9 +61,19 @@ Die Flutter-Seite ist dagegen klein (`app/build`, einige hundert MiB);
 
 ## Arbeit an einem Issue
 
-Ein Issue, ein Branch, benannt `hum-042-kurztitel`. Die Spezifikation jedes
-Issues steht in `backlog/sprint-N.md`; vor dem ersten `BACKLOG.md` Abschnitte 2
-bis 6 und `backlog/CONVENTIONS.md` lesen.
+Ein Issue, ein Branch, ein Pull Request. Seit Sprint 8 ist jedes offene Issue
+ein GitHub-Issue mit seiner vollständigen Spezifikation, und der Branch heißt
+`issue-42-kurztitel`. Ein neues Issue entsteht nur über eines der Formulare
+unter `.github/ISSUE_TEMPLATE/` (Bug, Feature, Doku, und `task.yml` für die
+ausgeschriebene Spezifikation mit Kontext, Spezifikation, Tests samt
+Mutationsbeweisen, Fallstricken, Akzeptanzkriterien, Größe und
+Abhängigkeiten); Issues und Pull Requests sind Englisch.
+`tools/issue-spec.sh 42 -o <datei>` schreibt Titel, Labels und Text des Issues
+in eine Markdown-Datei, die auch Reviewer ohne Netz lesen. Ältere Issues
+(`HUM-042`, Branch `hum-042-kurztitel`) stehen in `backlog/sprint-N.md`. Vor
+dem ersten Issue `BACKLOG.md` Abschnitte 2 bis 6 und `backlog/CONVENTIONS.md`
+lesen. Labels sind Code (`.github/labels.yml`); Einrichtung und Hintergrund in
+`docs/guides/maintaining.md`.
 
 Vor dem Commit genügen die gezielten Prüfungen des Issues: Tests der berührten
 Crates und Pakete, `cargo fmt`, `cargo clippy` auf den berührten Crates,
@@ -97,11 +107,68 @@ Drei Ziele gehören nicht zu `make check`:
   einzigen übersprungenen Test mit Grund, ein normaler `flutter test`-Lauf
   bleibt unberührt.
 
+### Über einen Pull Request nach `main`
+
+Ein Issue mit GitHub-Nummer landet über einen Pull Request, der sein Issue
+nach grüner CI selbst schließt:
+
+```sh
+tools/commit-issue.sh --pr 42 kurztitel "feat(area): subject" pfad/eins pfad/zwei <<'EOF'
+What was built, in two to four sentences.
+
+Review: Codex 2 findings (1 taken, 1 not taken: reason), Antigravity 1 finding (taken).
+EOF
+```
+
+1. Vor allem anderen: Der Commit-Body braucht den Absatz `Review:` und darf
+   kein eigenes Issue schließen (`Fixes #7` und ähnliche Schlüsselwörter;
+   ein Issue je Pull Request). Vor dem ersten Push fragt das Skript über
+   `gh api`, ob auf `main` eine Regel die Prüfung `ci-ok` auf einem aktuellen
+   Branch verlangt, und bricht ohne sie ab (`docs/guides/maintaining.md`):
+   Auto-Merge ohne Pflichtprüfung merged sofort.
+2. Der Commit entsteht wie bei `--ci` (nächster Abschnitt): eigener Index,
+   Spitze von `origin/main`, Abbruch, wenn einer der Pfade sich auf `main`
+   geändert hat, seit der Arbeitsbaum abzweigte.
+3. Push des Branches `issue-42-kurztitel`, dann `gh pr create`: Titel ist die
+   Betreffzeile, der Text kommt aus `.github/pull_request_template.md` mit
+   `Closes #42`, dem Commit-Body unter „What was built" und dem Absatz
+   `Review:` unter „Review". Die Befunde beider Reviewer, je übernommen oder
+   nicht mit Grund, gehören so in den Pull Request.
+4. Das Tor ist der `pull_request`-Lauf von `.github/workflows/ci.yml` für
+   genau den gepushten Kopf. Für `issue-*` gibt es absichtlich keinen
+   Push-Lauf, sonst liefe jeder Job zweimal. `tools/ci-gate.sh` wartet darauf
+   (`HUMANITL_CI_EVENT=pull_request`) und meldet Rot sofort.
+5. Erst wenn alle Tore dieses Commits grün sind (bei Release-Pfaden auch der
+   Probelauf), `gh pr merge --auto --merge --match-head-commit <sha>`.
+   GitHub merged, weil die Pflichtprüfung `ci-ok` grün und der Branch
+   aktuell ist. Das Skript wartet auf den Merge und nennt den Merge-Commit;
+   merged GitHub binnen `HUMANITL_PR_MERGE_TIMEOUT` Sekunden (Vorgabe 1800)
+   nicht, sagt es das und hört auf. Es merged nie selbst daran vorbei.
+
+Vor jedem Push auf den Branch eines Pull Requests mit eingeschaltetem
+Auto-Merge schaltet das Skript es ab; scheitert das, pusht es nicht. So kann
+GitHub nie einen Kopf mergen, dessen Tore nicht gelaufen sind. Bei roter CI
+bleibt der Pull Request offen, ohne Auto-Merge; nachbessern, Commit ergänzen,
+Arbeitsbaum auf einen anderen Branch stellen, dann
+`tools/commit-issue.sh --land issue-42-kurztitel`. Das nimmt den offenen Pull
+Request wieder auf und schreibt Titel und Text aus dem aktuellen Commit neu.
+Hat sich `main` bewegt, setzt das Skript den Commit um, pusht und wartet
+erneut, wie unten. Berührt der Commit einen Release-Pfad, heißt der Probelauf
+`release-dry/hum-42` (die Nummer ist die des GitHub-Issues); zeigt ein
+solcher Branch schon auf den Commit eines anderen Issues (ein altes
+`HUM-042`), bricht das Skript ab, statt ihn zu überschreiben. Den
+Merge-Commit schreibt GitHub; kein Werkzeug liest dessen Betreffzeile.
+
+`ci-ok` hat `if: always()` und keine Bedingung auf das Ereignis; an einem
+Pull Request wird es also nie übersprungen. Eine übersprungene Prüfung zählte
+für die Regel auf `main` als bestanden, deshalb bleibt das so.
+
 ### Vom Arbeitsbaum nach `main` (HUM-237)
 
-Das Tor nach `main` ist die CI auf dem Issue-Branch, nicht mehr ein lokaler
-Volllauf. `.github/workflows/ci.yml` läuft auch für Pushes auf `hum-*`, und
-`tools/commit-issue.sh --ci` führt den ganzen Weg:
+Der direkte Weg ohne Pull Request gilt nur noch für Issues ohne
+GitHub-Nummer. Das Tor nach `main` ist die CI auf dem Issue-Branch, nicht mehr
+ein lokaler Volllauf. `.github/workflows/ci.yml` läuft auch für Pushes auf
+`hum-*`, und `tools/commit-issue.sh --ci` führt den ganzen Weg:
 
 1. Commit aus genau den genannten Pfaden auf der Spitze von `origin/main`,
    gebaut in einem eigenen Index, ohne Arbeitsbaum und Index des Aufrufers
@@ -319,7 +386,7 @@ Aus `backlog/CONVENTIONS.md` Abschnitt 3.12, kurz:
 - Jeder öffentliche Typ und jede öffentliche Funktion hat einen
   Doc-Kommentar.
 - Die CI ist auf dem Issue-Branch grün, bevor der Merge nach `main` geht
-  (`tools/commit-issue.sh --ci`, HUM-237). Sie prüft den sauberen Commit,
+  (`tools/commit-issue.sh --pr` oder `--ci`, HUM-237). Sie prüft den sauberen Commit,
   nicht den Arbeitsbaum, und ersetzt damit den Pflichtlauf von
   `tools/verify-commit.sh`.
 

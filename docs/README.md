@@ -47,4 +47,5 @@ fails when they are stale.
 | [`UX.md`](UX.md) | screens and flows |
 | [`INSTALL.md`](INSTALL.md) | maintainer notes: APT repository, unit hardening, packaging, test matrix |
 | [`guides/release-process.md`](guides/release-process.md) | cutting a release with `tools/release.sh`, the changelog, what to do on red |
+| [`guides/maintaining.md`](guides/maintaining.md) | issue forms, labels as code, landing through a pull request with auto-merge, the repository settings behind it |
 | [`adr/README.md`](adr/README.md) | architecture decision records |

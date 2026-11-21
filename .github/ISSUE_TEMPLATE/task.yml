@@ -1,0 +1,66 @@
+# The maintainer specification format. tools/issue-spec.sh renders an issue
+# made from this form into a Markdown file that agents and offline reviewers
+# read.
+name: Task (maintainer specification)
+description: A fully specified piece of work, ready to be implemented.
+body:
+  - type: markdown
+    attributes:
+      value: |
+        Write in English and never name private references. Add one `type:`,
+        one `area:`, one `size:` label and, when it belongs to one, the
+        `sprint:` label after creating the issue.
+  - type: textarea
+    id: context
+    attributes:
+      label: Context
+      description: Why this work exists and what is there today.
+    validations:
+      required: true
+  - type: textarea
+    id: specification
+    attributes:
+      label: Specification
+      description: What is built, item by item, precise enough to implement without asking.
+    validations:
+      required: true
+  - type: textarea
+    id: tests
+    attributes:
+      label: Tests
+      description: |
+        The tests that come with the change, including mutation proofs: which
+        change to the code must turn which test red.
+    validations:
+      required: true
+  - type: textarea
+    id: pitfalls
+    attributes:
+      label: Pitfalls
+      description: What is easy to get wrong.
+    validations:
+      required: true
+  - type: textarea
+    id: acceptance
+    attributes:
+      label: Acceptance criteria
+      description: A numbered list; every item can be checked against the code.
+    validations:
+      required: true
+  - type: dropdown
+    id: size
+    attributes:
+      label: Size
+      options:
+        - S
+        - M
+        - L
+    validations:
+      required: true
+  - type: textarea
+    id: dependencies
+    attributes:
+      label: Dependencies
+      description: Issues that must land first, as `#N`, or "none".
+    validations:
+      required: true

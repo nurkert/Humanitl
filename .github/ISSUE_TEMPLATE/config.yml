@@ -1,0 +1,6 @@
+# Every new issue goes through one of the forms in this directory.
+blank_issues_enabled: false
+contact_links:
+  - name: Report a security vulnerability
+    url: https://github.com/nurkert/Humanitl/security/advisories/new
+    about: Please report vulnerabilities privately, never in a public issue. See SECURITY.md.

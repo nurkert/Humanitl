@@ -1,0 +1,24 @@
+name: Documentation
+description: Something in the documentation is wrong, missing or unclear.
+title: "docs: "
+labels: ["type:docs", "area:docs"]
+body:
+  - type: input
+    id: page
+    attributes:
+      label: Page
+      description: Path or link of the page, for example docs/guides/install.md.
+    validations:
+      required: true
+  - type: textarea
+    id: problem
+    attributes:
+      label: What is wrong or missing
+    validations:
+      required: true
+  - type: textarea
+    id: suggestion
+    attributes:
+      label: Suggested change
+    validations:
+      required: false

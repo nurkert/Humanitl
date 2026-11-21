@@ -23,7 +23,8 @@
 # `changes`, runs tools/ci-changes.sh and says which jobs this push needs:
 #   - hum-* and macos-* branches compare with their merge base with
 #     origin/main, main with the previous commit (github.event.before); an
-#     unknown or rewritten previous commit means everything.
+#     unknown or rewritten previous commit means everything. A pull request
+#     compares with the merge base with its base commit.
 #   - website/** alone starts only install-script, which builds the site and
 #     checks that /install is install.sh (HUM-528). install.sh alone starts
 #     only the three install-* jobs. backlog/** and BACKLOG.md start
@@ -58,7 +59,17 @@ on:
     # a green push run of exactly the tagged main commit.
     # `macos-*` is the feature branch of M12 (backlog/sprint-6.md), which
     # collects one commit per issue before it is merged (HUM-312).
+    # `issue-N-slug` branches are deliberately missing: they belong to pull
+    # requests (tools/commit-issue.sh --pr), and their gate is the
+    # pull_request run below. A push run as well would run every job twice.
     branches: [main, "hum-*", "macos-*"]
+  # The gate of tools/commit-issue.sh --pr: tools/ci-gate.sh waits for the
+  # pull_request run whose head_sha is the pushed head of the pull request,
+  # and the ruleset on main requires the check ci-ok of that run on an
+  # up-to-date branch before auto-merge merges. ci-ok has `if: always()` and
+  # no condition on the event, so it is never skipped on a pull request; a
+  # skipped ci-ok would count as passed for the ruleset. Keep it that way:
+  # no job-level `if` on ci-ok, and no event filter that could skip it.
   pull_request:
   # A full run by hand, for tools/release.sh when the push run of the release
   # commit skipped jobs by the path rules (HUM-424). full=false applies the
@@ -1773,7 +1784,9 @@ jobs:
     # by one: a failing `changes` would skip them all. This job always runs
     # and is green only when changes and lint succeeded and every other job
     # succeeded or was skipped because its output of changes is not 'true',
-    # the rule tools/ci-gate.sh applies to the step `skip <job>`.
+    # the rule tools/ci-gate.sh applies to the step `skip <job>`. It is also
+    # the required check for auto-merge of pull requests (see `on:`), so it
+    # must never be skipped: keep `always()` and add no event condition here.
     if: always()
     needs:
       - changes

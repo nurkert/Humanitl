@@ -71,7 +71,7 @@ typed-errors-lint: ## Typed errors (HUM-063) and the test reporter (HUM-133) che
 # Die Werkzeuge, die entscheiden, ob ein Issue-Zweig nach main kommt (HUM-237):
 # das CI-Tor gegen eine nachgestellte API, der Commit-Ablauf gegen ein
 # Wegwerf-origin. Beide brauchen nur bash, git und python3.
-tools-test: ## Tests of tools/ci-gate.sh, tools/commit-issue.sh --ci (HUM-237), tools/release.sh (HUM-363), the CI path rules (HUM-424) and the runner-loss classifier (HUM-531)
+tools-test: ## Tests of tools/ci-gate.sh, tools/commit-issue.sh --ci (HUM-237), tools/release.sh (HUM-363), the CI path rules (HUM-424), the runner-loss classifier (HUM-531), commit-issue.sh --pr, issue-spec.sh and the label sync
 	./tools/tests/ci_gate_test.sh
 	./tools/tests/ci_changes_test.sh
 	python3 tools/tests/ci_plan_test.py
@@ -79,6 +79,9 @@ tools-test: ## Tests of tools/ci-gate.sh, tools/commit-issue.sh --ci (HUM-237), 
 	./tools/tests/release_test.sh
 	python3 tools/tests/release_guard_test.py
 	./tools/tests/classify_runner_loss_test.sh
+	./tools/tests/commit_issue_pr_test.sh
+	./tools/tests/issue_spec_test.sh
+	python3 tools/tests/sync_labels_test.py
 
 # install.sh gegen nachgestellte Werkzeuge (HUM-528), ohne Container und ohne root. Die
 # Container-Matrix und den macOS-Lauf fahren tools/tests/install_sh_containers.sh und

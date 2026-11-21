@@ -1,0 +1,48 @@
+# Labels as code. Applies .github/labels.yml to the repository on every push
+# to main that changes it, and by hand. tools/sync_labels.py creates missing
+# labels, updates colour and description, renames a label that still carries
+# a former name, and never deletes one: labels that Dependabot or GitHub add
+# stay untouched.
+#
+# The script needs only python3 and gh, both on the runner image; no
+# third-party action. Every action is pinned to a commit SHA, the tag in the
+# trailing comment is documentation, as in ci.yml.
+
+name: labels
+
+on:
+  push:
+    branches: [main]
+    paths:
+      - .github/labels.yml
+      - .github/workflows/labels.yml
+      - tools/sync_labels.py
+  workflow_dispatch:
+
+# Nothing at the top level; the one job raises what it needs.
+permissions: {}
+
+concurrency:
+  group: labels
+  cancel-in-progress: false
+
+jobs:
+  sync:
+    name: sync labels
+    runs-on: ubuntu-24.04
+    timeout-minutes: 5
+    permissions:
+      # checkout reads the repository, gh label create/edit writes labels.
+      contents: read
+      issues: write
+    steps:
+      - uses: actions/checkout@11d5960a326750d5838078e36cf38b85af677262 # v4.4.0
+        with:
+          persist-credentials: false
+      - name: Check the labels file
+        run: python3 tools/sync_labels.py --check
+      - name: Apply the labels file
+        env:
+          GH_TOKEN: ${{ github.token }}
+          GH_REPO: ${{ github.repository }}
+        run: python3 tools/sync_labels.py
