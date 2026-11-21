@@ -1,5 +1,7 @@
 # Sprint 8 · Startfenster, Terminal-Client und Sitzungen, die ihr Terminal überleben
 
+> Seit 2026-11-21 stehen die offenen Issues dieses Sprints als GitHub-Issues im Repository, in Bearbeitungsreihenfolge im Tracking-Issue [#48](https://github.com/nurkert/Humanitl/issues/48). Die Abschnitte umgezogener Issues verweisen hier nur noch dorthin.
+
 Ziel des Sprints: Humanitl startet so, wie der Eigentümer es am 2026-11-17 beschrieben hat. Die App öffnet nie eine Sitzung ohne Projekt und zeigt sonst ein Startfenster (laufend, zuletzt, neu, aufräumen, Einstellungen als Reiter); `humanitl app [.]` öffnet es. `humanitl go claude` startet den Agenten im aktuellen Ordner, beim ersten Mal mit einem einzigen Bildschirm voller Vorgaben, danach ohne. Alle Einstellungen gibt es auch als TUI auf ratatui, aus demselben Katalog des Daemons. In der Sitzung wechselt eine Präfixtaste die Ansicht (Einstellungen, Interceptor) oder hängt ab, und Schließen hängt ab statt zu beenden. Dazu, unabhängig, ein Rückfall für den macOS-Runner des Releases. Entscheidung in [ADR-0024](../docs/adr/0024-terminal-client-and-start-window.md) (Accepted am 2026-11-18), Eintrag in `BACKLOG.md` Abschnitt 9, Punkt 24.
 
 Die offenen Fragen des ADR (dort nummeriert, hier als „Frage N" zitiert) hat der Eigentümer am 2026-11-17 beantwortet; die Fragen 3 und 4 hat der Hauptstrang nach dem Vorschlag des ADR entschieden, der Eigentümer hat nicht widersprochen. Die Antworten stehen im Abschnitt „Decision" des ADR mit Datum und sind in die Issues eingearbeitet. Frage 8 (Umfang des Aufräumens) hat der Eigentümer am 2026-11-18 mit der Vorgabe des ADR beantwortet (HUM-530). Kein Issue entscheidet eine offene Frage still.
@@ -33,19 +35,19 @@ Diagnose-Codes, hier nur geplant (registriert vom genannten Issue in `codes.rs` 
 | HUM-536 | Startvorschlag für ein neues Projekt als RPC (`Projects.proposal`) | M | HUM-532 |
 | HUM-537 | App: Startfenster mit Laufend, Zuletzt, Neu, Aufräumen und Einstellungen | L | HUM-533, HUM-535, HUM-536 |
 | HUM-538 | App: Erststart-Bildschirm unter „Neu" und für ein unbekanntes Projekt | M | HUM-537 |
-| HUM-539 | `humanitl app [PATH]`: App mit vorgewähltem Projekt starten oder die laufende erreichen | M | HUM-537 |
-| HUM-540 | TUI-Grundlage: ratatui im CLI, Terminal auf jedem Weg zurück | M | HUM-530 |
-| HUM-541 | Einstellungs-TUI `humanitl settings` | L | HUM-534, HUM-540 |
-| HUM-542 | `humanitl go [AGENT]`: Agent als Wort, `--dir`, `--disposable`, `--rw`, `--ro`, `--kernel`, Projektwahl | M | HUM-532 |
-| HUM-543 | Erststart-Bildschirm in `humanitl go` | M | HUM-536, HUM-540, HUM-542 |
-| HUM-544 | Präfixtaste `ctrl-b` mit fester Tabelle; `Ctrl+,` direkt nur mit kitty-Tastaturprotokoll | M | HUM-530 |
-| HUM-545 | Ansichtswechsel in der Sitzung: Einstellungs-TUI über dem Agenten und zurück | M | HUM-541, HUM-544 |
-| HUM-546 | Interceptor-Ansicht im Terminal, Glocke bei neuem Halt | M | HUM-545 |
-| HUM-547 | `humanitl go`: Schließen hängt ab statt zu beenden, ein zweites `go` hängt sich an | M | HUM-542 |
-| HUM-548 | Doku: `cli.md`, `CONFIG.md`, `UX.md`, Anleitung „Starten"; Nachtrag zu ADR-0024 | S | HUM-531 bis HUM-547 |
+| HUM-539 ([#5](https://github.com/nurkert/Humanitl/issues/5)) | `humanitl app [PATH]`: App mit vorgewähltem Projekt starten oder die laufende erreichen | M | HUM-537 |
+| HUM-540 ([#6](https://github.com/nurkert/Humanitl/issues/6)) | TUI-Grundlage: ratatui im CLI, Terminal auf jedem Weg zurück | M | HUM-530 |
+| HUM-541 ([#7](https://github.com/nurkert/Humanitl/issues/7)) | Einstellungs-TUI `humanitl settings` | L | HUM-534, HUM-540 |
+| HUM-542 ([#8](https://github.com/nurkert/Humanitl/issues/8)) | `humanitl go [AGENT]`: Agent als Wort, `--dir`, `--disposable`, `--rw`, `--ro`, `--kernel`, Projektwahl | M | HUM-532 |
+| HUM-543 ([#9](https://github.com/nurkert/Humanitl/issues/9)) | Erststart-Bildschirm in `humanitl go` | M | HUM-536, HUM-540, HUM-542 |
+| HUM-544 ([#10](https://github.com/nurkert/Humanitl/issues/10)) | Präfixtaste `ctrl-b` mit fester Tabelle; `Ctrl+,` direkt nur mit kitty-Tastaturprotokoll | M | HUM-530 |
+| HUM-545 ([#11](https://github.com/nurkert/Humanitl/issues/11)) | Ansichtswechsel in der Sitzung: Einstellungs-TUI über dem Agenten und zurück | M | HUM-541, HUM-544 |
+| HUM-546 ([#12](https://github.com/nurkert/Humanitl/issues/12)) | Interceptor-Ansicht im Terminal, Glocke bei neuem Halt | M | HUM-545 |
+| HUM-547 ([#13](https://github.com/nurkert/Humanitl/issues/13)) | `humanitl go`: Schließen hängt ab statt zu beenden, ein zweites `go` hängt sich an | M | HUM-542 |
+| HUM-548 ([#14](https://github.com/nurkert/Humanitl/issues/14)) | Doku: `cli.md`, `CONFIG.md`, `UX.md`, Anleitung „Starten"; Nachtrag zu ADR-0024 | S | HUM-531 bis HUM-547 |
 | HUM-552 | `Ctrl+,` schließt das Einstellungs-Sheet ohne Rückfrage bei ungespeichertem Formular | S | HUM-535 |
-| HUM-554 | Quelle des Agenten (Host oder Depot) als Teil der Projektwahl, Depot vorbelegt, wenn nur dort bereit | M | HUM-536 |
-| HUM-549 | Kandidat, nicht in diesem Sprint: mehrere Sitzungen je Daemon | L | HUM-537, HUM-547 |
+| HUM-554 ([#15](https://github.com/nurkert/Humanitl/issues/15)) | Quelle des Agenten (Host oder Depot) als Teil der Projektwahl, Depot vorbelegt, wenn nur dort bereit | M | HUM-536 |
+| HUM-549 ([#16](https://github.com/nurkert/Humanitl/issues/16)) | Kandidat, nicht in diesem Sprint: mehrere Sitzungen je Daemon | L | HUM-537, HUM-547 |
 
 ---
 
@@ -738,608 +740,47 @@ Vorgabe 3 in der App: derselbe eine Bildschirm wie in `humanitl go`, aus
 
 ## HUM-539 · `humanitl app [PATH]`: App mit vorgewähltem Projekt starten oder die laufende erreichen
 
-### Kontext
-Vorgabe 1: `humanitl app [.]` öffnet das Startfenster, `.` wählt den
-aktuellen Ordner vor. Die App heißt auf Linux `humanitl-app` (Desktop-Datei
-`packaging/deb/dev.humanitl.humanitl.desktop`, `Exec=humanitl-app %U`), auf
-macOS `Humanitl.app`. Frage 4 des ADR ist entschieden (Hauptstrang,
-2026-11-17, ohne Widerspruch des Eigentümers): Bei laufender App geht die
-Bitte über den Daemon.
-
-### Spezifikation
-1. **App:** nimmt `--project PATH` an; das Startfenster wählt das Projekt
-   vor (bekannt: unter „Zuletzt" markiert; unbekannt: Erststart-Bildschirm).
-   Ein Pfad, der kein Ordner ist, steht als Befund im Startfenster.
-2. **CLI `humanitl app [PATH]`:** kanonisiert `PATH` (`.` ist das
-   Arbeitsverzeichnis). Ist eine App mit dem Daemon verbunden, schickt das
-   CLI die Bitte über den Daemon (Operation `Projects.open_in_app`, die der
-   Daemon als Ereignis an die verbundene App gibt); sonst startet es die App (`humanitl-app --project PATH` aus dem
-   Ordner des eigenen Programms oder dem `PATH`; macOS
-   `open -a Humanitl --args --project PATH`). App nicht gefunden: `CLI_007`
-   mit Fix, wie man sie installiert.
-3. Ohne `PATH`: Startfenster ohne Vorwahl.
-4. Die App bringt ihr Fenster nach vorne, wenn eine Bitte ankommt.
-
-### Tests
-- CLI: App nicht auffindbar: `CLI_007`, Exit 1. Ein Fake-Programm statt der
-  App bekommt genau `--project <kanonischer Pfad>`.
-- Verbundene App (Fake-Daemon): Ereignis kommt an, kein zweiter Prozess.
-  Mutationsbeweis: Weiterleitung entfernt färbt den Test rot (es startet ein
-  zweiter Prozess).
-- App: `--project` auf einen bekannten und auf einen unbekannten Ordner;
-  auf eine Datei: Befund.
-
-### Fallstricke
-- Der Pfad aus der Bitte ist für die App nur eine Vorwahl; gestartet wird
-  erst nach „Start", nie durch die Bitte allein.
-- Auf Wayland darf eine App ihr Fenster nicht selbst nach vorne holen; dann
-  eine Benachrichtigung statt stillem Nichts.
-- Desktop-Datei unverändert lassen; ein Start aus dem Starter hat kein
-  Projekt und zeigt das Startfenster.
-
-### Akzeptanzkriterien
-1. `humanitl app .` zeigt das Startfenster mit diesem Ordner vorgewählt,
-   ob die App lief oder nicht.
-2. Kein Weg startet über `humanitl app` eine Sitzung ohne Bestätigung im
-   Fenster.
-
----
+Am 2026-11-21 nach GitHub umgezogen: [#5](https://github.com/nurkert/Humanitl/issues/5). Dort steht die vollständige Spezifikation (Englisch), hier nicht mehr.
 
 ## HUM-540 · TUI-Grundlage: ratatui im CLI, Terminal auf jedem Weg zurück
 
-### Kontext
-ADR-0024 Punkt 6. Der Einstellungsbildschirm, der Erststart in `go`, die
-Interceptor-Ansicht und die Hilfe der Präfixtaste teilen eine Grundlage.
-Heute setzt `daemon/bin/humanitl/src/tty.rs` den Rohmodus über `rustix`.
-
-### Spezifikation
-1. Abhängigkeiten `ratatui` (Backend `crossterm`) und `crossterm` in der
-   aktuellen stabilen Fassung, zentral in `daemon/Cargo.toml` vom
-   Hauptstrang eingetragen, `dep.workspace = true` in
-   `daemon/bin/humanitl/Cargo.toml`. `cargo deny check` grün; die Größe von
-   `humanitl` vorher und nachher im Commit-Body.
-2. Modul `daemon/bin/humanitl/src/tui/` mit: `TerminalGuard` (Rohmodus,
-   alternativer Schirm, Cursor, Maus, Bracketed Paste; `Drop` stellt alles
-   wieder her), Panic-Hook, der vor der Meldung zurücksetzt, Behandlung von
-   `SIGTERM`, `SIGHUP`, `SIGINT` und `SIGTSTP`/`SIGCONT`, Prüfung der
-   Mindestgröße (`TERM_003`), ein gemeinsamer Rahmen für Kopf, Fuß mit
-   Tasten und Suche.
-3. Zusammenspiel mit `tty.rs`: ein Weg in den Rohmodus je Prozess. Entweder
-   übernimmt der Guard die Einstellung aus `tty::RawMode`, oder `RawMode`
-   nutzt den Guard; zwei Besitzer der `termios` gibt es nicht.
-4. `NO_COLOR` gilt; ohne Terminal kein TUI-Bildschirm, sondern der
-   dokumentierte Weg ohne (je Bildschirm im Issue genannt).
-
-### Tests
-- Bildschirme über `ratatui::backend::TestBackend` als Schnappschuss.
-- Pseudoterminal-Test (wie `daemon/bin/humanitl/tests/tty.rs`): nach
-  normalem Ende, nach Panic, nach `SIGTERM` und `SIGHUP` sind `termios`
-  und alternativer Schirm wie vorher. Mutationsbeweis: Panic-Hook ohne
-  Zurücksetzen färbt den Panic-Test rot.
-- Zu kleines Terminal: `TERM_003`, Terminal unverändert.
-- macOS-Querprüfung (`aarch64-apple-darwin`, Erinnerung „macOS
-  cross-clippy").
-
-### Fallstricke
-- `SIGTSTP` (`Ctrl+Z`): vor dem Anhalten zurücksetzen, nach `SIGCONT` neu
-  setzen und neu zeichnen.
-- Ein Terminal, das den alternativen Schirm nicht kennt, darf keinen Müll
-  zurücklassen; dann ohne alternativen Schirm und am Ende löschen.
-- crossterm liest von `/dev/tty`, wenn `stdin` kein Terminal ist; das darf
-  den Weg ohne TUI nicht umgehen.
-
-### Akzeptanzkriterien
-1. Kein Ausgang eines TUI-Bildschirms hinterlässt ein verstelltes Terminal.
-2. Daemon und Shim linken weder ratatui noch crossterm (`cargo tree`-Prüfung
-   im Test oder in `tools/check-deps.sh`).
-
----
+Am 2026-11-21 nach GitHub umgezogen: [#6](https://github.com/nurkert/Humanitl/issues/6). Dort steht die vollständige Spezifikation (Englisch), hier nicht mehr.
 
 ## HUM-541 · Einstellungs-TUI `humanitl settings`
 
-### Kontext
-Vorgabe 2. Der Befehl heißt `humanitl settings` (Eigentümer, 2026-11-17,
-Frage 1).
-
-### Spezifikation
-1. Bildschirm aus `GetConfig(include_catalog)` (HUM-534): Kategorien links,
-   Zeilen rechts, Suche mit `/`, Herkunft je Zeile (`default`, `global`,
-   `project-choice`, …), gesperrte Werte nur lesbar mit Vorgabe.
-2. Bearbeiten nach `control`: Schalter, Auswahl, Text, Zahl, Pfad; Geheimnisse
-   nur als Verweis wie in der App (`secret_ref`), nie als Klartext im
-   Terminal.
-3. **Besondere Zeilen bekommen echte Bedienelemente** über dieselben RPC
-   wie in der App, je `id`:
-   - Modellserver (`llm.servers`, `llm.server_usage`): Liste, anlegen,
-     umbenennen, aktiv setzen, entfernen über `LlmServers`; Schlüssel über
-     `LlmKey` mit verdeckter Eingabe ohne Echo, einmal gesendet, nie
-     angezeigt; Prüfen über `ProbeLlm`.
-   - Agent, Ordner, Sandbox-Modus, Backend, Frist, Nachfragemodus: Auswahl
-     mit den Optionen und Gründen aus `SandboxBackends` bzw. dem Katalog,
-     geschrieben über `SetConfig` bzw. `save_choice`.
-   - Egress-Proxy samt CA und Auflösung: wie in der App über `SetConfig`;
-     Zugangsdaten des Proxys nur über `Egress.SetAuth` (verdeckte Eingabe
-     ohne Echo, einmal gesendet) und `Egress.RemoveAuth`, nie über
-     `SetConfig`; „Prüfen" über `Egress`.
-   - Daemon: Version aus `GetInfo`, Neustart über denselben RPC wie die
-     App, Updateprüfung über `Update`, Pfad der `config.toml` aus
-     `ConfigSnapshot.config_path` mit „im Editor öffnen" (`$EDITOR`, wie
-     `humanitl config edit`).
-   Ausgenommen sind nur Einstellungen des App-Fensters selbst (heute die
-   Skalierung, `uiScale`, die die App lokal hält); der Katalog markiert sie
-   `client = app`, die TUI zeigt sie nicht.
-4. Schreiben je Änderung: globale Ebene über `SetConfig`; Projektebene
-   (Schalter `--project PATH`, in der Sitzung das Projekt der Sitzung) liest
-   mit `GetConfig(project)` und schreibt Schlüssel mit `in_project_choice`
-   über `Projects.save_choice`, nie über `SetConfig`; andere Schlüssel sind
-   dort nur lesbar. Ablehnung an der Zeile mit `why` und `fix`.
-   Live-Aktualisierung bei `ConfigChanged` (HUM-534).
-5. Ohne Terminal oder mit `--json`: kein Bildschirm, Hinweis auf
-   `humanitl config get|set`, Exit 1.
-
-### Tests
-- Schnappschüsse über `TestBackend` mit einem Fake-Katalog: Kategorien,
-  Reihenfolge, Suche, gesperrte Zeile.
-- Tastenfolge „Kategorie wählen, Schalter umlegen" schickt genau ein
-  `SetConfig` mit Schlüssel und Wert. Mutationsbeweis: gesperrte Zeile
-  bearbeitbar färbt den Sperrtest rot.
-- Paritätstest: jede Kategorie und jeder Eintrag des Katalogs erscheint in
-  der TUI (gleiche Menge wie in der App, HUM-535).
-- Ablehnung des Daemons erscheint an der Zeile.
-- Projektebene mit zwei Projekten A und B (Fake-Daemon, verschiedene
-  Wahl): `--project A` zeigt den Wert von A mit Herkunft `project-choice`;
-  Umschalten von `sandbox.mode` schickt `save_choice` für A und kein
-  `SetConfig`. Mutationsbeweis: Schreiben über `SetConfig` färbt den Test
-  rot.
-- Modellserver: Anlegen in der TUI schickt `LlmServers.Add`; der Schlüssel
-  erscheint weder im Schnappschuss noch in der Ausgabe. Mutationsbeweis:
-  Eingabe mit Echo färbt den Test rot.
-- `ConfigChanged` von einem anderen Client lädt die gezeigte Zeile neu.
-- Zugangsdaten des Egress-Proxys: Eingabe in der TUI schickt genau ein
-  `Egress.SetAuth` und kein `SetConfig`, „Entfernen" ein
-  `Egress.RemoveAuth`; das Passwort steht weder im Schnappschuss noch in
-  der Ausgabe. Mutationsbeweis: Schreiben über `SetConfig` färbt den Test
-  rot.
-
-### Fallstricke
-- Keine eigene Liste, keine eigene Prüfung der Werte; Gültigkeit entscheidet
-  der Daemon.
-- Lange Hilfetexte umbrechen nach Anzeigebreite (Unicode), nicht nach Bytes.
-- Ein `secret_ref` wird nie aufgelöst angezeigt.
-
-### Akzeptanzkriterien
-1. Jede Einstellung der App ist in der TUI zu sehen und zu ändern, mit
-   gleicher Herkunft und Sperre, über dieselben RPC; ausgenommen nur die
-   als `client = app` markierten Einstellungen des App-Fensters.
-2. Ein neuer Katalog-Eintrag erscheint in der TUI ohne Codeänderung dort.
-
----
+Am 2026-11-21 nach GitHub umgezogen: [#7](https://github.com/nurkert/Humanitl/issues/7). Dort steht die vollständige Spezifikation (Englisch), hier nicht mehr.
 
 ## HUM-542 · `humanitl go [AGENT]`: Agent als Wort, `--dir`, `--disposable`, `--rw`, `--ro`, `--kernel`, Projektwahl
 
-### Kontext
-Vorgabe 4: `humanitl go claude`, höchstens etwa vier Wörter für den
-gewöhnlichen Start, mehr über Schalter. Heute nimmt `go` ein Kommando nur
-nach `--` (`daemon/bin/humanitl/src/cli.rs`, `GoArgs`) und ist immer
-`run --disposable`. Grammatik entschieden vom Eigentümer am 2026-11-17
-(Frage 5): Der gewöhnliche Start bleibt `humanitl go [AGENT]`, alles
-Weitere sind die Schalter `--ro`, `--rw`, `--kernel`, `--dir PATH`,
-`--disposable`.
-
-### Spezifikation
-1. `humanitl go [AGENT] [--dir PATH] [--disposable|--rw|--ro] [--kernel]
-   [--yes] [-- CMD...]`. `AGENT` ist eine Kennung aus der Liste der Adapter
-   (`opencode`, `pi`, `claude`, `codex`, `agy`); unbekannt: Befund mit der
-   Liste. Das Programm kommt nach ADR-0023 aus Host oder Depot.
-2. `--dir PATH`: Projektordner, Vorgabe das Arbeitsverzeichnis. Der
-   allgemeine Schalter `--work` (aus `sandbox.work_dir` erzeugt) gilt weiter;
-   beide zugleich sind ein Fehler.
-3. Ordnermodus, drei Schalter, höchstens einer: `--disposable` (Wegwerf),
-   `--rw` (direkt schreibend), `--ro` (nur lesbar). Ohne Schalter gilt die
-   Projektwahl, für ein neues Projekt die Vorgabe des Vorschlags (HUM-536).
-4. `--kernel`: Kernel-Stufe für diesen Start (hebt `sandbox.min_isolation`
-   für die Sitzung, wie `--sandbox-min-isolation` in HUM-489); nicht
-   verfügbar: der Befund der Stufe (`SANDBOX_045` u. a.), kein stiller
-   Rückfall.
-5. Alle Schalter gelten für diesen Aufruf und ändern die gespeicherte
-   Projektwahl nicht.
-6. Ein bekanntes Projekt startet mit seiner Projektwahl (HUM-532); `AGENT`
-   und Schalter überschreiben sie für diesen Aufruf. Ein unbekanntes Projekt
-   bekommt den Erststart-Bildschirm (HUM-543); bis der da ist, Vorgaben und
-   eine Zeile.
-7. Splash (HUM-496) und Frage nach wartenden Änderungen bleiben.
-8. `backlog/CONVENTIONS.md` 3.8 (Zeile `humanitl go`) im selben Commit
-   nachziehen.
-
-### Tests
-- `go claude` setzt den Adapter `claude` für den Start (Fake-Daemon prüft
-  die Anfrage).
-- `go` ohne Wort im bekannten Projekt nimmt den Agenten der Projektwahl.
-  Mutationsbeweis: Projektwahl ignoriert färbt den Test rot.
-- `--rw`, `--ro`, `--disposable` setzen Modus und `work_mode`; zwei davon
-  zugleich: Fehler von clap.
-- `--dir` und `--work` zugleich: Fehler. `--dir` auf eine Datei: Befund.
-- `--kernel` ohne verfügbare Kernel-Stufe: Befund, kein Start mit der
-  gemeinsamen Stufe. Mutationsbeweis: stiller Rückfall färbt den Test rot.
-- Nach einem Aufruf mit Schaltern ist die gespeicherte Projektwahl
-  unverändert.
-- `go foo`: Befund mit der Liste der Agenten, Exit 1.
-- `go claude -- --resume` reicht `--resume` an den Agenten.
-
-### Fallstricke
-- Ein Ordner namens `claude` im Arbeitsverzeichnis ist kein Agent;
-  Positionsargument ist immer der Agent, der Ordner nur über `--dir`.
-- `--ro` ist mit einer Wegwerf-Schicht sinnlos; deshalb schließen die drei
-  Schalter einander aus.
-- `--ask terminal` bleibt mit `CLI_002` abgelehnt.
-
-### Akzeptanzkriterien
-1. `humanitl go claude` startet Claude Code im aktuellen Ordner mit den
-   Vorgaben oder der Projektwahl, ohne weitere Angaben.
-2. Alles Weitere geht über die fünf Schalter; keiner ändert still die
-   gespeicherte Wahl.
-
----
+Am 2026-11-21 nach GitHub umgezogen: [#8](https://github.com/nurkert/Humanitl/issues/8). Dort steht die vollständige Spezifikation (Englisch), hier nicht mehr.
 
 ## HUM-543 · Erststart-Bildschirm in `humanitl go`
 
-### Kontext
-Vorgabe 3 im Terminal: derselbe Bildschirm wie in der App (HUM-538), aus
-`Projects.proposal`.
-
-### Spezifikation
-1. Beim ersten `go` in einem unbekannten Ordner, an einem Terminal und ohne
-   `--json` und `--yes`: ein TUI-Bildschirm (HUM-540) mit der Zeile der
-   Vorgaben, „Start" mit Fokus (`Enter`), „Anpassen…" (`a`), Abbrechen
-   (`Esc`, `q`, nichts gestartet, Exit 130 wie bei `Ctrl+C`).
-2. „Anpassen…" zeigt die Felder des Vorschlags wie HUM-538, nicht
-   verfügbare Optionen mit Grund.
-3. „Start" speichert die Wahl und startet; danach wie HUM-542.
-4. `--yes`, kein Terminal oder `--json`: kein Bildschirm, eine Zeile auf
-   `stderr` „First start in <name>: <Vorgaben>. Change with humanitl
-   projects show <path>" (Wortlaut festlegen), Wahl gespeichert, Start.
-5. Der Bildschirm endet vor dem Splash; Splash und Agent bekommen ein
-   zurückgesetztes Terminal.
-
-### Tests
-- Pseudoterminal: `Enter` startet mit den Vorgaben, die Wahl ist gespeichert,
-  das zweite `go` zeigt keinen Bildschirm. Mutationsbeweis: Wahl nicht
-  gespeichert färbt den Test des zweiten Starts rot.
-- `--yes`: keine Ausgabe auf `stdout`, genau eine Zeile auf `stderr`.
-- `Esc`: kein Start, keine Wahl gespeichert.
-- Terminalzustand nach dem Bildschirm unverändert (Test aus HUM-540).
-
-### Fallstricke
-- Zwischen Bildschirm und Splash darf kein Tastendruck verloren gehen oder
-  an den Agenten rutschen; Eingabepuffer nach dem Bildschirm leeren.
-- Der Hinweis auf Cloud-Inferenz folgt den Regeln von HUM-516, auch mit
-  `--yes`.
-
-### Akzeptanzkriterien
-1. Erster Start: ein Bildschirm, `Enter` genügt.
-2. Zweiter Start: kein Bildschirm.
-3. Ohne Terminal oder mit `--yes`/`--json`: kein Bildschirm, eine Zeile.
-
----
+Am 2026-11-21 nach GitHub umgezogen: [#9](https://github.com/nurkert/Humanitl/issues/9). Dort steht die vollständige Spezifikation (Englisch), hier nicht mehr.
 
 ## HUM-544 · Präfixtaste `ctrl-b` mit fester Tabelle; `Ctrl+,` direkt nur mit kitty-Tastaturprotokoll
 
-### Kontext
-Vorgabe 4 und ADR-0024 Punkt 8. Heute gibt es eine Präfixtaste nur zum
-Abhängen (`terminal.detach_prefix`, Vorgabe `ctrl-a`, HUM-279, Logik in
-`daemon/bin/humanitl/src/cmd/attach.rs`, Lesart `DetachKeys` in
-`daemon/crates/config/src/model.rs`). `Ctrl+,` hat in den meisten
-Terminals keinen Steuercode. Entscheidung des Eigentümers vom 2026-11-17
-(Frage 6): Vorgabe wird `ctrl-b` wie in tmux; `Ctrl+,` direkt nur mit dem
-kitty-Tastaturprotokoll.
-
-### Spezifikation
-1. Neuer Schlüssel `terminal.prefix` mit denselben erlaubten Werten wie
-   heute, **Vorgabe `ctrl-b`**; `terminal.detach_prefix` bleibt als Alias
-   (`alias.rs`) mit Hinweis beim Laden. `--detach-keys` bleibt, neu auch
-   `--prefix`. Ein ausdrücklich gesetztes `ctrl-a` (unter einem der beiden
-   Namen) bleibt, wie es ist.
-2. **Umstieg:** Wer bisher die Vorgabe `ctrl-a` hatte (kein Wert gesetzt),
-   bekommt beim ersten Anhängen nach dem Wechsel eine Zeile auf `stderr`:
-   „The prefix key is now Ctrl+B (was Ctrl+A). Keep the old one: humanitl
-   config set terminal.prefix ctrl-a". Gezeigt einmal je Nutzer, gemerkt im
-   Datenordner des Daemons, nie im Projekt.
-3. Feste Tabelle nach dem Präfix: `d` abhängen, `,` Einstellungen, `i`
-   Interceptor, `?` Hilfe (kleines Overlay der TUI mit der Tabelle), Präfix
-   zweimal oder sein Buchstabe schickt es einmal an den Agenten, jede andere
-   Taste geht mit dem Präfix unverändert weiter (wie heute).
-4. Die Tabelle steht an einer Stelle im Code und wird in Hilfe,
-   `cli.md` und Settings-Text aus ihr erzeugt.
-5. **`Ctrl+,` direkt:** nur, wenn die Ausgabe des Agenten das kitty-
-   Tastaturprotokoll eingeschaltet hat (`CSI > flags u`, Zustand im Client
-   aus dem Strom gelesen, Abschalten `CSI < u` beachtet) und der Schlüssel
-   `terminal.direct_keys` (Vorgabe `true`) es erlaubt. Dann wird
-   `CSI 44 ; 5 u` abgefangen. Der Client schaltet das Protokoll nie selbst
-   ein.
-6. Die Tabelle wirkt in `sandbox attach`, `run -- CMD` am Terminal und `go`.
-   Die Ansichten selbst baut HUM-545 und HUM-546; bis dahin sagen `,` und
-   `i` in einer Zeile, dass sie kommen, oder fehlen in der Tabelle.
-
-### Tests
-- Zustandsautomat der Tasten als Einheitstest: jede Taste nach dem Präfix,
-  Präfix am Ende eines Lesevorgangs (wartet ohne Frist, wie heute), Präfix
-  zweimal. Mutationsbeweis: Präfix zweimal schickt zwei Bytes färbt den
-  Test rot.
-- kitty-Zustand: `CSI > 1 u` im Strom, dann `CSI 44;5u` von der Tastatur
-  öffnet Einstellungen; ohne vorheriges Einschalten geht dieselbe Folge an
-  den Agenten. Mutationsbeweis: Abfangen ohne Prüfung des Zustands färbt den
-  zweiten Fall rot.
-- Alias: `terminal.detach_prefix = "ctrl-e"` wirkt als `terminal.prefix`.
-- Vorgabe ohne Konfiguration ist `ctrl-b`; ein gesetztes `ctrl-a` bleibt.
-  Mutationsbeweis: Vorgabe zurück auf `ctrl-a` färbt den Test rot.
-- Umstiegszeile: erscheint beim ersten Anhängen ohne gesetzten Wert, nicht
-  beim zweiten und nicht mit gesetztem Wert.
-- Prüfung der Konfiguration: dieselben Ausschlüsse wie heute (`ctrl-[`,
-  `ctrl-h`, `ctrl-i`, `ctrl-j`, `ctrl-m`).
-
-### Fallstricke
-- Kollision mit tmux: Ein tmux in der Sandbox hat dasselbe Präfix. Zweimal
-  `Ctrl+B` schickt es einmal hindurch; das steht in der Beschreibung des
-  Schlüssels, in der Hilfe (`?`) und in `docs/UX.md`. `ctrl-b` ist in
-  Shells und readline „ein Zeichen zurück"; auch das kommt mit zweimal
-  Drücken beim Agenten an.
-- Das Einschalten des kitty-Protokolls durch den Agenten muss den Filter
-  `FullScreen` passieren; prüfen, ob `CSI > … u` heute durchgeht, und den
-  Filter nicht in diesem Issue erweitern (wenn nicht: `Ctrl+,` direkt ist
-  dann nie aktiv, im Commit-Body nennen und eigenes Issue anlegen).
-- Die Beschreibung von `terminal.detach_prefix` in `model.rs`,
-  `DetachKeys::DEFAULT_SPEC` und die Texte von `attach.rs` und `run.rs`
-  nennen heute `ctrl-a`; alle mitziehen.
-- Die Oberfläche der App liest die Präfixtaste nicht (heute so); bleibt so.
-
-### Akzeptanzkriterien
-1. Eine Präfixtaste, konfigurierbar, mit fester Tabelle in allen drei
-   Wegen ins Terminal einer Sitzung.
-2. Keine Taste geht dem Agenten verloren außer der gewählten Präfixtaste,
-   und auch die kommt mit zweimal Drücken an.
-
----
+Am 2026-11-21 nach GitHub umgezogen: [#10](https://github.com/nurkert/Humanitl/issues/10). Dort steht die vollständige Spezifikation (Englisch), hier nicht mehr.
 
 ## HUM-545 · Ansichtswechsel in der Sitzung: Einstellungs-TUI über dem Agenten und zurück
 
-### Kontext
-ADR-0024 Punkt 9. Präfix und `,` öffnen die Einstellungs-TUI (HUM-541) in
-der laufenden Sitzung; danach soll der Agent aussehen wie vorher. Der Daemon
-hält keinen Bildschirmzustand, nur einen Rückstand roher Bytes.
-
-### Spezifikation
-1. Beim Wechsel: Eingabe an den Agenten anhalten, Ausgabe des Agenten im
-   Client puffern (Obergrenze, etwa 4 MiB; darüber verwerfen und merken),
-   eigenen alternativen Schirm zeigen.
-2. Beim Zurück: eigenen Schirm verlassen, gepufferte Ausgabe schreiben
-   (oder, wenn verworfen, nicht), dann den Agenten zum Neuzeichnen bringen:
-   über die `Terminal`-RPC eine Größenänderung auf eine Zeile weniger und
-   zurück auf die echte Größe.
-3. Größenänderungen während einer Ansicht gehen beim Zurück an den Agenten.
-4. Je ausgelieferten Agenten (OpenCode, pi, Claude Code, Codex, `agy`)
-   prüfen und im Commit-Body festhalten, ob das Neuzeichnen wirkt; wo
-   nicht, ein Hinweis in der Hilfe (`Ctrl+L` im Agenten).
-5. Der Agent läuft während der Ansicht weiter; ein Halt einer Anfrage zeigt
-   sich in der Fußzeile der Ansicht.
-
-### Tests
-- Mit einem Fake-Agenten (Programm, das bei `SIGWINCH` seinen Schirm neu
-  schreibt): nach Wechsel und Zurück steht dessen Schirm. Mutationsbeweis:
-  ohne Größenänderung beim Zurück färbt den Test rot.
-- Ausgabe während der Ansicht erscheint nach dem Zurück, in Reihenfolge.
-- Puffer über der Grenze: verworfen, Neuzeichnen trotzdem.
-- Keine Taste aus der Ansicht erreicht den Agenten.
-
-### Fallstricke
-- Der Agent kann selbst im alternativen Schirm sein; der Client verlässt
-  beim Zurück nur seinen eigenen.
-- Die Größenänderung kurz auf eine Zeile weniger ist für den Agenten
-  sichtbar; nur einmal je Rückkehr.
-- Kein zweiter Filter im Client: gepufferte Bytes sind schon gefiltert.
-
-### Akzeptanzkriterien
-1. Präfix und `,` öffnen die Einstellungen in der laufenden Sitzung, `Esc`
-   kehrt zurück, und der Agent ist wieder sichtbar und bedienbar.
-2. Der Agent verliert keine Ausgabe unterhalb der Puffergrenze.
-
----
+Am 2026-11-21 nach GitHub umgezogen: [#11](https://github.com/nurkert/Humanitl/issues/11). Dort steht die vollständige Spezifikation (Englisch), hier nicht mehr.
 
 ## HUM-546 · Interceptor-Ansicht im Terminal, Glocke bei neuem Halt
 
-### Kontext
-Präfix und `i` öffnen eine Ansicht der gehaltenen Anfragen. Im Terminal
-von `go` ist `--ask terminal` abgelehnt (`CLI_002`), weil die Fragen das
-Terminal des Agenten bräuchten; mit dem Ansichtswechsel (HUM-545) geht das
-jetzt ohne Kollision.
-
-### Spezifikation
-1. Ansicht aus `Subscribe` und den gehaltenen Flüssen: Liste mit Host,
-   Methode, Größe, Befunden, Wartezeit; Auswahl zeigt Kopf und den Anfang
-   des Bodys wie `ask_terminal.rs`.
-2. Entscheiden über `Decide`: erlauben, blockieren, Regel (die Wege der
-   App, nicht mehr).
-3. Ein neuer Halt, während der Agent sichtbar ist, schreibt keinen Text in
-   dessen Terminal, denn es gehört dem Agenten. Der Client gibt die Glocke
-   (ein Byte `BEL`, zwischen zwei Stücken der Ausgabe des Agenten, nie
-   mitten in einer Steuerfolge), einstellbar über `terminal.bell_on_hold`,
-   Vorgabe `true` (Eigentümer, 2026-11-17). Höchstens eine Glocke je
-   Sekunde. Daneben wie heute App und Benachrichtigung des Systems.
-4. Mit `--ask terminal` ist `go` weiterhin abgelehnt; die Ansicht ist ein
-   Weg zusätzlich zu `--ask ui`.
-
-### Tests
-- Fake-Daemon mit zwei gehaltenen Flüssen: Liste, Auswahl, `a` schickt
-  `Decide(allow)` für genau den gewählten. Mutationsbeweis: Entscheidung an
-  den ersten statt den gewählten färbt den Test rot.
-- Ein Fluss, der während der Ansicht von anderswo entschieden wird,
-  verschwindet aus der Liste.
-- Anzeige säubert Steuerzeichen in Host und Body wie `ask_terminal.rs`.
-- Glocke: ein neuer Halt ergibt genau ein `BEL` auf dem Terminal, nie
-  innerhalb einer Folge `ESC [ …` der Agentenausgabe; mit
-  `terminal.bell_on_hold = false` keines; zehn Halte in einer Sekunde ein
-  `BEL`. Mutationsbeweis: `BEL` mitten in einen gepufferten Block
-  geschrieben färbt den Test rot.
-
-### Fallstricke
-- Hosts und Bodies sind Text des Angreifers; dieselbe Säuberung wie im
-  bestehenden Terminal-Kasten, kein zweiter Weg.
-- Ein Halt läuft ab, während die Ansicht offen ist; Frist sichtbar.
-
-### Akzeptanzkriterien
-1. Gehaltene Anfragen lassen sich im Terminal der Sitzung entscheiden, ohne
-   das Terminal des Agenten zu stören.
-2. Keine Entscheidung ohne ausdrückliche Taste.
-
----
+Am 2026-11-21 nach GitHub umgezogen: [#12](https://github.com/nurkert/Humanitl/issues/12). Dort steht die vollständige Spezifikation (Englisch), hier nicht mehr.
 
 ## HUM-547 · `humanitl go`: Schließen hängt ab statt zu beenden, ein zweites `go` hängt sich an
 
-### Kontext
-Vorgabe 4 und ADR-0024 Punkt 10. Heute beenden `run` und `go` die Sitzung
-bei `SIGHUP` und `SIGTERM` (`daemon/bin/humanitl/src/cmd/run.rs`), damit
-keine Sandbox ohne Besitzer stehen bleibt. Der Daemon hält das
-Pseudoterminal; die Sitzung braucht den Client nicht. Ein zweiter Start
-wird mit `CLI_005` abgelehnt. Die App verhält sich schon anders: Schließt
-man ihr Fenster oder den Terminalbereich, hängt sie nur ihren Terminalstrom
-ab, die Sitzung läuft weiter, und Beenden ist dort eine eigene, bestätigte
-Aktion. Entscheidung des Eigentümers vom 2026-11-17 (Frage 7): Abhängen
-beim Schließen eines Terminals nur für `humanitl go`; `humanitl run` endet
-beim Schließen seines Terminals wie heute, und Sitzungen aus der App
-behalten ihr heutiges Verhalten (Schließen lässt sie laufen, sichtbar im
-Tray und unter „Laufend" im Startfenster, Beenden bleibt ausdrücklich).
-
-### Spezifikation
-1. Schlüssel `terminal.on_close`: `"detach"` (Vorgabe) oder `"stop"`, nur
-   für `humanitl go`. Mit `"detach"` hängt `SIGHUP` von `go` ab und die
-   Sitzung läuft weiter; `SIGTERM` beendet wie heute. `humanitl run` (auch
-   `run -- CMD` am Terminal) beendet bei `SIGHUP` weiter, unabhängig vom
-   Schlüssel.
-2. Ein `go` in einem Ordner, dessen Sitzung läuft, hängt sich an sie an
-   (Splash entfällt, eine Zeile „Attached to the running session in
-   <name>"), statt `CLI_005`. Ein `go` in einem anderen Ordner, während eine
-   Sitzung läuft, bekommt weiter `CLI_005`, jetzt mit Fix
-   `humanitl go` im Ordner der laufenden Sitzung bzw. `humanitl sandbox
-   attach`.
-3. Endet eine abgehängte Wegwerf-Sitzung, warten die Änderungen wie heute;
-   das nächste `go` im Ordner oder das Startfenster fragt danach
-   (`changes::review`).
-4. Die Moduszeile von `humanitl sessions` und der Eintrag unter „Laufend"
-   zeigen, dass eine Sitzung ohne angehängtes Terminal läuft.
-
-### Tests
-- Pseudoterminal: `SIGHUP` an `go` mit `"detach"`: Prozess endet, Sitzung
-  läuft (Status über den Fake-Daemon), kein `Sandbox(Stop)`. Mit `"stop"`:
-  `Sandbox(Stop)`. Mutationsbeweis: Bedingung umgedreht färbt beide rot.
-- `SIGHUP` an `run -- bash` mit `terminal.on_close = "detach"`:
-  `Sandbox(Stop)` wie heute. Mutationsbeweis: Schlüssel auch für `run`
-  ausgewertet färbt den Test rot.
-- Zweites `go` im selben Ordner hängt an, kein Start.
-- App (Widget-Test mit Fake-Daemon): Schließen des Terminalbereichs und
-  des Fensters schickt kein `Sandbox(Stop)`, die Sitzung steht danach unter
-  „Laufend"; Beenden nur nach Bestätigung. Mutationsbeweis: `Stop` beim
-  Schließen färbt den Test rot.
-- `go` in anderem Ordner: `CLI_005` mit dem neuen Fix.
-- Terminalzustand nach `SIGHUP`: nicht prüfbar (Terminal weg); stattdessen
-  kein hängender Prozess nach 2 s.
-
-### Fallstricke
-- Nach `SIGHUP` gibt es kein Terminal mehr; nichts mehr darauf schreiben,
-  sonst `EIO` und ein Prozess, der nicht endet.
-- Eine abgehängte Sitzung mit gehaltenen Anfragen wartet, bis jemand
-  entscheidet oder die Frist abläuft; das steht in der Beschreibung des
-  Schlüssels und in `docs/SECURITY.md` nicht als Schwächung, weil die
-  Vorgabe der Frist gilt.
-- Die Erinnerung „Flock fd inherited by waiters": Kein Kindprozess darf den
-  Client nach dem Abhängen am Leben halten.
-
-### Akzeptanzkriterien
-1. Ein geschlossenes Terminalfenster beendet einen mit `go` gestarteten
-   Agenten nicht (Vorgabe), einstellbar; `run` beendet wie vorher; eine
-   Sitzung aus der App läuft nach dem Schließen weiter wie heute und endet
-   nur über die ausdrückliche Aktion.
-2. App oder ein anderes Terminal hängen sich an die weiterlaufende Sitzung.
-3. Wartende Änderungen gehen nicht verloren.
-
----
+Am 2026-11-21 nach GitHub umgezogen: [#13](https://github.com/nurkert/Humanitl/issues/13). Dort steht die vollständige Spezifikation (Englisch), hier nicht mehr.
 
 ## HUM-548 · Doku: `cli.md`, `CONFIG.md`, `UX.md`, Anleitung „Starten"; Nachtrag zu ADR-0024
 
-### Kontext
-Abschluss des Sprints. Neue Befehle (`app`, `settings`, `projects`, `go
-[AGENT]`), neue Schlüssel (`terminal.prefix` mit Vorgabe `ctrl-b`,
-`terminal.direct_keys`, `terminal.on_close`, `terminal.bell_on_hold`),
-Startfenster und Erststart.
-
-### Spezifikation
-1. `docs/cli.md` aus `cli_docs.rs` neu erzeugt; `docs/CONFIG.md` mit den
-   neuen Schlüsseln; `docs/UX.md` mit Startfenster, Erststart, Präfixtabelle
-   und Ansichten.
-2. Anleitung `docs/guides/getting-started` (Name nach Bestand) mit dem Weg
-   „`humanitl go claude`, abhängen, in der App anhängen, aufräumen".
-3. ADR-0024 (angenommen mit HUM-530) bekommt einen Nachtrag, wo das
-   Gebaute abweicht; Indexzeile in `docs/adr/README.md` nachziehen; `BACKLOG.md` Abschnitt 9 Punkt 24 auf
-   den Stand bringen.
-4. `docs/SECURITY.md` und `docs/THREAT-MODEL.md` prüfen, dass die Aussagen
-   aus HUM-532, HUM-533 und HUM-547 dort stehen.
-
-### Tests
-- `scripts/ci/lint-docs.sh` und `docs/adr/check.sh` grün; Test der
-  CLI-Doku (`cli_docs.rs`) grün.
-
-### Fallstricke
-- Website-Übersetzungen unter `docs/translations/` nicht vergessen, wenn
-  geänderte Seiten dort eine Fassung haben (HUM-346).
-
-### Akzeptanzkriterien
-1. Jeder neue Befehl und Schlüssel ist dokumentiert.
-2. ADR-0024 beschreibt das Gebaute.
-
----
+Am 2026-11-21 nach GitHub umgezogen: [#14](https://github.com/nurkert/Humanitl/issues/14). Dort steht die vollständige Spezifikation (Englisch), hier nicht mehr.
 
 ## HUM-549 · Kandidat, nicht in diesem Sprint: mehrere Sitzungen je Daemon
 
-### Kontext
-Frage 9 des ADR-0024: Der Eigentümer will mehrere Sitzungen zugleich
-(Vision vom 2026-10-20, „wie screen"), aber später, in einem eigenen Issue
-(Entscheidung vom 2026-11-17). Heute führt der Daemon genau eine Sitzung;
-ein zweiter Start ist `CLI_005` (`daemon/crates/ipc/src/sandbox.rs`).
-Register, Startfenster, RPC `Projects` und `go` sind in diesem Sprint schon
-für mehrere ausgelegt. Dieses Issue ist ein Kandidat und wird erst
-ausgearbeitet, wenn der Eigentümer es einplant.
-
-### Spezifikation
-Vor der Einplanung auszuarbeiten, mindestens:
-1. Sitzungen je Projekt im Daemon (Zustand, Halte, Terminal, Wegwerf-Schicht
-   je Sitzung statt einer), `CLI_005` nur noch für denselben Ordner.
-2. Proxy und Regeln: Zuordnung jeder Anfrage zu ihrer Sitzung (Tür je
-   Sitzung), Sitzungsregeln je Sitzung.
-3. Grenzen für Speicher, Prozesse und Anzahl der Sitzungen.
-4. Benannte Sitzungen in der CLI (`humanitl sessions ls`, `attach NAME`).
-
-### Tests
-Werden mit der Spezifikation festgelegt; mindestens: zwei Sitzungen in zwei
-Ordnern, jede Anfrage landet in der Aufzeichnung der richtigen, die
-Escape-Suite je Sitzung grün.
-
-### Fallstricke
-- Eine Anfrage, die der falschen Sitzung zugeordnet wird, bekäme deren
-  Regeln; die Zuordnung darf nur aus der Tür kommen, nie aus Angaben der
-  Sandbox.
-- Die Tür der Kernel-Stufe ist nur je Sitzung begrenzt (64 Verbindungen,
-  bis zu 256 Deskriptoren des Daemons, HUM-467). HUM-479 hat ein gemeinsames
-  Limit verworfen, solange es nur eine Sitzung gibt (Entscheidung in
-  `backlog/sprint-7.md`). Mit mehreren Sitzungen summiert sich das, und
-  schon drei volle Türen kämen mit dem Proxy über die weiche Grenze von
-  1024 Deskriptoren des Daemons. Dieses Issue muss deshalb das gemeinsame
-  Budget neu entscheiden: Obergrenze der Sitzungen, Grenze der Deskriptoren des
-  Daemons, und wenn nötig ein gemeinsames Limit der Türen mit garantiertem
-  Anteil je Sitzung, getestet damit, dass eine volle Sitzung die Tür einer
-  anderen nicht sperrt.
-
-### Akzeptanzkriterien
-Werden mit der Spezifikation festgelegt.
-
----
+Am 2026-11-21 nach GitHub umgezogen: [#16](https://github.com/nurkert/Humanitl/issues/16). Dort steht die vollständige Spezifikation (Englisch), hier nicht mehr.
 
 ## HUM-552 · `Ctrl+,` schließt das Einstellungs-Sheet ohne Rückfrage bei ungespeichertem Formular
 
@@ -1378,38 +819,7 @@ vorbei. Der Fehler bestand schon vor HUM-535.
 
 ## HUM-554 · Quelle des Agenten (Host oder Depot) als Teil der Projektwahl
 
-### Kontext
-Aus dem Review von HUM-536. Die Spezifikation dort verlangte „Agent nur im
-Depot: Quelle `depot` vorbelegt". Gebaut wurde nach ADR-0023: Die Quelle
-ist eine Einstellung je Agent (`agents.<id>.source`), keine Projektwahl, und
-ein Start fällt nie auf die andere Quelle zurück. Darum zeigt der Vorschlag
-heute bei einem Agenten, der nur im Depot liegt, die wirksame Quelle `host`
-als Vorgabe, nicht wählbar und mit Grund. Der Erststart-Bildschirm kann die
-Quelle aber nicht umstellen; der Nutzer muss dafür `humanitl agents source`
-kennen. Das widerspricht „alles vorbelegt, nichts muss".
-
-### Spezifikation
-1. Die Quelle des Agenten wird ein Schlüssel der Projektwahl
-   (`PROJECT_CHOICE_KEYS`), der die globale Einstellung je Projekt
-   überschreibt; eine Sperre der Firmenvorgabe gilt weiter.
-2. `Projects.proposal`: Die Option eines Agenten trägt die Quelle in ihren
-   Paaren für `save_choice`. Ist der Agent nur in einer Quelle bereit, ist
-   diese vorbelegt; die andere steht mit Grund da.
-3. Ein Start ohne Bildschirm mit gespeicherter Projektwahl nimmt diese
-   Quelle; ohne Projektwahl gilt weiter ADR-0023 ohne Rückfall.
-4. ADR-0023 bekommt einen Nachtrag dazu.
-
-### Tests
-- Agent nur im Depot, keine Projektwahl: Vorschlag belegt `depot` vor, die
-  Paare enthalten die Quelle; nach `save_choice` startet `Sandbox(Plan)`
-  aus dem Depot. Mutationsbeweis: Quelle nicht in den Paaren färbt rot.
-- Sperre auf `agents.<id>.source`: Quelle nicht wählbar, Sperre genannt.
-
-### Akzeptanzkriterien
-1. Der Erststart-Bildschirm kann die Quelle wählen, und die Vorgabe ist der
-   Start, der mit der gespeicherten Wahl geschähe.
-
----
+Am 2026-11-21 nach GitHub umgezogen: [#15](https://github.com/nurkert/Humanitl/issues/15). Dort steht die vollständige Spezifikation (Englisch), hier nicht mehr.
 
 ## Nachzügler aus Sprint 7
 
@@ -1421,219 +831,68 @@ bleiben.
 
 | ID | Titel | Größe | Abhängigkeiten |
 |---|---|---|---|
-| HUM-572 | Durchreiche: soll Codex das WebSocket-Upgrade auf `/responses` bekommen? Entscheidung des Eigentümers | S | HUM-568 |
-| HUM-573 | Agent-Depot: Vorgaben eines Adapters in die Konfigurationskopie einer Depot-Sitzung (Codex `sandbox_mode`) | M | HUM-515, HUM-566 |
-| HUM-574 | Agent-Depot: der Daemon bindet den ausgepackten Baum selbst an das geprüfte Archiv | M | HUM-566 |
-| HUM-575 | Verschlüsselte Zugangsdateien: Herabstufung ohne Spur, Rotation des Schlüssels, stummes `secret-tool` | M | HUM-523 |
-| HUM-576 | `SandboxBackends` und `humanitl sandbox argv` laden die Projektwahl nicht | M | HUM-567 |
-| HUM-577 | `config set resolver.test_ca` prüft die Datei nicht (`CONFIG_010` erst beim Start) | S | HUM-562 |
-| HUM-578 | `agy`: welche weiteren Endpunkte braucht die Durchreiche? Messen | S | HUM-568 |
-| HUM-579 | App: eigene englische Fehlerteile und rohe Regel-Titel in nicht-englischer Oberfläche | S | HUM-569 |
-| HUM-580 | `session.ended` zählt gescheiterte Flows nicht eigens | S | HUM-565 |
-| HUM-581 | Fix von `sandbox image pull` nennt nur `--backend`, nicht die Untergrenze | S | HUM-567 |
-| HUM-582 | Agent-Depot: Wartungsläufe unter macOS brauchen `shasum` statt `sha256sum` | S | HUM-566 |
-| HUM-583 | Bedrohungsmodell: Tabellenzeile zu K-37 fehlt (en und de) | S | HUM-564 |
+| HUM-572 ([#17](https://github.com/nurkert/Humanitl/issues/17)) | Durchreiche: soll Codex das WebSocket-Upgrade auf `/responses` bekommen? Entscheidung des Eigentümers | S | HUM-568 |
+| HUM-573 ([#18](https://github.com/nurkert/Humanitl/issues/18)) | Agent-Depot: Vorgaben eines Adapters in die Konfigurationskopie einer Depot-Sitzung (Codex `sandbox_mode`) | M | HUM-515, HUM-566 |
+| HUM-574 ([#19](https://github.com/nurkert/Humanitl/issues/19)) | Agent-Depot: der Daemon bindet den ausgepackten Baum selbst an das geprüfte Archiv | M | HUM-566 |
+| HUM-575 ([#20](https://github.com/nurkert/Humanitl/issues/20)) | Verschlüsselte Zugangsdateien: Herabstufung ohne Spur, Rotation des Schlüssels, stummes `secret-tool` | M | HUM-523 |
+| HUM-576 ([#21](https://github.com/nurkert/Humanitl/issues/21)) | `SandboxBackends` und `humanitl sandbox argv` laden die Projektwahl nicht | M | HUM-567 |
+| HUM-577 ([#22](https://github.com/nurkert/Humanitl/issues/22)) | `config set resolver.test_ca` prüft die Datei nicht (`CONFIG_010` erst beim Start) | S | HUM-562 |
+| HUM-578 ([#23](https://github.com/nurkert/Humanitl/issues/23)) | `agy`: welche weiteren Endpunkte braucht die Durchreiche? Messen | S | HUM-568 |
+| HUM-579 ([#24](https://github.com/nurkert/Humanitl/issues/24)) | App: eigene englische Fehlerteile und rohe Regel-Titel in nicht-englischer Oberfläche | S | HUM-569 |
+| HUM-580 ([#25](https://github.com/nurkert/Humanitl/issues/25)) | `session.ended` zählt gescheiterte Flows nicht eigens | S | HUM-565 |
+| HUM-581 ([#26](https://github.com/nurkert/Humanitl/issues/26)) | Fix von `sandbox image pull` nennt nur `--backend`, nicht die Untergrenze | S | HUM-567 |
+| HUM-582 ([#27](https://github.com/nurkert/Humanitl/issues/27)) | Agent-Depot: Wartungsläufe unter macOS brauchen `shasum` statt `sha256sum` | S | HUM-566 |
+| HUM-583 ([#28](https://github.com/nurkert/Humanitl/issues/28)) | Bedrohungsmodell: Tabellenzeile zu K-37 fehlt (en und de) | S | HUM-564 |
 
 ---
 
 ## HUM-572 · Durchreiche: soll Codex das WebSocket-Upgrade auf `/responses` bekommen? Entscheidung des Eigentümers
 
-### Kontext
-HUM-568 hat gemessen, dass eine Regel ohne `upgrade` nie ein Upgrade trifft.
-Das WebSocket, das Codex beim eingebauten Anbieter auf `/responses` öffnet,
-wird also angehalten, vor HUM-568 wie danach. Wie sich ein echter
-Codex-Lauf dann verhält (Rückfall auf HTTP oder Warten), ist nicht gemessen;
-das gehört in den Probedurchgang von HUM-553.
-
-### Spezifikation
-1. Dem Eigentümer vorlegen: Ein erlaubtes Upgrade auf genau `<basis>/responses`
-   würde die Sicherheitsaussage in `docs/SECURITY.md` 5.1 erweitern, weil
-   Nachrichten im offenen WebSocket keine einzelne Entscheidung mehr bekommen.
-2. Nur nach Zustimmung: eine Route mit `upgrade` für Codex, Doku in
-   SECURITY und THREAT-MODEL (K-02) im selben Commit, en und de.
-
-### Akzeptanzkriterien
-1. Die Entscheidung steht mit Datum in diesem Issue; ohne Zustimmung bleibt
-   das Upgrade angehalten und der Grund steht in der Codex-Anleitung.
+Am 2026-11-21 nach GitHub umgezogen: [#17](https://github.com/nurkert/Humanitl/issues/17). Dort steht die vollständige Spezifikation (Englisch), hier nicht mehr.
 
 ## HUM-573 · Agent-Depot: Vorgaben eines Adapters in die Konfigurationskopie einer Depot-Sitzung (Codex `sandbox_mode`)
 
-### Kontext
-Eine Depot-Sitzung von Codex hat kein `sandbox_mode = "danger-full-access"`
-(offen seit HUM-515); Codex versucht dann seine eigene Sandbox, die in
-unserer nicht startet. Seit HUM-566 installiert das Depot Codex, damit
-trifft das jeden Depot-Nutzer. Heute hilft nur `humanitl agents config codex`.
-
-### Spezifikation
-1. Ein Adapter nennt Vorgaben, die der Daemon in die Konfigurationskopie
-   der Sitzung schreibt, ohne die Datei im Depot zu ändern.
-2. Ein Wert, den die Person selbst gesetzt hat, gewinnt; die Anleitung sagt das.
-
-### Akzeptanzkriterien
-1. Eine frische Depot-Sitzung von Codex startet ohne Handgriff mit der
-   Vorgabe; die Datei im Depot ist danach unverändert.
+Am 2026-11-21 nach GitHub umgezogen: [#18](https://github.com/nurkert/Humanitl/issues/18). Dort steht die vollständige Spezifikation (Englisch), hier nicht mehr.
 
 ## HUM-574 · Agent-Depot: der Daemon bindet den ausgepackten Baum selbst an das geprüfte Archiv
 
-### Kontext
-HUM-566 prüft die Kette Release, Prüfsummenliste, Archiv im Daemon. Dass der
-ausgepackte Baum aus genau diesem Archiv stammt, sichert nur der
-Wartungslauf (`curl`, `sha256sum`, `tar` des Hosts). SECURITY und K-36
-nennen das als Restrisiko.
-
-### Spezifikation
-1. Der Daemon liest das Archiv selbst (Crate `tar` plus `flate2`, zentral in
-   `daemon/Cargo.toml`, nur vom Hauptstrang eingetragen) und vergleicht jede
-   Datei des Baums mit ihrem Eintrag: Pfad, Art, Größe, Inhalt.
-2. Ein Eintrag zu viel oder zu wenig ist eine Ablehnung mit Schritt `tree`.
-
-### Akzeptanzkriterien
-1. Ein Lauf, der eine Datei nach dem Auspacken ändert oder hinzufügt, wird
-   abgelehnt; das Restrisiko entfällt in SECURITY und K-36 (en, de).
+Am 2026-11-21 nach GitHub umgezogen: [#19](https://github.com/nurkert/Humanitl/issues/19). Dort steht die vollständige Spezifikation (Englisch), hier nicht mehr.
 
 ## HUM-575 · Verschlüsselte Zugangsdateien: Herabstufung ohne Spur, Rotation des Schlüssels, stummes `secret-tool`
 
-### Kontext
-Aus dem Stand von HUM-523: (a) Wer Schreibrecht auf das Depot hat, kann eine
-Klartextdatei ablegen, während es nicht versiegelt ist, ohne dass eine Spur
-bleibt. (b) Der Schlüssel lässt sich nicht wechseln. (c) Ein
-`secret-tool lookup`, das stumm mit 1 endet, obwohl ein Eintrag besteht,
-ist nicht getestet.
-
-### Spezifikation
-1. (a) Eine Datei, die abgelegt wird, solange das Depot nicht versiegelt
-   ist, hinterlässt heute keine Spur. Festlegen und bauen, wie das sichtbar
-   wird: etwa ein Verzeichnis der Zugangsdateien mit Prüfsummen, das beim
-   Umschalten und beim Start mit dem Depot verglichen wird, und ein Befund
-   für jede Datei, die nicht darin steht. (Klartext in einem versiegelten
-   Depot lehnt HUM-523 schon mit `AGENT_020` ab.)
-2. (b) `humanitl agents encryption rotate` als RPC: neuer Schlüssel, alle
-   Dateien in einer Transaktion wie `seal::switch`.
-3. (c) Test mit einem Stellvertreter für `secret-tool`.
-
-### Akzeptanzkriterien
-1. Alle drei Punkte mit Test und Mutationsbeweis.
+Am 2026-11-21 nach GitHub umgezogen: [#20](https://github.com/nurkert/Humanitl/issues/20). Dort steht die vollständige Spezifikation (Englisch), hier nicht mehr.
 
 ## HUM-576 · `SandboxBackends` und `humanitl sandbox argv` laden die Projektwahl nicht
 
-### Kontext
-HUM-567 lässt `argv`, `argv_plan` und `image_pull` die Projektwahl laden.
-`SandboxBackends` mit Plan tut es nicht, und `humanitl sandbox argv` rechnet
-im eigenen Prozess (Abweichung von ADR-018) ohne Projektwahl.
-
-### Spezifikation
-1. `SandboxBackends` mit Plan lädt die Projektwahl wie die Vorschau.
-2. `humanitl sandbox argv` fragt `argv_plan` des Daemons statt selbst zu rechnen.
-
-### Akzeptanzkriterien
-1. Für einen Ordner mit gespeicherter Wahl zeigen beide dasselbe Backend wie der Start.
+Am 2026-11-21 nach GitHub umgezogen: [#21](https://github.com/nurkert/Humanitl/issues/21). Dort steht die vollständige Spezifikation (Englisch), hier nicht mehr.
 
 ## HUM-577 · `config set resolver.test_ca` prüft die Datei nicht (`CONFIG_010` erst beim Start)
 
-### Kontext
-HUM-562 prüft beim Setzen nur, dass der Pfad absolut ist. Ob die Datei da
-ist und ein Zertifikat enthält, prüft erst der Start (`CONFIG_010`). Das ist
-Zustand der Datei, nicht des Werts; sie kann nach dem Setzen erscheinen.
-
-### Spezifikation
-1. `config set` und `SetConfig` lesen die Datei, wenn sie da ist, und
-   warnen bei fehlender Datei oder fehlendem Zertifikat, ohne abzulehnen.
-
-### Akzeptanzkriterien
-1. Eine fehlende oder leere Datei ergibt beim Setzen einen Hinweis mit
-   `CONFIG_010`; der Wert wird trotzdem geschrieben.
+Am 2026-11-21 nach GitHub umgezogen: [#22](https://github.com/nurkert/Humanitl/issues/22). Dort steht die vollständige Spezifikation (Englisch), hier nicht mehr.
 
 ## HUM-578 · `agy`: welche weiteren Endpunkte braucht die Durchreiche? Messen
 
-### Kontext
-Seit HUM-568 lässt die Durchreiche für `agy` nur `generateContent`,
-`streamGenerateContent` und die Modellliste durch. `countTokens`,
-`GET models/{model}` und `embedContent` werden angehalten; ob `agy` sie
-schickt, ist nicht gemessen.
-
-### Spezifikation
-1. Eine echte `agy`-Sitzung mit Schlüssel durch Humanitl, gehaltene
-   Anfragen zählen (Handprüfung, in die Liste von HUM-553).
-2. Nur Gemessenes in die Route aufnehmen, mit Test.
-
-### Akzeptanzkriterien
-1. Die Messung steht mit Datum und Version im Issue.
+Am 2026-11-21 nach GitHub umgezogen: [#23](https://github.com/nurkert/Humanitl/issues/23). Dort steht die vollständige Spezifikation (Englisch), hier nicht mehr.
 
 ## HUM-579 · App: eigene englische Fehlerteile und rohe Regel-Titel in nicht-englischer Oberfläche
 
-### Kontext
-HUM-569 übersetzt die Gründe der Befunde des Daemons. Die App baut aber
-selbst englische Fehlerteile ohne Übersetzung
-(`daemon_restart_control.dart`, `update.dart`, `daemon_restart.dart`), und
-die Titel im Regel-Banner kommen roh vom Daemon.
-
-### Spezifikation
-1. Die Fehlerteile der App gehen über ARB (en, de).
-2. Regel-Titel: wie in HUM-569 über den Code übersetzt, der Satz des Daemons zugeklappt.
-
-### Akzeptanzkriterien
-1. In deutscher Oberfläche steht an diesen Stellen kein englischer Satz ohne Hinweis.
+Am 2026-11-21 nach GitHub umgezogen: [#24](https://github.com/nurkert/Humanitl/issues/24). Dort steht die vollständige Spezifikation (Englisch), hier nicht mehr.
 
 ## HUM-580 · `session.ended` zählt gescheiterte Flows nicht eigens
 
-### Kontext
-Seit HUM-565 steht ein gescheiterter Flow als `flow.failed` im Audit-Log,
-außer sein Ereignis `Failed` fällt in eine Lücke des Audit-Zweigs (K-38;
-die Lücke selbst steht als `audit.events_dropped` da). `session.ended`
-zählt gescheiterte Flows nicht eigens.
-
-### Spezifikation
-1. Feld `failed` in `session.ended`: die Zahl der `flow.failed`, die der
-   Audit-Zweig geschrieben hat; in einer Lücke verlorene zählen nicht, die
-   Doku sagt das. Schema, Verify- und Export-Werkzeuge, Anzeige in der App;
-   alte Einträge ohne das Feld bleiben gültig.
-
-### Akzeptanzkriterien
-1. Eine Sitzung mit zwei gescheiterten Flows endet mit `failed = 2`.
+Am 2026-11-21 nach GitHub umgezogen: [#25](https://github.com/nurkert/Humanitl/issues/25). Dort steht die vollständige Spezifikation (Englisch), hier nicht mehr.
 
 ## HUM-581 · Fix von `sandbox image pull` nennt nur `--backend`, nicht die Untergrenze
 
-### Kontext
-Lehnt ein älterer Daemon das Ziehen wegen Werten ab, die das Backend
-mitentscheiden, nennt der Fix nur `--backend`, nicht
-`sandbox.min_isolation` (HUM-567).
-
-### Spezifikation
-1. Der Fix nennt den Wert, der das Ziehen tatsächlich aufhält.
-
-### Akzeptanzkriterien
-1. Test für beide Fälle.
+Am 2026-11-21 nach GitHub umgezogen: [#26](https://github.com/nurkert/Humanitl/issues/26). Dort steht die vollständige Spezifikation (Englisch), hier nicht mehr.
 
 ## HUM-582 · Agent-Depot: Wartungsläufe unter macOS brauchen `shasum` statt `sha256sum`
 
-### Kontext
-Das Codex-Rezept aus HUM-566 nimmt `sha256sum`, das macOS nicht mitbringt.
-Heute verweigert Seatbelt Wartungsläufe ohnehin; sobald sie dort laufen,
-scheitert das Rezept.
-
-### Spezifikation
-1. Das Skript nimmt `sha256sum` oder, falls nicht da, `shasum -a 256`.
-
-### Akzeptanzkriterien
-1. Test mit einem PATH, der nur `shasum` kennt.
+Am 2026-11-21 nach GitHub umgezogen: [#27](https://github.com/nurkert/Humanitl/issues/27). Dort steht die vollständige Spezifikation (Englisch), hier nicht mehr.
 
 ## HUM-583 · Bedrohungsmodell: Tabellenzeile zu K-37 fehlt (en und de)
 
-### Kontext
-Beim Nachtragen von K-38 in HUM-564 fiel auf, dass die Übersichtstabelle
-von `docs/THREAT-MODEL.md` keine Zeile zu K-37 hat, im Original wie in der
-deutschen Übersetzung.
-
-### Spezifikation
-1. Zeile zu K-37 in beiden Tabellen nachtragen, passend zum Abschnitt K-37.
-
-### Akzeptanzkriterien
-1. Jede Kennung K-NN, die einen Abschnitt hat, hat in beiden Sprachen eine
-   Tabellenzeile; ein kleiner Test oder eine Prüfung in `lint-docs` hält das
-   fest (`check-translations` vergleicht keine Tabellenzeilen).
-
-
----
+Am 2026-11-21 nach GitHub umgezogen: [#28](https://github.com/nurkert/Humanitl/issues/28). Dort steht die vollständige Spezifikation (Englisch), hier nicht mehr.
 
 ## Wünsche des Eigentümers während Sprint 8
 
@@ -1642,75 +901,11 @@ Sprintziels; der Eigentümer entscheidet, wann es drankommt.
 
 | ID | Titel | Größe | Abhängigkeiten |
 |---|---|---|---|
-| HUM-584 | Entscheidungs-Proxy mit einem Klick: Burp mit den passenden Einstellungen starten, CA übernehmen | M | HUM-524 |
+| HUM-584 ([#29](https://github.com/nurkert/Humanitl/issues/29)) | Entscheidungs-Proxy mit einem Klick: Burp mit den passenden Einstellungen starten, CA übernehmen | M | HUM-524 |
 
 ## HUM-584 · Entscheidungs-Proxy mit einem Klick: Burp mit den passenden Einstellungen starten, CA übernehmen
 
-### Kontext
-Beim Durchgang am 2026-11-21 musste der Eigentümer Burp von Hand mit
-`--config-file ~/burp/humanitl.json` starten, die Datei vorher aus der
-Anleitung (`docs/guides/decision-proxy-burp.md`) anlegen, die CA in Burp
-exportieren und danach vier `config set` und einen Neustart des Daemons
-ausführen. Zweimal liefen dabei zwei Burp-Instanzen, eine davon ohne die
-Datei, und die belegte 8080. Wunsch des Eigentümers: ein Knopf „Burp
-starten", der alles mit den richtigen Argumenten erledigt, nach dem Prinzip
-„it just works".
-
-Beobachtet im Durchgang: Der Starter des nativen Installers
-(`~/BurpSuiteCommunity/BurpSuite`, Burp 2026.11.2) nimmt `--config-file`
-an; die Einstellungen aus der Datei galten danach.
-
-### Spezifikation
-1. **Der Daemon plant, der Client führt aus** (ADR-018): Ein RPC
-   (`Egress.decision_proxy_plan`, Name im Issue festlegen) liefert
-   - den gefundenen Starter (bekannte Orte des nativen Installers unter
-     Linux und macOS, dazu ein Wert `egress.decision_proxy.launcher` für
-     einen eigenen Pfad); kein Fund heißt ein Diagnostic mit Link auf die
-     Anleitung,
-   - die Argumentliste (`--config-file=<Pfad>`), nie eine Shell-Zeile,
-   - den Pfad der Einstellungsdatei, die der Daemon aus derselben Vorlage
-     schreibt, die die Anleitung zeigt (eine Quelle für beide; die Anleitung
-     wird daraus erzeugt oder ein Test vergleicht sie),
-   - ob am Listener (`egress.proxy`) schon etwas lauscht. Lauscht dort
-     schon etwas, startet der Knopf nichts, sondern sagt das: kein zweites
-     Burp auf demselben Port.
-   App und CLI (`humanitl egress burp start`) starten genau diese
-   Argumentliste losgelöst vom eigenen Prozess. Der Daemon selbst startet
-   kein Programm auf dem Desktop.
-2. **CA übernehmen:** Ein zweiter Schritt holt die CA des laufenden Burp
-   über den Listener (`http://burp/cert`, DER), zeigt Fingerabdruck SHA-256
-   und Antragsteller und schreibt sie als PEM erst nach Bestätigung durch
-   den Menschen; danach `egress.proxy`, `egress.proxy_ca`,
-   `egress.proxy_resolve` in einem Schritt setzen (Werte wie in der
-   Anleitung) und `egress check` anstoßen. Eine Vertrauensquelle, die ohne
-   Bestätigung übernommen wird, gibt es nicht.
-3. **App:** In den Einstellungen unter „Entscheidungs-Proxy" ein Knopf
-   „Burp starten" und danach „CA übernehmen", mit dem Ergebnis von
-   „Verbindung prüfen" darunter. Texte nur über ARB.
-4. **Anleitung:** `docs/guides/decision-proxy-burp.md` (en und de) nennt
-   den Knopf und den CLI-Befehl als ersten Weg, den Weg von Hand als
-   zweiten.
-
-### Tests
-- Plan: kein Starter gefunden, Starter gefunden, Port belegt. Mutation:
-  Prüfung des Ports entfernt färbt den Fall „belegt" rot.
-- CA: abgelehnte Bestätigung schreibt nichts und setzt nichts.
-  Mutation: Schreiben vor der Bestätigung färbt den Test rot.
-- Vorlage und Anleitung stimmen überein.
-
-### Fallstricke
-- Die CA einer laufenden Anwendung zu holen heißt, einer Antwort über
-  Loopback zu vertrauen. Deshalb Bestätigung mit Fingerabdruck, und
-  `docs/SECURITY.md` und `docs/THREAT-MODEL.md` im selben Commit.
-- Burp lädt beim Start mit `--config-file` die Projekteinstellungen;
-  Projekttyp „Temporary project in memory" bleibt eine Frage von Burp, die
-  der Mensch beantwortet.
-- Kein Produktname in Code außerhalb dieses Adapters (`check_coupling`).
-
-### Akzeptanzkriterien
-1. Ohne Handarbeit an Dateien läuft Burp mit den Einstellungen der
-   Anleitung, und Humanitl spricht nach einer bestätigten CA über ihn.
-2. Ein zweiter Klick startet kein zweites Burp auf demselben Port.
+Am 2026-11-21 nach GitHub umgezogen: [#29](https://github.com/nurkert/Humanitl/issues/29). Dort steht die vollständige Spezifikation (Englisch), hier nicht mehr.
 
 ## HUM-585 · Isolationsprüfung: Urteil und Anhalten hängen nicht am startenden Client
 
