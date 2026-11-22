@@ -113,6 +113,21 @@ fn draw(
     Ok(())
 }
 
+/// Überschreibt den Text eines Einfügens, nachdem der Bildschirm ihn hatte:
+/// Er kann ein Geheimnis sein (ein eingefügter Zugangsschlüssel). Die
+/// Lesepuffer von crossterm erreicht das nicht.
+fn forget(event: Event) -> Event {
+    use zeroize::Zeroize as _;
+
+    match event {
+        Event::Paste(mut text) => {
+            text.zeroize();
+            Event::Paste(text)
+        }
+        other => other,
+    }
+}
+
 /// Lässt `screen` laufen, bis er fertig ist oder ein Signal ihn beendet.
 ///
 /// # Errors
@@ -154,14 +169,17 @@ pub fn run(
         }
         let event = crossterm::event::read()?;
         dirty = true;
-        match classify(&event) {
-            Step::Suspend => guard.suspend()?,
-            Step::Interrupt => return Ok(Outcome::Interrupted),
-            Step::Pass => {
-                if screen.on_event(&event) == Flow::Done {
-                    return Ok(Outcome::Done);
-                }
+        let flow = match classify(&event) {
+            Step::Suspend => {
+                guard.suspend()?;
+                Flow::Continue
             }
+            Step::Interrupt => return Ok(Outcome::Interrupted),
+            Step::Pass => screen.on_event(&event),
+        };
+        drop(forget(event));
+        if flow == Flow::Done {
+            return Ok(Outcome::Done);
         }
     }
 }
@@ -170,7 +188,7 @@ pub fn run(
 mod tests {
     use crossterm::event::{Event, KeyCode, KeyEvent, KeyEventKind, KeyModifiers};
 
-    use super::{Step, classify};
+    use super::{Step, classify, forget};
 
     fn key(code: KeyCode, modifiers: KeyModifiers) -> Event {
         Event::Key(KeyEvent::new(code, modifiers))
@@ -203,5 +221,16 @@ mod tests {
             KeyEventKind::Release,
         ));
         assert_eq!(classify(&release), Step::Pass, "only a press counts");
+    }
+
+    /// Der Text eines Einfügens ist danach überschrieben und leer; andere
+    /// Ereignisse bleiben, wie sie sind.
+    #[test]
+    fn a_paste_is_wiped_after_the_screen_had_it() {
+        assert_eq!(
+            forget(Event::Paste("sk-pasted".to_owned())),
+            Event::Paste(String::new())
+        );
+        assert_eq!(forget(Event::Resize(80, 24)), Event::Resize(80, 24));
     }
 }

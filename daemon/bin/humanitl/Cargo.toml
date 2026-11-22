@@ -69,6 +69,11 @@ tokio.workspace = true
 # `ReceiverStream` ist die Bruecke vom Kanal zum gRPC-Strom.
 tokio-stream.workspace = true
 tonic.workspace = true
+# Die verdeckte Eingabe von `humanitl settings` (GitHub #7) haelt einen
+# Zugangsschluessel oder Zugangsdaten, bis sie einmal an den Daemon gehen; ihr
+# Puffer wird bei jedem Loeschen, Abbrechen, Wachsen und Fallenlassen
+# ueberschrieben.
+zeroize.workspace = true
 # `sandbox image pull` waehlt die Kennung seines Ziehens selbst, damit ein
 # `Ctrl+C` es abbrechen kann, bevor der Daemon antwortet (HUM-457).
 uuid.workspace = true

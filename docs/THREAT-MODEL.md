@@ -186,7 +186,9 @@ with `..` segments is held (HUM-204).
 Traffic is recorded and scanned (`LLM_005`; every finding stays on its request, the warning
 repeats only for findings new in the run or last warned about 15 minutes or more ago; an expired
 or evicted fingerprint warns again, HUM-354), and with
-`hold.hard_block_checksum_secrets` a checksum-confirmed secret is blocked (`HOLD_004`). The access key of a provider (HUM-140) lives in
+`hold.hard_block_checksum_secrets` a checksum-confirmed secret is blocked (`HOLD_004`). The access key of a provider (HUM-140) is entered only through the RPC
+`LlmKey` (the form of the app, `humanitl llm key set` from `stdin`, or the settings view
+`humanitl settings` without echo, sent once; never `SetConfig`), lives in
 the system keyring (on macOS the login Keychain, HUM-349; the Seatbelt profile reaches no
 `securityd` and no `~/Library/Keychains`, so the agent cannot ask for it) and reaches the sandbox
 only as a sandbox file. For Claude Code, which reads its key only from its environment, a shell
@@ -1344,6 +1346,7 @@ These attackers are not defended against, and Humanitl does not claim to:
 | 2026-11-20 | K-36: an install may take a vendor's package of several files (Codex): the recipe lists the files it expects, the daemon starts the program through a link of its own and checks a vendor's list of checksums on its own copy (release metadata, list, archive); residual: only TLS to the vendor's host vouches for the metadata, and the unpacked tree is bound to the archive by the run, not the daemon. `agy` gets no install: its manifest offers no chosen version, points at a shared storage host and carries its only checksum itself | HUM-566 |
 | 2026-11-20 | K-02: the passthrough pairs each method with its paths: an adapter gives one rule per set of methods (fixed ids `…00ff`, `…00fe`, `…00fd`). Codex passes `POST` only on `/responses` and `GET` only on `/models`; `agy` `POST` only on `models/{model}:generateContent` and `:streamGenerateContent` and `GET` only on the model list; Claude Code `POST` only on the Messages endpoints; OpenCode and pi `POST` on the endpoints that compute and `GET` on `/v1/models`, `/api/tags`, `/api/ps`, `/api/version`. `POST /models`, `GET /responses` and `GET` on an inference endpoint are now held. A path a human writes into `llm.passthrough_paths` keeps both methods. Narrows, weakens nothing | HUM-568 |
 | 2026-11-21 | K-15: the verdict on the three guarantees and the stop after a red or missing result no longer depend on the starting client. Before, a client that closed its event stream after `Status(starting)` ended the check before the verdict, and a sandbox with a red result kept running; the folder check and the register entry of a green start were skipped the same way. The daemon now stops the sandbox before it sends the results, records the finding in the session summary (`stopped_by`) and stops it a second time if the stopping thread fails | HUM-585 |
+| 2026-11-22 | K-02: a third way to enter the provider access key and the proxy credentials: the settings view `humanitl settings`, typed without echo, sent once through `LlmKey` or `Egress(SetAuth)`, never through `SetConfig`, never shown; the input buffer is overwritten on every delete, cancel, growth and drop, a pasted text once taken over, and the secret stays under `Zeroizing` until the request is built; not overwritten: the request field handed to tonic, the prost/tonic encode buffers and crossterm's read buffers | GitHub #7 |
 
 Every security-relevant change to the shim, the mount allowlist, the filter or the passthrough gets
 a line here. Vulnerabilities are reported as described in

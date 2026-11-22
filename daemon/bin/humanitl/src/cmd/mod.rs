@@ -40,6 +40,7 @@ pub mod rules;
 pub mod run;
 pub mod sandbox;
 pub mod sessions;
+pub mod settings;
 pub mod unit;
 pub mod update;
 

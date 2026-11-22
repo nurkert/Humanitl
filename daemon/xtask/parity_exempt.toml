@@ -11,7 +11,3 @@
 # Eine RPC, die hier steht und zugleich eine Zeile in `PARITY`
 # (`daemon/bin/humanitl/src/parity.rs`) hat, ist ein Fehler, ebenso eine RPC,
 # die der Vertrag nicht kennt.
-
-[[exempt]]
-rpc = "Humanitl.SetConfig"
-reason = "CLI liest und schreibt die Konfiguration lokal über denselben Lader wie der Daemon; die Oberfläche nutzt beide RPCs seit HUM-069, die Anbindung der Kommandozeile folgt mit HUM-170."

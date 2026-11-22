@@ -7187,3 +7187,27 @@ fn config_catalog_prints_the_catalog_of_the_daemon() {
     );
     assert!(out.contains("[ui.scale]  special  (app only)"), "{out}");
 }
+
+/// `humanitl settings` ohne Terminal oder mit `--json` (GitHub #7): kein
+/// Bildschirm, kein Daemon gefragt, der Hinweis auf `config get|set` und
+/// Exit 1. Ohne laufenden Daemon gemessen: Fragte der Befehl ihn zuerst,
+/// endete er mit 2 und `DAEMON_001`.
+#[test]
+fn settings_without_a_terminal_points_to_config_get_and_set() {
+    let harness = Harness::new();
+
+    let piped = harness.run(["settings"]);
+    assert_eq!(code(&piped), 1, "{}", stderr(&piped));
+    let err = stderr(&piped);
+    assert!(err.contains("CLI_004"), "{err}");
+    assert!(err.contains("humanitl config get"), "{err}");
+    assert!(err.contains("humanitl config set"), "{err}");
+    assert!(stdout(&piped).is_empty(), "no screen on stdout");
+
+    let json = harness.run(["--json", "settings", "--project", "."]);
+    assert_eq!(code(&json), 1, "{}", stderr(&json));
+    let value: serde_json::Value =
+        serde_json::from_str(stdout(&json).trim()).expect("one JSON value");
+    assert_eq!(value["code"], "CLI_004");
+    assert_eq!(value["fix"]["command"], "humanitl config get");
+}

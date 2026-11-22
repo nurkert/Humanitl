@@ -109,6 +109,7 @@ step, is described in [`docs/cli.md`](../cli.md); which RPC each subcommand serv
 - [`humanitl projects forget`](#humanitl-projects-forget) Forget a project: its stored project choice and its register entry, shown as a plan and asked first. Recorded requests stay
 - [`humanitl projects proposal`](#humanitl-projects-proposal) Show the start proposal for a folder: every field of the first-start screen (agent and its source, folder mode, isolation, ask mode, model server, profile) with its options, the default, and why an option is not available. The defaults are the start that would happen without a screen. Nothing is saved
 - [`humanitl app`](#humanitl-app) Open the start window of the desktop app, with a folder preselected
+- [`humanitl settings`](#humanitl-settings) Every setting as a full-screen view in the terminal: categories, search with `/`, the origin of each value, values locked by a company policy read only
 
 ## Configuration flags
 
@@ -235,6 +236,7 @@ Commands:
   agents     The agent depot: where each agent comes from (host or depot), its installed version and login; set the source, install or update an agent in a maintenance sandbox, remove a depot
   projects   The project register: the projects the daemon knows with their last start, agent and runs, and what was chosen for one of them
   app        Open the start window of the desktop app, with a folder preselected
+  settings   Every setting as a full-screen view in the terminal: categories, search with `/`, the origin of each value, values locked by a company policy read only
   help       Print this message or the help of the given subcommand(s)
 
 Options:
@@ -3637,6 +3639,38 @@ Arguments:
 Options:
       --json
           Machine-readable output: one JSON value on stdout, diagnostics included
+
+      --config <PATH>
+          Read this config file instead of the one in the user's config directory
+
+  -v, --verbose...
+          Explain what is happening; repeat for more
+
+  -q, --quiet
+          Only the result, no notes
+
+      --profile <NAME>
+          Use this profile for the session; falls back to the sandbox profile of that name when no session profile exists
+
+  -h, --help
+          Print help (see a summary with '-h')
+```
+
+## humanitl settings
+
+```text
+Every setting as a full-screen view in the terminal: categories, search with `/`, the origin of each value, values locked by a company policy read only.
+
+Rendered from the daemon's settings catalog and written through the same calls as the app. With --project, the values a start in that folder would get; there only the keys of the project choice can be changed. Secrets (access key, proxy credentials) are typed without echo and sent once. Without a terminal, or with --json, there is no view: use `humanitl config get` and `humanitl config set`.
+
+Usage: humanitl settings [OPTIONS]
+
+Options:
+      --json
+          Machine-readable output: one JSON value on stdout, diagnostics included
+
+      --project <PATH>
+          Show and change the project choice of this folder instead of the global settings; relative to the current directory
 
       --config <PATH>
           Read this config file instead of the one in the user's config directory

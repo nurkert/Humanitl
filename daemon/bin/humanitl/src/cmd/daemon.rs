@@ -62,7 +62,7 @@ mod image;
 mod launchd;
 mod manager;
 mod packaged;
-mod retire;
+pub(crate) mod retire;
 mod running;
 mod uninstall;
 
