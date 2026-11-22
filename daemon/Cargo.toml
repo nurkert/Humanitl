@@ -102,6 +102,15 @@ shlex = "2"
 # Server, UDP mit TCP-Rueckfall. Ohne `system-config`, weil er
 # /etc/resolv.conf gerade nicht lesen soll, und ohne TLS/DNSSEC (Nicht-Ziel).
 hickory-resolver = { version = "0.26", default-features = false, features = ["tokio"] }
+# TUI des CLI (GitHub #6, ADR-0024 Punkt 6). Nur `daemon/bin/humanitl` nennt
+# sie; Daemon und Shim linken sie nicht (geprüft in tools/check-deps.sh).
+# ratatui 0.30 ist modular; `crossterm_0_29` bindet das Backend an genau die
+# crossterm-Version unten, damit nicht zwei crossterm im Baum stehen.
+ratatui = { version = "0.30", default-features = false, features = ["crossterm_0_29", "layout-cache"] }
+crossterm = { version = "0.29", default-features = false, features = ["bracketed-paste", "events"] }
+# SIGTERM, SIGHUP, SIGINT, SIGTSTP/SIGCONT ohne `unsafe` (Crate verbietet es).
+# Version 0.3, weil crossterm 0.29 mit `events` schon signal-hook 0.3 zieht.
+signal-hook = "0.3"
 
 [workspace.lints.rust]
 missing_docs = "warn"

@@ -1244,6 +1244,14 @@ Terminal der Sandbox nicht erreichbar
 
 **Fix.** Kein Fix: Der Text nennt die Sitzung.
 
+#### TERM_003
+
+Terminal unsuitable for a full-screen view
+
+**Auslöser.** A full-screen view of `humanitl` needs a terminal that can place the cursor and has at least the minimum size the view names. This terminal is smaller, or `TERM` is unset or `dumb`. Nothing was changed on the terminal; the sentence names the measured and the needed size and the command that does the same without a full-screen view.
+
+**Fix.** `CopyCommand` with the command that needs no full-screen view; otherwise enlarge the window and run the command again.
+
 ### Bereich recorder
 
 #### RECORDER_001

@@ -34,6 +34,16 @@ jiff = { workspace = true, features = ["tz-system", "tzdb-zoneinfo"] }
 # Wire-Form kennt keinen anderen Weg, einen Zeitpunkt zu schreiben.
 prost-types.workspace = true
 serde_json.workspace = true
+# Die Bildschirme im Terminal (GitHub #6, ADR-0024 Punkt 6): Einstellungen,
+# Erststart, Interceptor und die Hilfe der Präfixtaste zeichnen mit ratatui
+# über crossterm (`src/tui/`). Den Rohmodus setzt weiter `src/tty.rs`, crossterm
+# schreibt nur Steuerfolgen und liest Tasten. `signal-hook` meldet `SIGTERM`,
+# `SIGHUP`, `SIGINT` und `SIGTSTP`/`SIGCONT` ohne `unsafe` an die Schleife des
+# Bildschirms. Nur dieses Binary nennt die drei; Daemon und Shim linken sie
+# nicht (`tools/check-deps.sh`).
+ratatui.workspace = true
+crossterm.workspace = true
+signal-hook.workspace = true
 # `config set` schreibt genau einen Wert in die `config.toml` des Menschen:
 # `toml_edit` aendert das Dokument, ohne Kommentare und Reihenfolge zu
 # verlieren, und `toml` ist die Gegenprobe, dass wirklich nur dieser eine Wert
@@ -84,3 +94,12 @@ rustix = { version = "1.1", features = [
   "pty",
   "process",
 ] }
+
+# `tests/tui.rs` startet sich selbst als Kind an einem Pseudoterminal und misst
+# von außen, ob das Terminal nach jedem Ausgang eines Bildschirms wieder steht
+# (GitHub #6). Ohne den Testläufer von libtest: Das Kind ist dasselbe Binary,
+# und eine Panik im Kind soll genau so ankommen wie im Produkt, ohne dass der
+# Testläufer sie fängt oder seine Ausgabe dazwischen schreibt.
+[[test]]
+name = "tui"
+harness = false

@@ -47,6 +47,22 @@ check_feature_graph "the workspace with all targets" --workspace -e features,nor
 check_feature_graph "the release build" -e features,normal,build \
   -p humanitld -p humanitl -p humanitl-shim
 
+# Die Bildschirme im Terminal (GitHub #6, ADR-0024 Punkt 6) gehoeren allein
+# der Kommandozeile. Daemon und Shim linken weder ratatui (samt seinen
+# Teilcrates `ratatui-*`) noch crossterm: Der Daemon zeichnet nichts, und der
+# Shim wird in jede Sandbox eingehaengt. Geprueft wird der Graph, den der
+# Release-Bau je Paket baut, ohne Dev-Abhaengigkeiten.
+for pkg in humanitld humanitl-shim; do
+  if ! tree=$(cd daemon && cargo tree --locked -e normal,build -p "$pkg" --prefix none); then
+    echo "cargo tree for $pkg failed" >&2
+    fail=1
+  elif hits=$(grep -E '^(ratatui|crossterm)([- ]|$)' <<<"$tree"); then
+    echo "$pkg links a terminal UI crate, which belongs to humanitl alone (GitHub #6):" >&2
+    sed -E 's/ \(\*\)$//' <<<"$hits" | sort -u >&2
+    fail=1
+  fi
+done
+
 for lib in daemon/crates/*/src/lib.rs; do
   if ! grep -q '#!\[deny(missing_docs)\]' "$lib"; then
     echo "missing #![deny(missing_docs)]: $lib" >&2

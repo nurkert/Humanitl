@@ -2084,5 +2084,7 @@
   "startPreselected": "Vorgewählt",
   "startAppRequestNotice": "Das Startfenster ist bereit",
   "startAppRequestNoticeFolder": "{folder} ist vorgewählt. Wechsle zum Fenster von Humanitl.",
-  "startAppRequestNoticePlain": "Wechsle zum Fenster von Humanitl."
+  "startAppRequestNoticePlain": "Wechsle zum Fenster von Humanitl.",
+  "diagTERM003Title": "Terminal für eine Vollbildansicht ungeeignet",
+  "diagTERM003Why": "Das Terminal ist kleiner, als die Ansicht braucht, oder es kann den Cursor nicht setzen. Am Terminal wurde nichts verändert."
 }

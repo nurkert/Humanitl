@@ -1,0 +1,207 @@
+//! Die Schleife eines Bildschirms: zeichnen, Taste lesen, Signal beachten
+//! (GitHub #6).
+//!
+//! Ein Bildschirm sagt nur, wie er aussieht ([`Screen::draw`]) und was eine
+//! Eingabe bewirkt ([`Screen::on_event`]). Was für alle gleich ist, steht
+//! hier: Signale, Größenänderung, ein Terminal unter dem Minimum, `Ctrl+Z`
+//! und `Ctrl+C`.
+//!
+//! - `Ctrl+Z` als Taste hält an wie `SIGTSTP` ([`TerminalGuard::suspend`]);
+//!   im Rohmodus erzeugt das Terminal das Signal nicht selbst.
+//! - `Ctrl+C` als Taste beendet den Bildschirm mit [`Outcome::Interrupted`],
+//!   auf jedem Bildschirm gleich, damit niemand in einem festsitzt.
+//! - `SIGTERM`, `SIGHUP`, `SIGINT` beenden ihn mit [`Outcome::Signal`]; der
+//!   Befehl entscheidet danach, was mit seiner Arbeit geschieht, und endet
+//!   mit `128 + n`.
+
+use std::io;
+use std::time::Duration;
+
+use crossterm::event::{Event, KeyCode, KeyEventKind, KeyModifiers};
+use ratatui::Frame;
+
+use super::frame::{Theme, too_small};
+use super::guard::TerminalGuard;
+use super::signals::{self, Signal};
+use super::size::Cells;
+
+/// So lange wartet die Schleife höchstens auf eine Taste, bevor sie nach
+/// Signalen sieht.
+const TICK: Duration = Duration::from_millis(50);
+
+/// Ob ein Bildschirm weiterläuft.
+#[derive(Clone, Copy, Debug, PartialEq, Eq)]
+pub enum Flow {
+    /// Weiter.
+    Continue,
+    /// Fertig; die Schleife endet mit [`Outcome::Done`].
+    Done,
+}
+
+/// Wie ein Bildschirm endete.
+#[derive(Clone, Copy, Debug, PartialEq, Eq)]
+pub enum Outcome {
+    /// Der Bildschirm selbst sagte [`Flow::Done`].
+    Done,
+    /// `Ctrl+C` als Taste.
+    Interrupted,
+    /// `SIGTERM`, `SIGHUP` oder `SIGINT` von außen.
+    Signal(Signal),
+}
+
+/// Ein Bildschirm.
+pub trait Screen {
+    /// Zeichnet den Bildschirm in `frame`.
+    fn draw(&mut self, frame: &mut Frame<'_>, theme: Theme);
+
+    /// Nimmt eine Eingabe: Taste, Einfügen, Maus, Größe.
+    fn on_event(&mut self, event: &Event) -> Flow;
+
+    /// Wird bei jedem Schritt der Schleife gefragt, auch ohne Eingabe; `true`
+    /// heißt, der Bildschirm hat sich von sich aus geändert (eine neue
+    /// Antwort des Daemons zum Beispiel) und wird neu gezeichnet.
+    ///
+    /// Ohne das zeichnet die Schleife nur nach einer Eingabe, einem Signal
+    /// oder einer Größenänderung: Ein Bild je Schritt schriebe auch ohne
+    /// Änderung jedes Mal Stilfolgen und das Verstecken des Cursors.
+    fn changed(&mut self) -> bool {
+        false
+    }
+}
+
+/// Was die Schleife mit einer Eingabe tut, bevor der Bildschirm sie sieht.
+#[derive(Clone, Copy, Debug, PartialEq, Eq)]
+enum Step {
+    /// An den Bildschirm.
+    Pass,
+    /// Anhalten (`Ctrl+Z`).
+    Suspend,
+    /// Beenden (`Ctrl+C`).
+    Interrupt,
+}
+
+/// Sortiert eine Eingabe.
+fn classify(event: &Event) -> Step {
+    let Event::Key(key) = event else {
+        return Step::Pass;
+    };
+    if key.kind != KeyEventKind::Press || !key.modifiers.contains(KeyModifiers::CONTROL) {
+        return Step::Pass;
+    }
+    match key.code {
+        KeyCode::Char('z' | 'Z') => Step::Suspend,
+        KeyCode::Char('c' | 'C') => Step::Interrupt,
+        _ => Step::Pass,
+    }
+}
+
+/// Zeichnet ein Bild: den Bildschirm oder, unter dem Minimum, den Hinweis.
+fn draw(
+    guard: &mut TerminalGuard,
+    screen: &mut impl Screen,
+    theme: Theme,
+    min: Cells,
+) -> io::Result<()> {
+    guard.terminal().draw(|frame| {
+        let area = frame.area();
+        if Cells::new(area.width, area.height).holds(min) {
+            screen.draw(frame, theme);
+        } else {
+            too_small(frame, min, theme);
+        }
+    })?;
+    Ok(())
+}
+
+/// Lässt `screen` laufen, bis er fertig ist oder ein Signal ihn beendet.
+///
+/// # Errors
+///
+/// Wenn das Terminal nicht mehr zu beschreiben oder zu lesen ist, oder
+/// wenn eine Panik in einem anderen Thread es schon zurückgegeben hat. Der
+/// Wächter gibt es beim Fallenlassen trotzdem zurück.
+pub fn run(
+    guard: &mut TerminalGuard,
+    screen: &mut impl Screen,
+    theme: Theme,
+    min: Cells,
+) -> io::Result<Outcome> {
+    let mut dirty = true;
+    loop {
+        if guard.lost() {
+            return Err(io::Error::other(
+                "a panic in another thread gave the terminal back; the view ends",
+            ));
+        }
+        match signals::take() {
+            Some(Signal::Stop) => {
+                guard.suspend()?;
+                dirty = true;
+            }
+            Some(Signal::Continue) => {
+                guard.redraw()?;
+                dirty = true;
+            }
+            Some(signal) => return Ok(Outcome::Signal(signal)),
+            None => {}
+        }
+        if dirty || screen.changed() {
+            draw(guard, screen, theme, min)?;
+            dirty = false;
+        }
+        if !crossterm::event::poll(TICK)? {
+            continue;
+        }
+        let event = crossterm::event::read()?;
+        dirty = true;
+        match classify(&event) {
+            Step::Suspend => guard.suspend()?,
+            Step::Interrupt => return Ok(Outcome::Interrupted),
+            Step::Pass => {
+                if screen.on_event(&event) == Flow::Done {
+                    return Ok(Outcome::Done);
+                }
+            }
+        }
+    }
+}
+
+#[cfg(test)]
+mod tests {
+    use crossterm::event::{Event, KeyCode, KeyEvent, KeyEventKind, KeyModifiers};
+
+    use super::{Step, classify};
+
+    fn key(code: KeyCode, modifiers: KeyModifiers) -> Event {
+        Event::Key(KeyEvent::new(code, modifiers))
+    }
+
+    /// `Ctrl+Z` hält an, `Ctrl+C` beendet; alles andere, auch `z` und `c`
+    /// ohne `Ctrl`, geht an den Bildschirm.
+    #[test]
+    fn control_z_suspends_and_control_c_interrupts() {
+        assert_eq!(
+            classify(&key(KeyCode::Char('z'), KeyModifiers::CONTROL)),
+            Step::Suspend
+        );
+        assert_eq!(
+            classify(&key(KeyCode::Char('c'), KeyModifiers::CONTROL)),
+            Step::Interrupt
+        );
+        assert_eq!(
+            classify(&key(KeyCode::Char('z'), KeyModifiers::NONE)),
+            Step::Pass
+        );
+        assert_eq!(
+            classify(&key(KeyCode::Char('c'), KeyModifiers::SHIFT)),
+            Step::Pass
+        );
+        assert_eq!(classify(&Event::Resize(80, 24)), Step::Pass);
+        let release = Event::Key(KeyEvent::new_with_kind(
+            KeyCode::Char('c'),
+            KeyModifiers::CONTROL,
+            KeyEventKind::Release,
+        ));
+        assert_eq!(classify(&release), Step::Pass, "only a press counts");
+    }
+}
