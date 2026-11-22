@@ -244,6 +244,27 @@ pub enum Cmd {
     /// only comes forward, without the folder preselected; on Linux such an
     /// app is not seen, and a second one starts.
     App(AppArgs),
+
+    /// Every setting as a full-screen view in the terminal: categories, search
+    /// with `/`, the origin of each value, values locked by a company policy
+    /// read only.
+    ///
+    /// Rendered from the daemon's settings catalog and written through the
+    /// same calls as the app. With --project, the values a start in that
+    /// folder would get; there only the keys of the project choice can be
+    /// changed. Secrets (access key, proxy credentials) are typed without echo
+    /// and sent once. Without a terminal, or with --json, there is no view:
+    /// use `humanitl config get` and `humanitl config set`.
+    Settings(SettingsArgs),
+}
+
+/// Die Argumente von `humanitl settings` (GitHub #7).
+#[derive(Debug, Args)]
+pub struct SettingsArgs {
+    /// Show and change the project choice of this folder instead of the
+    /// global settings; relative to the current directory.
+    #[arg(long, value_name = "PATH")]
+    pub project: Option<PathBuf>,
 }
 
 /// Die Argumente von `humanitl app` (HUM-539).

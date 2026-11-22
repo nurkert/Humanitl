@@ -12,6 +12,7 @@
 //! - [`frame`]: Kopf, Fuß mit Tasten, Suche, und die Farben nach `NO_COLOR`.
 //! - [`screen`]: die Schleife, in der jeder Bildschirm läuft.
 //! - [`backend`]: das Backend von ratatui mit der Größe von `stdin`.
+//! - [`settings`]: der Bildschirm `humanitl settings` (GitHub #7).
 //!
 //! # Ohne Terminal
 //!
@@ -30,6 +31,7 @@ pub mod backend;
 pub mod frame;
 pub mod guard;
 pub mod screen;
+pub mod settings;
 pub mod signals;
 pub mod size;
 

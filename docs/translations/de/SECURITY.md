@@ -979,8 +979,14 @@ Session-Bus, ein Fehler oder 20 Sekunden ohne Antwort), liegt er in
 wenn sie diesem Konto gehört, kein Symlink ist und für niemanden sonst lesbar ist (sonst
 `LLM_009`). `config.toml` enthält nie den Schlüssel, nur seinen Verweis `llm.api_key_ref`
 (`secret-service:humanitl/llm`, `keychain:humanitl/llm` oder `file:llm`). Gesetzt wird er über den RPC `LlmKey`, aus dem
-Formular oder mit `humanitl llm key set`, das ihn von `stdin` liest; keine Antwort des Daemons
-trägt ihn zurück.
+Formular, mit `humanitl llm key set`, das ihn von `stdin` liest, oder in der Einstellungsansicht
+`humanitl settings`, ohne Echo getippt und einmal geschickt (GitHub #7), nie über `SetConfig`;
+keine Antwort des Daemons trägt ihn zurück. Die Einstellungsansicht überschreibt ihren
+Eingabepuffer bei jedem Löschen, Abbrechen, Wachsen und Fallenlassen, ebenso den Text eines
+Einfügens, sobald er übernommen ist; bis zum Bau der Anfrage bleibt der Schlüssel unter
+`Zeroizing`. Kopien, die sie nicht überschreiben kann, bleiben: das Feld der Anfrage, die tonic
+übergeben wird, die Puffer, in die prost und tonic sie kodieren, und die Lesepuffer von
+crossterm.
 
 *Unter macOS (HUM-349).* Der Schlüsselbund ist der Anmelde-Schlüsselbund (das Keychain),
 angesprochen mit dem Systemwerkzeug `/usr/bin/security`, mit demselben Dienst `humanitl` und dem

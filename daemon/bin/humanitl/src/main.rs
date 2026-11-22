@@ -37,9 +37,9 @@ mod render;
 // Die Ladeanimation von `humanitl go` (HUM-496).
 mod splash;
 mod tty;
-// Das Fundament der Bildschirme im Terminal (GitHub #6). Die ersten Bildschirme
-// (Einstellungen, Erststart von `go`, Interceptor, Hilfe der Präfixtaste)
-// kommen mit ihren eigenen Issues; bis dahin benutzen nur die Tests es.
+// Die Bildschirme im Terminal (GitHub #6): seit GitHub #7 die Einstellungen.
+// Erststart von `go`, Interceptor und Hilfe der Präfixtaste kommen mit ihren
+// eigenen Issues; bis dahin bleiben Teile des Fundaments ungenutzt.
 #[allow(
     dead_code,
     unused_imports,
@@ -234,6 +234,7 @@ async fn run(ctx: &Context, command: Cmd) -> Result<u8, Failure> {
         Cmd::Agents { cmd } => cmd::agents::run(ctx, &cmd).await,
         Cmd::Projects { cmd } => cmd::projects::run(ctx, &cmd).await,
         Cmd::App(args) => cmd::app::run(ctx, &args).await,
+        Cmd::Settings(args) => cmd::settings::run(ctx, &args).await,
     }
 }
 

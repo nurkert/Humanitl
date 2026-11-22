@@ -1059,6 +1059,7 @@ dependencies = [
  "toml_edit",
  "tonic",
  "uuid",
+ "zeroize",
 ]
 
 [[package]]

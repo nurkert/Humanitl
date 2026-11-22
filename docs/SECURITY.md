@@ -955,8 +955,13 @@ bus, an error, or 20 seconds without an answer), it lives in
 to this account, is no symlink and is readable by nobody else (otherwise `LLM_009`).
 `config.toml` never holds the key, only its reference `llm.api_key_ref`
 (`secret-service:humanitl/llm`, `keychain:humanitl/llm` or `file:llm`). It is set through the RPC
-`LlmKey`, from the form or with `humanitl llm key set`, which reads it from `stdin`; no answer of the daemon carries it
-back.
+`LlmKey`, from the form, with `humanitl llm key set`, which reads it from `stdin`, or in the
+settings view `humanitl settings`, typed without echo and sent once (GitHub #7), never through
+`SetConfig`; no answer of the daemon carries it back. The settings view overwrites its input buffer
+on every delete, cancel, growth and drop, and the text of a paste once it is taken over; the key
+stays under `Zeroizing` until the request is built. Copies it cannot overwrite remain: the field
+of the request handed to tonic, the buffers prost and tonic encode it into, and crossterm's read
+buffers.
 
 *On macOS (HUM-349).* The keyring is the login Keychain, addressed with the system tool
 `/usr/bin/security`, with the same service `humanitl` and account `llm`, the reference

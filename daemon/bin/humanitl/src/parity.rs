@@ -19,9 +19,9 @@
 //! in der Tabelle untereinander.
 //!
 //! Nur Unterkommandos, die die RPC wirklich über gRPC aufrufen, stehen hier.
-//! `SetConfig` fehlt deshalb: `config set` schreibt die Konfiguration lokal;
-//! es steht als Ausnahme in `daemon/xtask/parity_exempt.toml`. `GetConfig`
-//! bedient `config catalog` (HUM-534); `config get` liest weiter lokal.
+//! `config set` schreibt die Konfiguration lokal; `SetConfig` bedient seit
+//! GitHub #7 der Bildschirm `settings`. `GetConfig` bedient `config catalog`
+//! (HUM-534) und `settings`; `config get` liest weiter lokal.
 //!
 //! Im Binary selbst hat die Tabelle keine Aufgabe; das Modul wird nur für die
 //! Tests übersetzt.
@@ -47,6 +47,9 @@ pub static PARITY: &[(&str, &str)] = &[
     // Der Einstellungskatalog (HUM-534): die Grundlage der TUI.
     ("Humanitl.GetConfig", "config catalog"),
     ("Humanitl.GetConfig", "config catalog --project"),
+    // Der Bildschirm der Einstellungen (GitHub #7).
+    ("Humanitl.GetConfig", "settings"),
+    ("Humanitl.GetConfig", "settings --project"),
     ("Humanitl.GetFlow", "flows show"),
     ("Humanitl.GetInfo", "daemon status"),
     ("Humanitl.GetSessionSummary", "sessions summary"),
@@ -74,6 +77,7 @@ pub static PARITY: &[(&str, &str)] = &[
     ("Humanitl.Projects", "projects ls"),
     ("Humanitl.Projects", "projects proposal"),
     ("Humanitl.Projects", "projects show"),
+    ("Humanitl.Projects", "settings --project"),
     ("Humanitl.Rules", "rules add"),
     ("Humanitl.Rules", "rules disable"),
     ("Humanitl.Rules", "rules dry-run"),
@@ -96,6 +100,7 @@ pub static PARITY: &[(&str, &str)] = &[
     ("Humanitl.Sandbox", "sandbox image pull"),
     ("Humanitl.Sandbox", "sandbox plan"),
     ("Humanitl.SandboxBackends", "sandbox backends"),
+    ("Humanitl.SetConfig", "settings"),
     // Bis es `flows watch` gibt, liest nur die Moderation im Terminal den
     // Ereignisstrom mit.
     ("Humanitl.Subscribe", "run --ask terminal"),

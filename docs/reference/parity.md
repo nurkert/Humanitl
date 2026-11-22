@@ -28,7 +28,7 @@ Eine RPC ohne CLI-Zeile und ohne Ausnahme bricht den CI-Job
 | `Humanitl.Egress` | `humanitl egress auth remove`<br>`humanitl egress auth set`<br>`humanitl egress check`<br>`humanitl egress status` | fehlt |
 | `Humanitl.Exec` | `humanitl sandbox exec` | `features/sandbox/widgets/terminal_tabs` |
 | `Humanitl.GetBody` | `humanitl flows show --body` | `features/history/history_detail` |
-| `Humanitl.GetConfig` | `humanitl config catalog`<br>`humanitl config catalog --project` | `features/settings/settings_panel` |
+| `Humanitl.GetConfig` | `humanitl config catalog`<br>`humanitl config catalog --project`<br>`humanitl settings`<br>`humanitl settings --project` | `features/settings/settings_panel` |
 | `Humanitl.GetFlow` | `humanitl flows show` | `features/history/history_detail` |
 | `Humanitl.GetInfo` | `humanitl daemon status` | `features/shell/connection_gate` |
 | `Humanitl.GetSessionSummary` | `humanitl sessions summary` | fehlt |
@@ -37,11 +37,11 @@ Eine RPC ohne CLI-Zeile und ohne Ausnahme bricht den CI-Job
 | `Humanitl.LlmKey` | `humanitl llm key remove`<br>`humanitl llm key set`<br>`humanitl llm key status` | `features/settings/widgets/servers/server_detail` |
 | `Humanitl.LlmServers` | `humanitl llm server add`<br>`humanitl llm server assign`<br>`humanitl llm server confirm`<br>`humanitl llm server edit`<br>`humanitl llm server ls`<br>`humanitl llm server rename`<br>`humanitl llm server rm`<br>`humanitl llm server unassign`<br>`humanitl llm server use` | `features/settings/categories/models_category` |
 | `Humanitl.ProbeLlm` | `humanitl llm test` | `features/setup/widgets/llm_check` |
-| `Humanitl.Projects` | `humanitl app`<br>`humanitl projects clean`<br>`humanitl projects forget`<br>`humanitl projects ls`<br>`humanitl projects proposal`<br>`humanitl projects show` | fehlt |
+| `Humanitl.Projects` | `humanitl app`<br>`humanitl projects clean`<br>`humanitl projects forget`<br>`humanitl projects ls`<br>`humanitl projects proposal`<br>`humanitl projects show`<br>`humanitl settings --project` | fehlt |
 | `Humanitl.Rules` | `humanitl rules add`<br>`humanitl rules disable`<br>`humanitl rules dry-run`<br>`humanitl rules enable`<br>`humanitl rules list`<br>`humanitl rules reload`<br>`humanitl rules remove`<br>`humanitl rules reorder`<br>`humanitl rules test`<br>`humanitl rules update` | `features/rules/rules_screen` |
 | `Humanitl.Sandbox` | `humanitl go`<br>`humanitl run`<br>`humanitl run --direct`<br>`humanitl run --disposable`<br>`humanitl sandbox apply`<br>`humanitl sandbox changes`<br>`humanitl sandbox discard`<br>`humanitl sandbox image pull`<br>`humanitl sandbox plan` | `features/sandbox/sandbox_screen` |
 | `Humanitl.SandboxBackends` | `humanitl sandbox backends` | fehlt |
-| `Humanitl.SetConfig` | Ausnahme | `core/ui/fix_control` |
+| `Humanitl.SetConfig` | `humanitl settings` | `core/ui/fix_control` |
 | `Humanitl.Subscribe` | `humanitl run --ask terminal` | `features/intercept/widgets/queue_pane` |
 | `Humanitl.Terminal` | `humanitl sandbox attach`<br>`humanitl sandbox attach --shell` | `features/sandbox/widgets/terminal_pane` |
 | `Humanitl.Update` | `humanitl update apply`<br>`humanitl update check` | `features/shell/widgets/update_notice` |
@@ -55,6 +55,4 @@ Eine RPC ohne CLI-Zeile und ohne Ausnahme bricht den CI-Job
 
 ## Ausnahmen
 
-| RPC | Begründung |
-|---|---|
-| `Humanitl.SetConfig` | CLI liest und schreibt die Konfiguration lokal über denselben Lader wie der Daemon; die Oberfläche nutzt beide RPCs seit HUM-069, die Anbindung der Kommandozeile folgt mit HUM-170. |
+Keine. Jede RPC hat ein Unterkommando.

@@ -874,7 +874,7 @@ fn edit(ctx: &Context) -> Result<u8, Failure> {
 }
 
 /// Der Editor: `$VISUAL`, dann `$EDITOR`, dann `nano`, dann `vi`.
-fn editor_for(ctx: &Context) -> Result<String, Failure> {
+pub(crate) fn editor_for(ctx: &Context) -> Result<String, Failure> {
     for key in ["VISUAL", "EDITOR"] {
         if let Some(value) = ctx.env.non_empty(key) {
             return Ok(value.to_owned());
@@ -912,7 +912,7 @@ fn in_path(ctx: &Context, program: &str) -> bool {
 }
 
 /// Startet den Editor mit dem Terminal dieses Prozesses.
-fn open_editor(ctx: &Context, editor: &str, file: &Path) -> Result<(), Failure> {
+pub(crate) fn open_editor(ctx: &Context, editor: &str, file: &Path) -> Result<(), Failure> {
     // Der Editor ist ein Befehl mit Argumenten (`code -w`), wie in jeder
     // anderen Umgebung auch; deshalb wird er zerlegt und nicht als ein Wort
     // gestartet.
@@ -941,7 +941,7 @@ fn open_editor(ctx: &Context, editor: &str, file: &Path) -> Result<(), Failure> 
 /// Geprüft wird gegen dieselbe Auflösung, die der Daemon beim Start fährt: Ein
 /// unbekannter Schlüssel oder ein Wert außerhalb des Bereichs fällt hier auf
 /// und nicht erst beim nächsten Start.
-fn check_file(file: &Path) -> Option<Diagnostic> {
+pub(crate) fn check_file(file: &Path) -> Option<Diagnostic> {
     let text = match std::fs::read_to_string(file) {
         Ok(text) => text,
         Err(error) if error.kind() == std::io::ErrorKind::NotFound => return None,
