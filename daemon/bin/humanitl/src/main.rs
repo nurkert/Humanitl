@@ -37,6 +37,15 @@ mod render;
 // Die Ladeanimation von `humanitl go` (HUM-496).
 mod splash;
 mod tty;
+// Das Fundament der Bildschirme im Terminal (GitHub #6). Die ersten Bildschirme
+// (Einstellungen, Erststart von `go`, Interceptor, Hilfe der Präfixtaste)
+// kommen mit ihren eigenen Issues; bis dahin benutzen nur die Tests es.
+#[allow(
+    dead_code,
+    unused_imports,
+    reason = "the first screens arrive with their own issues (ADR-0024)"
+)]
+mod tui;
 
 use std::process::ExitCode;
 

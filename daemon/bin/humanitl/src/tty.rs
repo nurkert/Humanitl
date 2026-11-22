@@ -101,7 +101,21 @@ impl RawMode {
     /// oben).
     #[must_use]
     pub fn enter() -> Option<Self> {
-        Self::enter_on(stdin_fd())
+        Self::enter_on(stdin_fd(), false)
+    }
+
+    /// Wie [`RawMode::enter`], aber nur, wenn kein anderer Rahmen dieses
+    /// Prozesses die Einstellungen schon gesichert hat ([`RawMode`] oder
+    /// [`NoEcho`]); sonst `None` und das Terminal unverändert.
+    ///
+    /// Für den Wächter der Bildschirme (`tui::TerminalGuard`, GitHub #6):
+    /// Prüfen und Setzen geschehen unter derselben Sperre, also können zwei
+    /// Threads nicht beide durch die Prüfung kommen. Ein zweiter Rahmen
+    /// sicherte sonst die schon rohen Einstellungen, und beim Zurückgeben
+    /// bliebe das Terminal roh.
+    #[must_use]
+    pub fn enter_exclusive() -> Option<Self> {
+        Self::enter_on(stdin_fd(), true)
     }
 
     /// Wie [`RawMode::enter`], aber an einem genannten Terminal.
@@ -109,7 +123,16 @@ impl RawMode {
     /// Getrennt, damit ein Test die Rückgabe an einem eigenen Pseudoterminal
     /// messen kann, ohne die Eingabe des Testläufers anzufassen. Im Betrieb
     /// gibt es genau einen Aufrufer, und der reicht `stdin` herein.
-    fn enter_on(terminal: BorrowedFd<'_>) -> Option<Self> {
+    fn enter_on(terminal: BorrowedFd<'_>, exclusive: bool) -> Option<Self> {
+        // Die Sperre gilt vom Prüfen bis zum Sichern: Kein zweiter Rahmen kann
+        // dazwischen den Rohmodus setzen. `restore` nimmt dieselbe Sperre, und
+        // nichts zwischen hier und dem Sichern kann eine Panik auslösen.
+        let mut slot = saved()
+            .lock()
+            .unwrap_or_else(std::sync::PoisonError::into_inner);
+        if exclusive && slot.is_some() {
+            return None;
+        }
         let current = tcgetattr(terminal).ok()?;
         // Eine eigene Kopie des Deskriptors: Der Hook lebt länger als der
         // Rahmen, der ihn setzt, und `0` ist nicht immer das gemeinte Terminal.
@@ -122,12 +145,8 @@ impl RawMode {
         let mut raw = current.clone();
         raw.make_raw();
         tcsetattr(terminal, OptionalActions::Flush, &raw).ok()?;
-        {
-            let mut guard = saved()
-                .lock()
-                .unwrap_or_else(std::sync::PoisonError::into_inner);
-            *guard = Some((owned, current));
-        }
+        *slot = Some((owned, current));
+        drop(slot);
         install_hooks();
         Some(Self { entered: true })
     }
@@ -171,17 +190,26 @@ impl NoEcho {
     #[must_use]
     pub fn enter() -> Option<Self> {
         let terminal = stdin_fd();
+        // Dieselbe Sperre wie [`RawMode::enter_on`], vom Prüfen bis zum
+        // Sichern. Hält schon ein anderer Rahmen das Terminal (etwa eine TUI im
+        // Rohmodus), bleiben seine gesicherten Einstellungen stehen: Dieser
+        // Rahmen schaltet nur das Echo ab und gibt nichts zurück, das tut der
+        // Besitzer. Sonst sicherte er den rohen Zustand als den gewöhnlichen,
+        // und das Terminal bliebe nach beiden roh.
+        let mut slot = saved()
+            .lock()
+            .unwrap_or_else(std::sync::PoisonError::into_inner);
         let current = tcgetattr(terminal).ok()?;
-        let owned = terminal.try_clone_to_owned().ok()?;
         let mut hidden = current.clone();
         hidden.local_modes.remove(rustix::termios::LocalModes::ECHO);
-        tcsetattr(terminal, OptionalActions::Flush, &hidden).ok()?;
-        {
-            let mut guard = saved()
-                .lock()
-                .unwrap_or_else(std::sync::PoisonError::into_inner);
-            *guard = Some((owned, current));
+        if slot.is_some() {
+            tcsetattr(terminal, OptionalActions::Flush, &hidden).ok()?;
+            return Some(Self { entered: false });
         }
+        let owned = terminal.try_clone_to_owned().ok()?;
+        tcsetattr(terminal, OptionalActions::Flush, &hidden).ok()?;
+        *slot = Some((owned, current));
+        drop(slot);
         install_hooks();
         Some(Self { entered: true })
     }
@@ -277,7 +305,7 @@ mod tests {
         let (_master, slave) = terminal();
         assert!(cooked(&slave), "the terminal starts cooked");
 
-        let guard = RawMode::enter_on(slave.as_fd()).expect("the raw mode is set");
+        let guard = RawMode::enter_on(slave.as_fd(), false).expect("the raw mode is set");
         assert!(!cooked(&slave), "the terminal is raw while the guard lives");
 
         let panicked = std::panic::catch_unwind(|| panic!("a command that fell over"));

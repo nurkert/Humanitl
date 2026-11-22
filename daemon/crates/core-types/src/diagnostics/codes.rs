@@ -2098,6 +2098,15 @@ registry! {
     CLI_007 => "cli", "Desktop app not installed or not starting", "#cli_007",
         "`humanitl app` hands the folder to a desktop app that is connected to the daemon, and otherwise starts the app: `humanitl-app` next to the own program or on `PATH`, on macOS `open -a Humanitl`. No app was connected, and the app was not found there or did not start; the text names where it looked and what the system said.",
         "`OpenUrl` on the installation guide; the desktop app comes with the package `humanitl` (Linux) or the `Humanitl.app` from the release (macOS).";
+    // GitHub #6: the foundation of the terminal screens (ADR-0024 point 6).
+    /// A terminal screen of `humanitl` (settings, first start, interceptor,
+    /// help of the prefix key) cannot be shown: the terminal is smaller than
+    /// the screen's minimum, or it cannot place the cursor (`TERM` unset or
+    /// `dumb`). Checked before anything changes; the terminal is as it was
+    /// (GitHub #6).
+    TERM_003 => "terminal", "Terminal unsuitable for a full-screen view", "#term_003",
+        "A full-screen view of `humanitl` needs a terminal that can place the cursor and has at least the minimum size the view names. This terminal is smaller, or `TERM` is unset or `dumb`. Nothing was changed on the terminal; the sentence names the measured and the needed size and the command that does the same without a full-screen view.",
+        "`CopyCommand` with the command that needs no full-screen view; otherwise enlarge the window and run the command again.";
 }
 
 /// Sucht einen Code im Register.
