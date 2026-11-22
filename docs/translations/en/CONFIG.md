@@ -221,7 +221,8 @@ The command line's terminal when it is attached to a session.
 
 | Key | Type | Default | Tier | Project | Effect | Description |
 |---|---|---|---|---|---|---|
-| `terminal.detach_prefix` | string | `"ctrl-a"` | advanced | denied | yes | Prefix of the key with which `humanitl sandbox attach` detaches: `ctrl-a` to `ctrl-z`, `ctrl-\`, `ctrl-]`, `ctrl-^`, `ctrl-_`, or `none`, in which case there is none. After the prefix, `d` detaches and leaves the session running; the prefix twice or its letter sends it once to the agent, any other key passes on unchanged together with the prefix. `ctrl-[` is excluded because every arrow key begins with this byte, and `ctrl-h`, `ctrl-i`, `ctrl-j` and `ctrl-m` because backspace, tab and enter send the same bytes. `--detach-keys` overrides the value for one invocation. |
+| `terminal.direct_keys` | boolean | `true` | advanced | denied | yes | `Ctrl+,` opens the settings without the prefix, but only while the agent has switched on the kitty keyboard protocol in the terminal (`CSI > flags u`, switched off with `CSI < u`): only then does the terminal send a sequence of its own for this key (`CSI 44 ; 5 u`). The command line never switches the protocol on itself. With `false`, or without a prefix (`terminal.prefix = "none"`), this sequence goes to the agent as well. |
+| `terminal.prefix` | string | `"ctrl-b"` | advanced | denied | yes | The prefix key in the terminal of a session (`humanitl sandbox attach`, `humanitl run -- CMD` at a terminal, `humanitl go`): `ctrl-a` to `ctrl-z`, `ctrl-\`, `ctrl-]`, `ctrl-^`, `ctrl-_`, or `none`, in which case there is none and every byte goes to the agent. A fixed table follows: `d` detaches and leaves the session running, `,` settings (in the session terminal soon; until then `humanitl settings`), `i` interceptor (in the session terminal soon; until then `humanitl intercept`), `?` shows this table. The prefix twice or its letter sends it once to the agent, so `Ctrl+B` reaches a tmux in the sandbox and a shell for which it means one character back; any other key passes on unchanged together with the prefix. `ctrl-[` is excluded because every arrow key begins with this byte, and `ctrl-h`, `ctrl-i`, `ctrl-j` and `ctrl-m` because backspace, tab and enter send the same bytes. The old name `terminal.detach_prefix` still works. `--prefix` (or `--detach-keys`) overrides the value for one invocation. |
 | `terminal.splash` | boolean | `true` | advanced | denied | yes | The boot animation of `humanitl go`: a rotating fist from the logo while the disposable session starts, at least one second and never longer than the start. It appears only when output and error output are a terminal and `--json` is absent, without colour under `NO_COLOR`. `false` turns it off. |
 
 ### `tls`
@@ -255,6 +256,7 @@ one wins, and loading adds a diagnostic about it.
 | `preview.cap_bytes` | `limits.preview_cap_bytes` | HUM-057 |
 | `preview.max_decompress_ratio` | `limits.max_decompress_ratio` | HUM-057 |
 | `recorder.max_body_bytes` | `limits.recorder_max_body_bytes` | HUM-057 |
+| `terminal.detach_prefix` | `terminal.prefix` | GitHub #10 |
 | `upstream.connect_timeout_secs` | `limits.connect_timeout_secs` | HUM-057 |
 
 ## Removed keys

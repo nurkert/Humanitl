@@ -376,14 +376,14 @@ const GROUP_OVERRIDES: &[GroupOverride] = &[
         after_higher: "System",
     },
     GroupOverride {
-        // HUM-279: `humanitl sandbox attach` liest die Taste zum Abhängen
-        // aus der Konfiguration, wenn `--detach-keys` fehlt.
+        // HUM-279, GitHub #10: Der Anschluss an ein Terminal liest die Präfixtaste
+        // aus der Konfiguration, wenn `--prefix` fehlt.
         group: "terminal",
-        path: "terminal.detach_prefix",
-        lower: "\"ctrl-b\"",
+        path: "terminal.prefix",
+        lower: "\"ctrl-a\"",
         higher: "none",
-        read: |config| config.terminal.detach_prefix.clone(),
-        after_lower: "ctrl-b",
+        read: |config| config.terminal.prefix.clone(),
+        after_lower: "ctrl-a",
         after_higher: "none",
     },
     GroupOverride {

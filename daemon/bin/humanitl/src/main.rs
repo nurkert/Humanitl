@@ -33,6 +33,8 @@ mod cmd;
 // (HUM-078); im Binary hat sie keine Aufgabe.
 #[cfg(test)]
 mod parity;
+// Die Präfixtaste im Terminal einer Sitzung mit ihrer Tabelle (GitHub #10).
+mod prefix;
 mod render;
 // Die Ladeanimation von `humanitl go` (HUM-496).
 mod splash;

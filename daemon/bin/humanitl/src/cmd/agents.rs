@@ -26,7 +26,7 @@ use humanitl_ipc::v1;
 use serde_json::json;
 
 use crate::cli::AgentsCmd;
-use crate::cmd::attach::{Ending, attach_sandbox, resolve_detach_keys};
+use crate::cmd::attach::{Ending, attach_sandbox, resolve_keys};
 use crate::cmd::{Context, EXIT_OK, Failure, from_proto, status_diagnostic};
 
 /// Wie oft nach dem Ende des Laufs nach seinem Ergebnis gefragt wird.
@@ -202,7 +202,7 @@ async fn maintain(
     }
     // Vor der Verbindung: Ein unlesbares Präfix soll nicht erst nach dem
     // Start des Laufs auffallen.
-    let keys = resolve_detach_keys(ctx, None)?;
+    let keys = resolve_keys(ctx, None)?;
     let wish = v1::agents_request::Maintain {
         agent: agent.to_owned(),
         version: version.unwrap_or_default().to_owned(),
@@ -257,7 +257,7 @@ async fn attended(
     ctx: &Context,
     agent: &str,
     started: &v1::AgentMaintenance,
-    keys: humanitl_config::DetachKeys,
+    keys: crate::prefix::Keys,
 ) -> Result<Attended, Failure> {
     if !ctx.render.is_json() {
         match attach_or_outcome(ctx, agent, &started.sandbox_id, keys).await? {
@@ -491,7 +491,7 @@ async fn attach_or_outcome(
     ctx: &Context,
     agent: &str,
     sandbox: &str,
-    keys: humanitl_config::DetachKeys,
+    keys: crate::prefix::Keys,
 ) -> Result<Attached, Failure> {
     let read_only = !std::io::stdin().is_terminal();
     match attach_sandbox(ctx, read_only, keys, sandbox).await {

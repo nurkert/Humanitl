@@ -202,7 +202,8 @@ below lists the flag names and their short aliases.
 | `--sandbox-qemu-virtiofsd` | - | `STRING,_OPTIONAL` | `sandbox.qemu.virtiofsd` |
 | `--sandbox-work-dir` | `--work` | `STRING,_OPTIONAL` | `sandbox.work_dir` |
 | `--sandbox-work-mode` | `--work-mode` | `ro`, `rw` | `sandbox.work_mode` |
-| `--terminal-detach-prefix` | - | `STRING` | `terminal.detach_prefix` |
+| `--terminal-direct-keys` | - | `true`, `false` | `terminal.direct_keys` |
+| `--terminal-prefix` | - | `STRING` | `terminal.prefix` |
 | `--terminal-splash` | - | `true`, `false` | `terminal.splash` |
 | `--tls-trust-system-store` | - | `true`, `false` | `tls.trust_system_store` |
 | `--ui-language` | - | `en`, `de` | `ui.language` |
@@ -578,7 +579,19 @@ Options:
 ```text
 Attach this terminal to the running session.
 
-One client writes, any number watch. Ctrl+C goes to the session's terminal as byte 0x03, which interrupts its foreground program, as in any terminal; this terminal itself never reaches the sandbox. Detach with Ctrl+A d, as in screen; the session keeps running, and a later attach shows it. Ctrl+A Ctrl+A (or Ctrl+A a) sends one Ctrl+A to the agent.
+One client writes, any number watch. Ctrl+C goes to the session's terminal as byte 0x03, which interrupts its foreground program, as in any terminal; this terminal itself never reaches the sandbox. The session keeps running after a detach, and a later attach shows it.
+
+The prefix key (terminal.prefix, default Ctrl+B as in tmux, --prefix for one call) is followed by a fixed table. The same table works in humanitl run -- CMD at a terminal and in humanitl go:
+
+  Ctrl+B d  detach; the session keeps running
+  Ctrl+B ,  settings (here soon; meanwhile humanitl settings)
+  Ctrl+B i  interceptor (here soon; meanwhile humanitl intercept)
+  Ctrl+B ?  this help
+  Ctrl+B Ctrl+B or Ctrl+B b  send Ctrl+B once to the agent
+            (a tmux in the sandbox, readline's one character back)
+  Ctrl+B and any other key  both go to the agent
+  Ctrl+,    settings directly while the agent uses the kitty keyboard
+            protocol (terminal.direct_keys)
 
 Usage: humanitl sandbox attach [OPTIONS]
 
@@ -587,13 +600,15 @@ Options:
           Machine-readable output: one JSON value on stdout, diagnostics included
 
       --read-only
-          Watch without sending anything. Ctrl+A d detaches here too, and so does Ctrl+C
+          Watch without sending anything. Ctrl+B d detaches here too, and so does Ctrl+C
 
       --config <PATH>
           Read this config file instead of the one in the user's config directory
 
-      --detach-keys <SPEC>
-          The prefix of the detach key: ctrl-a to ctrl-z (not ctrl-h, ctrl-i, ctrl-j, ctrl-m: Backspace, Tab and Enter send them), ctrl-\, ctrl-], ctrl-^, ctrl-_, or none for no detach key. Default from `terminal.detach_prefix`, which is ctrl-a
+      --prefix <SPEC>
+          The prefix key: ctrl-a to ctrl-z (not ctrl-h, ctrl-i, ctrl-j, ctrl-m: Backspace, Tab and Enter send them), ctrl-\, ctrl-], ctrl-^, ctrl-_, or none for no prefix key, so that every byte goes to the agent. Default from `terminal.prefix`, which is ctrl-b. The old name --detach-keys still works
+
+          [alias: --detach-keys]
 
       --shell <ID>
           Attach to a further shell from `humanitl sandbox exec` instead of the agent's terminal
@@ -616,7 +631,7 @@ Options:
 ```text
 Open a further shell in the running sandbox, next to the agent.
 
-Like docker exec: the shell gets a terminal of its own, the agent keeps running and keeps its terminal. The shell carries the same limits as the agent (filter, mounts, network through the proxy, rules) and sees the same project folder. It ends when its process exits or when the sandbox stops; at most four live at a time. Detach with Ctrl+A d, attach again with `humanitl sandbox attach --shell ID`. Without a terminal on stdin the command only watches the output.
+Like docker exec: the shell gets a terminal of its own, the agent keeps running and keeps its terminal. The shell carries the same limits as the agent (filter, mounts, network through the proxy, rules) and sees the same project folder. It ends when its process exits or when the sandbox stops; at most four live at a time. Detach with Ctrl+B d, attach again with `humanitl sandbox attach --shell ID`. Without a terminal on stdin the command only watches the output.
 
 Usage: humanitl sandbox exec [OPTIONS] [-- <CMD>...]
 
@@ -625,11 +640,13 @@ Arguments:
           The command to run, after `--`; without it an interactive bash, or sh when the sandbox has no bash
 
 Options:
-      --detach-keys <SPEC>
-          The prefix of the detach key, as for `humanitl sandbox attach`
-
       --json
           Machine-readable output: one JSON value on stdout, diagnostics included
+
+      --prefix <SPEC>
+          The prefix key, as for `humanitl sandbox attach`; the old name --detach-keys still works
+
+          [alias: --detach-keys]
 
       --config <PATH>
           Read this config file instead of the one in the user's config directory

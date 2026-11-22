@@ -962,24 +962,21 @@ pub enum SandboxCmd {
     Plan,
 
     /// Attach this terminal to the running session.
-    ///
-    /// One client writes, any number watch. Ctrl+C goes to the session's
-    /// terminal as byte 0x03, which interrupts its foreground program, as in
-    /// any terminal; this terminal itself never reaches the sandbox. Detach
-    /// with Ctrl+A d, as in screen; the session keeps running, and a later
-    /// attach shows it. Ctrl+A Ctrl+A (or Ctrl+A a) sends one Ctrl+A to the
-    /// agent.
+    // Der lange Text entsteht aus der Tabelle der Präfixtaste (GitHub #10),
+    // damit Hilfe, `docs/reference/cli.md` und `?` nicht auseinanderlaufen.
+    #[command(long_about = crate::prefix::attach_help())]
     Attach {
-        /// Watch without sending anything. Ctrl+A d detaches here too, and so
+        /// Watch without sending anything. Ctrl+B d detaches here too, and so
         /// does Ctrl+C.
         #[arg(long)]
         read_only: bool,
-        /// The prefix of the detach key: ctrl-a to ctrl-z (not ctrl-h, ctrl-i,
-        /// ctrl-j, ctrl-m: Backspace, Tab and Enter send them), ctrl-\,
-        /// ctrl-], ctrl-^, ctrl-_, or none for no detach key. Default from
-        /// `terminal.detach_prefix`, which is ctrl-a.
-        #[arg(long, value_name = "SPEC")]
-        detach_keys: Option<String>,
+        /// The prefix key: ctrl-a to ctrl-z (not ctrl-h, ctrl-i, ctrl-j,
+        /// ctrl-m: Backspace, Tab and Enter send them), ctrl-\, ctrl-],
+        /// ctrl-^, ctrl-_, or none for no prefix key, so that every byte goes
+        /// to the agent. Default from `terminal.prefix`, which is ctrl-b.
+        /// The old name --detach-keys still works.
+        #[arg(long, value_name = "SPEC", visible_alias = "detach-keys")]
+        prefix: Option<String>,
         /// Attach to a further shell from `humanitl sandbox exec` instead of
         /// the agent's terminal.
         #[arg(long, value_name = "ID")]
@@ -993,12 +990,13 @@ pub enum SandboxCmd {
     /// limits as the agent (filter, mounts, network through the proxy, rules)
     /// and sees the same project folder. It ends when its process exits or
     /// when the sandbox stops; at most four live at a time. Detach with
-    /// Ctrl+A d, attach again with `humanitl sandbox attach --shell ID`.
+    /// Ctrl+B d, attach again with `humanitl sandbox attach --shell ID`.
     /// Without a terminal on stdin the command only watches the output.
     Exec {
-        /// The prefix of the detach key, as for `humanitl sandbox attach`.
-        #[arg(long, value_name = "SPEC")]
-        detach_keys: Option<String>,
+        /// The prefix key, as for `humanitl sandbox attach`; the old name
+        /// --detach-keys still works.
+        #[arg(long, value_name = "SPEC", visible_alias = "detach-keys")]
+        prefix: Option<String>,
         /// The command to run, after `--`; without it an interactive bash,
         /// or sh when the sandbox has no bash.
         #[arg(last = true, value_name = "CMD")]

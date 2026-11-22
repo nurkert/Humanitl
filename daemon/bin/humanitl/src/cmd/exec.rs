@@ -20,7 +20,7 @@ use humanitl_core::diagnostics::codes;
 use humanitl_core::{Diagnostic, Severity};
 use humanitl_ipc::v1;
 
-use crate::cmd::attach::{attach_to, finish_with, resolve_detach_keys, shell_detached};
+use crate::cmd::attach::{attach_to, finish_with, resolve_keys, shell_detached};
 use crate::cmd::{Context, Failure, status_diagnostic};
 use crate::tty::window_size;
 
@@ -28,16 +28,12 @@ use crate::tty::window_size;
 ///
 /// # Errors
 ///
-/// `CLI_004` für ein unlesbares `--detach-keys` oder ein Argument, das kein
+/// `CLI_004` für ein unlesbares `--prefix` oder ein Argument, das kein
 /// UTF-8 ist; `DAEMON_001` ohne Daemon; `IPC_006`, wenn keine Sitzung läuft;
 /// `TERM_002`, wenn die Sandbox keine weitere Shell öffnet (Grenze erreicht,
 /// beendet, abgelehnt).
-pub async fn run(
-    ctx: &Context,
-    cmd: &[OsString],
-    detach_keys: Option<&str>,
-) -> Result<u8, Failure> {
-    let keys = resolve_detach_keys(ctx, detach_keys)?;
+pub async fn run(ctx: &Context, cmd: &[OsString], prefix: Option<&str>) -> Result<u8, Failure> {
+    let keys = resolve_keys(ctx, prefix)?;
     let command = utf8_command(cmd)?;
     let mut client = ctx.connect().await?;
     let (cols, rows) = window_size();

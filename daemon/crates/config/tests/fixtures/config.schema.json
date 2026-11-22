@@ -1354,14 +1354,22 @@
     "terminal": {
       "additionalProperties": false,
       "default": {
-        "detach_prefix": "ctrl-a",
+        "direct_keys": true,
+        "prefix": "ctrl-b",
         "splash": true
       },
       "description": "Das Terminal der Kommandozeile, wenn sie an einer Sitzung hängt.",
       "properties": {
-        "detach_prefix": {
-          "default": "ctrl-a",
-          "description": "Präfix der Taste, mit der sich `humanitl sandbox attach` abhängt: `ctrl-a` bis `ctrl-z`, `ctrl-\\`, `ctrl-]`, `ctrl-^`, `ctrl-_`, oder `none`, dann gibt es keine. Nach dem Präfix hängt `d` ab und lässt die Sitzung laufen; das Präfix zweimal oder sein Buchstabe schickt es einmal an den Agenten, jede andere Taste geht mit dem Präfix unverändert weiter. `ctrl-[` ist ausgenommen, weil jede Pfeiltaste mit diesem Byte beginnt, `ctrl-h`, `ctrl-i`, `ctrl-j` und `ctrl-m`, weil Rücktaste, Tab und Enter dieselben Bytes schicken. `--detach-keys` überschreibt den Wert für einen Aufruf.",
+        "direct_keys": {
+          "default": true,
+          "description": "`Ctrl+,` öffnet die Einstellungen ohne Präfix, aber nur, solange der Agent im Terminal das kitty-Tastaturprotokoll eingeschaltet hat (`CSI > Flags u`, abgeschaltet mit `CSI < u`): Nur dann schickt das Terminal für diese Taste eine eigene Folge (`CSI 44 ; 5 u`). Die Kommandozeile schaltet das Protokoll nie selbst ein. Mit `false` oder ohne Präfix (`terminal.prefix = \"none\"`) geht auch diese Folge an den Agenten.",
+          "type": "boolean",
+          "x-project-scope": "denied",
+          "x-tier": "advanced"
+        },
+        "prefix": {
+          "default": "ctrl-b",
+          "description": "Die Präfixtaste im Terminal einer Sitzung (`humanitl sandbox attach`, `humanitl run -- CMD` an einem Terminal, `humanitl go`): `ctrl-a` bis `ctrl-z`, `ctrl-\\`, `ctrl-]`, `ctrl-^`, `ctrl-_`, oder `none`, dann gibt es keine und jedes Byte geht an den Agenten. Danach gilt eine feste Tabelle: `d` hängt ab und lässt die Sitzung laufen, `,` Einstellungen (im Terminal der Sitzung bald; bis dahin `humanitl settings`), `i` Interceptor (im Terminal der Sitzung bald; bis dahin `humanitl intercept`), `?` zeigt diese Tabelle. Das Präfix zweimal oder sein Buchstabe schickt es einmal an den Agenten, so erreicht `Ctrl+B` ein tmux in der Sandbox und eine Shell, für die es ein Zeichen zurück heißt; jede andere Taste geht mit dem Präfix unverändert weiter. `ctrl-[` ist ausgenommen, weil jede Pfeiltaste mit diesem Byte beginnt, `ctrl-h`, `ctrl-i`, `ctrl-j` und `ctrl-m`, weil Rücktaste, Tab und Enter dieselben Bytes schicken. Der alte Name `terminal.detach_prefix` gilt weiter. `--prefix` (oder `--detach-keys`) überschreibt den Wert für einen Aufruf.",
           "type": "string",
           "x-project-scope": "denied",
           "x-tier": "advanced"

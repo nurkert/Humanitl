@@ -370,14 +370,14 @@ fn wait_for_byte(child: &mut Child, pty: &Pty, byte: u8) {
     panic!("the byte {byte:#04x} never came back from the session");
 }
 
-/// `Ctrl+A d` hängt ab (HUM-279): Exit 0, ein `close` beim Daemon, keine der
+/// `Ctrl+B d` hängt ab (HUM-279): Exit 0, ein `close` beim Daemon, keine der
 /// beiden Tasten beim Agenten, das Terminal gewöhnlich, und ein zweites
 /// `attach` kommt wieder an die Sitzung.
 ///
 /// Der Fake beantwortet `close` und das Ende des Stroms gleich; ob wirklich
 /// `close` kam, liest der Test deshalb aus dem, was der Fake empfangen hat.
 #[test]
-fn ctrl_a_d_detaches_and_gives_the_terminal_back() {
+fn ctrl_b_d_detaches_and_gives_the_terminal_back() {
     let harness = Harness::new();
     let server = FakeServer::start(&harness);
     let pty = Pty::open();
@@ -385,7 +385,7 @@ fn ctrl_a_d_detaches_and_gives_the_terminal_back() {
 
     let mut child = attach(&harness, &pty);
     wait_for_raw(&mut child, &pty);
-    pty.write(b"\x01d");
+    pty.write(b"\x02d");
 
     assert_eq!(wait_for_exit(&mut child, &pty), 0);
     assert!(
@@ -394,7 +394,7 @@ fn ctrl_a_d_detaches_and_gives_the_terminal_back() {
         pty.modes()
     );
     let said = String::from_utf8_lossy(&pty.read()).into_owned();
-    assert!(said.contains("Detach: Ctrl+A d"), "{said:?}");
+    assert!(said.contains("Detach: Ctrl+B d"), "{said:?}");
     assert!(
         said.contains("Detached; the session keeps running. Attach again: humanitl sandbox attach"),
         "{said:?}"
@@ -414,21 +414,130 @@ fn ctrl_a_d_detaches_and_gives_the_terminal_back() {
     assert_eq!(wait_for_exit(&mut again, &pty), 0);
 }
 
-/// `Ctrl+A Ctrl+A` schickt dem Agenten ein `Ctrl+A` und hängt nicht ab
+/// Die Zeile zur neuen Vorgabe (GitHub #10): beim ersten Anhängen ohne
+/// gesetzten Wert, nicht beim zweiten, und nie mit gesetztem Wert; ein
+/// gesetztes `ctrl-a` bleibt die Präfixtaste.
+#[test]
+#[cfg(target_os = "linux")]
+fn the_new_prefix_is_announced_once() {
+    const LINE: &str = "The prefix key is now Ctrl+B (was Ctrl+A). Keep the old one: humanitl \
+                        config set terminal.prefix ctrl-a";
+    let harness = Harness::new();
+    let _server = FakeServer::start(&harness);
+    let pty = Pty::open();
+    // `read` gibt alles seit dem Öffnen; jede Runde misst nur ihren Teil.
+    let mut seen = 0;
+    for (round, announced) in [(1, true), (2, false)] {
+        let mut child = attach(&harness, &pty);
+        wait_for_raw(&mut child, &pty);
+        pty.write(b"\x02d");
+        assert_eq!(wait_for_exit(&mut child, &pty), 0);
+        let all = pty.read();
+        let said = String::from_utf8_lossy(&all[seen..]).into_owned();
+        seen = all.len();
+        assert_eq!(said.contains(LINE), announced, "attach {round}: {said:?}");
+    }
+
+    let set = Harness::new();
+    let _other = FakeServer::start(&set);
+    let mut child = set
+        .command()
+        .env("HUMANITL_TERMINAL__PREFIX", "ctrl-a")
+        .args(["sandbox", "attach"])
+        .stdin(pty.stdio())
+        .stdout(pty.stdio())
+        .stderr(pty.stdio())
+        .spawn()
+        .expect("the binary starts");
+    wait_for_raw(&mut child, &pty);
+    pty.write(b"\x01d");
+    assert_eq!(
+        wait_for_exit(&mut child, &pty),
+        0,
+        "ctrl-a stays the prefix"
+    );
+    let said = String::from_utf8_lossy(&pty.read()[seen..]).into_owned();
+    assert!(!said.contains(LINE), "{said:?}");
+    assert!(said.contains("Detach: Ctrl+A d"), "{said:?}");
+}
+
+/// `--read-only --prefix none` liest keine Tastatur und setzt keinen
+/// Rohmodus, gibt aber das Terminal trotzdem zurück: Alternativschirm und
+/// kitty-Flags kommen mit der Ausgabe des Agenten, also hängt das Aufräumen
+/// an einer Ausgabe auf ein Terminal (Review zu GitHub #10). Mutationsbeweis:
+/// Aufräumen nur mit Rohmodus macht ihn rot.
+#[test]
+#[cfg(target_os = "linux")]
+fn a_watcher_without_keys_still_gives_the_screen_back() {
+    let harness = Harness::new();
+    let _server = FakeServer::start(&harness);
+    let pty = Pty::open();
+    let mut child = attach_with(&harness, &pty, &["--read-only", "--prefix", "none"]);
+    let deadline = Instant::now() + PATIENCE;
+    while !String::from_utf8_lossy(&pty.read()).contains("input is echoed") {
+        if Instant::now() >= deadline {
+            let _ = child.kill();
+            let _ = child.wait();
+            panic!("no output: {:?}", String::from_utf8_lossy(&pty.read()));
+        }
+        std::thread::sleep(Duration::from_millis(10));
+    }
+    signal(&child, rustix::process::Signal::TERM);
+    assert_eq!(wait_for_exit(&mut child, &pty), 143);
+    let said = String::from_utf8_lossy(&pty.read()).into_owned();
+    assert!(said.contains("\x1b[?1049l\x1b[?25h"), "{said:?}");
+}
+
+/// `Ctrl+B ?` zeigt die Tabelle auf dem Alternativschirm, die nächste Taste
+/// schließt sie, ohne den Agenten zu erreichen, und `Ctrl+B d` hängt danach
+/// ab (GitHub #10).
+#[test]
+#[cfg(target_os = "linux")]
+fn ctrl_b_question_mark_shows_the_table() {
+    let harness = Harness::new();
+    let server = FakeServer::start(&harness);
+    let pty = Pty::open();
+    let mut child = attach(&harness, &pty);
+    wait_for_raw(&mut child, &pty);
+    pty.write(b"\x02?");
+    let deadline = Instant::now() + PATIENCE;
+    while !String::from_utf8_lossy(&pty.read()).contains("Prefix keys") {
+        if Instant::now() >= deadline {
+            let _ = child.kill();
+            let _ = child.wait();
+            panic!("no help: {:?}", String::from_utf8_lossy(&pty.read()));
+        }
+        std::thread::sleep(Duration::from_millis(10));
+    }
+    pty.write(b"q");
+    pty.write(b"\x02d");
+    assert_eq!(wait_for_exit(&mut child, &pty), 0);
+    let said = String::from_utf8_lossy(&pty.read()).into_owned();
+    assert!(said.contains("\x1b[?1049h"), "{said:?}");
+    assert!(said.contains("Ctrl+B Ctrl+B or Ctrl+B b"), "{said:?}");
+    assert!(said.contains("\x1b[?1049l"), "{said:?}");
+    assert!(
+        !server.terminal_inputs().contains(&"data"),
+        "a key of the help reached the agent: {:?}",
+        server.terminal_inputs()
+    );
+}
+
+/// `Ctrl+B Ctrl+B` schickt dem Agenten ein `Ctrl+B` und hängt nicht ab
 /// (HUM-279).
 #[test]
-fn ctrl_a_twice_reaches_the_agent() {
+fn ctrl_b_twice_reaches_the_agent() {
     let harness = Harness::new();
     let _server = FakeServer::start(&harness);
     let pty = Pty::open();
 
     let mut child = attach(&harness, &pty);
     wait_for_raw(&mut child, &pty);
-    pty.write(b"\x01\x01");
-    wait_for_byte(&mut child, &pty, 0x01);
+    pty.write(b"\x02\x02");
+    wait_for_byte(&mut child, &pty, 0x02);
     assert!(
         child.try_wait().expect("the child can be polled").is_none(),
-        "Ctrl+A Ctrl+A detached"
+        "Ctrl+B Ctrl+B detached"
     );
 
     pty.write(&[0x04]);
@@ -443,7 +552,7 @@ fn ctrl_a_twice_reaches_the_agent() {
 /// Anschluss hat niemanden, dem er es schicken könnte.
 #[test]
 fn read_only_detaches_on_the_same_key() {
-    for keys in [&b"\x01d"[..], &b"\x03"[..]] {
+    for keys in [&b"\x02d"[..], &b"\x03"[..]] {
         let harness = Harness::new();
         let server = FakeServer::start(&harness);
         let pty = Pty::open();
@@ -465,7 +574,7 @@ fn read_only_detaches_on_the_same_key() {
 
 /// Eine Sitzung, die ihre Eingabe nicht liest, hält den Menschen nicht fest
 /// (HUM-279, Review): Nach einem großen Einfügen staut sich alles im
-/// Transport, und `Ctrl+A d` hängt trotzdem ab, in begrenzter Zeit, mit
+/// Transport, und `Ctrl+B d` hängt trotzdem ab, in begrenzter Zeit, mit
 /// Exit 0 und einem gewöhnlichen Terminal.
 ///
 /// Gemessen wird beides mit Frist: dass der Lauf das Eingefügte abnimmt (ein
@@ -489,7 +598,7 @@ fn a_session_that_reads_nothing_still_lets_go() {
     }
     let started = Instant::now();
     assert!(
-        pty.write_within(b"\x01d", Instant::now() + Duration::from_secs(5)),
+        pty.write_within(b"\x02d", Instant::now() + Duration::from_secs(5)),
         "the detach key was not taken"
     );
 
@@ -528,18 +637,18 @@ fn read_only_ctrl_c_detaches_even_as_the_prefix() {
     assert_eq!(server.terminal_inputs(), vec!["open", "close"]);
 }
 
-/// `--detach-keys none`: `Ctrl+A d` geht an den Agenten, und der Lauf hängt
+/// `--detach-keys none`: `Ctrl+B d` geht an den Agenten, und der Lauf hängt
 /// sich nicht ab (HUM-279).
 #[test]
-fn detach_keys_none_forwards_ctrl_a_d() {
+fn detach_keys_none_forwards_ctrl_b_d() {
     let harness = Harness::new();
     let _server = FakeServer::start(&harness);
     let pty = Pty::open();
 
     let mut child = attach_with(&harness, &pty, &["--detach-keys", "none"]);
     wait_for_raw(&mut child, &pty);
-    pty.write(b"\x01d");
-    wait_for_byte(&mut child, &pty, 0x01);
+    pty.write(b"\x02d");
+    wait_for_byte(&mut child, &pty, 0x02);
     assert!(
         child.try_wait().expect("the child can be polled").is_none(),
         "--detach-keys none still detached"
@@ -608,7 +717,7 @@ fn run_with_a_command_at_a_terminal_attaches() {
         .spawn()
         .expect("the binary starts");
     wait_for_raw(&mut child, &pty);
-    pty.write(b"\x01d");
+    pty.write(b"\x02d");
 
     assert_eq!(wait_for_exit(&mut child, &pty), 0);
     assert!(
@@ -617,7 +726,7 @@ fn run_with_a_command_at_a_terminal_attaches() {
         pty.modes()
     );
     let said = String::from_utf8_lossy(&pty.read()).into_owned();
-    assert!(said.contains("Detach: Ctrl+A d"), "{said:?}");
+    assert!(said.contains("Detach: Ctrl+B d"), "{said:?}");
     assert!(
         said.contains("Detached; the session keeps running"),
         "{said:?}"
@@ -675,7 +784,7 @@ fn run_with_a_command_without_a_terminal_does_not_attach() {
 
 /// `humanitl sandbox exec` asks the daemon for a further shell, attaches to
 /// that shell's terminal (not the agent's) like `sandbox attach`, and
-/// `Ctrl+A d` detaches with a line that names the shell (HUM-299).
+/// `Ctrl+B d` detaches with a line that names the shell (HUM-299).
 #[test]
 fn sandbox_exec_opens_a_shell_and_attaches_to_its_terminal() {
     let harness = Harness::new();
@@ -691,7 +800,7 @@ fn sandbox_exec_opens_a_shell_and_attaches_to_its_terminal() {
         .spawn()
         .expect("the binary starts");
     wait_for_raw(&mut child, &pty);
-    pty.write(b"\x01d");
+    pty.write(b"\x02d");
 
     assert_eq!(wait_for_exit(&mut child, &pty), 0);
     assert!(
@@ -773,7 +882,7 @@ fn go_shows_the_splash_for_a_second_and_gives_the_terminal_back() {
     let mut child = go_at(&harness, &pty, &[], None);
     wait_for_raw(&mut child, &pty);
     let took = begun.elapsed();
-    pty.write(b"\x01d");
+    pty.write(b"\x02d");
     assert_eq!(wait_for_exit(&mut child, &pty), 0);
     assert!(pty.is_cooked(), "modes {:?}", pty.modes());
 
@@ -797,7 +906,7 @@ fn go_shows_the_splash_for_a_second_and_gives_the_terminal_back() {
         .find("no network interface")
         .expect("the checks are shown");
     let detach = said
-        .find("Detach: Ctrl+A d")
+        .find("Detach: Ctrl+B d")
         .expect("the attach is announced");
     assert!(leave < check && leave < detach, "{said:?}");
     assert_eq!(server.terminal_inputs().first(), Some(&"open"));
@@ -816,7 +925,7 @@ fn go_without_colour_and_without_splash() {
         let pty = Pty::open();
         let mut child = go_at(&harness, &pty, extra, no_color);
         wait_for_raw(&mut child, &pty);
-        pty.write(b"\x01d");
+        pty.write(b"\x02d");
         assert_eq!(wait_for_exit(&mut child, &pty), 0, "{extra:?}");
         let said = String::from_utf8_lossy(&pty.read()).into_owned();
         assert_eq!(
@@ -932,8 +1041,8 @@ fn go_first_start_enter_saves_and_the_second_go_shows_no_screen() {
         "nothing starts under the screen"
     );
     pty.write(b"\r");
-    wait_for_text(&mut child, &pty, "Detach: Ctrl+A d");
-    pty.write(b"\x01d");
+    wait_for_text(&mut child, &pty, "Detach: Ctrl+B d");
+    pty.write(b"\x02d");
     assert_eq!(wait_for_exit(&mut child, &pty), 0);
     assert_eq!(termios(&pty), before, "the terminal is as before");
     let said = String::from_utf8_lossy(&pty.read()).into_owned();
@@ -946,8 +1055,8 @@ fn go_first_start_enter_saves_and_the_second_go_shows_no_screen() {
 
     let pty = sized_pty();
     let mut child = go_first(&harness, &pty);
-    wait_for_text(&mut child, &pty, "Detach: Ctrl+A d");
-    pty.write(b"\x01d");
+    wait_for_text(&mut child, &pty, "Detach: Ctrl+B d");
+    pty.write(b"\x02d");
     assert_eq!(wait_for_exit(&mut child, &pty), 0);
     let said = String::from_utf8_lossy(&pty.read()).into_owned();
     assert!(!said.contains("Customize"), "a second screen: {said:?}");
@@ -1061,7 +1170,7 @@ fn go_first_start_a_second_enter_during_the_save_reaches_nobody() {
         std::thread::sleep(Duration::from_millis(10));
     }
     pty.write(b"y\r");
-    wait_for_text(&mut child, &pty, "Detach: Ctrl+A d");
+    wait_for_text(&mut child, &pty, "Detach: Ctrl+B d");
     // Was durchgereicht würde, käme gleich nach dem Anschluss; eine kurze,
     // feste Frist reicht, ihn zu sehen.
     let settle = Instant::now() + Duration::from_millis(500);
@@ -1070,7 +1179,7 @@ fn go_first_start_a_second_enter_during_the_save_reaches_nobody() {
         std::thread::sleep(Duration::from_millis(10));
     }
     let inputs = server.terminal_inputs();
-    pty.write(b"\x01d");
+    pty.write(b"\x02d");
     assert_eq!(wait_for_exit(&mut child, &pty), 0);
     assert!(
         !inputs.contains(&"data"),

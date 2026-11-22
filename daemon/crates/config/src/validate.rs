@@ -654,10 +654,10 @@ fn agent_is_well_formed(agent: &AgentRef) -> Result<(), Diagnostic> {
 /// lesen kann (HUM-279). Ein unlesbarer Wert fiele sonst erst beim nächsten
 /// `attach` auf, und dann mit einem Terminal, aus dem niemand mehr herausfindet.
 fn terminal_is_well_formed(terminal: &TerminalConfig) -> Result<(), Diagnostic> {
-    if DetachKeys::parse(&terminal.detach_prefix).is_none() {
+    if DetachKeys::parse(&terminal.prefix).is_none() {
         return Err(out_of_range(
-            "terminal.detach_prefix",
-            &format!("{:?}", terminal.detach_prefix),
+            "terminal.prefix",
+            &format!("{:?}", terminal.prefix),
             DetachKeys::ALLOWED,
         ));
     }
@@ -1125,24 +1125,28 @@ mod tests {
         }
     }
 
-    /// `terminal.detach_prefix` nimmt, was `--detach-keys` nimmt, und ein
-    /// unlesbarer Wert nennt Schlüssel, Wert und Vorgabe (HUM-279).
+    /// `terminal.prefix` nimmt, was `--prefix` und `--detach-keys` nehmen,
+    /// mit denselben Ausnahmen wie vor GitHub #10, und ein unlesbarer Wert
+    /// nennt Schlüssel, Wert und Vorgabe (HUM-279).
     #[test]
-    fn a_detach_prefix_must_be_a_control_key_or_none() {
+    fn a_prefix_must_be_a_control_key_or_none() {
         let mut config = Config::default();
-        assert_eq!(config.terminal.detach_prefix, "ctrl-a");
-        for allowed in ["ctrl-b", "Ctrl-Z", "ctrl-]", "ctrl-\\", "ctrl-_", "none"] {
-            config.terminal.detach_prefix = allowed.to_owned();
+        assert_eq!(config.terminal.prefix, "ctrl-b");
+        for allowed in [
+            "ctrl-a", "ctrl-b", "Ctrl-Z", "ctrl-]", "ctrl-\\", "ctrl-_", "none",
+        ] {
+            config.terminal.prefix = allowed.to_owned();
             assert!(config.validate().is_ok(), "{allowed} is allowed");
         }
         for refused in [
-            "ctrl-[", "ctrl-m", "ctrl-1", "alt-a", "ctrl-", "ctrl-ab", "", "a",
+            "ctrl-[", "ctrl-h", "ctrl-i", "ctrl-j", "ctrl-m", "ctrl-1", "alt-a", "ctrl-",
+            "ctrl-ab", "", "a",
         ] {
-            config.terminal.detach_prefix = refused.to_owned();
+            config.terminal.prefix = refused.to_owned();
             let diagnostic = config.validate().expect_err(refused);
             assert_eq!(diagnostic.code.as_str(), "CONFIG_003");
             assert!(
-                diagnostic.why.contains("terminal.detach_prefix"),
+                diagnostic.why.contains("terminal.prefix"),
                 "{}",
                 diagnostic.why
             );
@@ -1150,14 +1154,14 @@ mod tests {
                 matches!(
                     &diagnostic.fix,
                     Some(FixAction::ChangeSetting { key, value })
-                        if key == "terminal.detach_prefix" && value.contains("ctrl-a")
+                        if key == "terminal.prefix" && value.contains("ctrl-b")
                 ),
                 "{:?}",
                 diagnostic.fix
             );
         }
         // Der Befund nennt den Grund, warum Enter kein Präfix sein kann.
-        config.terminal.detach_prefix = "ctrl-m".to_owned();
+        config.terminal.prefix = "ctrl-m".to_owned();
         assert!(why_of(&config).contains("Backspace, Tab and Enter"));
     }
 
@@ -1641,10 +1645,10 @@ mod tests {
         let mut profile = Config::default();
         profile.sandbox.profile = "a/b".to_owned();
         let mut prefix = Config::default();
-        prefix.terminal.detach_prefix = "ctrl-ab".to_owned();
+        prefix.terminal.prefix = "ctrl-ab".to_owned();
         for (config, key, expected) in [
             (profile, "sandbox.profile", "default"),
-            (prefix, "terminal.detach_prefix", "ctrl-a"),
+            (prefix, "terminal.prefix", "ctrl-b"),
         ] {
             let err = config.validate().expect_err("out of range");
             let Some(humanitl_core::diagnostics::FixAction::ChangeSetting { key: got, value }) =
