@@ -216,6 +216,9 @@ const REGISTER: &[(&str, &str)] = &[
     // Gelesen in jedem Anschluss an das Terminal einer Sitzung, wenn
     // `--prefix` fehlt: `sandbox attach`, `run -- CMD`, `go`
     // (`cmd/attach.rs`, GitHub #10). Daemon und Oberfläche lesen beide nicht.
+    // `terminal.bell_on_hold` liest derselbe Anschluss, bevor er die Glocke
+    // für neu gehaltene Anfragen einschaltet (GitHub #12).
+    ("terminal.bell_on_hold", "effective"),
     ("terminal.direct_keys", "effective"),
     ("terminal.prefix", "effective"),
     // Gelesen in `humanitl go`, bevor die Ladeanimation startet

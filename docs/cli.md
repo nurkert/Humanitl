@@ -594,13 +594,13 @@ from it:
 |---|---|
 | `d` | Detach; the session keeps running. |
 | `,` | Settings over the agent, the screen of `humanitl settings` in the session terminal; `Esc` or `q` returns to the agent (GitHub #11, below). |
-| `i` | Interceptor. The view comes with #12; until then a box says so, meanwhile `humanitl intercept`. |
+| `i` | Interceptor over the agent: the held requests, decided with one key; `Esc` or `q` returns (GitHub #12, below). |
 | `?` | This table, as a small box over the agent. |
 | `Ctrl+B` or `b` | Send one `Ctrl+B` to the agent. |
 | anything else | Send `Ctrl+B` and that key unchanged. |
 
-Any key closes a box, and that key does not reach the agent. While a box
-or the settings stand, the agent's output waits in the command and follows
+Any key closes a box, and that key does not reach the agent. While a box,
+the settings or the interceptor stand, the agent's output waits in the command and follows
 when they close, in whole chunks as the daemon filtered them and at most
 4 MiB; once a chunk does not fit, everything that waited is dropped, with
 every later chunk, nothing is written, and the agent is asked to redraw. Pasted text (between `ESC [200~` and `ESC [201~`) is never a key:
@@ -648,6 +648,78 @@ Over an agent on the alternate screen it therefore does not open the
 settings and only rings the bell (`BEL`); use `humanitl settings` in another
 terminal there. Over an agent on the ordinary screen the own alternate
 screen keeps the picture, so the settings open as usual.
+
+**Interceptor over the agent (GitHub #12).** The prefix and `i` open the
+held requests in the running session, by the same rules as the settings:
+the keyboard reader pauses, no key reaches the agent, its output waits in
+whole chunks, and on return the agent is asked to redraw. `Esc` or `q`
+returns, `Ctrl+C` as well. The top half lists every held request with
+method, time left until its deadline, time waited, size, number of findings
+and host with path; the bottom half shows the selected one with the head of
+the `--ask terminal` box (request, origin, size, first finding, catalog) and
+the start of its body. Host, path, method, findings and body are the agent's
+text: they pass through the same sanitising as the box (no control
+characters, no line breaks, everything outside ASCII as `?`).
+
+The list comes from the daemon alone: `ListFlows` when the view opens and
+then the event stream (`Subscribe`). A request decided elsewhere, in the app
+or in another terminal, or whose deadline ran out, disappears; one whose
+deadline has passed shows `expired` until the daemon removes it. Your own
+decision also removes a row only once the daemon reports it.
+
+Keys: `↑`/`↓` (or `k`/`j`) choose, `a` allows the selected request once,
+`b` blocks it, and `r` builds a rule in two steps as in `--ask terminal`
+(target `1` to `4`, duration `1` to `3`), shown as one sentence and sent
+only after `Enter`; any other key drops it. Nothing more is offered, as in
+the app. Every decision goes as `Decide` for exactly the selected request,
+never for a position in the list. Nothing is ever selected by itself: not
+the first request when the view opens, not one that arrives while nothing
+is selected, and after the selected request disappears nothing is selected
+until you press an arrow key. An `a` typed in the same instant thus never
+hits a request you have not chosen. A refusal of the daemon stands in the
+footer with its reason.
+
+The targets and the sentence before `Enter` say how far a rule reaches, in
+`--ask terminal` too: a rule never names a scheme, a port or an upgrade, so
+it holds for `http`, `https`, `ws` and `wss` and every port, but never for a
+WebSocket upgrade (the menu says so once below the targets); the path is compared without its query,
+so target `1` holds for every query (`/pay?dry_run=1` also allows
+`/pay?dry_run=0`); without a method it holds for every method; and an apex
+rule (`**.example.com`) includes the apex itself. The sentence reads, for
+example, `rule: allow host: h, path: /pay with any query, any method, http,
+https, ws or wss, any port, not a WebSocket upgrade - this session`.
+
+A key that decides (`a`, `b`, `r`, and every key of a rule) first compares
+the terminal's size with that of the last frame. If the terminal changed
+size and the key came before the resize event, the key does nothing, the
+footer says so, and the next frame in the new size counts again.
+
+Below 60 × 12 the view shows only `Terminal too small`, and no key but
+`Esc`, `q` and `Ctrl+C` does anything. A question of the rule (the menu of
+targets or durations, the sentence before `Enter`) is drawn first and
+wrapped; its keys work only once all of its lines were on the screen,
+otherwise the view asks to enlarge the terminal.
+
+A `--read-only` attach shows the interceptor for reading: `a`, `b` and `r`
+send nothing, and the footer says to decide in the writing terminal, in the
+app or with `humanitl run --ask terminal`. Over an agent on the alternate
+screen it does not open at all and rings the bell, as with the settings.
+`--ask terminal` stays refused in `humanitl go` (`CLI_002`): the interceptor
+is an additional way next to `--ask ui`, not its replacement.
+
+**A new hold rings the bell (GitHub #12).** The command writes no text into
+the agent's terminal when a request is held: the daemon's notice line stands
+only in the footer of an open view. When the output is a file or a pipe, it
+is a transcript and not the agent's screen; there the line still stands
+between the bytes, in a line of its own. At a terminal the command rings the terminal bell, one
+`BEL` byte, through the same writer as the agent's output and only between
+two whole chunks of it, so it never lands inside an escape sequence, and
+after a chunk that ended inside a UTF-8 character it waits behind the chunk
+that completes it; at most one per second, counted from when the bell
+actually rang. While a view stands (help, settings, interceptor), nothing
+rings: the interceptor shows the request itself. The bell rings only when the
+output is a terminal; `terminal.bell_on_hold = false` turns it off. The app
+and the system notification report the request as before.
 
 **Collision with tmux and readline.** A tmux inside the sandbox has the same
 prefix, and in shells and readline `Ctrl+B` means one character back. Both

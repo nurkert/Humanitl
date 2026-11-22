@@ -377,8 +377,8 @@ pub(crate) fn refuse_ask_terminal(config: &Config) -> Result<(), Failure> {
             .why(
                 "humanitl go hands this terminal to the agent, and --ask terminal (hold.ask_mode \
                  = \"terminal\") would need the same terminal for its questions. Decide in the \
-                 app with --ask ui, or use humanitl run --ask terminal to answer here without \
-                 the agent's terminal.",
+                 app with --ask ui, in the interceptor over the agent (prefix key, then i), or \
+                 use humanitl run --ask terminal to answer here without the agent's terminal.",
             )
             .fix(FixAction::CopyCommand("humanitl go --ask ui".to_owned()))
             .build(),

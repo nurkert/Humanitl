@@ -1295,8 +1295,13 @@ fn ctrl_b_comma_opens_the_settings_and_the_agent_stands_after_esc() {
     let mut child = attach(&harness, &pty);
     wait_for_raw(&mut child, &pty);
     wait_for_text(&mut child, &pty, "SCREEN 1 100x30");
-    // Ein Hinweis vor der Ansicht: Er steht von Anfang an in ihrer Fußzeile.
-    wait_for_text(&mut child, &pty, "request held: example.test/first");
+    // Ein Hinweis vor der Ansicht (an der zehnten Zeile): Er steht von Anfang
+    // an in ihrer Fußzeile, aber nicht im Terminal des Agenten (GitHub #12).
+    wait_for_text(&mut child, &pty, "tick 11\r\n");
+    assert!(
+        !String::from_utf8_lossy(&pty.read()).contains("example.test/first"),
+        "a notice reached the agent's terminal"
+    );
 
     let before = pty.read().len();
     pty.write(b"\x02,");
@@ -1362,6 +1367,10 @@ fn ctrl_b_comma_opens_the_settings_and_the_agent_stands_after_esc() {
     assert!(
         !view.contains(super_running()),
         "the footer started without the notice seen before the view"
+    );
+    assert!(
+        view.contains("example.test/first"),
+        "the footer shows the notice that came before the view"
     );
     assert!(
         !String::from_utf8_lossy(&all[left..]).contains("example.test/second"),
@@ -1479,4 +1488,108 @@ fn the_return_happens_while_keys_keep_coming() {
         "the detach key was not taken"
     );
     assert_eq!(wait_for_exit(&mut child, &pty), 0);
+}
+
+// ---------------------------------------------------------------------------
+// Der Interceptor über dem Agenten (GitHub #12)
+// ---------------------------------------------------------------------------
+
+/// `Ctrl+B i` öffnet den Interceptor nach den Regeln der Einstellungen:
+/// Keine Taste aus der Ansicht erreicht den Agenten (auch `a` und `b` nicht,
+/// die dort entscheiden), seine Ausgabe während der Ansicht kommt erst nach
+/// der Rückkehr, und danach zeichnet er neu und nimmt Tasten an.
+/// Mutationsbeweis: den Interceptor als Kasten öffnen (`takes_screen` ohne
+/// ihn) gibt die Ausgabe nach der ersten Taste frei, und der Test wird rot.
+#[cfg(target_os = "linux")]
+#[test]
+fn ctrl_b_i_opens_the_interceptor_and_the_agent_stands_after_esc() {
+    let harness = Harness::new();
+    let server = FakeServer::start_with_winch_agent(&harness);
+    let pty = sized_pty();
+    let mut child = attach(&harness, &pty);
+    wait_for_raw(&mut child, &pty);
+    wait_for_text(&mut child, &pty, "SCREEN 1 100x30");
+
+    let before = pty.read().len();
+    pty.write(b"\x02i");
+    let opened = wait_for_after(&mut child, &pty, before, "Interceptor");
+    settle(&pty, Duration::from_millis(300));
+    pty.write(b"jab");
+    settle(&pty, Duration::from_millis(300));
+    let leave: &[u8] = b"\x1b[0m\x1b[H\x1b[2J\x1b8";
+    for _ in 0..5 {
+        pty.write(b"\x1b");
+        settle(&pty, Duration::from_millis(400));
+        if pty.read()[opened..]
+            .windows(leave.len())
+            .any(|window| window == leave)
+        {
+            break;
+        }
+    }
+    let left = wait_for_after(&mut child, &pty, opened, "\x1b[0m\x1b[H\x1b[2J\x1b8");
+    let redrawn = wait_for_after(&mut child, &pty, left, "SCREEN 3 100x30");
+    let all = pty.read();
+    let during = ticks(&all[opened..left]);
+    assert!(
+        during.is_empty(),
+        "output during the view reached the screen: {during:?}"
+    );
+    let numbers = ticks(&all);
+    assert!(
+        numbers.windows(2).all(|pair| pair[1] == pair[0] + 1),
+        "output lost or out of order: {numbers:?}"
+    );
+
+    pty.write(b"z");
+    wait_for_after(&mut child, &pty, redrawn, "echo:z");
+    pty.write(b"\x02d");
+    assert_eq!(wait_for_exit(&mut child, &pty), 0);
+    assert!(pty.is_cooked(), "modes {:?}", pty.modes());
+    let inputs = server.terminal_inputs();
+    assert_eq!(
+        inputs.iter().filter(|kind| **kind == "data").count(),
+        1,
+        "a key of the interceptor reached the agent: {inputs:?}"
+    );
+}
+
+/// Ein echtes `FlowEvent.held` aus `Subscribe` läuft durch die Schleife des
+/// Anschlusses und gibt genau ein `BEL` auf dem Terminal, nie innerhalb einer
+/// CSI-Folge des Agenten, der währenddessen weiter schreibt; Text erscheint
+/// dafür keiner (GitHub #12). Mutationsbeweis: ohne den Zweig der gehaltenen
+/// Anfragen klingelt nichts, und der Test wird rot.
+#[cfg(target_os = "linux")]
+#[test]
+fn a_held_request_rings_exactly_once_between_chunks() {
+    let harness = Harness::new();
+    let _server = FakeServer::start_with_winch_agent_and_a_hold(&harness);
+    let pty = sized_pty();
+    let mut child = attach(&harness, &pty);
+    wait_for_raw(&mut child, &pty);
+    wait_for_text(&mut child, &pty, "SCREEN 1 100x30");
+    wait_for_text(&mut child, &pty, "\x07");
+    // Weiterlesen, während der Agent schreibt: Eine zweite Glocke käme hier.
+    settle(&pty, Duration::from_millis(1500));
+    let all = pty.read();
+    let bells = all.split(|byte| *byte == 0x07).count() - 1;
+    assert_eq!(bells, 1, "{:?}", String::from_utf8_lossy(&all));
+    let at = all.iter().position(|byte| *byte == 0x07).expect("the bell");
+    let before = &all[..at];
+    let csi_open = before
+        .windows(2)
+        .rposition(|pair| pair == b"\x1b[")
+        .is_some_and(|start| {
+            !before[start + 2..]
+                .iter()
+                .any(|b| (0x40..=0x7e).contains(b))
+        });
+    assert!(!csi_open, "the bell stands inside an ESC [ sequence");
+    assert!(
+        !String::from_utf8_lossy(&all).contains("held-by-the-fake"),
+        "text about the hold reached the agent's terminal"
+    );
+    pty.write(b"\x02d");
+    assert_eq!(wait_for_exit(&mut child, &pty), 0);
+    assert!(pty.is_cooked(), "modes {:?}", pty.modes());
 }

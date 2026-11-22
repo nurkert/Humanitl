@@ -264,7 +264,7 @@ fn authority_text(authority: &v1::Authority) -> String {
 }
 
 /// Der Name einer Methode aus dem Enum, für den Fall ohne `method_raw`.
-fn method_name(method: i32) -> String {
+pub(crate) fn method_name(method: i32) -> String {
     match v1::Method::try_from(method) {
         Ok(v1::Method::Get) => "GET",
         Ok(v1::Method::Post) => "POST",
@@ -281,7 +281,7 @@ fn method_name(method: i32) -> String {
 }
 
 /// Eine Zahl Bytes, wie ein Mensch sie liest.
-struct ByteSize(u64);
+pub(crate) struct ByteSize(pub(crate) u64);
 
 impl std::fmt::Display for ByteSize {
     fn fmt(&self, formatter: &mut std::fmt::Formatter<'_>) -> std::fmt::Result {
@@ -395,10 +395,23 @@ pub fn countdown(left: u64) -> String {
     format!("{:02}:{:02}", left / 60, left % 60)
 }
 
+/// Fremder Text, wie er in ein Terminal darf: gesäubert ([`plain`]: keine
+/// Steuerzeichen, keine Zeilenumbrüche) und auf ASCII gebracht, damit eine
+/// Spalte ein Zeichen ist.
+///
+/// Der eine Weg für jeden Text aus einer Anfrage, der auf einem Schirm der
+/// Kommandozeile steht: dieser Kasten und der Interceptor im Terminal der
+/// Sitzung (`tui::interceptor`, GitHub #12). Ein zweiter Säuberer daneben
+/// wäre eine zweite Stelle, an der eine Lücke entstehen kann.
+#[must_use]
+pub fn display_text(text: &str) -> String {
+    ascii_only(&plain(text))
+}
+
 /// Eine Zeile im Kasten, gesäubert, auf ASCII gebracht und auf `inner`
 /// Spalten geklemmt.
 fn field(text: &str, inner: usize) -> String {
-    let text = ascii_only(&plain(text));
+    let text = display_text(text);
     let clamped = clamp(&text, inner);
     let pad = inner.saturating_sub(clamped.chars().count());
     format!("{VERTICAL} {clamped}{} {VERTICAL}", " ".repeat(pad))
@@ -416,7 +429,7 @@ fn ascii_only(text: &str) -> String {
 }
 
 /// Höchstens `width` Skalare, mit `…` am Ende, wenn etwas wegfällt.
-fn clamp(text: &str, width: usize) -> String {
+pub(crate) fn clamp(text: &str, width: usize) -> String {
     if text.chars().count() <= width {
         return text.to_owned();
     }

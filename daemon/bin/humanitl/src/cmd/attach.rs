@@ -47,6 +47,27 @@
 //! Ausgabe des Agenten wartet, und nach `Esc` lässt der Anschluss den Agenten
 //! neu zeichnen ([`crate::prefix::redraw`]). Die Schleife wartet dabei nie:
 //! Bildschirm, Neuzeichnen und Strom sind Zweige derselben Schleife.
+//!
+//! # Der Interceptor und die Glocke (GitHub #12)
+//!
+//! Präfix und `i` öffnen den Interceptor nach denselben Regeln
+//! ([`crate::prefix::interceptor`]): Leser angehalten, keine Taste beim
+//! Agenten, seine Ausgabe als ganze Stücke zurückgehalten, Neuzeichnen bei
+//! der Rückkehr. Ein lesender Anschluss zeigt ihn nur zum Lesen und über
+//! einem Agenten auf dem Alternativschirm gar nicht (ein `BEL` statt dessen),
+//! wie die Einstellungen.
+//!
+//! Eine neu gehaltene Anfrage schreibt keinen Text in das Terminal des
+//! Agenten: Die Hinweiszeile des Daemons (`TerminalOutput.notice`) steht dort
+//! nur noch in der Fußzeile einer offenen Ansicht. Geht die Ausgabe in eine
+//! Datei oder Pipe, ist sie ein Mitschnitt und kein Bild des Agenten; dort
+//! steht die Zeile weiter zwischen den Bytes, in ihrer eigenen Zeile (HUM-042,
+//! der Lauf `tests/e2e/m3_agent_inside` liest sie so). Statt dessen klingelt
+//! der Anschluss, wenn `terminal.bell_on_hold` gilt und die Ausgabe ein Terminal
+//! ist ([`crate::prefix::bell`]). Woher er von der Anfrage weiß, ist ein
+//! eigenes Abonnement von `Subscribe` (`FlowEvent.held`) und nicht der Text
+//! der Hinweiszeile: Die schaltet `ui.terminal_notices` ab, und ein Text ist
+//! keine Art von Ereignis.
 
 use std::io::{IsTerminal as _, Write};
 use std::sync::Arc;
@@ -54,6 +75,7 @@ use std::sync::atomic::AtomicBool;
 use std::time::Duration;
 
 use humanitl_config::DetachKeys;
+use humanitl_config::prefix::PrefixAction;
 use humanitl_core::diagnostics::codes;
 use humanitl_core::{Diagnostic, FixAction, Severity};
 use humanitl_ipc::client::Client;
@@ -63,7 +85,9 @@ use tokio_stream::wrappers::ReceiverStream;
 
 use crate::cmd::{Context, EXIT_OK, Failure, from_proto, status_diagnostic};
 use crate::prefix::Keys;
+use crate::prefix::bell::HoldBell;
 use crate::prefix::input::{self, Control, Reader};
+use crate::prefix::interceptor::InterceptorView;
 use crate::prefix::keys::{KeyEvent, takes_screen};
 use crate::prefix::redraw::{Redraw, resize};
 use crate::prefix::settings::SettingsView;
@@ -151,6 +175,7 @@ pub(crate) fn resolve_keys(ctx: &Context, prefix: Option<&str>) -> Result<Keys, 
         direct: terminal.direct_keys,
         migration: prefix.is_none()
             && humanitl_config::prefix::migration_due(&ctx.paths, &resolved),
+        bell: terminal.bell_on_hold,
     })
 }
 
@@ -292,6 +317,25 @@ async fn attach_at(
     // Flags des kitty-Protokolls kommen mit der Ausgabe des Agenten, nicht
     // mit der Tastatur (Review zu GitHub #10).
     let leaves_screen = std::io::stdout().is_terminal();
+    // Die Glocke klingelt nur in ein Terminal: In einer Pipe wäre ein `BEL`
+    // ein fremdes Byte in der Ausgabe des Agenten. Kommt das Abonnement
+    // nicht zustande, bleibt sie still; das Anhängen scheitert daran nicht.
+    let bell = HoldBell::new(keys.bell && leaves_screen);
+    let holds = if bell.enabled() {
+        client
+            .subscribe(v1::SubscribeRequest {
+                since_flow_id: String::new(),
+                include_passthrough: false,
+                // Die Kommandozeile ist nicht die Desktop-App (HUM-539).
+                desktop_app: false,
+            })
+            .await
+            .ok()
+            .map(tonic::Response::into_inner)
+    } else {
+        None
+    };
+    let mut watch = HoldWatch { holds, bell };
     // Ob der Agent das kitty-Protokoll eingeschaltet hat: geschrieben vom
     // Leser der Ausgabe, gelesen vom Leser der Tastatur.
     let kitty = Arc::new(AtomicBool::new(false));
@@ -314,25 +358,27 @@ async fn attach_at(
         spawn_resizes(tx.clone());
     }
 
-    let mut settings = None;
+    let mut screen = None;
     let ending = follow(
         &mut view,
         &mut stream,
         &mut events,
         &mut signals,
-        &mut settings,
+        &mut screen,
+        &mut watch,
         &Wiring {
             tx: &tx,
             writes: !read_only,
             client: &client,
             reader: control.as_ref(),
             theme,
+            terminal: leaves_screen,
         },
     )
     .await;
     // Ein Bildschirm, der beim Ende noch steht (ein Signal, das Ende der
     // Sitzung), zeichnet nicht mehr, bevor die Ansicht schließt.
-    if let Some(open) = settings.take() {
+    if let Some(open) = screen.take() {
         open.stop().await;
     }
     if matches!(ending, Ending::Detached) {
@@ -380,11 +426,58 @@ struct Wiring<'a> {
     reader: Option<&'a Control>,
     /// Mit oder ohne Farbe.
     theme: Theme,
+    /// Ob die Ausgabe ein Terminal ist; nur dann bleibt die Hinweiszeile des
+    /// Daemons aus dem Bild des Agenten (GitHub #12).
+    terminal: bool,
 }
 
-/// Die Schleife eines Anschlusses: Ereignisse der Tastatur, Signale, der
-/// Bildschirm der Einstellungen, das Neuzeichnen und der Strom des Daemons,
-/// bis einer davon ihn beendet.
+/// Die Glocke eines Anschlusses und das Abonnement, aus dem sie von neu
+/// gehaltenen Anfragen erfährt; ohne Glocke ohne Abonnement.
+struct HoldWatch {
+    /// `Subscribe`, solange es läuft.
+    holds: Option<tonic::Streaming<v1::FlowEvent>>,
+    /// Die Glocke mit ihrer Drossel.
+    bell: HoldBell,
+}
+
+/// Ein ganzer Bildschirm über dem Agenten: die Einstellungen (GitHub #11)
+/// oder der Interceptor (GitHub #12).
+enum SessionScreen {
+    /// Präfix und `,`.
+    Settings(SettingsView),
+    /// Präfix und `i`.
+    Interceptor(InterceptorView),
+}
+
+impl SessionScreen {
+    /// Ein Hinweis des Daemons, für die Fußzeile der Einstellungen; der
+    /// Interceptor zeigt die Anfrage selbst.
+    fn notice(&self, text: &str) {
+        if let Self::Settings(open) = self {
+            open.notice(text);
+        }
+    }
+
+    /// Wird fertig, wenn der Bildschirm zu Ende ist.
+    async fn finished(&mut self) {
+        match self {
+            Self::Settings(open) => open.finished().await,
+            Self::Interceptor(open) => open.finished().await,
+        }
+    }
+
+    /// Beendet den Bildschirm, bevor das Terminal zurückgeht.
+    async fn stop(self) {
+        match self {
+            Self::Settings(open) => open.stop().await,
+            Self::Interceptor(open) => open.stop().await,
+        }
+    }
+}
+
+/// Die Schleife eines Anschlusses: Ereignisse der Tastatur, Signale, ein
+/// Bildschirm über dem Agenten, das Neuzeichnen, neu gehaltene Anfragen und
+/// der Strom des Daemons, bis einer davon ihn beendet.
 ///
 /// `SIGTERM`, `SIGHUP` und `SIGINT` gehören diesem Befehl: Ohne eigenen Weg
 /// nähme der Kernel den Prozess weg, bevor `Drop` das Terminal zurückgibt,
@@ -392,17 +485,25 @@ struct Wiring<'a> {
 ///
 /// `biased` mit der Tastatur zuerst: Endet der Strom im selben Moment, in dem
 /// die Taste zum Abhängen kommt, gilt die Taste, und Exit-Code und Zeile
-/// hängen nicht vom Zufall der Reihenfolge ab. Das Neuzeichnen steht vor dem
-/// Strom, damit ein Agent, der ohne Pause schreibt, es nicht verdrängt.
+/// hängen nicht vom Zufall der Reihenfolge ab. Neuzeichnen und Glocke stehen
+/// vor dem Strom, damit ein Agent, der ohne Pause schreibt, sie nicht
+/// verdrängt.
 ///
-/// Ein Bildschirm, der beim Ende noch steht, bleibt in `settings`; der
+/// **Die Glocke steht zwischen zwei Stücken.** Jeder Zweig läuft zu Ende,
+/// bevor der nächste dran ist, und ein Stück des Agenten geht in einem Zweig
+/// ganz hinaus. Das `BEL` aus dem Zweig der gehaltenen Anfragen kann deshalb
+/// nie in einem Stück stehen, und ein Stück des Daemons endet nie in einer
+/// halben Folge.
+///
+/// Ein Bildschirm, der beim Ende noch steht, bleibt in `screen`; der
 /// Aufrufer beendet ihn, bevor er das Terminal zurückgibt.
 async fn follow<W: Write>(
     view: &mut AgentView<W>,
     stream: &mut tonic::Streaming<v1::TerminalOutput>,
     events: &mut mpsc::UnboundedReceiver<KeyEvent>,
     signals: &mut Signals,
-    settings: &mut Option<SettingsView>,
+    screen: &mut Option<SessionScreen>,
+    watch: &mut HoldWatch,
     wiring: &Wiring<'_>,
 ) -> Ending {
     let mut code = EXIT_OK;
@@ -418,10 +519,10 @@ async fn follow<W: Write>(
             Some(event) = events.recv() => match event {
                 KeyEvent::Detach => return Ending::Detached,
                 KeyEvent::Open(action) if takes_screen(action) => {
-                    open_settings(view, settings, wiring, last_notice.clone());
+                    open_screen(view, screen, wiring, action, last_notice.clone());
                 }
-                KeyEvent::Open(action) => {
-                    let _ = view.open(action, window_size());
+                KeyEvent::Open(_) => {
+                    let _ = view.open_help(window_size());
                 }
                 // Über einem Vollbild-Agenten: neu zeichnen lassen
                 // (ADR-0024 Punkt 9).
@@ -432,8 +533,8 @@ async fn follow<W: Write>(
                 }
             },
             number = signals.next() => return Ending::Signal(number),
-            () = finished(settings) => {
-                *settings = None;
+            () = finished(screen) => {
+                *screen = None;
                 // Auch wenn das Terminal beim Zurückkehren nicht mehr
                 // schrieb: Der Agent soll sein Bild trotzdem neu zeichnen.
                 if view.close().unwrap_or(true) {
@@ -447,51 +548,91 @@ async fn follow<W: Write>(
                 Some(permit) => redraw.step(permit, window_size()),
                 None => redraw.cancel(),
             },
+            event = next_hold(&mut watch.holds) => match event {
+                Some(v1::FlowEvent {
+                    event: Some(v1::flow_event::Event::Held(_)),
+                    ..
+                }) => {
+                    if watch.bell.held(view, std::time::Instant::now()).is_err() {
+                        return Ending::Stream(Ok(code));
+                    }
+                }
+                Some(_) => {}
+                // Ohne Abonnement schweigt die Glocke; der Anschluss läuft.
+                None => watch.holds = None,
+            },
             message = stream.message() => {
                 if let Ok(Some(v1::TerminalOutput {
                     output: Some(v1::terminal_output::Output::Notice(text)),
                 })) = &message
                 {
                     last_notice = Some(text.clone());
-                    // In der Fußzeile der Einstellungen steht er schon; er
-                    // wartet nicht noch ein zweites Mal auf die Rückkehr.
-                    if let Some(open) = settings.as_ref() {
+                    if let Some(open) = screen.as_ref() {
                         open.notice(text);
+                        continue;
+                    }
+                    // Kein Text in das Terminal des Agenten (GitHub #12): Der
+                    // Hinweis steht nur in der Fußzeile einer Ansicht, und eine
+                    // neu gehaltene Anfrage klingelt. In einen Mitschnitt
+                    // schreibt `take` ihn weiter.
+                    if wiring.terminal {
                         continue;
                     }
                 }
                 if let Some(outcome) = take(view, message, &mut code) {
                     return Ending::Stream(outcome);
                 }
+                // Eine aufgeschobene Glocke, die dieses Stück hinausschrieb,
+                // zählt für die Drossel ab jetzt.
+                watch.bell.settle(view, std::time::Instant::now());
             }
         }
     }
 }
 
-/// Öffnet die Einstellungen über dem Agenten. Erst steht der eigene Schirm,
-/// dann zeichnet der Bildschirm. Ohne Terminal gibt es keinen, und der Leser
-/// der Tastatur läuft gleich weiter; er hat nach dem Ereignis angehalten und
-/// wartet auf genau eine Antwort. `notice` ist der letzte Hinweis des
-/// Daemons, für die Fußzeile.
+/// Das nächste Ereignis des Abonnements; `None`, wenn es endet oder
+/// scheitert. Ohne Abonnement nie.
+async fn next_hold(holds: &mut Option<tonic::Streaming<v1::FlowEvent>>) -> Option<v1::FlowEvent> {
+    match holds {
+        Some(stream) => stream.message().await.ok().flatten(),
+        None => std::future::pending().await,
+    }
+}
+
+/// Öffnet einen Bildschirm über dem Agenten: die Einstellungen oder den
+/// Interceptor. Erst steht der eigene Schirm, dann zeichnet der Bildschirm.
+/// Ohne Terminal gibt es keinen, und der Leser der Tastatur läuft gleich
+/// weiter; er hat nach dem Ereignis angehalten und wartet auf genau eine
+/// Antwort. `notice` ist der letzte Hinweis des Daemons, für die Fußzeile der
+/// Einstellungen.
 ///
 /// Kann dieser Anschluss den Agenten danach nicht neu zeichnen lassen und
 /// steht der Agent auf dem Alternativschirm, öffnet sich nichts
 /// ([`settings_allowed`]); ein `BEL` sagt, dass die Taste hier nicht geht.
-fn open_settings<W: Write>(
+/// Ein lesender Anschluss bekommt den Interceptor sonst nur zum Lesen.
+fn open_screen<W: Write>(
     view: &mut AgentView<W>,
-    settings: &mut Option<SettingsView>,
+    screen: &mut Option<SessionScreen>,
     wiring: &Wiring<'_>,
+    action: PrefixAction,
     notice: Option<String>,
 ) {
-    if settings.is_some() {
+    if screen.is_some() {
         return;
     }
     if !settings_allowed(wiring.writes, view.agent_alt_screen()) {
         let _ = view.bell();
     } else if crate::tui::available() {
         let _ = view.open_screen();
-        *settings = SettingsView::start(wiring.client.clone(), wiring.theme, notice);
-        if settings.is_some() {
+        *screen = match action {
+            PrefixAction::Interceptor => {
+                InterceptorView::start(wiring.client.clone(), wiring.theme, !wiring.writes)
+                    .map(SessionScreen::Interceptor)
+            }
+            _ => SettingsView::start(wiring.client.clone(), wiring.theme, notice)
+                .map(SessionScreen::Settings),
+        };
+        if screen.is_some() {
             return;
         }
         let _ = view.close();
@@ -501,7 +642,8 @@ fn open_settings<W: Write>(
     }
 }
 
-/// Ob die Einstellungen über dem Agenten aufgehen dürfen.
+/// Ob ein Bildschirm über dem Agenten aufgehen darf: die Einstellungen und
+/// der Interceptor.
 ///
 /// Über einem Agenten auf dem Alternativschirm zeichnen sie über sein Bild
 /// und löschen es beim Schließen; erst sein Neuzeichnen bringt es zurück.
@@ -514,10 +656,10 @@ const fn settings_allowed(writes: bool, agent_alt_screen: bool) -> bool {
     writes || !agent_alt_screen
 }
 
-/// Wird fertig, wenn der Bildschirm der Einstellungen zu Ende ist; ohne
+/// Wird fertig, wenn der Bildschirm über dem Agenten zu Ende ist; ohne
 /// Bildschirm nie.
-async fn finished(settings: &mut Option<SettingsView>) {
-    match settings {
+async fn finished(screen: &mut Option<SessionScreen>) {
+    match screen {
         Some(open) => open.finished().await,
         None => std::future::pending().await,
     }
@@ -574,10 +716,11 @@ fn take<W: Write>(
         // Ein Terminal, das nicht mehr schreibt, beendet den Anschluss.
         Some(v1::terminal_output::Output::Data(data)) => view.agent(&data).err().map(|_| Ok(*code)),
         // Die Hinweiszeile des Daemons steht neben den Bytes und nicht darin
-        // (`ipc/src/terminal.rs`). Wer am Terminal sitzt, hat keine zweite
-        // Fläche dafür, also schreibt dieser Befehl sie zwischen die Bytes des
-        // Agenten -- an der Grenze, an der der Daemon sie geschickt hat, und
-        // in ihre eigene Zeile.
+        // (`ipc/src/terminal.rs`). Hierher kommt sie nur noch, wenn die
+        // Ausgabe kein Terminal ist ([`follow`], GitHub #12): Ein Mitschnitt
+        // hat keine zweite Fläche, also steht sie zwischen den Bytes des
+        // Agenten, an der Grenze, an der der Daemon sie geschickt hat, und in
+        // ihrer eigenen Zeile.
         Some(v1::terminal_output::Output::Notice(text)) => {
             view.agent(&notice_line(&text)).err().map(|_| Ok(*code))
         }

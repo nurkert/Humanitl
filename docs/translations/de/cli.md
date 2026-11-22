@@ -570,13 +570,13 @@ daraus:
 |---|---|
 | `d` | Trennen; die Session läuft weiter. |
 | `,` | Einstellungen über dem Agenten, der Bildschirm von `humanitl settings` im Terminal der Session; `Esc` oder `q` kehrt zum Agenten zurück (GitHub #11, unten). |
-| `i` | Interceptor. Die Ansicht kommt mit #12; bis dahin sagt ein Kasten das, `humanitl intercept` geht. |
+| `i` | Interceptor über dem Agenten: die gehaltenen Anfragen, entschieden mit einer Taste; `Esc` oder `q` kehrt zurück (GitHub #12, unten). |
 | `?` | Diese Tabelle als kleiner Kasten über dem Agenten. |
 | `Ctrl+B` oder `b` | Ein `Ctrl+B` an den Agenten senden. |
 | alles andere | `Ctrl+B` und diese Taste unverändert senden. |
 
 Jede Taste schließt einen Kasten und erreicht den Agenten nicht. Solange ein
-Kasten oder die Einstellungen stehen, wartet die Ausgabe des Agenten im Befehl
+Kasten, die Einstellungen oder der Interceptor stehen, wartet die Ausgabe des Agenten im Befehl
 und folgt beim Schließen, in ganzen Stücken, wie der Daemon sie gefiltert hat,
 und höchstens 4 MiB; passt ein Stück nicht mehr, fällt alles weg, was
 wartete, mit jedem weiteren Stück, geschrieben wird nichts, und der Agent
@@ -631,6 +631,83 @@ dem Alternativschirm öffnet er die Einstellungen darum nicht und gibt nur
 einen Signalton (`BEL`); dort hilft `humanitl settings` in einem anderen
 Terminal. Über einem Agenten auf dem gewöhnlichen Schirm bewahrt der eigene
 Alternativschirm das Bild, und die Einstellungen öffnen sich wie sonst.
+
+**Interceptor über dem Agenten (GitHub #12).** Das Präfix und `i` öffnen die
+gehaltenen Anfragen in der laufenden Session, nach denselben Regeln wie die
+Einstellungen: Der Leser der Tastatur hält an, keine Taste erreicht den
+Agenten, seine Ausgabe wartet in ganzen Stücken, und bei der Rückkehr zeichnet
+der Agent neu. `Esc` oder `q` kehrt zurück, `Ctrl+C` ebenso. Oben steht jede
+gehaltene Anfrage mit Methode, Restzeit bis zur Frist, Wartezeit, Größe, Zahl
+der Funde und Host mit Pfad; unten die gewählte mit dem Kopf des Kastens von
+`--ask terminal` (Anfrage, Herkunft, Größe, erster Fund, Katalog) und dem
+Anfang ihres Rumpfs. Host, Pfad, Methode, Funde und Rumpf sind Text des
+Agenten: Sie laufen durch dieselbe Säuberung wie der Kasten (keine
+Steuerzeichen, keine Zeilenumbrüche, alles außerhalb von ASCII als `?`).
+
+Die Liste kommt allein vom Daemon: `ListFlows` beim Öffnen und danach der
+Ereignisstrom (`Subscribe`). Eine Anfrage, über die anderswo entschieden wird,
+in der App oder in einem anderen Terminal, oder deren Frist abläuft,
+verschwindet; eine, deren Frist vorbei ist, steht als `expired` da, bis der
+Daemon sie streicht. Auch die eigene Entscheidung nimmt eine Zeile erst weg,
+wenn der Daemon sie meldet.
+
+Tasten: `↑`/`↓` (oder `k`/`j`) wählen, `a` erlaubt die gewählte Anfrage
+einmal, `b` blockt sie, und `r` baut eine Regel in zwei Schritten wie in
+`--ask terminal` (Ziel `1` bis `4`, Dauer `1` bis `3`), als ein Satz gezeigt
+und erst nach `Enter` geschickt; jede andere Taste verwirft sie. Mehr gibt es
+nicht, wie in der App. Jede Entscheidung geht als `Decide` für genau die
+gewählte Anfrage hinaus, nie für eine Stelle in der Liste. Von selbst wird
+nie etwas gewählt: nicht die erste Anfrage beim Öffnen, nicht eine, die kommt,
+während nichts gewählt ist, und nachdem die gewählte verschwunden ist, nichts,
+bis eine Pfeiltaste kommt. Ein `a`, das im selben Augenblick getippt wurde,
+trifft so nie eine Anfrage, die du nicht gewählt hast. Lehnt der Daemon ab,
+steht der Grund in der Fußzeile.
+
+Die Ziele und der Satz vor `Enter` sagen, wie weit eine Regel reicht, auch in
+`--ask terminal`: Eine Regel nennt nie Schema, Port oder Upgrade, gilt also
+für `http`, `https`, `ws` und `wss` und jeden Port, aber nie für ein
+WebSocket-Upgrade (das Menü sagt es einmal unter den Zielen); der Pfad wird ohne Abfrage verglichen, Ziel `1`
+gilt also für jede Abfrage (`/pay?dry_run=1` erlaubt auch `/pay?dry_run=0`);
+ohne Methode gilt sie für jede Methode; und eine Regel auf den Apex
+(`**.example.com`) schließt den Apex selbst ein. Der Satz lautet etwa
+`rule: allow host: h, path: /pay with any query, any method, http, https,
+ws or wss, any port, not a WebSocket upgrade - this session`.
+
+Eine Taste, die entscheidet (`a`, `b`, `r` und jede Taste einer Regel),
+vergleicht zuerst die Größe des Terminals mit der des letzten Bildes. Hat
+sich das Terminal verändert und kam die Taste vor dem Ereignis der
+Größenänderung, wirkt sie nicht, die Fußzeile sagt es, und ab dem nächsten
+Bild in der neuen Größe gilt sie wieder.
+
+Unter 60 × 12 zeigt die Ansicht nur `Terminal too small`, und keine Taste
+außer `Esc`, `q` und `Ctrl+C` wirkt. Eine Frage der Regel (das Menü der Ziele
+oder Dauern, der Satz vor `Enter`) steht zuerst und umgebrochen; ihre Tasten
+wirken erst, wenn alle ihre Zeilen auf dem Schirm standen, sonst bittet die
+Ansicht um ein größeres Terminal.
+
+Ein Anschluss mit `--read-only` zeigt den Interceptor zum Lesen: `a`, `b` und
+`r` schicken nichts, und die Fußzeile verweist auf das schreibende Terminal,
+die App oder `humanitl run --ask terminal`. Über einem Agenten auf dem
+Alternativschirm öffnet er ihn gar nicht und gibt einen Signalton, wie bei
+den Einstellungen. `--ask terminal` bleibt in `humanitl go` abgelehnt
+(`CLI_002`): Der Interceptor ist ein Weg neben `--ask ui`, kein Ersatz.
+
+**Eine neue gehaltene Anfrage klingelt (GitHub #12).** Wird eine Anfrage
+gehalten, schreibt der Befehl keinen Text in das Terminal des Agenten: Die
+Hinweiszeile des Daemons steht nur in der Fußzeile einer offenen Ansicht.
+Geht die Ausgabe in eine Datei oder eine Pipe, ist sie ein Mitschnitt und
+nicht das Bild des Agenten; dort steht die Zeile weiter zwischen den Bytes,
+in einer eigenen Zeile. An einem Terminal gibt der Befehl statt dessen einen
+Signalton, ein `BEL`-Byte, über denselben
+Schreiber wie die Ausgabe des Agenten und nur zwischen zwei ganzen Stücken
+davon, also nie mitten in einer Steuerfolge, und nach einem Stück, das
+mitten in einem UTF-8-Zeichen endete, erst hinter dem Stück, das es
+vollendet; höchstens einen je Sekunde, gezählt ab dem Augenblick, in dem
+der Ton wirklich kam.
+Solange eine Ansicht steht (Hilfe, Einstellungen, Interceptor), klingelt
+nichts: Der Interceptor zeigt die Anfrage selbst. Der Ton kommt nur, wenn die
+Ausgabe ein Terminal ist; `terminal.bell_on_hold = false` schaltet ihn ab.
+App und Benachrichtigung des Systems melden die Anfrage wie bisher.
 
 **Zusammenstoß mit tmux und readline.** Ein tmux in der Sandbox hat dasselbe
 Präfix, und in Shells und readline heißt `Ctrl+B` ein Zeichen zurück. Beide
