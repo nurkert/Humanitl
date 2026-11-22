@@ -78,6 +78,10 @@ pub struct StreamState {
     base: [u32; 2],
     /// Ob das Protokoll eingeschaltet ist; geteilt mit dem Leser der Tastatur.
     kitty: Arc<AtomicBool>,
+    /// Ob der Agent eingefügten Text geklammert haben will (`CSI ? 2004 h`).
+    paste: bool,
+    /// Ob der Agent den Cursor versteckt hat (`CSI ? 25 l`).
+    cursor_hidden: bool,
 }
 
 impl StreamState {
@@ -92,6 +96,8 @@ impl StreamState {
             stacks: [Vec::new(), Vec::new()],
             base: [0, 0],
             kitty,
+            paste: false,
+            cursor_hidden: false,
         }
     }
 
@@ -112,6 +118,19 @@ impl StreamState {
     /// Ob der Agent auf dem Alternativschirm zeichnet.
     pub const fn alt_screen(&self) -> bool {
         self.alt
+    }
+
+    /// Ob der Agent eingefügten Text geklammert haben will
+    /// (`CSI ? 2004 h`). Die Einstellungen im Terminal der Sitzung schalten
+    /// das Klammern für sich ein und stellen danach diesen Stand wieder her
+    /// (GitHub #11).
+    pub const fn bracketed_paste(&self) -> bool {
+        self.paste
+    }
+
+    /// Ob der Agent den Cursor versteckt hat (`CSI ? 25 l`).
+    pub const fn cursor_hidden(&self) -> bool {
+        self.cursor_hidden
     }
 
     /// Was beim Verlassen vor dem gewöhnlichen Schirm geschrieben wird: die
@@ -211,12 +230,14 @@ impl StreamState {
                 };
             }
             (Some(b'?'), b'h' | b'l') => {
-                let switches = params[1..]
-                    .split(|byte| *byte == b';')
-                    .filter_map(number)
-                    .any(|mode| matches!(mode, 47 | 1047 | 1049));
-                if switches {
-                    self.alt = last == b'h';
+                let on = last == b'h';
+                for mode in params[1..].split(|byte| *byte == b';').filter_map(number) {
+                    match mode {
+                        47 | 1047 | 1049 => self.alt = on,
+                        2004 => self.paste = on,
+                        25 => self.cursor_hidden = !on,
+                        _ => {}
+                    }
                 }
             }
             _ => return,
@@ -305,6 +326,19 @@ mod tests {
         assert!(stream.kitty(), "back on the main screen");
         assert!(stream.leave_before().is_empty());
         assert_eq!(stream.leave_after(), b"\x1b[<1u");
+    }
+
+    /// Klammern für eingefügten Text und der versteckte Cursor folgen der
+    /// Ausgabe, auch mehrere Modi in einer Folge (GitHub #11).
+    #[test]
+    fn paste_brackets_and_the_cursor_follow_the_output() {
+        let mut stream = state();
+        assert!(!stream.bracketed_paste() && !stream.cursor_hidden());
+        stream.observe(b"\x1b[?2004;25l\x1b[?2004h");
+        assert!(stream.bracketed_paste());
+        assert!(stream.cursor_hidden());
+        stream.observe(b"\x1b[?25h\x1b[?2004l");
+        assert!(!stream.bracketed_paste() && !stream.cursor_hidden());
     }
 
     /// `CSI = … u` auf einem leeren Stapel legt keinen Eintrag an: Das

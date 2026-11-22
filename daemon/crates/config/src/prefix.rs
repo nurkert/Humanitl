@@ -60,8 +60,8 @@ pub static TABLE: &[Binding] = &[
     Binding {
         key: b',',
         action: PrefixAction::Settings,
-        en: "settings (here soon; meanwhile humanitl settings)",
-        de: "Einstellungen (im Terminal der Sitzung bald; bis dahin `humanitl settings`)",
+        en: "settings over the agent; Esc returns to it",
+        de: "Einstellungen über dem Agenten, `Esc` kehrt zu ihm zurück",
     },
     Binding {
         key: b'i',
@@ -83,21 +83,18 @@ pub fn binding(key: u8) -> Option<&'static Binding> {
     TABLE.iter().find(|binding| binding.key == key)
 }
 
-/// Was eine Ansicht anstelle von Einstellungen und Interceptor zeigt,
-/// solange es sie im Terminal der Sitzung nicht gibt (#11, #12): ein Satz,
-/// auf zwei kurze Zeilen verteilt, damit er auch in 80 Spalten ganz steht.
+/// Was eine Ansicht anstelle des Interceptors zeigt, solange es ihn im
+/// Terminal der Sitzung nicht gibt (#12): ein Satz, auf zwei kurze Zeilen
+/// verteilt, damit er auch in 80 Spalten ganz steht. Die Einstellungen gibt
+/// es dort seit GitHub #11.
 #[must_use]
 pub const fn coming(action: PrefixAction) -> Option<[&'static str; 2]> {
     match action {
-        PrefixAction::Settings => Some([
-            "The settings view in this terminal is coming;",
-            "meanwhile run humanitl settings in another terminal.",
-        ]),
         PrefixAction::Interceptor => Some([
             "The interceptor view in this terminal is coming;",
             "meanwhile run humanitl intercept in another terminal.",
         ]),
-        PrefixAction::Detach | PrefixAction::Help => None,
+        PrefixAction::Detach | PrefixAction::Settings | PrefixAction::Help => None,
     }
 }
 
@@ -120,8 +117,19 @@ pub fn help_lines(label: &str, letter: char) -> Vec<String> {
     lines.push(format!("{label} and any other key  both go to the agent"));
     lines.push("Ctrl+,    settings directly while the agent uses the kitty keyboard".to_owned());
     lines.push("          protocol (terminal.direct_keys)".to_owned());
+    lines.push(REDRAW_HINT[0].to_owned());
+    lines.push(REDRAW_HINT[1].to_owned());
     lines
 }
+
+/// Der Hinweis für einen Agenten, der nach einer Ansicht nicht von selbst
+/// neu zeichnet (GitHub #11): Die Kommandozeile bittet ihn mit einer
+/// Größenänderung darum, und wer darauf nicht antwortet, zeichnet meist mit
+/// `Ctrl+L` neu.
+pub const REDRAW_HINT: [&str; 2] = [
+    "Ctrl+L    in the agent redraws it if a view left a remnant on the",
+    "          screen (most agents redraw by themselves after a view)",
+];
 
 /// Die Hilfe der Kommandozeile mit der Vorgabe `Ctrl+B`: Absatz für Absatz,
 /// wie `clap` ihn als langen Hilfetext zeigt.
@@ -267,11 +275,14 @@ mod tests {
         for line in help_lines("Ctrl+B", 'b') {
             assert!(line.len() <= 76, "{line:?} is {} long", line.len());
         }
-        for action in [PrefixAction::Settings, PrefixAction::Interceptor] {
-            for line in super::coming(action).expect("a sentence") {
-                assert!(line.len() <= 76, "{line:?}");
-            }
+        for line in super::coming(PrefixAction::Interceptor).expect("a sentence") {
+            assert!(line.len() <= 76, "{line:?}");
         }
+        assert!(
+            super::coming(PrefixAction::Settings).is_none(),
+            "the settings view exists in the session terminal (#11)"
+        );
+        assert!(help.contains("Ctrl+L"), "{help}");
     }
 
     fn paths_in(dir: &std::path::Path) -> Paths {

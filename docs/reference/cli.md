@@ -584,7 +584,7 @@ One client writes, any number watch. Ctrl+C goes to the session's terminal as by
 The prefix key (terminal.prefix, default Ctrl+B as in tmux, --prefix for one call) is followed by a fixed table. The same table works in humanitl run -- CMD at a terminal and in humanitl go:
 
   Ctrl+B d  detach; the session keeps running
-  Ctrl+B ,  settings (here soon; meanwhile humanitl settings)
+  Ctrl+B ,  settings over the agent; Esc returns to it
   Ctrl+B i  interceptor (here soon; meanwhile humanitl intercept)
   Ctrl+B ?  this help
   Ctrl+B Ctrl+B or Ctrl+B b  send Ctrl+B once to the agent
@@ -592,6 +592,8 @@ The prefix key (terminal.prefix, default Ctrl+B as in tmux, --prefix for one cal
   Ctrl+B and any other key  both go to the agent
   Ctrl+,    settings directly while the agent uses the kitty keyboard
             protocol (terminal.direct_keys)
+  Ctrl+L    in the agent redraws it if a view left a remnant on the
+            screen (most agents redraw by themselves after a view)
 
 Usage: humanitl sandbox attach [OPTIONS]
 

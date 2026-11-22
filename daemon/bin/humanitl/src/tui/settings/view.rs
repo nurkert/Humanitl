@@ -127,6 +127,7 @@ pub fn draw(screen: &SettingsScreen, frame: &mut Frame<'_>, theme: Theme) {
         context: &context,
         keys,
         search: Some(&screen.search),
+        status: screen.status.as_deref(),
     }
     .render(frame, theme);
 

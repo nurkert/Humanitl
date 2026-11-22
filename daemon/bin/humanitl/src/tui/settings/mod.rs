@@ -173,6 +173,9 @@ pub struct SettingsScreen {
     /// Der Ereignisstrom ist zu Ende: Änderungen anderer Clients erscheinen
     /// erst nach `r`.
     live_ended: bool,
+    /// Rechts in der Fußzeile, im Terminal einer Sitzung: der Stand des
+    /// Agenten und der letzte Hinweis des Daemons (GitHub #11).
+    status: Option<String>,
 }
 
 impl SettingsScreen {
@@ -200,6 +203,7 @@ impl SettingsScreen {
             overlay: None,
             exit: None,
             live_ended: false,
+            status: None,
         };
         screen.load();
         screen
@@ -226,6 +230,11 @@ impl SettingsScreen {
     /// Was nach dem Bildschirm zu tun ist; `Quit`, wenn nichts gesagt wurde.
     pub fn take_exit(&mut self) -> Exit {
         self.exit.take().unwrap_or(Exit::Quit)
+    }
+
+    /// Setzt, was rechts in der Fußzeile steht; `None` für nichts.
+    pub fn set_status(&mut self, status: Option<String>) {
+        self.status = status;
     }
 
     /// Schreibt eine Auskunft an eine Zeile, etwa nach einem Neustart.

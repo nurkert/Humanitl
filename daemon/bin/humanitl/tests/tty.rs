@@ -1210,3 +1210,273 @@ fn go_first_start_a_signal_during_the_save_starts_nothing() {
     assert!(server.starts().is_empty(), "{:?}", server.starts());
     assert_eq!(termios(&pty), before);
 }
+
+// ---------------------------------------------------------------------------
+// Die Einstellungen über dem Agenten (GitHub #11)
+// ---------------------------------------------------------------------------
+
+/// Wartet, bis `text` hinter der Stelle `from` der Ausgabe steht, und gibt
+/// zurück, wo; mit Frist, wie [`wait_for_text`].
+#[cfg(target_os = "linux")]
+fn wait_for_after(child: &mut Child, pty: &Pty, from: usize, text: &str) -> usize {
+    let deadline = Instant::now() + PATIENCE;
+    loop {
+        let all = pty.read();
+        let tail = &all[from.min(all.len())..];
+        if let Some(found) = tail
+            .windows(text.len())
+            .position(|window| window == text.as_bytes())
+        {
+            return from + found;
+        }
+        let said = String::from_utf8_lossy(tail).into_owned();
+        if let Some(status) = child.try_wait().expect("the child can be polled") {
+            panic!("the command ended with {status:?} before {text:?}: {said:?}");
+        }
+        if Instant::now() >= deadline {
+            let _ = child.kill();
+            let _ = child.wait();
+            panic!("{text:?} did not appear within {PATIENCE:?}: {said:?}");
+        }
+        std::thread::sleep(Duration::from_millis(10));
+    }
+}
+
+/// Was die Fußzeile ohne Hinweis sagt (`prefix::settings::RUNNING`).
+#[cfg(target_os = "linux")]
+const fn super_running() -> &'static str {
+    "agent keeps running"
+}
+
+/// Eine kurze, feste Pause, in der der Test weiterliest.
+#[cfg(target_os = "linux")]
+fn settle(pty: &Pty, pause: Duration) {
+    let until = Instant::now() + pause;
+    while Instant::now() < until {
+        pty.drain();
+        std::thread::sleep(Duration::from_millis(10));
+    }
+}
+
+/// Die Nummern aller `tick N` in `bytes`, in ihrer Reihenfolge.
+#[cfg(target_os = "linux")]
+fn ticks(bytes: &[u8]) -> Vec<u64> {
+    String::from_utf8_lossy(bytes)
+        .split("tick ")
+        .skip(1)
+        .filter_map(|rest| {
+            let digits: String = rest.chars().take_while(char::is_ascii_digit).collect();
+            digits.parse().ok()
+        })
+        .collect()
+}
+
+/// `Ctrl+B ,` öffnet die Einstellungen über einem Vollbild-Agenten, der sein
+/// Bild nur bei einer echten Größenänderung neu zeichnet (wie auf
+/// `SIGWINCH`), und `Esc` kehrt zurück (GitHub #11):
+///
+/// - Die Einstellungen stehen, und in ihrer Fußzeile der Hinweis des
+///   Daemons auf eine gehaltene Anfrage.
+/// - Keine Taste aus der Ansicht erreicht den Agenten.
+/// - Die Ausgabe des Agenten während der Ansicht kommt nach der Rückkehr,
+///   vollständig und in ihrer Reihenfolge, und nicht vorher.
+/// - Nach der Rückkehr steht das Bild des Agenten wieder, in der echten
+///   Größe, und er nimmt Tasten an.
+///
+/// Mutationsbeweis: ohne die Größenänderung bei der Rückkehr (oder mit
+/// derselben Größe statt einer Zeile weniger) zeichnet der Agent nicht neu,
+/// und der Test wird rot.
+#[cfg(target_os = "linux")]
+#[test]
+fn ctrl_b_comma_opens_the_settings_and_the_agent_stands_after_esc() {
+    let harness = Harness::new();
+    let server = FakeServer::start_with_winch_agent(&harness);
+    let pty = sized_pty();
+    let mut child = attach(&harness, &pty);
+    wait_for_raw(&mut child, &pty);
+    wait_for_text(&mut child, &pty, "SCREEN 1 100x30");
+    // Ein Hinweis vor der Ansicht: Er steht von Anfang an in ihrer Fußzeile.
+    wait_for_text(&mut child, &pty, "request held: example.test/first");
+
+    let before = pty.read().len();
+    pty.write(b"\x02,");
+    let opened = wait_for_after(&mut child, &pty, before, "Settings");
+    // Der Hinweis kommt an jeder zehnten Zeile, also während der Ansicht.
+    // Der zweite Hinweis kommt während der Ansicht und steht in der
+    // Fußzeile; danach kommt keiner mehr.
+    wait_for_after(&mut child, &pty, opened, "second");
+    // Tasten der Ansicht, auch eine Suche und ihr Abbruch; das zweite `Esc`
+    // kehrt zurück. Jedes `Esc` kommt allein, damit es keine Folge beginnt.
+    pty.write(b"jjk");
+    settle(&pty, Duration::from_millis(150));
+    pty.write(b"/ab");
+    settle(&pty, Duration::from_millis(150));
+    // Unter Last kann crossterm zwei `Esc` in einem Lesevorgang als ein
+    // `Alt+Esc` lesen; dann braucht es eines mehr. Höchstens fünf, und nach
+    // der Rückkehr keines mehr, damit keines den Agenten erreicht.
+    let leave: &[u8] = b"\x1b[0m\x1b[H\x1b[2J\x1b8";
+    for _ in 0..5 {
+        pty.write(b"\x1b");
+        settle(&pty, Duration::from_millis(400));
+        if pty.read()[opened..]
+            .windows(leave.len())
+            .any(|window| window == leave)
+        {
+            break;
+        }
+    }
+    let left = wait_for_after(&mut child, &pty, opened, "\x1b[0m\x1b[H\x1b[2J\x1b8");
+    let redrawn = wait_for_after(&mut child, &pty, left, "SCREEN 3 100x30");
+
+    let all = pty.read();
+    assert!(
+        String::from_utf8_lossy(&all[left..redrawn]).contains("100x29"),
+        "one row less first: {:?}",
+        String::from_utf8_lossy(&all[left..])
+    );
+    let during = ticks(&all[opened..left]);
+    assert!(
+        during.is_empty(),
+        "output during the view reached the screen: {during:?}"
+    );
+    let numbers = ticks(&all);
+    assert!(
+        numbers.windows(2).all(|pair| pair[1] == pair[0] + 1),
+        "output lost or out of order: {numbers:?}"
+    );
+    let last_before = ticks(&all[..opened])
+        .last()
+        .copied()
+        .expect("ticks before the view");
+    let first_after = ticks(&all[left..])
+        .first()
+        .copied()
+        .expect("ticks after the view");
+    assert_eq!(first_after, last_before + 1, "the held output follows on");
+    let held = ticks(&all[left..redrawn]).len();
+    assert!(
+        held >= 5,
+        "the agent kept running during the view: {held} lines held"
+    );
+    let view = String::from_utf8_lossy(&all[before..left]);
+    assert!(
+        !view.contains(super_running()),
+        "the footer started without the notice seen before the view"
+    );
+    assert!(
+        !String::from_utf8_lossy(&all[left..]).contains("example.test/second"),
+        "a notice the footer showed was replayed after the view"
+    );
+
+    // Der Agent ist wieder zu bedienen.
+    pty.write(b"z");
+    wait_for_after(&mut child, &pty, redrawn, "echo:z");
+    pty.write(b"\x02d");
+    assert_eq!(wait_for_exit(&mut child, &pty), 0);
+    assert!(pty.is_cooked(), "modes {:?}", pty.modes());
+    let inputs = server.terminal_inputs();
+    assert_eq!(
+        inputs.iter().filter(|kind| **kind == "data").count(),
+        1,
+        "a key of the view reached the agent: {inputs:?}"
+    );
+}
+
+/// Ein lesender Anschluss über einem Agenten auf dem Alternativschirm
+/// öffnet die Einstellungen nicht: Er könnte den Agenten danach nicht neu
+/// zeichnen lassen. Ein `BEL` sagt es, und der Anschluss bleibt bedienbar
+/// (Review zu GitHub #11). Mutationsbeweis: ohne die Prüfung öffnen sich die
+/// Einstellungen, und der Test wird rot.
+#[cfg(target_os = "linux")]
+#[test]
+fn read_only_over_a_full_screen_agent_rings_instead_of_opening_the_settings() {
+    let harness = Harness::new();
+    let _server = FakeServer::start_with_winch_agent(&harness);
+    let pty = sized_pty();
+    let mut child = attach_with(&harness, &pty, &["--read-only"]);
+    wait_for_raw(&mut child, &pty);
+    wait_for_text(&mut child, &pty, "SCREEN 1 100x30");
+    let before = pty.read().len();
+    pty.write(b"\x02,");
+    wait_for_after(&mut child, &pty, before, "\x07");
+    settle(&pty, Duration::from_millis(500));
+    let said = pty.read();
+    assert!(
+        !String::from_utf8_lossy(&said[before..]).contains("Settings"),
+        "the settings opened over a full-screen agent without a redraw"
+    );
+    pty.write(b"\x02d");
+    assert_eq!(wait_for_exit(&mut child, &pty), 0);
+    assert!(pty.is_cooked(), "modes {:?}", pty.modes());
+}
+
+/// Tasten, die ohne Pause weiterkommen, halten die Rückkehr zum Agenten
+/// nicht auf: Nach `Ctrl+C` in den Einstellungen steht der Agent wieder,
+/// während der Strom noch läuft (Review zu GitHub #11). Mutationsbeweis: ein
+/// Verwerfen ohne Grenze kehrt erst nach Sekunden zurück, und der
+/// Test wird rot.
+#[cfg(target_os = "linux")]
+#[test]
+fn the_return_happens_while_keys_keep_coming() {
+    use std::sync::Arc;
+    use std::sync::atomic::{AtomicBool, Ordering};
+
+    const STREAM: Duration = Duration::from_secs(4);
+    // Ohne Strom dauert die Rückkehr Millisekunden; die Grenze lässt Platz
+    // für einen ausgelasteten Rechner und liegt weit unter dem Strom.
+    const RETURN_WITHIN: Duration = Duration::from_millis(1500);
+    let harness = Harness::new();
+    let _server = FakeServer::start_with_winch_agent(&harness);
+    let pty = sized_pty();
+    let mut child = attach(&harness, &pty);
+    wait_for_raw(&mut child, &pty);
+    wait_for_text(&mut child, &pty, "SCREEN 1 100x30");
+    let before = pty.read().len();
+    pty.write(b"\x02,");
+    let opened = wait_for_after(&mut child, &pty, before, "Settings");
+
+    let master = pty
+        .master
+        .as_ref()
+        .expect("the master is open")
+        .try_clone()
+        .expect("a second descriptor for the stream of keys");
+    let stop = Arc::new(AtomicBool::new(false));
+    let done = Arc::new(AtomicBool::new(false));
+    let started = Instant::now();
+    let keys = std::thread::spawn({
+        let stop = Arc::clone(&stop);
+        let done = Arc::clone(&done);
+        move || {
+            // Erst `Ctrl+C`, dann ohne Pause weitere Tasten, aus demselben
+            // Faden: Die Ansicht schließt, während der Strom läuft.
+            let until = Instant::now() + STREAM;
+            let stream = [b'j'; 4096];
+            let mut interrupted = false;
+            while !stop.load(Ordering::SeqCst) && Instant::now() < until {
+                let keys: &[u8] = if interrupted { &stream } else { b"\x03" };
+                match rustix::io::write(&master, keys) {
+                    Ok(_) => interrupted = true,
+                    Err(rustix::io::Errno::AGAIN) => std::thread::yield_now(),
+                    Err(_) => break,
+                }
+            }
+            done.store(true, Ordering::SeqCst);
+        }
+    });
+    let left = wait_for_after(&mut child, &pty, opened, "\x1b[0m\x1b[H\x1b[2J\x1b8");
+    let took = started.elapsed();
+    let returned_while_streaming = !done.load(Ordering::SeqCst);
+    stop.store(true, Ordering::SeqCst);
+    keys.join().expect("the stream of keys ends");
+    assert!(
+        returned_while_streaming && took < RETURN_WITHIN,
+        "the return waited for the keys: {took:?}"
+    );
+    wait_for_after(&mut child, &pty, left, "SCREEN 3 100x30");
+    assert!(
+        pty.write_within(b"\x02d", Instant::now() + PATIENCE),
+        "the detach key was not taken"
+    );
+    assert_eq!(wait_for_exit(&mut child, &pty), 0);
+}

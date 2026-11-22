@@ -13,9 +13,13 @@
 //! `humanitl go`; alle drei hängen über `cmd/attach.rs` an.
 //!
 //! - [`keys`]: die Zustandsmaschine der Tastatur.
+//! - [`input`]: der Leser der Tastatur, der für einen eigenen Bildschirm
+//!   anhält.
 //! - [`stream`]: was die Ausgabe des Agenten über das Terminal sagt
-//!   (kitty-Protokoll, Alternativschirm).
-//! - [`view`]: das Bild des Agenten und die kleine Ansicht darüber.
+//!   (kitty-Protokoll, Alternativschirm, Klammern, Cursor).
+//! - [`view`]: das Bild des Agenten und die Ansicht darüber.
+//! - [`settings`]: die Einstellungen über dem Agenten (GitHub #11).
+//! - [`redraw`]: den Agenten danach neu zeichnen lassen.
 //!
 //! # Was die Taste nie tut
 //!
@@ -26,7 +30,10 @@
 //! in denen kein Byte des Agenten steht. Das kitty-Protokoll schaltet sie
 //! nie ein, sie liest nur, ob der Agent es eingeschaltet hat.
 
+pub mod input;
 pub mod keys;
+pub mod redraw;
+pub mod settings;
 pub mod stream;
 pub mod view;
 

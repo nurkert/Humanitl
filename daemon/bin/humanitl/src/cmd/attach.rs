@@ -39,26 +39,38 @@
 //!
 //! Die Taste gehört dieser Kommandozeile allein. Das Terminal der Oberfläche
 //! liest sie nicht; dort hängt sich ab, wer den Bereich schließt.
+//!
+//! # Die Einstellungen über dem Agenten (GitHub #11)
+//!
+//! Präfix und `,` öffnen die Einstellungen im laufenden Anschluss
+//! ([`crate::prefix::settings`]): Der Leser der Tastatur hält an, die
+//! Ausgabe des Agenten wartet, und nach `Esc` lässt der Anschluss den Agenten
+//! neu zeichnen ([`crate::prefix::redraw`]). Die Schleife wartet dabei nie:
+//! Bildschirm, Neuzeichnen und Strom sind Zweige derselben Schleife.
 
 use std::io::{IsTerminal as _, Write};
 use std::sync::Arc;
-use std::sync::atomic::{AtomicBool, Ordering};
+use std::sync::atomic::AtomicBool;
 use std::time::Duration;
 
 use humanitl_config::DetachKeys;
 use humanitl_core::diagnostics::codes;
 use humanitl_core::{Diagnostic, FixAction, Severity};
+use humanitl_ipc::client::Client;
 use humanitl_ipc::{notice_line, v1};
-use tokio::io::AsyncReadExt as _;
 use tokio::sync::mpsc;
 use tokio_stream::wrappers::ReceiverStream;
 
 use crate::cmd::{Context, EXIT_OK, Failure, from_proto, status_diagnostic};
 use crate::prefix::Keys;
-use crate::prefix::keys::{KeyEvent, PrefixFilter, has_ctrl_c};
+use crate::prefix::input::{self, Control, Reader};
+use crate::prefix::keys::{KeyEvent, takes_screen};
+use crate::prefix::redraw::{Redraw, resize};
+use crate::prefix::settings::SettingsView;
 use crate::prefix::stream::StreamState;
 use crate::prefix::view::AgentView;
 use crate::tty::{RawMode, window_size};
+use crate::tui::Theme;
 
 /// Die Zeile nach dem Abhängen, auf `stderr` und auf einem gewöhnlichen
 /// Terminal.
@@ -75,9 +87,6 @@ const DETACH_GRACE: Duration = Duration::from_secs(2);
 
 /// Wie viele Nachrichten der Eingangskanal puffert.
 const INPUT_BUFFER: usize = 32;
-
-/// Wie viel Eingabe auf einmal gelesen wird.
-const INPUT_CHUNK: usize = 4096;
 
 /// Führt `humanitl sandbox attach` aus.
 ///
@@ -286,30 +295,46 @@ async fn attach_at(
     // Ob der Agent das kitty-Protokoll eingeschaltet hat: geschrieben vom
     // Leser der Ausgabe, gelesen vom Leser der Tastatur.
     let kitty = Arc::new(AtomicBool::new(false));
+    let theme = Theme::from_env();
     let mut view = AgentView::new(
         std::io::stdout(),
         StreamState::new(Arc::clone(&kitty)),
         keys.prefix,
-        crate::tui::Theme::from_env(),
+        theme,
     );
     let (events_tx, mut events) = mpsc::unbounded_channel();
-    let forwarder = if watches_keys {
-        spawn_input(tx.clone(), keys, !read_only, events_tx, kitty)
+    let (control, forwarder) = if watches_keys {
+        let Reader { control, forwarder } =
+            input::spawn(tx.clone(), keys, !read_only, events_tx, kitty);
+        (Some(control), forwarder)
     } else {
-        None
+        (None, None)
     };
     if !read_only {
         spawn_resizes(tx.clone());
     }
 
+    let mut settings = None;
     let ending = follow(
         &mut view,
         &mut stream,
         &mut events,
         &mut signals,
-        (&tx, !read_only),
+        &mut settings,
+        &Wiring {
+            tx: &tx,
+            writes: !read_only,
+            client: &client,
+            reader: control.as_ref(),
+            theme,
+        },
     )
     .await;
+    // Ein Bildschirm, der beim Ende noch steht (ein Signal, das Ende der
+    // Sitzung), zeichnet nicht mehr, bevor die Ansicht schließt.
+    if let Some(open) = settings.take() {
+        open.stop().await;
+    }
     if matches!(ending, Ending::Detached) {
         // `close` schickt dieser Rahmen und nicht der Leser: Schickte der es
         // vor seiner Meldung, könnte das Ende des Stroms das Rennen gegen die
@@ -325,10 +350,15 @@ async fn attach_at(
             if let Some(forwarder) = forwarder {
                 let _ = forwarder.await;
             }
-            let _ = tx.send(close()).await;
+            let _ = tx.send(input::close()).await;
             drain(&mut stream).await;
         })
         .await;
+    }
+    // Der Leser hört auf, bevor das Terminal zurückgeht: Ein Byte danach
+    // gehört dem, der das Terminal dann hat, der Shell des Menschen etwa.
+    if let Some(control) = control {
+        control.finish().await;
     }
     drop(raw);
     // Die Ansicht schließt auf jedem Weg; den Schirm räumt der Befehl nur
@@ -337,8 +367,24 @@ async fn attach_at(
     Ok(ending)
 }
 
-/// Die Schleife eines Anschlusses: Ereignisse der Tastatur, Signale und der
-/// Strom des Daemons, bis einer davon ihn beendet.
+/// Was die Schleife eines Anschlusses außer Terminal und Strom braucht.
+struct Wiring<'a> {
+    /// Der Kanal zum Daemon.
+    tx: &'a mpsc::Sender<v1::TerminalInput>,
+    /// Ob dieser Anschluss schreibt; nur dann bittet er den Agenten nach
+    /// einer Ansicht, neu zu zeichnen.
+    writes: bool,
+    /// Die Verbindung, über die auch die Einstellungen sprechen.
+    client: &'a Client,
+    /// Der Leser der Tastatur, wenn es einen gibt.
+    reader: Option<&'a Control>,
+    /// Mit oder ohne Farbe.
+    theme: Theme,
+}
+
+/// Die Schleife eines Anschlusses: Ereignisse der Tastatur, Signale, der
+/// Bildschirm der Einstellungen, das Neuzeichnen und der Strom des Daemons,
+/// bis einer davon ihn beendet.
 ///
 /// `SIGTERM`, `SIGHUP` und `SIGINT` gehören diesem Befehl: Ohne eigenen Weg
 /// nähme der Kernel den Prozess weg, bevor `Drop` das Terminal zurückgibt,
@@ -346,18 +392,24 @@ async fn attach_at(
 ///
 /// `biased` mit der Tastatur zuerst: Endet der Strom im selben Moment, in dem
 /// die Taste zum Abhängen kommt, gilt die Taste, und Exit-Code und Zeile
-/// hängen nicht vom Zufall der Reihenfolge ab.
+/// hängen nicht vom Zufall der Reihenfolge ab. Das Neuzeichnen steht vor dem
+/// Strom, damit ein Agent, der ohne Pause schreibt, es nicht verdrängt.
 ///
-/// `input` ist der Kanal zum Daemon und ob dieser Anschluss schreibt; nur
-/// dann bittet er den Agenten nach einer Ansicht, neu zu zeichnen.
+/// Ein Bildschirm, der beim Ende noch steht, bleibt in `settings`; der
+/// Aufrufer beendet ihn, bevor er das Terminal zurückgibt.
 async fn follow<W: Write>(
     view: &mut AgentView<W>,
     stream: &mut tonic::Streaming<v1::TerminalOutput>,
     events: &mut mpsc::UnboundedReceiver<KeyEvent>,
     signals: &mut Signals,
-    (tx, writes): (&mpsc::Sender<v1::TerminalInput>, bool),
+    settings: &mut Option<SettingsView>,
+    wiring: &Wiring<'_>,
 ) -> Ending {
     let mut code = EXIT_OK;
+    let mut redraw = Redraw::default();
+    // Der letzte Hinweis des Daemons, für die Fußzeile einer Ansicht, die
+    // erst danach aufgeht: Eine schon gehaltene Anfrage steht dann sofort da.
+    let mut last_notice: Option<String> = None;
     loop {
         tokio::select! {
             biased;
@@ -365,24 +417,109 @@ async fn follow<W: Write>(
             // dann passt das Muster nicht, und nur dieser Zweig ruht.
             Some(event) = events.recv() => match event {
                 KeyEvent::Detach => return Ending::Detached,
+                KeyEvent::Open(action) if takes_screen(action) => {
+                    open_settings(view, settings, wiring, last_notice.clone());
+                }
                 KeyEvent::Open(action) => {
                     let _ = view.open(action, window_size());
                 }
-                // Über einem Vollbild-Agenten: dieselbe Größe noch einmal,
-                // damit er neu zeichnet (ADR-0024 Punkt 9).
+                // Über einem Vollbild-Agenten: neu zeichnen lassen
+                // (ADR-0024 Punkt 9).
                 KeyEvent::Close => {
-                    if matches!(view.close(), Ok(true)) && writes {
-                        request_redraw(tx, window_size());
+                    if matches!(view.close(), Ok(true)) {
+                        redraw.request();
                     }
                 }
             },
             number = signals.next() => return Ending::Signal(number),
+            () = finished(settings) => {
+                *settings = None;
+                // Auch wenn das Terminal beim Zurückkehren nicht mehr
+                // schrieb: Der Agent soll sein Bild trotzdem neu zeichnen.
+                if view.close().unwrap_or(true) {
+                    redraw.request();
+                }
+                if let Some(reader) = wiring.reader {
+                    reader.resume();
+                }
+            }
+            permit = redraw.ready(wiring.tx), if wiring.writes => match permit {
+                Some(permit) => redraw.step(permit, window_size()),
+                None => redraw.cancel(),
+            },
             message = stream.message() => {
+                if let Ok(Some(v1::TerminalOutput {
+                    output: Some(v1::terminal_output::Output::Notice(text)),
+                })) = &message
+                {
+                    last_notice = Some(text.clone());
+                    // In der Fußzeile der Einstellungen steht er schon; er
+                    // wartet nicht noch ein zweites Mal auf die Rückkehr.
+                    if let Some(open) = settings.as_ref() {
+                        open.notice(text);
+                        continue;
+                    }
+                }
                 if let Some(outcome) = take(view, message, &mut code) {
                     return Ending::Stream(outcome);
                 }
             }
         }
+    }
+}
+
+/// Öffnet die Einstellungen über dem Agenten. Erst steht der eigene Schirm,
+/// dann zeichnet der Bildschirm. Ohne Terminal gibt es keinen, und der Leser
+/// der Tastatur läuft gleich weiter; er hat nach dem Ereignis angehalten und
+/// wartet auf genau eine Antwort. `notice` ist der letzte Hinweis des
+/// Daemons, für die Fußzeile.
+///
+/// Kann dieser Anschluss den Agenten danach nicht neu zeichnen lassen und
+/// steht der Agent auf dem Alternativschirm, öffnet sich nichts
+/// ([`settings_allowed`]); ein `BEL` sagt, dass die Taste hier nicht geht.
+fn open_settings<W: Write>(
+    view: &mut AgentView<W>,
+    settings: &mut Option<SettingsView>,
+    wiring: &Wiring<'_>,
+    notice: Option<String>,
+) {
+    if settings.is_some() {
+        return;
+    }
+    if !settings_allowed(wiring.writes, view.agent_alt_screen()) {
+        let _ = view.bell();
+    } else if crate::tui::available() {
+        let _ = view.open_screen();
+        *settings = SettingsView::start(wiring.client.clone(), wiring.theme, notice);
+        if settings.is_some() {
+            return;
+        }
+        let _ = view.close();
+    }
+    if let Some(reader) = wiring.reader {
+        reader.resume();
+    }
+}
+
+/// Ob die Einstellungen über dem Agenten aufgehen dürfen.
+///
+/// Über einem Agenten auf dem Alternativschirm zeichnen sie über sein Bild
+/// und löschen es beim Schließen; erst sein Neuzeichnen bringt es zurück.
+/// Ein lesender Anschluss (`--read-only`) darf die Größe nicht ändern und
+/// kann darum nicht neu zeichnen lassen: Über einem Agenten, der gerade
+/// nichts schreibt, bliebe ihm ein leerer Schirm (Review zu GitHub #11).
+/// Über einem Agenten auf dem gewöhnlichen Schirm stellt der eigene
+/// Alternativschirm das Bild ohnehin wieder her.
+const fn settings_allowed(writes: bool, agent_alt_screen: bool) -> bool {
+    writes || !agent_alt_screen
+}
+
+/// Wird fertig, wenn der Bildschirm der Einstellungen zu Ende ist; ohne
+/// Bildschirm nie.
+async fn finished(settings: &mut Option<SettingsView>) {
+    match settings {
+        Some(open) => open.finished().await,
+        None => std::future::pending().await,
     }
 }
 
@@ -462,174 +599,6 @@ fn take<W: Write>(
     }
 }
 
-/// Reicht jede Taste an den Agenten weiter, bis auf die Präfixtaste und ihre
-/// Tabelle ([`PrefixFilter`]).
-///
-/// Endet die Eingabe — an einem Terminal nie, an einer Pipe sofort —, schickt
-/// der Befehl `close` und hängt sich ab. Die Sitzung läuft weiter; das ist der
-/// Unterschied zwischen „ich sehe nicht mehr zu" und „hör auf".
-///
-/// Was die Tabelle auslöst, meldet der Leser über `events`. Nach dem
-/// Abhängen endet er; `close` schickt der Aufrufer, nachdem der
-/// Weiterreicher die Bytes davor abgegeben hat. Ohne `forward` (ein lesender
-/// Anschluss) geht nichts hinauf, und das Ende der Eingabe beendet nur das
-/// Lesen. `kitty` sagt, ob der Agent das kitty-Tastaturprotokoll gerade
-/// eingeschaltet hat.
-///
-/// **Lesen und Weiterreichen sind getrennt.** Liest die Sitzung ihre Eingabe
-/// nicht, staut sich ein eingefügter Text bis in den Kanal zum Daemon, und
-/// ein Leser, der selbst in `send` wartete, sähe die Taste zum Abhängen nie:
-/// Der Mensch säße fest. Deshalb liest der Leser immer weiter und gibt die
-/// Bytes an eine eigene Warteschlange ([`Backlog`]); der Weiterreicher leert
-/// sie in den Kanal. Was über [`BACKLOG_LIMIT`] hinausgeht, fällt weg -- die
-/// Sitzung nimmt in diesem Moment ohnehin nichts an.
-///
-/// Gibt den Weiterreicher zurück, damit der Aufrufer vor `close` auf ihn
-/// warten kann; ohne `forward` gibt es keinen.
-fn spawn_input(
-    tx: mpsc::Sender<v1::TerminalInput>,
-    keys: Keys,
-    forward: bool,
-    events: mpsc::UnboundedSender<KeyEvent>,
-    kitty: Arc<AtomicBool>,
-) -> Option<tokio::task::JoinHandle<()>> {
-    let (backlog, forwarder) = if forward {
-        let (backlog, queued) = Backlog::new();
-        (
-            Some(backlog),
-            Some(tokio::spawn(forward_backlog(queued, tx))),
-        )
-    } else {
-        (None, None)
-    };
-    tokio::spawn(async move {
-        let mut stdin = tokio::io::stdin();
-        let mut buffer = vec![0u8; INPUT_CHUNK];
-        let mut filter = PrefixFilter::new(keys.prefix, keys.direct);
-        loop {
-            let read = match stdin.read(&mut buffer).await {
-                Ok(read) if read > 0 => read,
-                Ok(_) | Err(_) => {
-                    if let Some(backlog) = backlog {
-                        // Ein Präfix ganz am Ende war keines: Es gehört dem
-                        // Agenten wie jedes andere Byte.
-                        backlog.push(filter.finish());
-                        backlog.close();
-                    }
-                    return;
-                }
-            };
-            let chunk = &buffer[..read];
-            // Ein lesender Anschluss schickt nichts hinauf, also hat `Ctrl+C`
-            // dort keinen Empfänger. Vor HUM-279 beendete es ihn als Signal;
-            // im Rohmodus ist es ein Byte (oder im kitty-Protokoll eine
-            // Folge), und es hängt ab wie die Taste -- geprüft vor dem
-            // Filter, damit es auch dann abhängt, wenn `Ctrl+C` selbst das
-            // Präfix ist.
-            if !forward && has_ctrl_c(chunk) {
-                let _ = events.send(KeyEvent::Detach);
-                return;
-            }
-            let filtered = filter.feed(chunk, kitty.load(Ordering::SeqCst));
-            if let Some(backlog) = &backlog {
-                backlog.push(filtered.forward);
-            }
-            for event in filtered.events {
-                if event == KeyEvent::Detach {
-                    // Die Warteschlange endet hier, ohne `close`: Das schickt
-                    // der Aufrufer, nachdem sie leer ist.
-                    drop(backlog);
-                    let _ = events.send(KeyEvent::Detach);
-                    return;
-                }
-                let _ = events.send(event);
-            }
-        }
-    });
-    forwarder
-}
-
-/// Wie viele Bytes zwischen Tastatur und Kanal höchstens warten.
-///
-/// Ein MiB ist mehr, als ein Mensch auf einmal einfügt, und wenig genug, dass
-/// eine Sitzung, die nicht liest, den Speicher nicht füllt.
-const BACKLOG_LIMIT: usize = 1024 * 1024;
-
-/// Die Warteschlange zwischen Leser und Weiterreicher, mit einer Obergrenze in
-/// Bytes.
-struct Backlog {
-    /// Die Nachrichten in ihrer Reihenfolge; unbeschränkt, weil die Grenze in
-    /// Bytes über `queued` gilt und der Leser nie warten darf.
-    sender: mpsc::UnboundedSender<v1::TerminalInput>,
-    /// Wie viele Bytes gerade warten.
-    queued: std::sync::Arc<std::sync::atomic::AtomicUsize>,
-}
-
-/// Die Seite des Weiterreichers.
-struct Queued {
-    receiver: mpsc::UnboundedReceiver<v1::TerminalInput>,
-    queued: std::sync::Arc<std::sync::atomic::AtomicUsize>,
-}
-
-impl Backlog {
-    fn new() -> (Self, Queued) {
-        let (sender, receiver) = mpsc::unbounded_channel();
-        let queued = std::sync::Arc::new(std::sync::atomic::AtomicUsize::new(0));
-        (
-            Self {
-                sender,
-                queued: std::sync::Arc::clone(&queued),
-            },
-            Queued { receiver, queued },
-        )
-    }
-
-    /// Stellt Tastendrücke an. Was in die Obergrenze passt, geht mit; nur der
-    /// Rest dahinter fällt weg.
-    ///
-    /// Nur der Leser stellt an, der Weiterreicher zieht nur ab: Der Platz,
-    /// den `load` sieht, kann bis zum `fetch_add` nur größer werden.
-    fn push(&self, mut bytes: Vec<u8>) {
-        use std::sync::atomic::Ordering;
-
-        let room = BACKLOG_LIMIT.saturating_sub(self.queued.load(Ordering::Acquire));
-        bytes.truncate(room);
-        if bytes.is_empty() {
-            return;
-        }
-        self.queued.fetch_add(bytes.len(), Ordering::AcqRel);
-        let _ = self.sender.send(data(bytes));
-    }
-
-    /// Das Ende der Eingabe: `close` hinter allen Bytes.
-    fn close(self) {
-        let _ = self.sender.send(close());
-    }
-}
-
-/// Leert die Warteschlange in den Kanal zum Daemon, bis sie endet.
-async fn forward_backlog(mut queued: Queued, tx: mpsc::Sender<v1::TerminalInput>) {
-    use std::sync::atomic::Ordering;
-
-    while let Some(message) = queued.receiver.recv().await {
-        let len = match &message.input {
-            Some(v1::terminal_input::Input::Data(bytes)) => bytes.len(),
-            _ => 0,
-        };
-        if tx.send(message).await.is_err() {
-            return;
-        }
-        queued.queued.fetch_sub(len, Ordering::AcqRel);
-    }
-}
-
-/// Tastendrücke als Nachricht.
-fn data(bytes: Vec<u8>) -> v1::TerminalInput {
-    v1::TerminalInput {
-        input: Some(v1::terminal_input::Input::Data(bytes)),
-    }
-}
-
 /// Die Signale, auf die dieser Befehl selbst hört.
 ///
 /// **Der Handler steht, bevor das Terminal roh wird.** Ein Signal, das in der
@@ -688,13 +657,6 @@ impl Signals {
     }
 }
 
-/// Das Ende dieses Stroms, nicht das der Sitzung.
-fn close() -> v1::TerminalInput {
-    v1::TerminalInput {
-        input: Some(v1::terminal_input::Input::Close(())),
-    }
-}
-
 /// Reicht jede neue Fenstergröße weiter.
 ///
 /// Der Daemon drosselt sie auf eine je 50 ms; dieser Befehl schickt, was das
@@ -714,25 +676,6 @@ fn spawn_resizes(tx: mpsc::Sender<v1::TerminalInput>) {
     });
 }
 
-/// Bittet den Agenten, neu zu zeichnen, ohne je zu warten: Liest die Sitzung
-/// ihre Eingabe nicht und ist der Kanal voll, fällt die Bitte weg. Ein
-/// `send(..).await` hielte hier die Schleife fest, und eine spätere Taste
-/// zum Abhängen käme nie an (Review zu GitHub #10). Wahr, wenn die Bitte im
-/// Kanal steht.
-fn request_redraw(tx: &mpsc::Sender<v1::TerminalInput>, size: (u32, u32)) -> bool {
-    tx.try_send(resize(size)).is_ok()
-}
-
-/// Eine Fenstergröße als Nachricht. Dieselbe Größe noch einmal lässt den
-/// Agenten neu zeichnen (ADR-0024 Punkt 9).
-fn resize((cols, rows): (u32, u32)) -> v1::TerminalInput {
-    v1::TerminalInput {
-        input: Some(v1::terminal_input::Input::Resize(
-            v1::terminal_input::Resize { cols, rows },
-        )),
-    }
-}
-
 /// Der Befund, wenn der Eingangskanal des Stroms schon zu ist.
 fn closed_input() -> Failure {
     Failure::new(
@@ -744,55 +687,16 @@ fn closed_input() -> Failure {
 
 #[cfg(test)]
 mod tests {
-    #![allow(clippy::expect_used)]
+    use super::settings_allowed;
 
-    use super::{BACKLOG_LIMIT, Backlog, request_redraw};
-
-    /// Die Bitte um ein neues Bild wartet nie, auch nicht auf einen vollen
-    /// Kanal zu einer Sitzung, die nichts liest: Sie fällt dann weg, und die
-    /// Schleife bleibt frei für die Taste zum Abhängen. Gemessen in einem
-    /// eigenen Faden mit Frist. Mutationsbeweis: warten, bis Platz ist, macht
-    /// ihn rot.
+    /// Ein schreibender Anschluss öffnet die Einstellungen immer, ein
+    /// lesender nur über einem Agenten auf dem gewöhnlichen Schirm (Review
+    /// zu GitHub #11).
     #[test]
-    fn a_redraw_never_waits_on_a_full_channel() {
-        let (tx, _rx) = tokio::sync::mpsc::channel(1);
-        assert!(request_redraw(&tx, (80, 24)), "room for one");
-        let (done, finished) = std::sync::mpsc::channel();
-        std::thread::spawn(move || {
-            let _ = done.send(request_redraw(&tx, (80, 24)));
-        });
-        let queued = finished
-            .recv_timeout(std::time::Duration::from_secs(5))
-            .expect("the redraw request returned within the deadline");
-        assert!(!queued, "a full channel drops the request");
-    }
-
-    /// An der Grenze der Warteschlange geht mit, was passt, und nur der Rest
-    /// fällt weg (HUM-279, Review): Mit 1 MiB weniger einem Byte in der
-    /// Schlange kommt von zwei Bytes das erste an.
-    #[test]
-    fn the_backlog_takes_what_fits_and_drops_only_the_rest() {
-        use std::sync::atomic::Ordering;
-
-        let (backlog, mut queued) = Backlog::new();
-        backlog.push(vec![b'x'; BACKLOG_LIMIT - 1]);
-        backlog.push(b"ab".to_vec());
-        backlog.push(b"c".to_vec());
-        assert_eq!(queued.queued.load(Ordering::Acquire), BACKLOG_LIMIT);
-
-        let first = queued.receiver.try_recv().expect("the first read");
-        let second = queued.receiver.try_recv().expect("the part that fit");
-        assert!(matches!(
-            first.input,
-            Some(super::v1::terminal_input::Input::Data(bytes)) if bytes.len() == BACKLOG_LIMIT - 1
-        ));
-        assert!(matches!(
-            second.input,
-            Some(super::v1::terminal_input::Input::Data(bytes)) if bytes == b"a"
-        ));
-        assert!(
-            queued.receiver.try_recv().is_err(),
-            "a full backlog takes nothing more"
-        );
+    fn a_reader_opens_the_settings_only_over_the_ordinary_screen() {
+        assert!(settings_allowed(true, true));
+        assert!(settings_allowed(true, false));
+        assert!(settings_allowed(false, false));
+        assert!(!settings_allowed(false, true));
     }
 }
