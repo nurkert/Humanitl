@@ -106,6 +106,10 @@ pub async fn run(ctx: &Context, cmd: &ProjectsCmd) -> Result<u8, Failure> {
                 .into_inner();
             crate::cmd::daemon::check_proto(&info)?;
             let (request, notice) = proposal_request(ctx, path.as_deref(), info.proto_minor);
+            // Den Agenten der Sitzung nimmt ein Daemon erst ab 1.61 an (#8).
+            if let Some(v1::projects_request::Op::Proposal(sent)) = &request.op {
+                crate::cmd::run::agent_reaches_the_daemon(&sent.cli_overrides, info.proto_minor)?;
+            }
             // Ein Daemon vor 1.57 kennt die Werte der Sitzung im Vorschlag
             // nicht (HUM-559, HUM-567); wer sie gesetzt hat, erfährt es,
             // statt dass sie still wegfallen.

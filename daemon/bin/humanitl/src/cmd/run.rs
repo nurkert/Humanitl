@@ -61,7 +61,9 @@ use humanitl_core::block::sanitize_note;
 use humanitl_core::diagnostics::codes;
 use humanitl_core::{Diagnostic, FixAction, Severity};
 use humanitl_ipc::client::Client;
-use humanitl_ipc::session::{SANDBOX_MIN_ISOLATION_KEY, SESSION_OVERRIDE_KEYS, ask_mode_name};
+use humanitl_ipc::session::{
+    AGENT_ADAPTER_KEY, SANDBOX_MIN_ISOLATION_KEY, SESSION_OVERRIDE_KEYS, ask_mode_name,
+};
 use humanitl_ipc::v1;
 use humanitl_sandbox::agent::{AdapterRegistry, AgentAdapter};
 use serde_json::json;
@@ -127,6 +129,9 @@ pub(crate) struct Launch {
     /// `humanitl go`: das Terminal auch ohne eigenes Kommando anhängen und
     /// die Ladeanimation zeigen, wo sie erwünscht ist.
     pub go: bool,
+    /// `humanitl go`: der Ordner, den dieser Aufruf gewählt hat, und woher
+    /// er kommt (#8); `None` heißt, wie bei `run` aus der Auflösung.
+    pub folder: Option<(std::path::PathBuf, humanitl_sandbox::WorkDirSource)>,
     /// Die Palette der Ladeanimation, wenn sie erscheint; [`launch`] setzt
     /// sie nach der Konfiguration.
     pub splash: Option<crate::splash::Palette>,
@@ -179,7 +184,14 @@ pub(crate) async fn launch(
         .into_inner();
     crate::cmd::daemon::check_proto(&info)?;
 
-    let (work_dir, work_dir_source) = ctx.work_dir(&resolved);
+    let (work_dir, work_dir_source) = Box::pin(folder_of(
+        ctx,
+        &mut client,
+        &resolved,
+        launch,
+        info.proto_minor,
+    ))
+    .await;
     let chosen = Box::pin(wish::chosen_ask_mode(
         &mut client,
         &resolved,
@@ -244,20 +256,7 @@ pub(crate) async fn launch(
 
     ctx.render.note(&where_decisions_happen(config));
     let moderate = config.hold.ask_mode == AskMode::Terminal;
-    // A command of the caller at a terminal works like `sandbox attach`
-    // (HUM-280). The key is read before the start, so a typo in
-    // `terminal.detach_prefix` stops nothing that already runs.
-    let keys = if attaches(
-        args,
-        launch.go,
-        moderate,
-        ctx.render.is_json(),
-        stdin_is_terminal(),
-    ) {
-        Some(crate::cmd::attach::resolve_detach_keys(ctx, None)?)
-    } else {
-        None
-    };
+    let keys = detach_keys(ctx, args, launch.go, moderate)?;
     // Die Ladeanimation nur für `go` und nie neben dem Kasten von
     // `--ask terminal`, der dasselbe Terminal braucht (HUM-496).
     if launch.go && !moderate {
@@ -279,6 +278,51 @@ pub(crate) async fn launch(
         ctx.render.value(&value);
     }
     Ok(code)
+}
+
+/// Die Taste zum Abhängen, wenn dieser Lauf sein Terminal anhängt.
+///
+/// A command of the caller at a terminal works like `sandbox attach`
+/// (HUM-280). The key is read before the start, so a typo in
+/// `terminal.detach_prefix` stops nothing that already runs.
+fn detach_keys(
+    ctx: &Context,
+    args: &RunArgs,
+    go: bool,
+    moderate: bool,
+) -> Result<Option<humanitl_config::DetachKeys>, Failure> {
+    if attaches(
+        args,
+        go,
+        moderate,
+        ctx.render.is_json(),
+        stdin_is_terminal(),
+    ) {
+        Ok(Some(crate::cmd::attach::resolve_detach_keys(ctx, None)?))
+    } else {
+        Ok(None)
+    }
+}
+
+/// Der Ordner dieses Laufs und woher er kommt: unter `go` der, den der
+/// Aufruf gewählt hat (das aktuelle Verzeichnis oder `--dir`, nicht der
+/// gespeicherte Ordner, #8), samt der Zeile für ein neues Projekt; sonst
+/// wie [`Context::work_dir`].
+async fn folder_of(
+    ctx: &Context,
+    client: &mut Client,
+    resolved: &Resolved,
+    launch: &Launch,
+    minor: u32,
+) -> (std::path::PathBuf, humanitl_sandbox::WorkDirSource) {
+    let (work_dir, source) = launch
+        .folder
+        .clone()
+        .unwrap_or_else(|| ctx.work_dir(resolved));
+    if launch.go {
+        crate::cmd::go::announce_new_project(ctx, client, &work_dir, minor).await;
+    }
+    (work_dir, source)
 }
 
 /// Ob `stdin` ein Terminal ist.
@@ -1258,7 +1302,9 @@ fn session_overrides(
     resolved: &Resolved,
     minor: u32,
 ) -> Result<Vec<v1::sandbox_request::CliOverride>, Failure> {
-    floor_reaches_the_daemon(client_overrides(ctx, resolved), minor)
+    let overrides = floor_reaches_the_daemon(client_overrides(ctx, resolved), minor)?;
+    agent_reaches_the_daemon(&overrides, minor)?;
+    Ok(overrides)
 }
 
 /// Die Werte der Sitzung, die dieser Aufruf einem Start schicken würde, ohne
@@ -1412,6 +1458,45 @@ fn floor_reaches_the_daemon(
             ))
             .fix(FixAction::CopyCommand(
                 "systemctl --user restart humanitld.service".to_owned(),
+            ))
+            .build(),
+    ))
+}
+
+/// Ab dieser Minor nimmt der Daemon `agent.adapter` in
+/// `Start.cli_overrides` an (#8).
+pub(crate) const SESSION_AGENT_MINOR: u32 = 61;
+
+/// Ob der Daemon den Agenten unter den Werten der Sitzung annimmt, vor dem
+/// Senden von Start, Vorschau, Ziehen oder Vorschlag.
+///
+/// Ein Daemon vor Vertrag 1.61 lehnt `agent.adapter` in `cli_overrides` mit
+/// `CONFIG_003` ab, als dürfe eine Sitzung ihren Agenten nie wählen; hier
+/// sagt `CLI_004` stattdessen, dass der Daemon zu alt ist.
+///
+/// # Errors
+///
+/// `CLI_004`, wenn die Werte `agent.adapter` tragen und der Daemon vor
+/// Vertrag 1.61 spricht.
+pub(crate) fn agent_reaches_the_daemon(
+    overrides: &[v1::sandbox_request::CliOverride],
+    minor: u32,
+) -> Result<(), Failure> {
+    let Some(agent) = overrides.iter().find(|pair| pair.path == AGENT_ADAPTER_KEY) else {
+        return Ok(());
+    };
+    if minor >= SESSION_AGENT_MINOR {
+        return Ok(());
+    }
+    Err(Failure::new(
+        Diagnostic::builder(codes::CLI_004, Severity::Error)
+            .why(format!(
+                "the daemon speaks contract 1.{minor}, and the agent {:?} for this run needs \
+                 1.{SESSION_AGENT_MINOR}; restart the daemon so that it takes this agent",
+                agent.value
+            ))
+            .fix(FixAction::CopyCommand(
+                humanitl_core::diagnostics::RESTART_DAEMON_COMMAND.to_owned(),
             ))
             .build(),
     ))
@@ -2263,5 +2348,29 @@ mod tests {
                 .expect("nothing to refuse")
                 .is_empty()
         );
+    }
+
+    /// Ein Daemon vor Vertrag 1.61 lehnte `agent.adapter` mit `CONFIG_003`
+    /// ab, als dürfe eine Sitzung ihren Agenten nie wählen; der Client sagt
+    /// stattdessen `CLI_004` (#8).
+    ///
+    /// Mutation proof: with `SESSION_FLOOR_MINOR` (1.49) as the bar, contract
+    /// 1.60 passes and the first assertion fails.
+    #[test]
+    fn an_old_daemon_gets_no_agent_it_would_misread() {
+        let agent = vec![humanitl_ipc::v1::sandbox_request::CliOverride {
+            path: humanitl_ipc::session::AGENT_ADAPTER_KEY.to_owned(),
+            value: "claude".to_owned(),
+        }];
+        let refused =
+            super::agent_reaches_the_daemon(&agent, 60).expect_err("the old daemon is too old");
+        assert_eq!(refused.diagnostic.code.as_str(), "CLI_004");
+        assert!(
+            refused.diagnostic.why.contains("claude"),
+            "{}",
+            refused.diagnostic.why
+        );
+        super::agent_reaches_the_daemon(&agent, super::SESSION_AGENT_MINOR)
+            .expect("a new daemon takes it");
     }
 }

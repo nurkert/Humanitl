@@ -231,7 +231,8 @@ fn check_minor(minor: u32, overrides: &[v1::sandbox_request::CliOverride]) -> Re
                 .build(),
         ));
     }
-    Ok(())
+    // Den Agenten der Sitzung nimmt ein Daemon erst ab 1.61 an (#8).
+    crate::cmd::run::agent_reaches_the_daemon(overrides, minor)
 }
 
 /// Ob der Start den Ordner `folder` ablehnte: dieselbe Prüfung wie im

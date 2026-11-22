@@ -766,10 +766,12 @@ fn run_ask_terminal_without_a_terminal_is_cli_002() {
     assert!(text.contains("terminal on standard input"), "{text}");
 }
 
-/// `humanitl go` without a terminal is `humanitl run --disposable` (HUM-496):
-/// the same answer, byte for byte, with and without `--json`, and not one
-/// byte of the boot animation. The fake's start ends without an exit code,
-/// so both end with `CLI_001`; what counts is that they end alike.
+/// `humanitl go --disposable` without a terminal is `humanitl run
+/// --disposable` (HUM-496): the same answer, byte for byte, with and without
+/// `--json`, and not one byte of the boot animation. The fake's start ends
+/// without an exit code, so both end with `CLI_001`; what counts is that
+/// they end alike. The one line `go` adds for a project the register does
+/// not know yet (#8) is taken out before the comparison.
 #[test]
 fn go_without_a_terminal_behaves_like_run_disposable() {
     let harness = Harness::new();
@@ -777,11 +779,31 @@ fn go_without_a_terminal_behaves_like_run_disposable() {
 
     for json in [false, true] {
         let flag: &[&str] = if json { &["--json"] } else { &[] };
-        let go = harness.run(
-            flag.iter()
-                .copied()
-                .chain(["go", "--", "sh", "-c", "exit 0"]),
+        let mut go = harness.run(flag.iter().copied().chain([
+            "go",
+            "--disposable",
+            "--",
+            "sh",
+            "-c",
+            "exit 0",
+        ]));
+        let text = stderr(&go);
+        // Mit `--json` gibt es keine Hinweise auf stderr, also auch diese
+        // Zeile nicht.
+        assert_eq!(
+            text.contains("[humanitl] new project "),
+            !json,
+            "json {json}: {text}"
         );
+        let mut kept = String::new();
+        for line in text
+            .lines()
+            .filter(|line| !line.starts_with("[humanitl] new project "))
+        {
+            kept.push_str(line);
+            kept.push('\n');
+        }
+        go.stderr = kept.into_bytes();
         let run = harness.run(flag.iter().copied().chain([
             "run",
             "--disposable",

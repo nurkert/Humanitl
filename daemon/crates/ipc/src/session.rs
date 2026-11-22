@@ -25,7 +25,7 @@
 //! Client; sie stehen in `config.toml` oder in einem globalen Profil, wo ein
 //! Mensch sie geschrieben hat, und der Daemon liest sie dort.
 //!
-//! Übrig bleiben die fünf Schlüssel in [`SESSION_OVERRIDE_KEYS`]; die ersten
+//! Übrig bleiben die sechs Schlüssel in [`SESSION_OVERRIDE_KEYS`]; die ersten
 //! zwei sind Flags aus `backlog/CONVENTIONS.md` 3.8:
 //!
 //! - `hold.timeout_secs` sagt, wie lange eine gehaltene Anfrage wartet. Er
@@ -77,6 +77,18 @@
 //!   draußen, und die Herkunft nennt weiter die Ebene des strengsten. Vor
 //!   HUM-489 ließ `humanitl run` das Flag still fallen, und der Daemon
 //!   startete unter einer Stufe, die der Mensch ausgeschlossen hatte.
+//! - `agent.adapter` (#8, `humanitl go claude`, `--agent-adapter`) wählt den
+//!   Agenten dieser Sitzung unter den eingebauten Adaptern
+//!   ([`AdapterRegistry::builtin`]); eine unbekannte Kennung lehnt der Start
+//!   mit `CONFIG_003` ab. Er vergrößert nichts, was ein Client auf dem Socket
+//!   nicht schon bestimmt: Dieselbe Wahl schreibt `Projects.save_choice` als
+//!   Projektwahl dauerhaft (HUM-532), und ein Adapter bringt nur mit, was im
+//!   Binary steht, nie einen Pfad, ein Programm oder eine Regel des Clients.
+//!   `agent.command` bleibt gesperrt; ein `agent.command` einer tieferen
+//!   Ebene als der des Adapters lässt die Auflösung fallen
+//!   (`command_follows_the_agent`). Die Quelle des Programms (Host oder
+//!   Depot) bestimmt weiter nur `agents.*`, und eine Firmenvorgabe, die den
+//!   Adapter sperrt, gewinnt als oberste Ebene.
 //!
 //! [`SandboxService`]: crate::SandboxService
 //!
@@ -115,7 +127,12 @@ pub const SESSION_OVERRIDE_KEYS: &[&str] = &[
     SANDBOX_BACKEND_KEY,
     "sandbox.podman.runtime",
     SANDBOX_MIN_ISOLATION_KEY,
+    AGENT_ADAPTER_KEY,
 ];
+
+/// Der Adapter der Sitzung, seit #8 ein Schlüssel der Sitzung: `humanitl go
+/// claude` wählt den Agenten für genau diesen Start.
+pub const AGENT_ADAPTER_KEY: &str = "agent.adapter";
 
 /// Die Untergrenze der Isolation, seit HUM-489 ein Schlüssel der Sitzung.
 /// Ein Wunsch über den Start hebt sie nur: Beim Mischen gilt der strengste
@@ -410,6 +427,7 @@ impl SessionResolver {
         if project.is_some() {
             resolved.config.sandbox.work_dir = stored;
         }
+        command_follows_the_agent(&mut resolved);
         Ok(resolved)
     }
 
@@ -446,15 +464,54 @@ impl SessionResolver {
                 |now| now.config.sandbox.work_dir,
             )
         });
-        humanitl_config::resolve_with_choice(
+        let mut resolved = humanitl_config::resolve_with_choice(
             &selection,
             cwd.as_deref(),
             self.env(),
             &request.cli_pairs(),
             request.project_choice.as_ref(),
-        )
+        )?;
+        command_follows_the_agent(&mut resolved);
+        Ok(resolved)
     }
 }
+
+/// Ein Agent startet mit seinem eigenen Programm, wenn ihn eine höhere
+/// Ebene gewählt hat als die, aus der `agent.command` kommt (#8).
+///
+/// Ein `agent.command` gehört zum Agenten seiner Ebene. Wählt eine höhere
+/// Ebene einen Adapter (die Projektwahl, der Start mit `humanitl go claude`),
+/// liefe sonst `/opt/mypi` oder `claude` unter dem Adapter `pi`. Die Sitzung
+/// nimmt dann das Vorgabeprogramm des Adapters mit dessen eigenem Start
+/// (Schlüssel, Loopback). Verglichen wird das Band der Ebene
+/// ([`humanitl_config::Origin::rank`]: Vorgabe, `config.toml`, Profile,
+/// Projekt-Profil, Projektwahl, Umgebung, Kommandozeile); aus derselben Ebene
+/// bleiben beide zusammen. Eine Firmenvorgabe, die `agent.command` sperrt,
+/// bleibt immer. Das ausdrückliche `Start.command` steht nicht in der
+/// Auflösung und bleibt unberührt; über `cli_overrides` kommt `agent.command`
+/// nie (`check_override_key`).
+fn command_follows_the_agent(resolved: &mut Resolved) {
+    let (Some(adapter), Some(command)) = (
+        resolved.origin(AGENT_ADAPTER_KEY),
+        resolved.origin(AGENT_COMMAND_KEY),
+    ) else {
+        return;
+    };
+    if resolved.config.agent.command.is_none()
+        || matches!(command, humanitl_config::Origin::Policy(_))
+        || adapter.rank() <= command.rank()
+    {
+        return;
+    }
+    resolved.config.agent.command = None;
+    resolved.origins.insert(
+        AGENT_COMMAND_KEY.to_owned(),
+        humanitl_config::Origin::Default,
+    );
+}
+
+/// Der Befehl des Agenten, den ein Adapter aus dem Start überdeckt (#8).
+const AGENT_COMMAND_KEY: &str = "agent.command";
 
 /// Prüft einen Pfad, den ein Client für seine Sitzung setzen will.
 ///
@@ -824,10 +881,10 @@ mod tests {
         // vergrößert.
         assert_eq!(
             SESSION_OVERRIDE_KEYS.len(),
-            5,
+            6,
             "a client sets llm.endpoint, hold.timeout_secs, sandbox.backend, \
-             sandbox.podman.runtime and sandbox.min_isolation, and nothing else: \
-             {SESSION_OVERRIDE_KEYS:?}"
+             sandbox.podman.runtime, sandbox.min_isolation and agent.adapter, and nothing \
+             else: {SESSION_OVERRIDE_KEYS:?}"
         );
         for key in SESSION_OVERRIDE_KEYS {
             assert!(check_override_key(key).is_ok(), "{key} should be allowed");
@@ -838,7 +895,8 @@ mod tests {
         // über den Start bestimmte sonst Programm, Wurzel und Grenzen von
         // Podman. Die Untergrenze der Isolation steht seit HUM-489 auf der
         // Liste; dass ein Wunsch sie nur hebt, prüft
-        // `a_session_floor_only_raises`.
+        // `a_session_floor_only_raises`. Der Adapter steht seit #8 darauf,
+        // der Befehl des Agenten nie.
         for key in [
             "sandbox.podman.program",
             "sandbox.podman.rootfs",
@@ -847,7 +905,6 @@ mod tests {
             "sandbox.profile",
             "sandbox.work_dir",
             "sandbox.env",
-            "agent.adapter",
             "agent.command",
             "hold.ask_mode",
             "findings.enabled",
@@ -1122,5 +1179,130 @@ mod tests {
             Some(&Origin::Global),
             "the origin names the layer of the strictest value"
         );
+    }
+
+    /// Ein `agent.command` aus `config.toml` gehörte zum Agenten jener Ebene;
+    /// wählt eine höhere Ebene den Adapter (der Start, die Projektwahl),
+    /// startet dessen eigenes Programm (#8). Aus derselben Ebene bleiben beide
+    /// zusammen.
+    ///
+    /// Mutation proof: without `command_follows_the_agent` the session keeps
+    /// `/opt/mypi` under the adapter `claude`; with the rule limited to an
+    /// adapter from the start (`Origin::Cli`), the project-choice case keeps
+    /// it under `pi`.
+    #[test]
+    fn the_agent_of_a_start_runs_its_own_program() {
+        let home = tempfile::tempdir().expect("tempdir");
+        let under_test = session_resolver(home.path());
+        let config = under_test.paths().config_path();
+        std::fs::create_dir_all(config.parent().expect("a directory")).expect("mkdir");
+        std::fs::write(&config, "[agent]\ncommand = [\"/opt/mypi\"]\n").expect("write");
+
+        let started = under_test
+            .resolve(&SessionRequest {
+                overrides: vec![(super::AGENT_ADAPTER_KEY.to_owned(), "claude".to_owned())],
+                ..SessionRequest::default()
+            })
+            .expect("resolves");
+        assert_eq!(started.config.agent.adapter, "claude");
+        assert_eq!(started.config.agent.command, None, "the adapter's default");
+        let program = humanitl_sandbox::AdapterRegistry::builtin()
+            .get(&started.config.agent.adapter)
+            .map(humanitl_sandbox::AgentAdapter::program);
+        assert_eq!(program, Some("claude"));
+
+        let planned = under_test
+            .resolve_plan(
+                None,
+                None,
+                None,
+                None,
+                &[(super::AGENT_ADAPTER_KEY.to_owned(), "claude".to_owned())],
+                None,
+            )
+            .expect("resolves");
+        assert_eq!(
+            planned.config.agent.command, None,
+            "the preview as the start"
+        );
+
+        let without = under_test
+            .resolve(&SessionRequest::default())
+            .expect("resolves");
+        assert_eq!(
+            without.config.agent.command,
+            Some(vec!["/opt/mypi".to_owned()]),
+            "without a word the configured command stays"
+        );
+
+        // Die Projektwahl wählt `pi` über einem Befehl aus `config.toml`:
+        // auch ohne Wort im Start das Vorgabeprogramm von `pi`.
+        let chosen = under_test
+            .resolve(&SessionRequest {
+                project_choice: Some(
+                    humanitl_config::ProjectChoice::from_pairs([("agent.adapter", "pi")])
+                        .expect("a choice"),
+                ),
+                ..SessionRequest::default()
+            })
+            .expect("resolves");
+        assert_eq!(chosen.config.agent.adapter, "pi");
+        assert_eq!(
+            chosen.config.agent.command, None,
+            "the choice's adapter default"
+        );
+
+        // Gegenprobe: Adapter und Befehl aus derselben Ebene bleiben zusammen.
+        std::fs::write(
+            &config,
+            "[agent]\nadapter = \"pi\"\ncommand = [\"/opt/mypi\"]\n",
+        )
+        .expect("write");
+        let together = under_test
+            .resolve(&SessionRequest::default())
+            .expect("resolves");
+        assert_eq!(together.config.agent.adapter, "pi");
+        assert_eq!(
+            together.config.agent.command,
+            Some(vec!["/opt/mypi".to_owned()]),
+            "a command of the adapter's own layer stays"
+        );
+    }
+
+    /// `agent.adapter` über den Start wählt den Agenten dieser Sitzung (#8),
+    /// über der Projektwahl, die ihn sonst bestimmt (HUM-532), und über
+    /// `config.toml`.
+    ///
+    /// Mutation proof: without the key in `SESSION_OVERRIDE_KEYS` this is
+    /// `CONFIG_003`; with the session values below the project choice the
+    /// adapter stays `pi`.
+    #[test]
+    fn the_agent_of_a_start_outranks_the_project_choice() {
+        use humanitl_config::{Origin, ProjectChoice};
+
+        let home = tempfile::tempdir().expect("tempdir");
+        let under_test = session_resolver(home.path());
+        let config = under_test.paths().config_path();
+        std::fs::create_dir_all(config.parent().expect("a directory")).expect("mkdir");
+        std::fs::write(&config, "[agent]\nadapter = \"codex\"\n").expect("write");
+        let choice = ProjectChoice::from_pairs([("agent.adapter", "pi")]).expect("a choice");
+
+        let chosen = under_test
+            .resolve(&SessionRequest {
+                project_choice: Some(choice.clone()),
+                ..SessionRequest::default()
+            })
+            .expect("resolves");
+        assert_eq!(chosen.config.agent.adapter, "pi");
+
+        let started = under_test
+            .resolve(&SessionRequest {
+                overrides: vec![(super::AGENT_ADAPTER_KEY.to_owned(), "claude".to_owned())],
+                project_choice: Some(choice),
+                ..SessionRequest::default()
+            })
+            .expect("resolves");
+        assert_eq!(started.config.agent.adapter, "claude");
+        assert_eq!(started.origin("agent.adapter"), Some(&Origin::Cli));
     }
 }

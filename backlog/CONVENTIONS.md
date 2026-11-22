@@ -241,7 +241,7 @@ Config-Schlüssel (Auszug, verbindlich): `llm.endpoint` (URL), `llm.passthrough_
 
 ```
 humanitl run [--profile NAME] [--work DIR] [--ask ui|terminal|none] [--llm URL] [--backend NAME] [--podman-runtime crun] [-- CMD...]
-humanitl go [--profile NAME] [--work DIR] [--backend NAME] [-- CMD...]
+humanitl go [AGENT] [--dir PATH] [--disposable|--rw|--ro] [--kernel] [--yes] [--profile NAME] [--backend NAME] [-- CMD...]
 humanitl sandbox run [--profile NAME] [--backend NAME] [--podman-runtime crun] -- CMD...
 humanitl sandbox argv [--profile NAME]
 humanitl sandbox check
@@ -4130,3 +4130,66 @@ Befund am Flow, etwa ein Fehler der Aufzeichnung, lässt den Flow weiterlaufen.
 Flows weiter nicht eigens. Fällt `Failed` selbst in eine Lücke des Sinks,
 fehlt der Record: `Recorded` nennt nur den Flow, und das Ereignis wird dafür
 nicht erweitert (`docs/THREAT-MODEL.md` K-38).
+
+### 4.60 Aus der Umsetzung von `humanitl go [AGENT]` (#8, vormals HUM-542, 2026-11-22)
+
+**Der Agent ist ein Wort, alles andere sind Schalter.** `humanitl go claude`
+startet Claude Code im aktuellen Ordner. Das Wort ist immer eine Kennung aus
+`AdapterRegistry::builtin` (`opencode`, `pi`, `claude`, `codex`, `agy`); ein
+Ordner gleichen Namens ist kein Agent, den Ordner nennt nur `--dir PATH`.
+Eine unbekannte Kennung ist `CLI_004` mit der Liste und Exit 1, bevor
+irgendetwas verbindet. Mit einem Wort und ohne `--` bleibt `Start.command`
+leer, und der Daemon startet den Agenten mit dem eigenen Start seines
+Adapters (Schlüssel, Loopback). Kommt `agent.adapter` aus einer höheren
+Ebene als `agent.command` (Band nach `Origin::rank`: Vorgabe, `config.toml`,
+Profile, Projekt-Profil, Projektwahl, Umgebung, Kommandozeile), lässt die
+Auflösung des Daemons diesen Befehl fallen und nimmt das Vorgabeprogramm des
+Adapters (`session::command_follows_the_agent`, Start und Vorschau), mit
+Wort im Start wie ohne, etwa unter der Projektwahl `pi` über
+`agent.command = ["claude"]` in `config.toml`. Aus derselben Ebene bleiben
+beide zusammen; eine Firmenvorgabe auf `agent.command` bleibt immer; das
+ausdrückliche `Start.command` berührt die Regel nicht (Nachtrag aus dem
+Review). Mit Wörtern nach `--` sind sie Argumente des Agenten
+(`humanitl go claude -- --resume` startet `claude --resume`). Ohne Wort
+ersetzen die Wörter den Agenten wie bei `humanitl run`. Ein globaler Schalter, der dem Wort oder
+einem Ordnerschalter widerspricht (`--agent-adapter`, `--sandbox-mode`,
+`--sandbox-work-mode`), ist `CLI_004`; derselbe Wert ist kein Widerspruch.
+Eine Firmenvorgabe, die `agent.adapter` sperrt, gewinnt als oberste Ebene
+über das Wort.
+
+**Was reist.** Das Wort reist als `agent.adapter` in `Start.cli_overrides`,
+seit Vertrag 1.61 ein Schlüssel der Sitzung (`SESSION_OVERRIDE_KEYS`, jetzt
+sechs). Er vergrößert nichts, was ein Client auf dem Socket nicht schon
+bestimmt: Dieselbe Wahl schreibt `Projects.save_choice` als Projektwahl
+dauerhaft (HUM-532), ein Adapter bringt nur mit, was im Binary steht, und
+eine unbekannte Kennung lehnt der Start mit `CONFIG_003` ab. `agent.command`
+bleibt gesperrt. Ein Daemon vor 1.61 lehnte den Schlüssel mit `CONFIG_003`
+ab; der Client sagt dann `CLI_004` mit dem Neustart des Daemons, vor dem
+Senden, in jedem Weg mit Werten der Sitzung: Start, `sandbox plan`,
+`sandbox image pull` und `projects proposal`
+(`cmd::run::agent_reaches_the_daemon`). Damit
+erreicht auch der globale Schalter `--agent-adapter` von `humanitl run`
+den Daemon, den `run` bis dahin still fallen ließ. `--disposable`, `--rw`
+und `--ro` (je höchstens einer, sonst Fehler von `clap`) setzen
+`Start.sandbox_mode` und `Start.work_mode` wie die Optionen des Vorschlags
+(`disposable`/`rw`, `direct`/`rw`, `direct`/`ro`); `--ro` mit
+Wegwerf-Schicht gibt es nicht. `--kernel` setzt `sandbox.min_isolation =
+"kernel"` wie `--sandbox-min-isolation kernel` (HUM-489); wo die Stufe
+fehlt, steht ihr Befund da (`SANDBOX_045` und andere), nie ein Start auf der
+geteilten Stufe.
+
+**Was nicht reist.** Ohne Wort und ohne Schalter bleiben diese Felder leer,
+und der Daemon löst mit der Projektwahl auf; für ein neues Projekt ist das
+der Vorschlag (HUM-536). `go` ruft `Projects.save_choice` nie: Kein Schalter
+ändert die gespeicherte Wahl. Ein Ordner, den `Projects.get` nicht kennt
+(`CONFIG_003`), bekommt bis zum Erststart-Bildschirm (#9) eine Zeile
+`[humanitl] new project …: starting with the defaults`.
+
+**Der Ordner.** `--dir` gegen das aktuelle Verzeichnis gelesen und
+kanonisiert; kein Ordner ist `SANDBOX_006`, neben `--work` `CLI_004`. Ohne
+`--dir` gilt ein Wunsch dieses Aufrufs (`--work`, die Variable, eine Datei
+aus `--config`), sonst das aktuelle Verzeichnis, nicht der in `config.toml`
+gespeicherte Ordner: Für `go` ist der Ordner das Projekt. Der gewählte Ordner
+steht als `sandbox.work_dir` unter den Werten der Kommandozeile, damit auch
+die Auflösung des Clients sein Projekt-Profil liest und nicht das des
+gespeicherten Ordners (Nachtrag aus dem Review).

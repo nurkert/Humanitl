@@ -14,7 +14,7 @@ step, is described in [`docs/cli.md`](../cli.md); which RPC each subcommand serv
 ## Commands
 
 - [`humanitl run`](#humanitl-run) Start a session in the current directory, or show the session a profile resolves to
-- [`humanitl go`](#humanitl-go) Start a disposable session and land in the agent's terminal; afterwards choose what to keep
+- [`humanitl go`](#humanitl-go) Start an agent in a project folder and land in its terminal; afterwards choose what to keep
 - [`humanitl sandbox`](#humanitl-sandbox) Start, plan and check the sandbox
 - [`humanitl sandbox run`](#humanitl-sandbox-run) Start a sandbox with CMD as the agent and exit with its exit code
 - [`humanitl sandbox argv`](#humanitl-sandbox-argv) Print the bwrap command line for the current profile without starting it
@@ -220,7 +220,7 @@ Usage: humanitl [OPTIONS] <COMMAND>
 
 Commands:
   run        Start a session in the current directory, or show the session a profile resolves to
-  go         Start a disposable session and land in the agent's terminal; afterwards choose what to keep
+  go         Start an agent in a project folder and land in its terminal; afterwards choose what to keep
   sandbox    Start, plan and check the sandbox
   rules      List, add, change, reorder, dry-run and reload rules
   flows      The flows of this and earlier sessions
@@ -317,25 +317,34 @@ Options:
 ## humanitl go
 
 ```text
-Start a disposable session and land in the agent's terminal; afterwards choose what to keep.
+Start an agent in a project folder and land in its terminal; afterwards choose what to keep.
 
-The same as `humanitl run --disposable`, with this terminal handed to the agent as soon as the session runs, also for the agent from the configuration. While the session starts, a rotating fist is shown for at least one second (off with `terminal.splash = false`, without colour with `NO_COLOR`, never with --json or without a terminal). When the agent ends and changes wait in the disposable layer, the command lists them and asks whether to apply, discard or keep them for later.
+`humanitl go claude` starts Claude Code in the current folder. A known project starts with its project choice, a new one with the defaults of the start proposal (`humanitl projects proposal`). The agent word and the switches hold for this start only and never change the stored project choice. This terminal is handed to the agent as soon as the session runs. While the session starts, a rotating fist is shown for at least one second (off with `terminal.splash = false`, without colour with `NO_COLOR`, never with --json or without a terminal). When the agent ends and changes wait in the disposable layer, the command lists them and asks whether to apply, discard or keep them for later.
 
-Usage: humanitl go [OPTIONS] [-- <CMD>...]
+Usage: humanitl go [OPTIONS] [AGENT] [-- <CMD>...]
 
 Arguments:
+  [AGENT]
+          The agent to start, by the id of its adapter as `humanitl agents status` lists them (opencode, pi, claude, codex, agy); its program comes from the host or the agent depot as `agents.source` says. Without it, the agent of the project choice, for a new project the default. Always the agent: a folder of the same name is chosen with --dir
+
   [CMD]...
-          The command to run in the sandbox, after `--`; without it the agent from the configuration
+          The command to run in the sandbox, after `--`. With an AGENT these are arguments for the agent (`humanitl go claude -- --resume`); without one, the command replaces the agent
 
 Options:
+      --dir <PATH>
+          The project folder; relative to the current directory. Without it, the current directory. Not together with --work
+
       --json
           Machine-readable output: one JSON value on stdout, diagnostics included
 
-      --yes
-          Do not ask before the first start of an agent whose model provider lies outside this machine (cloud inference); the notice still goes to stderr, and this counts as confirmed for that agent and provider. Without a terminal or with --json nobody is asked either: the notice is one line on stderr and the next start shows it again
-
       --config <PATH>
           Read this config file instead of the one in the user's config directory
+
+      --disposable
+          Keep the project folder untouched for this start: the agent writes into a disposable layer, and afterwards you choose what to keep
+
+      --rw
+          Let the agent write to the project folder directly for this start
 
   -v, --verbose...
           Explain what is happening; repeat for more
@@ -343,8 +352,17 @@ Options:
   -q, --quiet
           Only the result, no notes
 
+      --ro
+          Let the agent only read the project folder for this start
+
+      --kernel
+          Start at the kernel level (an own guest kernel) for this start: raises `sandbox.min_isolation` to "kernel" like --sandbox-min-isolation kernel. Where the kernel level is not available the start is refused with its finding; it never falls back to a weaker level
+
       --profile <NAME>
           Use this profile for the session; falls back to the sandbox profile of that name when no session profile exists
+
+      --yes
+          Do not ask before the first start of an agent whose model provider lies outside this machine (cloud inference); the notice still goes to stderr, and this counts as confirmed for that agent and provider. Without a terminal or with --json nobody is asked either: the notice is one line on stderr and the next start shows it again
 
   -h, --help
           Print help (see a summary with '-h')

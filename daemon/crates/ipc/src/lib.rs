@@ -51,7 +51,13 @@ pub const PROTO_MAJOR: u32 = 1;
 /// Minor-Version des Vertrags. Steigt bei jeder additiven Änderung
 /// (`Info.proto_minor`).
 ///
-/// `60` seit der Bitte an die verbundene App (HUM-539):
+/// `61` seit dem Agenten eines Starts (#8): `agent.adapter` steht in der
+/// Erlaubnisliste von `Start.cli_overrides`, `Plan.cli_overrides` und
+/// `Proposal.cli_overrides` (`session::SESSION_OVERRIDE_KEYS`);
+/// `humanitl go claude` wählt den Agenten damit für genau diesen Start,
+/// über der Projektwahl. Ein Daemon davor lehnt den Schlüssel mit
+/// `CONFIG_003` ab, und der Client sagt stattdessen `CLI_004`.
+/// `60` war die Bitte an die verbundene App (HUM-539):
 /// `ProjectsRequest.open_in_app` gibt einen Ordner als
 /// `FlowEvent.open_in_app` an jeden Strom mit `SubscribeRequest.desktop_app`
 /// und sagt in `ProjectsResponse.app_reached`, ob einer da war;
@@ -334,7 +340,7 @@ pub const PROTO_MAJOR: u32 = 1;
 /// Spiegelung in `app/lib/core/ipc/proto_version.dart` darf nachziehen: eine
 /// abweichende Minor ist verabredetermaßen kein Grund, die Verbindung
 /// abzulehnen (`docs/PROTOCOL.md`).
-pub const PROTO_MINOR: u32 = 60;
+pub const PROTO_MINOR: u32 = 61;
 
 /// Metadata-Schlüssel für das Session-Token aus
 /// `$XDG_RUNTIME_DIR/humanitl/token` (CONVENTIONS.md 3.6).
