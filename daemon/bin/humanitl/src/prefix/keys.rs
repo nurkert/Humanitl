@@ -29,6 +29,16 @@
 //! geht. Die Bits für Caps Lock und Num Lock im Feld der Modifikatoren zählen
 //! nicht: `CSI 98;133u` ist `Ctrl+B` mit Num Lock.
 //!
+//! # Eine Ansicht mit eigenem Bildschirm
+//!
+//! Die Einstellungen (`,` und `Ctrl+,`, GitHub #11) sind kein Kasten, den
+//! die nächste Taste schließt, sondern ein ganzer Bildschirm mit eigener
+//! Tastatur ([`takes_screen`]). Mit ihrem Ereignis endet das Stück: Was im
+//! selben Lesevorgang danach stand, geht weder an den Agenten noch an die
+//! Ansicht, sondern fällt weg. Der Leser der Tastatur hält danach an, bis die
+//! Ansicht zu Ende ist (`prefix::input`); so liest in dieser Zeit nur die
+//! Ansicht das Terminal, und keine ihrer Tasten erreicht den Agenten.
+//!
 //! # Eingefügter Text
 //!
 //! Zwischen `CSI 200~` und `CSI 201~` (bracketed paste) ist nichts eine
@@ -88,6 +98,14 @@ pub enum KeyEvent {
     Close,
 }
 
+/// Ob eine Taste der Tabelle einen eigenen Bildschirm mit eigener Tastatur
+/// öffnet: die Einstellungen (GitHub #11). Hilfe und Interceptor sind bis
+/// #12 Kästen, die die nächste Taste schließt.
+#[must_use]
+pub const fn takes_screen(action: PrefixAction) -> bool {
+    matches!(action, PrefixAction::Settings)
+}
+
 /// Was von einem Lesevorgang hinaufgeht, und was der Anschluss tut.
 #[derive(Debug, Default, PartialEq, Eq)]
 pub struct Filtered {
@@ -102,6 +120,14 @@ impl Filtered {
     /// Ob dieses Stück abhängt.
     pub fn detaches(&self) -> bool {
         self.events.contains(&KeyEvent::Detach)
+    }
+
+    /// Ob dieses Stück eine Ansicht mit eigenem Bildschirm öffnet
+    /// ([`takes_screen`]); dann steht ihr Ereignis zuletzt.
+    pub fn hands_over(&self) -> bool {
+        self.events
+            .iter()
+            .any(|event| matches!(event, KeyEvent::Open(action) if takes_screen(*action)))
     }
 }
 
@@ -216,6 +242,19 @@ fn next_key(input: &[u8], kitty: bool) -> (usize, bool) {
     (input.len(), input.len() >= MAX_SEQUENCE)
 }
 
+/// Was nach einer Ansicht mit den Tasten geschieht.
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+enum ViewState {
+    /// Keine Ansicht: Tasten gehen nach der Tabelle.
+    None,
+    /// Ein Kasten ist offen: Die nächste Taste schließt ihn.
+    Box,
+    /// Ein eigener Bildschirm ging zu Ende: Bis zur ersten gedrückten Taste
+    /// fällt das Loslassen der Tasten weg, die ihn geöffnet oder geschlossen
+    /// haben ([`PrefixFilter::resumed`]).
+    AfterScreen,
+}
+
 /// Die Tastatur hinter dem Präfix.
 #[derive(Debug)]
 pub struct PrefixFilter {
@@ -232,8 +271,9 @@ pub struct PrefixFilter {
     partial: Vec<u8>,
     /// Losgelassene Tasten, die hinter einem ausstehenden Präfix warten.
     released: Vec<Vec<u8>>,
-    /// Wahr, solange eine Ansicht offen ist: Die nächste Taste schließt sie.
-    overlay: bool,
+    /// Ob ein Kasten offen ist oder ein eigener Bildschirm gerade zu Ende
+    /// ging.
+    view: ViewState,
     /// Wahr zwischen `CSI 200~` und `CSI 201~`.
     pasting: bool,
     /// Wann zuletzt Eingabe kam, für [`PASTE_IDLE`].
@@ -258,12 +298,25 @@ impl PrefixFilter {
             pending: None,
             partial: Vec::new(),
             released: Vec::new(),
-            overlay: false,
+            view: ViewState::None,
             pasting: false,
             last_input: None,
             paste_start: Matcher { matched: 0 },
             paste_end: Matcher { matched: 0 },
         }
+    }
+
+    /// Der eigene Bildschirm ist zu Ende, und der Leser liest wieder. Das
+    /// Loslassen der Tasten, die die Ansicht geöffnet oder geschlossen haben
+    /// (im kitty-Protokoll mit gemeldetem Loslassen), gehört der Ansicht und
+    /// nicht dem Agenten: Bis zur ersten gedrückten Taste fällt es weg, damit
+    /// der Agent nie ein Loslassen ohne Drücken sieht (Review zu GitHub #11).
+    /// Das Loslassen jeder anderen Taste geht weiter; sie kann vor der
+    /// Ansicht gedrückt und an den Agenten gegangen sein, und ohne ihr
+    /// Loslassen hielte der Agent sie für gedrückt
+    /// ([`PrefixFilter::closes_view`]).
+    pub const fn resumed(&mut self) {
+        self.view = ViewState::AfterScreen;
     }
 
     /// Filtert ein gelesenes Stück; `kitty` sagt, ob der Agent das
@@ -308,7 +361,9 @@ impl PrefixFilter {
             let (key, tail) = rest.split_at(len);
             rest = tail;
             self.step(key, &mut out);
-            if out.detaches() {
+            // Nach dem Abhängen und nach dem Öffnen eines eigenen Bildschirms
+            // gehört der Rest des Stücks niemandem.
+            if out.detaches() || out.hands_over() {
                 break;
             }
             for &byte in key {
@@ -337,9 +392,18 @@ impl PrefixFilter {
     fn step(&mut self, key: &[u8], out: &mut Filtered) {
         let kitty = KittyKey::parse(key);
         let released = kitty.is_some_and(KittyKey::released);
-        if self.overlay {
+        if self.view == ViewState::AfterScreen {
+            if released {
+                if kitty.is_some_and(|found| self.closes_view(found)) {
+                    return;
+                }
+            } else {
+                self.view = ViewState::None;
+            }
+        }
+        if self.view == ViewState::Box {
             if !released {
-                self.overlay = false;
+                self.view = ViewState::None;
                 out.events.push(KeyEvent::Close);
             }
             return;
@@ -368,8 +432,10 @@ impl PrefixFilter {
                     }
                     if found.action == PrefixAction::Detach {
                         out.events.push(KeyEvent::Detach);
+                    } else if takes_screen(found.action) {
+                        out.events.push(KeyEvent::Open(found.action));
                     } else {
-                        self.overlay = true;
+                        self.view = ViewState::Box;
                         out.events.push(KeyEvent::Open(found.action));
                     }
                 }
@@ -392,11 +458,26 @@ impl PrefixFilter {
         } else if self.direct
             && kitty.is_some_and(|found| found.code == u32::from(b',') && found.mods == KITTY_CTRL)
         {
-            self.overlay = true;
             out.events.push(KeyEvent::Open(PrefixAction::Settings));
         } else {
             out.forward.extend_from_slice(key);
         }
+    }
+
+    /// Ob eine Taste des kitty-Protokolls die Ansicht geöffnet oder
+    /// geschlossen haben kann: das Präfix, `,` (auch `Ctrl+,`), `Esc`, `q` und
+    /// `Ctrl+C`. Verglichen wird der Code; die Modifikatoren beim Loslassen
+    /// hängen davon ab, ob `Ctrl` vorher losgelassen wurde.
+    fn closes_view(&self, key: KittyKey) -> bool {
+        const ESC_CODE: u32 = 27;
+        [
+            ESC_CODE,
+            u32::from(b','),
+            u32::from(b'q'),
+            u32::from(b'c'),
+            u32::from(self.letter),
+        ]
+        .contains(&key.code)
     }
 
     /// Ob diese Taste das Präfix ist: das Byte, oder im kitty-Protokoll
@@ -416,7 +497,7 @@ impl PrefixFilter {
             rest.extend(release);
         }
         rest.append(&mut self.partial);
-        if self.overlay {
+        if self.view == ViewState::Box {
             rest.clear();
         }
         rest
@@ -512,7 +593,6 @@ mod tests {
         // Was nach `d` im selben Stück steht, ist verworfen.
         assert_eq!(ctrl_b().feed(b"\x02dxyz", false), event(KeyEvent::Detach));
         for (key, action) in [
-            (b',', PrefixAction::Settings),
             (b'i', PrefixAction::Interceptor),
             (b'?', PrefixAction::Help),
         ] {
@@ -524,6 +604,64 @@ mod tests {
             assert_eq!(filter.feed(b"q", false), event(KeyEvent::Close));
             assert_eq!(filter.feed(b"q", false), forwarded(b"q"), "closed");
         }
+    }
+
+    /// `,` öffnet die Einstellungen als eigenen Bildschirm: Das Stück endet
+    /// mit dem Ereignis, was danach im selben Lesevorgang stand, erreicht den
+    /// Agenten nicht, und es gibt keinen Kasten, den eine Taste schließt
+    /// (GitHub #11). Mutationsbeweis: ohne das Ende des Stücks geht `abc` an
+    /// den Agenten, und der Test wird rot.
+    #[test]
+    fn the_settings_take_the_rest_of_the_read() {
+        let mut filter = ctrl_b();
+        assert_eq!(
+            filter.feed(b"ls\x02,abc\x02d", false),
+            Filtered {
+                forward: b"ls".to_vec(),
+                events: vec![KeyEvent::Open(PrefixAction::Settings)],
+            }
+        );
+        assert_eq!(filter.feed(b"q", false), forwarded(b"q"), "no box to close");
+        let mut direct = ctrl_b();
+        assert_eq!(
+            direct.feed(b"\x1b[44;5uxyz", true),
+            event(KeyEvent::Open(PrefixAction::Settings))
+        );
+        assert!(direct.finish().is_empty(), "nothing left for the agent");
+    }
+
+    /// Nach einem eigenen Bildschirm fällt das Loslassen der Tasten weg, die
+    /// ihn schlossen (das `Esc` als `CSI 27;1:3u`, das Präfix), bis zur
+    /// ersten gedrückten Taste; das Loslassen einer anderen Taste, etwa eines
+    /// `a`, das vor der Ansicht an den Agenten ging, geht weiter, und nach
+    /// dem ersten Drücken jedes (Review zu GitHub #11). Mutationsbeweis: ohne
+    /// [`PrefixFilter::resumed`] erreicht das Loslassen von `Esc` den
+    /// Agenten, und jedes Loslassen wegwerfen verschluckt das von `a`; beides
+    /// macht ihn rot.
+    #[test]
+    fn a_release_from_the_screen_does_not_reach_the_agent() {
+        let mut filter = ctrl_b();
+        assert_eq!(
+            filter.feed(b"\x1b[97u\x02,", true),
+            Filtered {
+                forward: b"\x1b[97u".to_vec(),
+                events: vec![KeyEvent::Open(PrefixAction::Settings)],
+            }
+        );
+        filter.resumed();
+        assert_eq!(filter.feed(b"\x1b[27;1:3u", true), forwarded(b""));
+        assert_eq!(filter.feed(b"\x1b[98;1:3u", true), forwarded(b""));
+        assert_eq!(
+            filter.feed(b"\x1b[97;1:3u", true),
+            forwarded(b"\x1b[97;1:3u"),
+            "the release of a key pressed before the view reaches the agent"
+        );
+        assert_eq!(filter.feed(b"\x1b[97u", true), forwarded(b"\x1b[97u"));
+        assert_eq!(
+            filter.feed(b"\x1b[97;1:3u", true),
+            forwarded(b"\x1b[97;1:3u"),
+            "a release after a press goes through"
+        );
     }
 
     /// Das Präfix zweimal und sein Buchstabe schicken genau ein Präfix an

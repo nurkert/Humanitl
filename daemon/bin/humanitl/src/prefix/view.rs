@@ -1,11 +1,14 @@
 //! Das Bild des Agenten und die kleine Ansicht darüber (GitHub #10).
 //!
 //! Die Bytes des Agenten gehen unverändert auf das eigene Terminal, wie vor
-//! diesem Issue. Steht eine Ansicht (die Hilfe hinter `?`, die Zeile für
-//! Einstellungen und Interceptor, bis #11 und #12 sie bauen), hält die
-//! Kommandozeile die Bytes des Agenten zurück, bis zu [`HELD_LIMIT`], und
-//! gibt sie danach in ihrer Reihenfolge aus. Gezeichnet wird mit ratatui in
-//! einen Puffer, der nur den Kasten der Ansicht abdeckt.
+//! diesem Issue. Steht eine Ansicht (die Hilfe hinter `?`, die Zeile für den
+//! Interceptor, bis #12 ihn baut, und die Einstellungen aus GitHub #11), hält
+//! die Kommandozeile die Bytes des Agenten zurück, bis zu [`HELD_LIMIT`], und
+//! gibt sie danach in ihrer Reihenfolge aus. Einen Kasten zeichnet diese
+//! Datei mit ratatui in einen Puffer, der nur ihn abdeckt; die Einstellungen
+//! zeichnet ihr eigener Bildschirm (`prefix::settings`), und diese Datei
+//! setzt nur den Schirm dafür auf und wieder zurück
+//! ([`AgentView::open_screen`]).
 //!
 //! Wie die Ansicht wieder verschwindet, hängt vom Schirm des Agenten ab
 //! ([`super::stream::StreamState::alt_screen`]):
@@ -43,7 +46,16 @@ use crate::tui::Theme;
 /// Folge bildet, die der Filter nie gesehen hat (Review zu GitHub #10). Ein
 /// Stück, das nicht mehr passt, fällt deshalb ganz weg, und mit ihm jedes
 /// weitere, bis die Ansicht schließt; danach zeichnet der Agent neu.
-pub const HELD_LIMIT: usize = 1024 * 1024;
+///
+/// **Nach einem Überlauf gar nichts.** Mit dem ersten Stück, das nicht mehr
+/// passt, fällt auch alles weg, was bis dahin wartete (Review zu GitHub
+/// #11): Der Rest vor der Lücke ergäbe ein Bild, dem ein Stück fehlt, und das
+/// neue Bild des Agenten ersetzt ihn ohnehin.
+///
+/// Vier MiB, eine Grenze für Kasten und Einstellungen (GitHub #11): genug
+/// für viele Bilder eines Vollbild-Agenten, solange jemand in den
+/// Einstellungen liest, und wenig genug für den Speicher eines Clients.
+pub const HELD_LIMIT: usize = 4 * 1024 * 1024;
 
 /// Was der Befehl beim Verlassen in das eigene Terminal schreibt, zwischen
 /// den Flags der beiden Schirme ([`AgentView::leave`]).
@@ -58,6 +70,9 @@ const LEAVE_SCREEN: &[u8] = b"\x1b[?1049l\x1b[?25h\r\n";
 struct Shown {
     /// Wahr, wenn die Ansicht auf den Alternativschirm umgezogen ist.
     switched: bool,
+    /// Wahr für einen ganzen Bildschirm (die Einstellungen), falsch für
+    /// einen Kasten.
+    screen: bool,
 }
 
 /// Das eigene Terminal, solange es an einer Sitzung hängt.
@@ -106,6 +121,7 @@ impl<W: Write> AgentView<W> {
         if self.shown.is_some() {
             if self.overflowed || self.held.len().saturating_add(bytes.len()) > HELD_LIMIT {
                 self.overflowed = true;
+                self.held = Vec::new();
             } else {
                 self.held.extend_from_slice(bytes);
             }
@@ -142,13 +158,66 @@ impl<W: Write> AgentView<W> {
         bytes.extend(draw(title, &lines, size, self.theme)?);
         self.out.write_all(&bytes)?;
         self.out.flush()?;
-        self.shown = Some(Shown { switched });
+        self.shown = Some(Shown {
+            switched,
+            screen: false,
+        });
         Ok(())
     }
 
+    /// Setzt den Schirm für einen ganzen Bildschirm über dem Agenten auf,
+    /// die Einstellungen (GitHub #11), und hält ab jetzt seine Ausgabe
+    /// zurück. Gezeichnet wird danach von dem Bildschirm selbst; diese Datei
+    /// schreibt nur die festen Folgen davor und danach. Steht schon eine
+    /// Ansicht, bleibt sie.
+    ///
+    /// - Über einem Agenten auf dem gewöhnlichen Schirm zieht die Ansicht
+    ///   auf den Alternativschirm um; zurück stellt das Terminal das Bild
+    ///   selbst wieder her.
+    /// - Steht der Agent schon auf dem Alternativschirm, schaltet die Ansicht
+    ///   nicht ein zweites Mal um: Ein `CSI ? 1049 l` beim Zurückkehren
+    ///   verließe sonst auch den Schirm des Agenten. Sie sichert den Cursor
+    ///   (`ESC 7`), zeichnet darüber und löscht beim Zurückkehren, was sie
+    ///   gezeichnet hat; das Bild des Agenten kommt mit seinem Neuzeichnen.
+    ///
+    /// Die Ansicht versteckt den Cursor und klammert eingefügten Text, damit
+    /// ein eingefügter Wert als ein Stück ankommt. Beides stellt
+    /// [`AgentView::close`] auf den Stand des Agenten zurück.
+    ///
+    /// # Errors
+    ///
+    /// Wenn das Terminal nicht mehr schreibt.
+    pub fn open_screen(&mut self) -> io::Result<()> {
+        if self.shown.is_some() {
+            return Ok(());
+        }
+        let switched = !self.stream.alt_screen();
+        let mut bytes = if switched {
+            b"\x1b[?1049h".to_vec()
+        } else {
+            b"\x1b7".to_vec()
+        };
+        bytes.extend_from_slice(b"\x1b[0m\x1b[H\x1b[2J\x1b[?25l\x1b[?2004h");
+        // Erst gilt die Ansicht, dann wird geschrieben: Auch wenn das
+        // Schreiben scheitert, hält der Befehl die Ausgabe zurück und das
+        // Schließen räumt auf.
+        self.shown = Some(Shown {
+            switched,
+            screen: true,
+        });
+        self.out.write_all(&bytes)?;
+        self.out.flush()
+    }
+
     /// Schließt die Ansicht und gibt aus, was solange wartete. Wahr, wenn
-    /// der Agent danach neu zeichnen soll: weil die Ansicht über seinem Bild
-    /// stand, oder weil Stücke seiner Ausgabe weggefallen sind.
+    /// der Agent danach neu zeichnen soll: nach einem ganzen Bildschirm
+    /// immer (GitHub #11, Punkt 2), nach einem Kasten, wenn er über dem Bild
+    /// des Agenten stand, und in jedem Fall, wenn Stücke seiner Ausgabe
+    /// weggefallen sind.
+    ///
+    /// Die Reihenfolge ist die der Spezifikation: erst den eigenen Schirm
+    /// verlassen, dann die zurückgehaltene Ausgabe, oder nach einem Überlauf
+    /// keine; das Neuzeichnen bittet danach der Anschluss an.
     ///
     /// # Errors
     ///
@@ -157,17 +226,61 @@ impl<W: Write> AgentView<W> {
         let Some(shown) = self.shown.take() else {
             return Ok(false);
         };
-        let back: &[u8] = if shown.switched {
-            b"\x1b[?1049l"
+        let back = if shown.screen {
+            self.screen_back(shown.switched)
+        } else if shown.switched {
+            b"\x1b[?1049l".to_vec()
         } else {
-            b"\x1b8"
+            b"\x1b8".to_vec()
         };
-        self.out.write_all(back)?;
-        self.out.flush()?;
         let held = std::mem::take(&mut self.held);
         let overflowed = std::mem::take(&mut self.overflowed);
-        self.agent(&held)?;
-        Ok(!shown.switched || overflowed)
+        self.out.write_all(&back)?;
+        self.out.flush()?;
+        if !overflowed {
+            self.agent(&held)?;
+        }
+        Ok(shown.screen || !shown.switched || overflowed)
+    }
+
+    /// Ob der Agent gerade auf dem Alternativschirm zeichnet.
+    pub const fn agent_alt_screen(&self) -> bool {
+        self.stream.alt_screen()
+    }
+
+    /// Ein kurzes Zeichen (`BEL`), dass eine Taste hier nichts öffnen kann.
+    /// Keine Folge, die etwas am Terminal ändert.
+    ///
+    /// # Errors
+    ///
+    /// Wenn das Terminal nicht mehr schreibt.
+    pub fn bell(&mut self) -> io::Result<()> {
+        self.out.write_all(b"\x07")?;
+        self.out.flush()
+    }
+
+    /// Die Folge zurück aus einem ganzen Bildschirm: Stile zurück, den
+    /// eigenen Schirm verlassen (oder über dem Agenten löschen und den
+    /// Cursor zurück), dann Klammern und Cursor auf den Stand, den der Agent
+    /// zuletzt gesetzt hat.
+    fn screen_back(&self, switched: bool) -> Vec<u8> {
+        let mut bytes = b"\x1b[0m".to_vec();
+        if switched {
+            bytes.extend_from_slice(b"\x1b[?1049l");
+        } else {
+            bytes.extend_from_slice(b"\x1b[H\x1b[2J\x1b8");
+        }
+        bytes.extend_from_slice(if self.stream.bracketed_paste() {
+            b"\x1b[?2004h"
+        } else {
+            b"\x1b[?2004l"
+        });
+        bytes.extend_from_slice(if self.stream.cursor_hidden() {
+            b"\x1b[?25l"
+        } else {
+            b"\x1b[?25h"
+        });
+        bytes
     }
 
     /// Gibt das Terminal zurück: eine offene Ansicht schließen und ausgeben,
@@ -285,9 +398,9 @@ mod tests {
     fn a_view_over_a_full_screen_agent_asks_for_a_redraw() {
         let mut view = view();
         view.agent(b"\x1b[?1049h").unwrap();
-        view.open(PrefixAction::Settings, (80, 24)).unwrap();
+        view.open(PrefixAction::Interceptor, (80, 24)).unwrap();
         let shown = text(&view);
-        assert!(shown.contains("humanitl settings"), "{shown:?}");
+        assert!(shown.contains("humanitl intercept"), "{shown:?}");
         assert!(shown.contains("\x1b7"), "{shown:?}");
         assert_eq!(shown.matches("\x1b[?1049h").count(), 1, "{shown:?}");
         let before = view.out().len();
@@ -295,7 +408,10 @@ mod tests {
         view.agent(&vec![b'x'; HELD_LIMIT]).unwrap();
         assert!(view.close().unwrap(), "redraw over a full-screen agent");
         let after = text(&view);
-        assert!(after[before..].contains("kept"), "the chunk that fit");
+        assert!(
+            !after[before..].contains("kept"),
+            "after an overflow nothing is replayed, not even what fit"
+        );
         assert!(
             !after.contains("xxxx"),
             "a chunk over the limit is dropped whole"
@@ -326,6 +442,81 @@ mod tests {
         assert!(
             !out.contains("\x1b[?25l"),
             "the chunk over the limit is gone"
+        );
+    }
+
+    /// Die Einstellungen über einem Vollbild-Agenten (GitHub #11): kein
+    /// zweites `CSI ? 1049 h`, das beim Zurückkehren auch den Schirm des
+    /// Agenten verließe; die Ausgabe während der Ansicht wartet und kommt
+    /// nach dem Zurückkehren in ihrer Reihenfolge, nach dem Löschen der
+    /// Ansicht; Klammern und Cursor stehen danach wie beim Agenten, und der
+    /// Agent soll neu zeichnen.
+    #[test]
+    fn the_settings_over_a_full_screen_agent_come_back_in_order() {
+        let mut view = view();
+        view.agent(b"\x1b[?1049h\x1b[?2004h\x1b[?25l").unwrap();
+        let before = view.out().len();
+        view.open_screen().unwrap();
+        let opened = text(&view)[before..].to_owned();
+        assert!(opened.starts_with("\x1b7"), "{opened:?}");
+        assert!(!opened.contains("1049"), "{opened:?}");
+        assert!(opened.contains("\x1b[?2004h"), "{opened:?}");
+        view.agent(b"one ").unwrap();
+        view.agent(b"two ").unwrap();
+        view.agent(b"three").unwrap();
+        assert!(!text(&view).contains("one"), "held while the view stands");
+        assert!(view.close().unwrap(), "a redraw after the settings");
+        let after = text(&view)[before..].to_owned();
+        let back = after
+            .find("\x1b[0m\x1b[H\x1b[2J\x1b8\x1b[?2004h\x1b[?25l")
+            .expect("the view is cleared, cursor, brackets and cursor mode as the agent left them");
+        assert!(!after[back..].contains("1049"), "{after:?}");
+        assert!(after[back..].ends_with("one two three"), "{after:?}");
+    }
+
+    /// Über einer Shell zieht die Ansicht auf den Alternativschirm um und
+    /// kehrt mit `CSI ? 1049 l` zurück; neu zeichnen soll der Agent auch
+    /// dann (GitHub #11, Punkt 2), und Klammern und Cursor stehen wie bei der
+    /// Shell. Mutationsbeweis: die Regel des Kastens (kein Neuzeichnen über
+    /// einer Shell) macht ihn rot.
+    #[test]
+    fn the_settings_over_a_shell_leave_their_own_screen_and_redraw() {
+        let mut view = view();
+        view.agent(b"$ ").unwrap();
+        view.open_screen().unwrap();
+        assert!(text(&view).contains("\x1b[?1049h"), "{:?}", text(&view));
+        view.agent(b"later").unwrap();
+        assert!(view.close().unwrap(), "a redraw after the settings");
+        let after = text(&view);
+        let back = after
+            .find("\x1b[0m\x1b[?1049l\x1b[?2004l\x1b[?25h")
+            .expect("back to the shell");
+        assert!(after[back..].ends_with("later"), "{after:?}");
+    }
+
+    /// Über der Grenze fällt die Ausgabe während der Einstellungen ganz weg,
+    /// auch was vor dem Überlauf passte, und der Agent zeichnet trotzdem neu
+    /// (GitHub #11, Review: 3 MiB und dann 2 MiB ergaben vorher 3 MiB mit
+    /// einer Lücke dahinter). Mutationsbeweis: das Zurückhalten vor dem
+    /// Überlauf wieder ausgeben macht ihn rot.
+    #[test]
+    fn the_settings_over_the_limit_drop_the_output_and_redraw_anyway() {
+        let mut view = view();
+        view.agent(b"\x1b[?1049h").unwrap();
+        view.open_screen().unwrap();
+        view.agent(&vec![b'k'; 3 * 1024 * 1024]).unwrap();
+        view.agent(&vec![b'x'; 2 * 1024 * 1024]).unwrap();
+        view.agent(b"after").unwrap();
+        assert!(view.close().unwrap(), "redraw anyway");
+        let out = text(&view);
+        assert!(
+            out.ends_with("\x1b8\x1b[?2004l\x1b[?25h"),
+            "{:?}",
+            &out[out.len().saturating_sub(80)..]
+        );
+        assert!(
+            !out.contains("kkkk") && !out.contains("xxxx") && !out.contains("after"),
+            "dropped whole"
         );
     }
 

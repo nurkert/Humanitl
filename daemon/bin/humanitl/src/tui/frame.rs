@@ -172,6 +172,10 @@ pub struct ScreenFrame<'a> {
     pub keys: &'a [Key<'a>],
     /// Die Suche, wenn der Bildschirm eine hat.
     pub search: Option<&'a Search>,
+    /// Rechts in der Fußzeile, hervorgehoben, oder nichts: im Terminal einer
+    /// Sitzung der Stand des Agenten und der letzte Hinweis des Daemons,
+    /// etwa eine gehaltene Anfrage (GitHub #11).
+    pub status: Option<&'a str>,
 }
 
 impl ScreenFrame<'_> {
@@ -227,7 +231,30 @@ impl ScreenFrame<'_> {
             spans.push(Span::styled(key.key, theme.key()));
             spans.push(Span::styled(format!(" {}", key.action), theme.hint()));
         }
-        frame.render_widget(Paragraph::new(Line::from(spans)), foot);
+        let keys = Line::from(spans);
+        let Some(status) = self.status.filter(|status| !status.is_empty()) else {
+            frame.render_widget(Paragraph::new(keys), foot);
+            return body;
+        };
+        // Die Tasten links, der Stand rechts. Reicht der Platz nicht, bekommt
+        // der Stand mindestens die Hälfte: Eine gehaltene Anfrage ist
+        // wichtiger als die Hilfe zu den Tasten.
+        let wanted = u16::try_from(Line::raw(status).width().saturating_add(1)).unwrap_or(u16::MAX);
+        let keys_width = u16::try_from(keys.width()).unwrap_or(u16::MAX);
+        let room = foot
+            .width
+            .saturating_sub(keys_width.saturating_add(1))
+            .max(foot.width / 2);
+        let [left, right] =
+            Layout::horizontal([Constraint::Min(0), Constraint::Length(wanted.min(room))])
+                .areas(foot);
+        frame.render_widget(Paragraph::new(keys), left);
+        frame.render_widget(
+            Paragraph::new(format!("{status} "))
+                .alignment(Alignment::Right)
+                .style(theme.key()),
+            right,
+        );
         body
     }
 }
@@ -300,6 +327,7 @@ mod tests {
                     context: "~/project",
                     keys: KEYS,
                     search,
+                    status: None,
                 }
                 .render(frame, theme);
                 frame.render_widget(Paragraph::new("body"), body);
@@ -310,6 +338,31 @@ mod tests {
 
     fn key(code: KeyCode) -> KeyEvent {
         KeyEvent::new(code, KeyModifiers::NONE)
+    }
+
+    /// Der Stand steht rechts in der Fußzeile, die Tasten links; reicht der
+    /// Platz nicht, bekommt der Stand die Hälfte (GitHub #11).
+    #[test]
+    fn the_status_stands_right_of_the_keys() {
+        let draw = |status: &str, width: u16| {
+            let mut terminal = Terminal::new(TestBackend::new(width, 3)).expect("a terminal");
+            terminal
+                .draw(|frame| {
+                    ScreenFrame {
+                        title: "Settings",
+                        context: "",
+                        keys: KEYS,
+                        search: None,
+                        status: Some(status),
+                    }
+                    .render(frame, Theme::from_no_color(None));
+                })
+                .expect("drawn");
+            lines(terminal.backend().buffer()).pop().expect("a footer")
+        };
+        assert_eq!(draw("running", 36), " q quit  / search           running ");
+        let long = draw("request held: example.test/path", 36);
+        assert_eq!(long, " q quit  / search request held: exam");
     }
 
     /// Schnappschuss: Kopf oben mit Titel und Kontext, Inhalt dazwischen,

@@ -198,12 +198,24 @@ pub struct Recorded {
 
 type Record = Arc<std::sync::Mutex<Recorded>>;
 
+/// Was hinter `Terminal` steht.
+#[derive(Clone, Copy, Debug, Default, PartialEq, Eq)]
+enum TerminalKind {
+    /// Der Fake: Er wirft jede Eingabe zurück.
+    #[default]
+    Echo,
+    /// Eine Sitzung, die nach dem `Open` nichts mehr liest (HUM-279).
+    Stalled,
+    /// Der Vollbild-Agent aus [`winch_agent`] (GitHub #11).
+    WinchAgent,
+}
+
 /// Wie der Fake vom Standard abweicht.
 #[derive(Default)]
 struct Tweaks {
     silent_export: bool,
     version: Option<String>,
-    stall_terminal: bool,
+    terminal: TerminalKind,
     idle: bool,
     proto_minor: Option<u32>,
     cleanups: Option<Cleanups>,
@@ -338,7 +350,21 @@ impl FakeServer {
         Self::start_with(
             harness,
             Tweaks {
-                stall_terminal: true,
+                terminal: TerminalKind::Stalled,
+                ..Tweaks::default()
+            },
+        )
+    }
+
+    /// Wie [`FakeServer::start`], aber hinter `Terminal` steht ein
+    /// Vollbild-Agent, der sein Bild nur bei einer echten Größenänderung neu
+    /// zeichnet, wie ein Programm auf `SIGWINCH` (GitHub #11,
+    /// [`winch_agent`]).
+    pub fn start_with_winch_agent(harness: &Harness) -> Self {
+        Self::start_with(
+            harness,
+            Tweaks {
+                terminal: TerminalKind::WinchAgent,
                 ..Tweaks::default()
             },
         )
@@ -382,7 +408,7 @@ impl FakeServer {
                             silent: tweaks.silent_export,
                             version: tweaks.version,
                             terminal_inputs: recorded,
-                            stall_terminal: tweaks.stall_terminal,
+                            terminal: tweaks.terminal,
                             idle: tweaks.idle,
                             proto_minor: tweaks.proto_minor,
                             cleanups: tweaks.cleanups,
@@ -557,8 +583,8 @@ struct SilentExport {
     version: Option<String>,
     /// Wohin die Arten der Terminal-Nachrichten geschrieben werden.
     terminal_inputs: TerminalInputs,
-    /// Wahr, wenn `Terminal` nach dem `Open` nichts mehr liest.
-    stall_terminal: bool,
+    /// Was hinter `Terminal` steht.
+    terminal: TerminalKind,
     /// Wahr, wenn `retire_if_idle` mit „ich ende" antwortet: ein Daemon ohne
     /// Sitzung (HUM-382). Der Fake läuft danach weiter, wie ein Daemon, den
     /// systemd sofort wieder startet.
@@ -755,7 +781,10 @@ impl DaemonApi for SilentExport {
         use v1::terminal_input::Input;
 
         let recorded = Arc::clone(&self.terminal_inputs);
-        if self.stall_terminal {
+        if self.terminal == TerminalKind::WinchAgent {
+            return winch_agent(input, recorded);
+        }
+        if self.terminal == TerminalKind::Stalled {
             // Das `Open` lesen, eine Zeile schicken, dann die Eingabe halten,
             // ohne sie je wieder zu lesen, bis der Client geht.
             let (out, rx) = tokio::sync::mpsc::channel(4);
@@ -1067,4 +1096,142 @@ pub fn stderr(output: &Output) -> String {
 /// Der Exit-Code, oder `-1` bei einem Signal.
 pub fn code(output: &Output) -> i32 {
     output.status.code().unwrap_or(-1)
+}
+
+/// Wie oft der Agent aus [`winch_agent`] eine Zeile schreibt.
+pub const WINCH_TICK: Duration = Duration::from_millis(40);
+
+/// Die Hinweise, die der Fake an der zehnten und an der dreißigsten Zeile in
+/// den Strom des Terminals legt, wie der Daemon bei einer gehaltenen
+/// Anfrage; danach keine mehr, damit ein Test jeden wiedererkennt.
+pub const WINCH_NOTICES: [(u64, &str); 2] = [
+    (
+        10,
+        "[humanitl] request held: example.test/first · waiting for you",
+    ),
+    (
+        30,
+        "[humanitl] request held: example.test/second · waiting for you",
+    ),
+];
+
+/// Ein Vollbild-Agent für die Tests von GitHub #11.
+///
+/// - Beim `Open` schaltet er auf den Alternativschirm und zeichnet sein Bild:
+///   `SCREEN n COLSxROWS`.
+/// - Eine Größe nimmt er wie der Daemon an: höchstens eine je 50 ms, die
+///   letzte gewinnt (`humanitl_ipc::terminal::RESIZE_INTERVAL`). Neu
+///   gezeichnet wird nur, wenn sie sich wirklich ändert, wie beim Kernel:
+///   Dieselbe Größe noch einmal ist kein `SIGWINCH`.
+/// - Alle [`WINCH_TICK`] schreibt er `tick N`, fortlaufend, damit ein Test
+///   sieht, ob Ausgabe fehlt oder ihre Reihenfolge wechselt; an jeder
+///   zehnten und dreißigsten Zeile legt er [`WINCH_NOTICES`] als Hinweis
+///   daneben.
+/// - Eingabe schreibt er als `echo:…` zurück.
+fn winch_agent(
+    input: BoxStream<v1::TerminalInput>,
+    recorded: TerminalInputs,
+) -> BoxStream<v1::TerminalOutput> {
+    use tokio_stream::StreamExt as _;
+    use v1::terminal_input::Input;
+    use v1::terminal_output::Output;
+
+    fn record(recorded: &TerminalInputs, kind: &'static str) {
+        recorded
+            .lock()
+            .unwrap_or_else(std::sync::PoisonError::into_inner)
+            .push(kind);
+    }
+    fn data(bytes: Vec<u8>) -> v1::TerminalOutput {
+        v1::TerminalOutput {
+            output: Some(Output::Data(bytes)),
+        }
+    }
+    fn screen(number: u32, (cols, rows): (u32, u32)) -> v1::TerminalOutput {
+        data(format!("\x1b[H\x1b[2JSCREEN {number} {cols}x{rows}\r\n").into_bytes())
+    }
+
+    let (out, rx) = tokio::sync::mpsc::channel(256);
+    tokio::spawn(async move {
+        let mut input = input;
+        let (wishes, mut pending) = tokio::sync::watch::channel((0_u32, 0_u32));
+        let (applied_tx, mut applied) = tokio::sync::mpsc::unbounded_channel();
+        // Die Drossel des Daemons: anwenden, dann 50 ms nichts.
+        tokio::spawn(async move {
+            while pending.changed().await.is_ok() {
+                let size = *pending.borrow_and_update();
+                if applied_tx.send(size).is_err() {
+                    return;
+                }
+                tokio::time::sleep(humanitl_ipc::terminal::RESIZE_INTERVAL).await;
+            }
+        });
+        let mut size = (0, 0);
+        let mut drawn = 0_u32;
+        let mut tick = 0_u64;
+        let mut ticker = tokio::time::interval(WINCH_TICK);
+        loop {
+            let message = tokio::select! {
+                message = input.next() => message,
+                _ = ticker.tick(), if drawn > 0 => {
+                    tick += 1;
+                    if out.send(data(format!("tick {tick}\r\n").into_bytes())).await.is_err() {
+                        return;
+                    }
+                    if let Some((_, text)) = WINCH_NOTICES.iter().find(|(at, _)| *at == tick) {
+                        let notice = v1::TerminalOutput {
+                            output: Some(Output::Notice((*text).to_owned())),
+                        };
+                        if out.send(notice).await.is_err() {
+                            return;
+                        }
+                    }
+                    continue;
+                }
+                Some(wanted) = applied.recv() => {
+                    if wanted != size {
+                        size = wanted;
+                        drawn += 1;
+                        if out.send(screen(drawn, size)).await.is_err() {
+                            return;
+                        }
+                    }
+                    continue;
+                }
+            };
+            match message.and_then(|message| message.input) {
+                Some(Input::Open(open)) => {
+                    record(&recorded, "open");
+                    size = (open.cols, open.rows);
+                    drawn += 1;
+                    let mut first = b"\x1b[?1049h".to_vec();
+                    if let Some(Output::Data(bytes)) = screen(drawn, size).output {
+                        first.extend(bytes);
+                    }
+                    if out.send(data(first)).await.is_err() {
+                        return;
+                    }
+                }
+                Some(Input::Data(bytes)) => {
+                    record(&recorded, "data");
+                    let mut echo = b"echo:".to_vec();
+                    echo.extend(bytes);
+                    echo.extend_from_slice(b"\r\n");
+                    if out.send(data(echo)).await.is_err() {
+                        return;
+                    }
+                }
+                Some(Input::Resize(resize)) => {
+                    record(&recorded, "resize");
+                    let _ = wishes.send((resize.cols, resize.rows));
+                }
+                Some(Input::Close(())) => {
+                    record(&recorded, "close");
+                    return;
+                }
+                None => return,
+            }
+        }
+    });
+    Box::pin(tokio_stream::wrappers::ReceiverStream::new(rx))
 }

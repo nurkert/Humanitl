@@ -569,23 +569,68 @@ daraus:
 | Taste | Wirkung |
 |---|---|
 | `d` | Trennen; die Session läuft weiter. |
-| `,` | Einstellungen. Die Ansicht im Terminal der Session kommt mit #11; bis dahin sagt ein Kasten das, `humanitl settings` geht in einem anderen Terminal. |
+| `,` | Einstellungen über dem Agenten, der Bildschirm von `humanitl settings` im Terminal der Session; `Esc` oder `q` kehrt zum Agenten zurück (GitHub #11, unten). |
 | `i` | Interceptor. Die Ansicht kommt mit #12; bis dahin sagt ein Kasten das, `humanitl intercept` geht. |
 | `?` | Diese Tabelle als kleiner Kasten über dem Agenten. |
 | `Ctrl+B` oder `b` | Ein `Ctrl+B` an den Agenten senden. |
 | alles andere | `Ctrl+B` und diese Taste unverändert senden. |
 
 Jede Taste schließt einen Kasten und erreicht den Agenten nicht. Solange ein
-Kasten steht, wartet die Ausgabe des Agenten im Befehl und folgt beim
-Schließen, in ganzen Stücken, wie der Daemon sie gefiltert hat, und höchstens
-1 MiB; ein Stück, das nicht mehr passt, fällt ganz weg, mit jedem weiteren,
-und der Agent zeichnet danach neu. Eingefügter Text (zwischen `ESC [200~` und
+Kasten oder die Einstellungen stehen, wartet die Ausgabe des Agenten im Befehl
+und folgt beim Schließen, in ganzen Stücken, wie der Daemon sie gefiltert hat,
+und höchstens 4 MiB; passt ein Stück nicht mehr, fällt alles weg, was
+wartete, mit jedem weiteren Stück, geschrieben wird nichts, und der Agent
+zeichnet danach neu. Eingefügter Text (zwischen `ESC [200~` und
 `ESC [201~`) ist nie eine Taste: Ein `Ctrl+B d` darin erreicht den Agenten. Kommt das Ende nie an, endet der
 eingefügte Text nach einer halben Sekunde ohne Eingabe, und die Präfixtaste
 wirkt wieder. Über einer Shell nutzt der Kasten den Alternativschirm,
 das Terminal stellt das Bild selbst wieder her; über einem Vollbild-Agenten
 steht er darüber, und der Befehl bittet den Agenten danach, neu zu zeichnen
-(eine Größenänderung auf dieselbe Größe über die `Terminal`-RPC).
+(siehe unten).
+
+**Einstellungen über dem Agenten (GitHub #11).** Das Präfix und `,` (oder
+`Ctrl+,` unter dem kitty-Tastaturprotokoll) öffnen den Bildschirm von
+`humanitl settings` in der laufenden Session; `Esc` oder `q` kehrt zurück,
+`Ctrl+C` ebenso. Solange die Einstellungen stehen, liest der Befehl keine
+Taste für den Agenten: Sein Leser der Tastatur hält an, und nur der
+Bildschirm der Einstellungen liest das Terminal. Tasten, die im selben
+Lesevorgang nach `,` kommen, und bis zu 64 schon gelesene nach dem `Esc`
+zum Zurückkehren fallen weg und erreichen niemanden; Tasten, die weiter
+kommen, gehen wieder an den Agenten. Unter dem kitty-Tastaturprotokoll mit
+gemeldetem Loslassen erreicht auch das Loslassen der Taste, die die Ansicht
+schloss, den Agenten nicht. Der Agent läuft weiter; seine Ausgabe wartet wie
+oben. Die Fußzeile sagt das und zeigt den letzten Hinweis des Daemons im
+Terminal der Session, etwa eine Anfrage, die gehalten wird und auf dich
+wartet. `config.toml` im Editor öffnen und den Daemon neu starten gibt es in
+einer Session nicht; die Zeile verweist dafür auf `humanitl settings` in einem
+anderen Terminal.
+
+Über einem Agenten auf dem gewöhnlichen Schirm (etwa einer Shell)
+nutzen die Einstellungen den Alternativschirm. Über einem Agenten, der selbst
+auf dem Alternativschirm steht (ein Vollbild-Programm), zeichnen sie darüber, ohne
+ein zweites Mal umzuschalten, denn das Verlassen verließe sonst auch den
+Schirm des Agenten, und löschen beim Schließen, was sie gezeichnet haben.
+Beim Zurückkehren verlässt der Befehl seinen eigenen Schirm, schreibt die
+wartende Ausgabe (nach einem Überlauf keine), stellt Klammern für eingefügten
+Text und Cursor auf den Stand des Agenten zurück und bittet den Agenten dann,
+neu zu zeichnen: über die `Terminal`-RPC eine Größenänderung auf eine Zeile
+weniger und 100 ms später zurück auf die echte Größe, einmal je Rückkehr.
+Dieselbe Größe noch einmal käme beim Agenten nicht an, denn der Kernel
+schickt `SIGWINCH` nur, wenn sich die Größe ändert, und der Daemon reicht
+höchstens eine Größe je 50 ms weiter. Liest die Session in diesem Moment
+keine Eingabe, wartet die Bitte, bis Platz ist, und hält den Befehl nie auf;
+die Taste zum Trennen wirkt weiter. Eine Größenänderung des Terminals während
+der Einstellungen erreicht den Agenten spätestens mit der Rückkehr, in der
+echten Größe.
+
+Ein Agent, der auf eine Größenänderung nicht neu zeichnet, behält einen Rest
+der Ansicht, bis er wieder zeichnet; `Ctrl+L` im Agenten zeichnet die meisten
+neu. Ein Anschluss mit `--read-only` darf die Größe der Session nicht ändern
+und kann deshalb gar nicht um ein neues Bild bitten. Über einem Agenten auf
+dem Alternativschirm öffnet er die Einstellungen darum nicht und gibt nur
+einen Signalton (`BEL`); dort hilft `humanitl settings` in einem anderen
+Terminal. Über einem Agenten auf dem gewöhnlichen Schirm bewahrt der eigene
+Alternativschirm das Bild, und die Einstellungen öffnen sich wie sonst.
 
 **Zusammenstoß mit tmux und readline.** Ein tmux in der Sandbox hat dasselbe
 Präfix, und in Shells und readline heißt `Ctrl+B` ein Zeichen zurück. Beide

@@ -593,22 +593,61 @@ from it:
 | Key | Effect |
 |---|---|
 | `d` | Detach; the session keeps running. |
-| `,` | Settings. The view in the session terminal comes with #11; until then a box says so, meanwhile `humanitl settings` works in another terminal. |
+| `,` | Settings over the agent, the screen of `humanitl settings` in the session terminal; `Esc` or `q` returns to the agent (GitHub #11, below). |
 | `i` | Interceptor. The view comes with #12; until then a box says so, meanwhile `humanitl intercept`. |
 | `?` | This table, as a small box over the agent. |
 | `Ctrl+B` or `b` | Send one `Ctrl+B` to the agent. |
 | anything else | Send `Ctrl+B` and that key unchanged. |
 
 Any key closes a box, and that key does not reach the agent. While a box
-stands, the agent's output waits in the command and follows when it closes,
-in whole chunks as the daemon filtered them and at most 1 MiB; a chunk that
-does not fit is dropped whole, with every later one, and the agent is asked
-to redraw. Pasted text (between `ESC [200~` and `ESC [201~`) is never a key:
+or the settings stand, the agent's output waits in the command and follows
+when they close, in whole chunks as the daemon filtered them and at most
+4 MiB; once a chunk does not fit, everything that waited is dropped, with
+every later chunk, nothing is written, and the agent is asked to redraw. Pasted text (between `ESC [200~` and `ESC [201~`) is never a key:
 a `Ctrl+B d` inside it reaches the agent. A paste whose end never arrives
 ends after half a second without input, so the prefix key works again. Over a shell the box uses the alternate screen, so the
 terminal restores the screen by itself; over a full-screen agent the box is
-drawn on top and the command then asks the agent to redraw (a resize to the
-same size through the `Terminal` RPC).
+drawn on top and the command then asks the agent to redraw (see below).
+
+**Settings over the agent (GitHub #11).** The prefix and `,` (or `Ctrl+,`
+under the kitty keyboard protocol) open the settings screen of
+`humanitl settings` in the running session; `Esc` or `q` returns, `Ctrl+C`
+as well. While the settings stand, the command reads no key for the agent:
+its keyboard reader pauses, and only the settings screen reads the
+terminal. Keys typed in the same read after `,`, and up to 64 already
+buffered after the `Esc` that returns, are dropped and reach nobody; keys
+that keep coming go to the agent again. Under the kitty keyboard protocol
+with key release reporting, the release of the key that closed the view
+does not reach the agent either. The agent keeps running; its output
+waits as above. The footer says so and shows the daemon's latest notice on
+the session terminal, for example a request that is held and waiting for
+you. Opening `config.toml` in the editor and restarting the daemon are not
+offered inside a session; the row says to use `humanitl settings` in another
+terminal for that.
+
+Over an agent on the ordinary screen (a shell, for example) the settings
+use the alternate screen. Over an agent that is itself on the alternate
+screen (a full-screen program) they draw on top without switching a second time,
+because leaving would otherwise leave the agent's screen too, and clear
+what they drew when they close. On return the command leaves its own
+screen, writes the waiting output (or, after an overflow, none), restores
+bracketed paste and the cursor to what the agent had set, and then asks the
+agent to redraw: through the `Terminal` RPC a resize to one row less and,
+100 ms later, back to the real size, once per return. A resize to the same
+size would not reach the agent, because the kernel raises `SIGWINCH` only
+when the size changes, and the daemon passes on at most one size per 50 ms.
+If the session reads no input at that moment, the request waits until there
+is room and never holds up the command, so the detach key keeps working. A
+resize of the terminal during the settings reaches the agent at the latest
+with the return, at the real size.
+
+An agent that does not redraw on a resize keeps a remnant of the view until
+it draws again; `Ctrl+L` in the agent redraws most of them. A `--read-only`
+attach may not resize the session, so it cannot ask for a redraw at all.
+Over an agent on the alternate screen it therefore does not open the
+settings and only rings the bell (`BEL`); use `humanitl settings` in another
+terminal there. Over an agent on the ordinary screen the own alternate
+screen keeps the picture, so the settings open as usual.
 
 **Collision with tmux and readline.** A tmux inside the sandbox has the same
 prefix, and in shells and readline `Ctrl+B` means one character back. Both

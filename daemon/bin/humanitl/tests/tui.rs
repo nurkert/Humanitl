@@ -93,6 +93,7 @@ impl Screen for Probe {
                 action: "quit",
             }],
             search: None,
+            status: None,
         }
         .render(frame, theme);
         frame.render_widget(Paragraph::new("probe-ready"), body);

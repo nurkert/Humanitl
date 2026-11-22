@@ -213,6 +213,7 @@ pub fn draw(screen: &FirstStartScreen, frame: &mut Frame<'_>, theme: Theme) {
         context: &name,
         keys,
         search: None,
+        status: None,
     }
     .render(frame, theme);
     let mut body = Body::new(usize::from(area.width).saturating_sub(MARGIN + 1));

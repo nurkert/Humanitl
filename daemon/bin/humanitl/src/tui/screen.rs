@@ -13,13 +13,20 @@
 //! - `SIGTERM`, `SIGHUP`, `SIGINT` beenden ihn mit [`Outcome::Signal`]; der
 //!   Befehl entscheidet danach, was mit seiner Arbeit geschieht, und endet
 //!   mit `128 + n`.
+//!
+//! Im Terminal einer Sitzung (die Einstellungen über dem Agenten, GitHub
+//! #11) läuft derselbe Bildschirm in [`run_in_session`]: Dort gehören
+//! Rohmodus und Signale dem Anschluss, `Ctrl+Z` hält nichts an, und `Ctrl+C`
+//! schließt nur die Ansicht.
 
 use std::io;
+use std::sync::atomic::{AtomicBool, Ordering};
 use std::time::Duration;
 
 use crossterm::event::{Event, KeyCode, KeyEventKind, KeyModifiers};
 use ratatui::Frame;
 
+use super::backend::TtyBackend;
 use super::frame::{Theme, too_small};
 use super::guard::TerminalGuard;
 use super::signals::{self, Signal};
@@ -109,12 +116,12 @@ fn needs_drawing(dirty: bool, screen: &mut impl Screen) -> bool {
 
 /// Zeichnet ein Bild: den Bildschirm oder, unter dem Minimum, den Hinweis.
 fn draw(
-    guard: &mut TerminalGuard,
+    terminal: &mut ratatui::Terminal<TtyBackend>,
     screen: &mut impl Screen,
     theme: Theme,
     min: Cells,
 ) -> io::Result<()> {
-    guard.terminal().draw(|frame| {
+    terminal.draw(|frame| {
         let area = frame.area();
         if Cells::new(area.width, area.height).holds(min) {
             screen.draw(frame, theme);
@@ -173,7 +180,7 @@ pub fn run(
             None => {}
         }
         if needs_drawing(dirty, screen) {
-            draw(guard, screen, theme, min)?;
+            draw(guard.terminal(), screen, theme, min)?;
             dirty = false;
         }
         if !crossterm::event::poll(TICK)? {
@@ -192,6 +199,87 @@ pub fn run(
         drop(forget(event));
         if flow == Flow::Done {
             return Ok(Outcome::Done);
+        }
+    }
+}
+
+/// Lässt `screen` im Terminal einer laufenden Sitzung laufen, über dem
+/// Agenten (GitHub #11), bis er fertig ist, `Ctrl+C` kommt oder `stop`
+/// gesetzt wird.
+///
+/// Anders als [`run`] hält kein [`TerminalGuard`] das Terminal: Rohmodus,
+/// Signale und das Aufräumen gehören dem Anschluss, der den Schirm vorher
+/// aufgesetzt hat (`prefix::view`). Deshalb:
+///
+/// - `Ctrl+Z` hält nichts an: Das Terminal gehört in dieser Zeit dem
+///   Anschluss, und ein Anhalten ließe es roh zurück.
+/// - `Ctrl+C` endet mit [`Outcome::Interrupted`]; der Anschluss schließt
+///   damit nur die Ansicht.
+/// - `SIGTERM` und die anderen Signale hört der Anschluss selbst; er setzt
+///   `stop`, und die Schleife endet spätestens nach einem Takt.
+///
+/// # Errors
+///
+/// Wenn das Terminal nicht mehr zu beschreiben oder zu lesen ist.
+pub fn run_in_session(
+    terminal: &mut ratatui::Terminal<TtyBackend>,
+    screen: &mut impl Screen,
+    theme: Theme,
+    min: Cells,
+    stop: &AtomicBool,
+) -> io::Result<Outcome> {
+    let mut dirty = true;
+    loop {
+        if stop.load(Ordering::SeqCst) {
+            return Ok(Outcome::Done);
+        }
+        if needs_drawing(dirty, screen) {
+            draw(terminal, screen, theme, min)?;
+            dirty = false;
+        }
+        if !crossterm::event::poll(TICK)? {
+            continue;
+        }
+        let event = crossterm::event::read()?;
+        dirty = true;
+        let flow = match classify(&event) {
+            Step::Suspend => Flow::Continue,
+            Step::Interrupt => return Ok(Outcome::Interrupted),
+            Step::Pass => screen.on_event(&event),
+        };
+        drop(forget(event));
+        if flow == Flow::Done {
+            return Ok(Outcome::Done);
+        }
+    }
+}
+
+/// Wie viele Ereignisse [`discard_pending_events`] höchstens verwirft.
+const DISCARD_LIMIT: usize = 64;
+
+/// Verwirft, was crossterm schon gelesen, aber noch nicht abgegeben hat,
+/// nachdem ein Bildschirm in einer Sitzung zu Ende ist: Tasten, die im
+/// selben Lesevorgang hinter `Esc` standen, gehören weder der nächsten
+/// Ansicht noch dem Agenten.
+///
+/// **Begrenzt.** Höchstens [`DISCARD_LIMIT`] Ereignisse, jedes ohne Warten:
+/// Ein Strom von Tasten, der nicht abreißt, hielte sonst die Rückkehr zum
+/// Agenten für immer auf und äße auch Tasten späterer Lesevorgänge (Review
+/// zu GitHub #11). Was danach kommt, liest wieder der Leser des Anschlusses.
+pub fn discard_pending_events() {
+    discard_bounded(
+        || crossterm::event::poll(Duration::ZERO).unwrap_or(false),
+        || crossterm::event::read().is_ok(),
+    );
+}
+
+/// Der Kern von [`discard_pending_events`], ohne Terminal prüfbar: `ready`
+/// sagt ohne Warten, ob ein Ereignis wartet, `take` nimmt es; `false` von
+/// `take` beendet das Verwerfen.
+fn discard_bounded(mut ready: impl FnMut() -> bool, mut take: impl FnMut() -> bool) {
+    for _ in 0..DISCARD_LIMIT {
+        if !ready() || !take() {
+            return;
         }
     }
 }
@@ -263,6 +351,31 @@ mod tests {
         assert_eq!(screen.0, 1, "changed ran although dirty");
         assert!(!needs_drawing(false, &mut screen));
         assert_eq!(screen.0, 2);
+    }
+
+    /// Auch ein Strom von Ereignissen, der nie abreißt, hält das Verwerfen
+    /// nach einem Bildschirm nicht auf: Es endet nach der Grenze. Gemessen in
+    /// einem eigenen Faden mit Frist. Mutationsbeweis: ohne Grenze verwirft
+    /// es für immer, und der Test wird rot.
+    #[test]
+    #[allow(clippy::expect_used)]
+    fn discarding_stops_even_under_endless_input() {
+        let (done, finished) = std::sync::mpsc::channel();
+        std::thread::spawn(move || {
+            let mut taken = 0_usize;
+            super::discard_bounded(
+                || true,
+                || {
+                    taken += 1;
+                    true
+                },
+            );
+            let _ = done.send(taken);
+        });
+        let taken = finished
+            .recv_timeout(std::time::Duration::from_secs(5))
+            .expect("discarding ended within the deadline");
+        assert_eq!(taken, super::DISCARD_LIMIT);
     }
 
     /// Der Text eines Einfügens ist danach überschrieben und leer; andere
