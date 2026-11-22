@@ -616,14 +616,51 @@ detaches.
 ## `humanitl go`
 
 ```sh
-humanitl go [--backend NAME] [--profile NAME] [--work DIR] [-- CMD...]
+humanitl go [AGENT] [--dir PATH] [--disposable|--rw|--ro] [--kernel] [--yes]
+            [--backend NAME] [--profile NAME] [-- CMD...]
 ```
 
-One command from the shell to the agent's prompt in a disposable session
-(HUM-496). `humanitl go` is `humanitl run --disposable` with three
-differences; resolving the profile, the start, the three guarantees and the
-signals are the same code as for `run`, and every capability behind it is the
-`Sandbox` RPC (ADR-018).
+One command from the shell to the agent's prompt (HUM-496, #8). The ordinary
+start is `humanitl go claude`: the agent is a word, an adapter id as
+`humanitl agents status` lists them (`opencode`, `pi`, `claude`, `codex`,
+`agy`), and its program comes from the host or the agent depot as
+`agents.source` says. An unknown word is `CLI_004` with the list. A folder of
+the same name is never the agent's folder; the project folder is the current
+directory or `--dir PATH` (`SANDBOX_006` if it is not a folder, `CLI_004`
+beside `--work`). The folder stored in `config.toml` does not apply to `go`.
+
+A known project starts with its project choice (`humanitl projects show`), a
+new one with the defaults of the start proposal (`humanitl projects
+proposal`) and one line that says so. Everything else is a switch for this
+start only; none of them changes the stored project choice:
+
+| Switch | For this start |
+|---|---|
+| `AGENT` | the agent, above the project choice (`agent.adapter`, contract 1.61) |
+| `--disposable` | the folder under a disposable layer (`sandbox.mode = "disposable"`, `rw`) |
+| `--rw` | the agent writes the folder directly (`direct`, `rw`) |
+| `--ro` | the agent only reads the folder (`direct`, `ro`) |
+| `--kernel` | `sandbox.min_isolation = "kernel"`; without the kernel level its finding, never a weaker level |
+
+At most one of `--disposable`, `--rw` and `--ro`. A global switch that
+contradicts the word or a folder switch (`--agent-adapter pi go claude`,
+`--sandbox-mode disposable go --rw`) is `CLI_004`; nothing starts. With an
+agent word the daemon starts that adapter with its own start (key, shared
+loopback). Whenever a higher layer picks the adapter than the one
+`agent.command` comes from (the word of this start, or the project choice
+over `config.toml` or a profile), the daemon ignores that command, which
+belonged to the agent of its own layer, and runs the adapter's default
+program; a command from the adapter's own layer stays, and a company policy
+that locks `agent.command` always applies. The words after `--` are the agent's
+arguments (`humanitl go claude -- --resume`). Without a word,
+`-- CMD` replaces the agent. A company policy that locks `agent.adapter` wins
+over the word: the policy is the topmost layer of the resolution, and the
+session starts the locked agent. A daemon before contract 1.61 does not take
+the agent of a start; `go`, `sandbox plan`, `sandbox image pull` and
+`projects proposal` then say `CLI_004` with the version before they send
+anything. Resolving the profile, the start, the three
+guarantees and the signals are the same code as for `run`, and every
+capability behind it is the `Sandbox` RPC (ADR-018). What `go` adds:
 
 1. **This terminal goes to the agent** as soon as the session runs, also
    without `-- CMD`, so with the agent from the configuration: you land in its
@@ -647,15 +684,17 @@ signals are the same code as for `run`, and every capability behind it is the
    the exit code stays the agent's.
 
 ```sh
-$ humanitl go                       # the configured agent, disposable
-$ humanitl go --backend <name>      # the same with another sandbox backend
+$ humanitl go                       # the agent of the project choice
+$ humanitl go claude                # Claude Code in this folder
+$ humanitl go codex --ro --dir ../x # Codex reading another folder
+$ humanitl go claude -- --resume    # an argument for the agent
 $ humanitl go -- bash               # a shell instead of the agent
 ```
 
 Without a terminal on `stdin`, or with `--json`, `humanitl go` behaves like
-`humanitl run --disposable`: it reads along, shows no animation and asks
-nothing. Where the system cannot keep the project folder untouched, the start
-refuses, as with `run --disposable`.
+`humanitl run`: it reads along, shows no animation and asks nothing. With
+`--disposable`, where the system cannot keep the project folder untouched, the
+start refuses, as with `run --disposable`.
 
 With `--ask terminal`, from the flag or from `hold.ask_mode`, `humanitl go`
 refuses with `CLI_002` before it starts anything: in `go` this terminal

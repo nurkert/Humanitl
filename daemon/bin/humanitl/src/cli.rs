@@ -114,12 +114,15 @@ pub enum Cmd {
     /// Start a session in the current directory, or show the session a profile resolves to.
     Run(RunArgs),
 
-    /// Start a disposable session and land in the agent's terminal; afterwards
+    /// Start an agent in a project folder and land in its terminal; afterwards
     /// choose what to keep.
     ///
-    /// The same as `humanitl run --disposable`, with this terminal handed to
-    /// the agent as soon as the session runs, also for the agent from the
-    /// configuration. While the session starts, a rotating fist is shown for at
+    /// `humanitl go claude` starts Claude Code in the current folder. A known
+    /// project starts with its project choice, a new one with the defaults of
+    /// the start proposal (`humanitl projects proposal`). The agent word and
+    /// the switches hold for this start only and never change the stored
+    /// project choice. This terminal is handed to the agent as soon as the
+    /// session runs. While the session starts, a rotating fist is shown for at
     /// least one second (off with `terminal.splash = false`, without colour
     /// with `NO_COLOR`, never with --json or without a terminal). When the agent ends
     /// and changes wait in the disposable layer, the command lists them and
@@ -772,17 +775,51 @@ pub struct RunArgs {
     pub yes: bool,
 }
 
-/// Die Argumente von `humanitl go` (HUM-496).
+/// Die Argumente von `humanitl go` (HUM-496, #8).
 ///
-/// Das Kommando und `--yes` (HUM-516): Der Modus ist immer `disposable`,
-/// und alles andere (`--backend`, `--work`, `--profile`, `--llm`) sind die
-/// globalen Schalter, die auch `humanitl run` nimmt.
+/// Der gewöhnliche Start ist `humanitl go [AGENT]`; alles andere sind
+/// Schalter (ADR-0024 Punkt 7). Sie gelten für diesen einen Aufruf und
+/// ändern die gespeicherte Projektwahl nie. `--work`, `--backend`,
+/// `--profile` und `--llm` sind weiter die globalen Schalter, die auch
+/// `humanitl run` nimmt.
+// Fünf Schalter sind fünf Wahrheitswerte; ein Aufzählungstyp je Schalter
+// machte `clap` nicht klarer.
+#[allow(clippy::struct_excessive_bools)]
 #[derive(Debug, Args)]
 pub struct GoArgs {
-    /// The command to run in the sandbox, after `--`; without it the agent
-    /// from the configuration.
-    #[arg(last = true, value_name = "CMD")]
-    pub cmd: Vec<OsString>,
+    /// The agent to start, by the id of its adapter as `humanitl agents
+    /// status` lists them (opencode, pi, claude, codex, agy); its program
+    /// comes from the host or the agent depot as `agents.source` says.
+    /// Without it, the agent of the project choice, for a new project the
+    /// default. Always the agent: a folder of the same name is chosen with
+    /// --dir.
+    #[arg(value_name = "AGENT")]
+    pub agent: Option<String>,
+
+    /// The project folder; relative to the current directory. Without it,
+    /// the current directory. Not together with --work.
+    #[arg(long, value_name = "PATH")]
+    pub dir: Option<PathBuf>,
+
+    /// Keep the project folder untouched for this start: the agent writes
+    /// into a disposable layer, and afterwards you choose what to keep.
+    #[arg(long, conflicts_with_all = ["rw", "ro"])]
+    pub disposable: bool,
+
+    /// Let the agent write to the project folder directly for this start.
+    #[arg(long, conflicts_with = "ro")]
+    pub rw: bool,
+
+    /// Let the agent only read the project folder for this start.
+    #[arg(long)]
+    pub ro: bool,
+
+    /// Start at the kernel level (an own guest kernel) for this start: raises
+    /// `sandbox.min_isolation` to "kernel" like --sandbox-min-isolation kernel.
+    /// Where the kernel level is not available the start is refused with its
+    /// finding; it never falls back to a weaker level.
+    #[arg(long)]
+    pub kernel: bool,
 
     /// Do not ask before the first start of an agent whose model provider
     /// lies outside this machine (cloud inference); the notice still goes to
@@ -791,6 +828,12 @@ pub struct GoArgs {
     /// is one line on stderr and the next start shows it again.
     #[arg(long)]
     pub yes: bool,
+
+    /// The command to run in the sandbox, after `--`. With an AGENT these are
+    /// arguments for the agent (`humanitl go claude -- --resume`); without
+    /// one, the command replaces the agent.
+    #[arg(last = true, value_name = "CMD")]
+    pub cmd: Vec<OsString>,
 }
 
 /// Die Unterkommandos von `humanitl audit`.

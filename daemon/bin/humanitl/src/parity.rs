@@ -72,6 +72,8 @@ pub static PARITY: &[(&str, &str)] = &[
     ("Humanitl.ProbeLlm", "llm test"),
     // `humanitl app` gibt den Ordner an die verbundene App (HUM-539).
     ("Humanitl.Projects", "app"),
+    // `go` fragt das Register, ob der Ordner ein bekanntes Projekt ist (#8).
+    ("Humanitl.Projects", "go"),
     ("Humanitl.Projects", "projects clean"),
     ("Humanitl.Projects", "projects forget"),
     ("Humanitl.Projects", "projects ls"),
@@ -88,9 +90,14 @@ pub static PARITY: &[(&str, &str)] = &[
     ("Humanitl.Rules", "rules reorder"),
     ("Humanitl.Rules", "rules test"),
     ("Humanitl.Rules", "rules update"),
-    // `go` ist `run --disposable` mit Anschluss und der Frage am Ende
-    // (HUM-496).
+    // `go` startet mit Anschluss und der Frage am Ende (HUM-496); Agent und
+    // Schalter reisen im Start (#8).
     ("Humanitl.Sandbox", "go"),
+    ("Humanitl.Sandbox", "go --dir"),
+    ("Humanitl.Sandbox", "go --disposable"),
+    ("Humanitl.Sandbox", "go --kernel"),
+    ("Humanitl.Sandbox", "go --ro"),
+    ("Humanitl.Sandbox", "go --rw"),
     ("Humanitl.Sandbox", "run"),
     ("Humanitl.Sandbox", "run --direct"),
     ("Humanitl.Sandbox", "run --disposable"),

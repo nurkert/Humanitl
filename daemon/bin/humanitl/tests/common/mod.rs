@@ -178,6 +178,33 @@ pub struct FakeServer {
     /// Die Art jeder Nachricht, die über `Terminal` ankam, in ihrer
     /// Reihenfolge (HUM-279).
     terminal_inputs: TerminalInputs,
+    /// Jeder `Sandbox(Start)`, der ankam, und die Zahl der
+    /// `Projects.save_choice` (#8).
+    record: Record,
+}
+
+/// Was der Fake über Starts und die Projektwahl mitschreibt (#8): jeden
+/// `Sandbox(Start)` in seiner Reihenfolge und jedes `Projects.save_choice`.
+#[derive(Debug, Default)]
+pub struct Recorded {
+    /// Die Starts, wie sie ankamen.
+    pub starts: Vec<v1::sandbox_request::Start>,
+    /// Wie oft `Projects.save_choice` kam.
+    pub saved_choices: usize,
+}
+
+type Record = Arc<std::sync::Mutex<Recorded>>;
+
+/// Wie der Fake vom Standard abweicht.
+#[derive(Default)]
+struct Tweaks {
+    silent_export: bool,
+    version: Option<String>,
+    stall_terminal: bool,
+    idle: bool,
+    proto_minor: Option<u32>,
+    cleanups: Option<Cleanups>,
+    known_project: Option<PathBuf>,
 }
 
 /// Was der Fake über `Terminal` empfangen hat: `open`, `data`, `resize` oder
@@ -191,7 +218,20 @@ type TerminalInputs = Arc<std::sync::Mutex<Vec<&'static str>>>;
 impl FakeServer {
     /// Startet den Dienst und wartet, bis Socket und Token da sind.
     pub fn start(harness: &Harness) -> Self {
-        Self::start_with(harness, false, None, false, false, None, None)
+        Self::start_with(harness, Tweaks::default())
+    }
+
+    /// Wie [`FakeServer::start`], aber das Register kennt `project` als
+    /// Projekt mit einer gespeicherten Wahl (#8): `Projects.get` antwortet
+    /// für diesen Ordner, statt ihn als unbekannt abzulehnen.
+    pub fn start_with_known_project(harness: &Harness, project: &Path) -> Self {
+        Self::start_with(
+            harness,
+            Tweaks {
+                known_project: Some(project.to_path_buf()),
+                ..Tweaks::default()
+            },
+        )
     }
 
     /// Wie [`FakeServer::start`], aber `Projects.cleanup_plan` liefert einen
@@ -201,12 +241,10 @@ impl FakeServer {
         let cleanups = Cleanups::default();
         let server = Self::start_with(
             harness,
-            false,
-            None,
-            false,
-            false,
-            None,
-            Some(Arc::clone(&cleanups)),
+            Tweaks {
+                cleanups: Some(Arc::clone(&cleanups)),
+                ..Tweaks::default()
+            },
         );
         (server, cleanups)
     }
@@ -217,25 +255,35 @@ impl FakeServer {
     pub fn start_with_version(harness: &Harness, version: &str) -> Self {
         Self::start_with(
             harness,
-            false,
-            Some(version.to_owned()),
-            false,
-            false,
-            None,
-            None,
+            Tweaks {
+                version: Some(version.to_owned()),
+                ..Tweaks::default()
+            },
         )
     }
 
     /// Wie [`FakeServer::start`], aber `GetInfo` nennt diese Minor des
     /// Vertrags: ein älterer Daemon (HUM-436).
     pub fn start_with_proto_minor(harness: &Harness, minor: u32) -> Self {
-        Self::start_with(harness, false, None, false, false, Some(minor), None)
+        Self::start_with(
+            harness,
+            Tweaks {
+                proto_minor: Some(minor),
+                ..Tweaks::default()
+            },
+        )
     }
 
     /// Wie [`FakeServer::start`], aber ohne Sitzung: `retire_if_idle` sagt
     /// `retired` (HUM-382). Der Standard-Fake spielt eine laufende Sitzung.
     pub fn start_idle(harness: &Harness) -> Self {
-        Self::start_with(harness, false, None, false, true, None, None)
+        Self::start_with(
+            harness,
+            Tweaks {
+                idle: true,
+                ..Tweaks::default()
+            },
+        )
     }
 
     /// Wie [`FakeServer::start`], aber `Audit(Export)` meldet Erfolg und
@@ -243,7 +291,13 @@ impl FakeServer {
     /// schreibt, die der Aufrufer nicht hat, etwa ein eigenes `/tmp` unter
     /// `PrivateTmp`.
     pub fn start_with_silent_export(harness: &Harness) -> Self {
-        Self::start_with(harness, true, None, false, false, None, None)
+        Self::start_with(
+            harness,
+            Tweaks {
+                silent_export: true,
+                ..Tweaks::default()
+            },
+        )
     }
 
     /// Wie [`FakeServer::start`], aber `Terminal` liest nach dem `Open` keine
@@ -251,18 +305,16 @@ impl FakeServer {
     /// Strom bleibt offen, bis der Client geht, und alles, was er schickt,
     /// staut sich im Transport.
     pub fn start_with_stalled_terminal(harness: &Harness) -> Self {
-        Self::start_with(harness, false, None, true, false, None, None)
+        Self::start_with(
+            harness,
+            Tweaks {
+                stall_terminal: true,
+                ..Tweaks::default()
+            },
+        )
     }
 
-    fn start_with(
-        harness: &Harness,
-        silent_export: bool,
-        version: Option<String>,
-        stall_terminal: bool,
-        idle: bool,
-        proto_minor: Option<u32>,
-        cleanups: Option<Cleanups>,
-    ) -> Self {
+    fn start_with(harness: &Harness, tweaks: Tweaks) -> Self {
         let paths = harness.paths();
         let socket = paths.daemon_socket();
         let token_path = paths.token_path();
@@ -277,6 +329,8 @@ impl FakeServer {
         let session = Session::load(&fixture()).expect("the recorded session loads");
         let terminal_inputs = TerminalInputs::default();
         let recorded = Arc::clone(&terminal_inputs);
+        let record = Record::default();
+        let record_of_service = Arc::clone(&record);
         let (stop, stopped) = tokio::sync::oneshot::channel();
         let thread = std::thread::spawn({
             let socket = socket.clone();
@@ -295,13 +349,15 @@ impl FakeServer {
                     let service = v1::humanitl_server::HumanitlServer::new(DaemonService::new(
                         Arc::new(SilentExport {
                             inner: daemon,
-                            silent: silent_export,
-                            version,
+                            silent: tweaks.silent_export,
+                            version: tweaks.version,
                             terminal_inputs: recorded,
-                            stall_terminal,
-                            idle,
-                            proto_minor,
-                            cleanups,
+                            stall_terminal: tweaks.stall_terminal,
+                            idle: tweaks.idle,
+                            proto_minor: tweaks.proto_minor,
+                            cleanups: tweaks.cleanups,
+                            record: record_of_service,
+                            known_project: tweaks.known_project,
                         }),
                         token,
                     ));
@@ -332,7 +388,25 @@ impl FakeServer {
             stop: Some(stop),
             thread: Some(thread),
             terminal_inputs,
+            record,
         }
+    }
+
+    /// Die Starts, die bisher ankamen (#8).
+    pub fn starts(&self) -> Vec<v1::sandbox_request::Start> {
+        self.record
+            .lock()
+            .unwrap_or_else(std::sync::PoisonError::into_inner)
+            .starts
+            .clone()
+    }
+
+    /// Wie oft `Projects.save_choice` bisher ankam (#8).
+    pub fn saved_choices(&self) -> usize {
+        self.record
+            .lock()
+            .unwrap_or_else(std::sync::PoisonError::into_inner)
+            .saved_choices
     }
 
     /// Die Arten der Nachrichten, die bisher über `Terminal` ankamen.
@@ -454,6 +528,56 @@ struct SilentExport {
     /// Plan mit Einträgen ([`cleanup_plan`]) und zählt jedes `cleanup`
     /// (HUM-533). Der Fake selbst plant nichts, weil seine Sitzung läuft.
     cleanups: Option<Cleanups>,
+    /// Starts und `save_choice` (#8).
+    record: Record,
+    /// Ein Ordner, den `Projects.get` als Projekt mit gespeicherter Wahl
+    /// kennt (#8).
+    known_project: Option<PathBuf>,
+}
+
+/// Ein Start, der die Kernel-Stufe verlangt, endet im Fake wie auf einem
+/// Rechner ohne sie (#8): mit dem Befund der Stufe und ohne Start auf einer
+/// schwächeren.
+fn asks_for_the_kernel_level(start: &v1::sandbox_request::Start) -> bool {
+    start
+        .cli_overrides
+        .iter()
+        .any(|pair| pair.path == "sandbox.min_isolation" && pair.value == "kernel")
+}
+
+/// Der Befund des Fakes für die Kernel-Stufe, die er nicht hat.
+fn no_kernel_level() -> v1::SandboxEvent {
+    v1::SandboxEvent {
+        event: Some(v1::sandbox_event::Event::Diagnostic(
+            humanitl_ipc::diagnostic_to_proto(
+                &Diagnostic::builder(
+                    humanitl_core::diagnostics::codes::SANDBOX_045,
+                    humanitl_core::Severity::Blocking,
+                )
+                .why("the fake daemon has no kernel level".to_owned())
+                .build(),
+            ),
+        )),
+    }
+}
+
+/// `Projects.get` für den bekannten Ordner: ein Eintrag und die Wahl
+/// `agent.adapter = "claude"`.
+fn known_project_answer(path: &Path) -> v1::ProjectsResponse {
+    v1::ProjectsResponse {
+        project: Some(v1::ProjectEntry {
+            project_id: "0190a6d4-0000-7000-8000-000000000008".to_owned(),
+            path: path.display().to_string(),
+            ..v1::ProjectEntry::default()
+        }),
+        choice: vec![v1::ProjectChoiceField {
+            key: "agent.adapter".to_owned(),
+            chosen: "claude".to_owned(),
+            effective: "claude".to_owned(),
+            origin: "project-choice".to_owned(),
+        }],
+        ..v1::ProjectsResponse::default()
+    }
 }
 
 /// Wie oft `Projects.cleanup` ankam (HUM-533).
@@ -529,6 +653,16 @@ impl DaemonApi for SilentExport {
         self.inner.rules(request).await
     }
     fn sandbox(&self, request: v1::SandboxRequest) -> BoxStream<v1::SandboxEvent> {
+        if let Some(v1::sandbox_request::Op::Start(start)) = &request.op {
+            self.record
+                .lock()
+                .unwrap_or_else(std::sync::PoisonError::into_inner)
+                .starts
+                .push(start.clone());
+            if asks_for_the_kernel_level(start) {
+                return Box::pin(tonic::codegen::tokio_stream::iter(vec![no_kernel_level()]));
+            }
+        }
         if self.idle && matches!(request.op, Some(v1::sandbox_request::Op::RetireIfIdle(()))) {
             return Box::pin(tonic::codegen::tokio_stream::iter(vec![v1::SandboxEvent {
                 event: Some(v1::sandbox_event::Event::Retire(
@@ -625,6 +759,23 @@ impl DaemonApi for SilentExport {
         &self,
         request: v1::ProjectsRequest,
     ) -> Result<v1::ProjectsResponse, Diagnostic> {
+        match &request.op {
+            Some(v1::projects_request::Op::SaveChoice(_)) => {
+                self.record
+                    .lock()
+                    .unwrap_or_else(std::sync::PoisonError::into_inner)
+                    .saved_choices += 1;
+            }
+            Some(v1::projects_request::Op::Get(get))
+                if self
+                    .known_project
+                    .as_ref()
+                    .is_some_and(|known| Path::new(&get.path) == known) =>
+            {
+                return Ok(known_project_answer(Path::new(&get.path)));
+            }
+            _ => {}
+        }
         if let Some(cleanups) = &self.cleanups {
             match request.op {
                 Some(v1::projects_request::Op::CleanupPlan(asked)) => {

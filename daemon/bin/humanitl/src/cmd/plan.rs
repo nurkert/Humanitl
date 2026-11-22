@@ -212,6 +212,9 @@ fn preview_values(
     let needs = |pair: &v1::sandbox_request::CliOverride| {
         if pair.path == "sandbox.backend" {
             PLAN_BACKEND_MINOR
+        } else if pair.path == humanitl_ipc::session::AGENT_ADAPTER_KEY {
+            // Den Agenten nimmt ein Daemon erst ab 1.61 an (#8).
+            crate::cmd::run::SESSION_AGENT_MINOR
         } else {
             PLAN_OVERRIDES_MINOR
         }
