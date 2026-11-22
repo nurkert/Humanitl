@@ -154,6 +154,14 @@ impl Paths {
         self.data_dir().join("cloud-inference.toml")
     }
 
+    /// Der Merker, dass die Zeile zur neuen Präfixtaste gezeigt wurde
+    /// (GitHub #10): einmal je Nutzer, im Datenverzeichnis und nie im
+    /// Projekt.
+    #[must_use]
+    pub fn prefix_notice_path(&self) -> PathBuf {
+        self.data_dir().join("prefix-notice-shown")
+    }
+
     /// Die Depots der Agenten (ADR-0023, HUM-518): je Agent ein Ordner
     /// `agents/<id>/` mit Programm, Konfiguration und Anmeldung. Im
     /// Datenverzeichnis des Daemons, das keine Sandbox einhängt; nur der
@@ -626,6 +634,7 @@ mod tests {
                 paths.agents_dir(),
                 paths.project_servers_path(),
                 paths.cloud_inference_path(),
+                paths.prefix_notice_path(),
             ] {
                 assert!(
                     covered(&held),

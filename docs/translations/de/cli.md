@@ -194,8 +194,8 @@ eigenes Profil, wo ein Mensch ihn geschrieben hat und der Daemon ihn liest.
 
 `humanitl run -- bash` mit einem Terminal an `stdin` hängt dieses Terminal an
 die Session, wie `humanitl sandbox attach`: Raw-Modus, sobald der Daemon
-`running` meldet, die Fenstergröße, jede Taste an die Shell und die Trenntaste
-`Ctrl+A d` (`terminal.detach_prefix`). Das Terminal der Session ist das eigene
+`running` meldet, die Fenstergröße, jede Taste an die Shell und die Präfixtaste
+mit ihrer Tabelle (`Ctrl+B d` trennt, `terminal.prefix`). Das Terminal der Session ist das eigene
 Pseudo-Terminal des Daemons, nie dieses hier; die Bytes kommen gefiltert zurück
 wie bei `attach` (HUM-280).
 
@@ -207,7 +207,7 @@ von `PATH`. Dateien und Umgebung des Adapters sind dieselben wie bei einem
 Agenten, den der Daemon selbst startet: Modell, Schlüsseldatei, CA und
 Konfiguration. So startet `opencode` (oder `pi`) mit dem konfigurierten Modell
 und Schlüssel, `Ctrl+C` beendet ihn und kehrt zur Shell zurück, `exit` beendet
-die Session, und `Ctrl+A d` lässt sie für ein späteres
+die Session, und `Ctrl+B d` lässt sie für ein späteres
 `humanitl sandbox attach` weiterlaufen. Der Befehl nach `--` selbst wird nie
 eingebunden; er muss in der Sandbox startbar sein. pi ist ein Skript und wird nie
 eingebunden; es muss unter einem Mount wie `/usr/local` liegen. Gibt der
@@ -237,11 +237,11 @@ außen (HUM-299, `docs/SECURITY.md` Abschnitt 4).
 ```text
 $ humanitl sandbox exec
 Shell 4f2a91c3-1 in sandbox 0193…
-Detach: Ctrl+A d
+Detach: Ctrl+B d, help: Ctrl+B ?
 agent@sandbox:/work$
 ```
 
-`Ctrl+A d` trennt und lässt die Shell weiterlaufen; `humanitl sandbox attach
+`Ctrl+B d` trennt und lässt die Shell weiterlaufen; `humanitl sandbox attach
 --shell 4f2a91c3-1` hängt sich wieder an, mit `--read-only` zum Zuschauen; die
 ID gilt nur für diese Session. Ein Befehl, der endet, bevor das Terminal
 angehängt ist, hinterlässt Ausgabe und Exit-Code für den ersten Client, 30
@@ -503,7 +503,7 @@ Für diese Version bedeutet das:
   bekommt keine Antwort. Für zeilenorientierte Läufe ist das kein Problem, für
   eine Vollbild-TUI schon. Wer tippen will, hängt sich mit
   `humanitl sandbox attach` an dieselbe Session; dort geht jede Taste an den
-  Agenten, außer der Trenntaste `Ctrl+A d`.
+  Agenten, außer der Trenntaste `Ctrl+B d`.
 - Einen **Raw-Modus** gibt es nur mit `--ask terminal`, und nur für die Tasten
   des Kastens: Die Abfrage braucht einzelne Tasten ohne Zeilenende. Das Terminal
   wird bei jedem Ende wiederhergestellt: beim gewöhnlichen Ende, auf jedem
@@ -555,38 +555,83 @@ unterbricht es dort das Vordergrundprogramm, und ein Programm im Raw-Modus liest
 das Byte. Wer sich trennt, beendet nur seinen eigenen Strom; die Session läuft
 weiter, und ein späteres `attach` zeigt, was sich inzwischen angesammelt hat.
 
-Der Weg hinaus ist eine Taste, wie in `screen`: **`Ctrl+A d`** trennt. Der Befehl
-sendet `close`, gibt das Terminal zurück und endet mit `0` und der Zeile
+Der Weg hinaus ist eine Präfixtaste, wie in tmux: **`Ctrl+B d`** trennt. Der
+Befehl sendet `close`, gibt das Terminal zurück und endet mit `0` und der Zeile
 `Detached; the session keeps running. Attach again: humanitl sandbox attach`.
 Bevor das Terminal in den Raw-Modus geht, nennt eine Zeile auf `stderr` die Taste
-(`Detach: Ctrl+A d`). Nach dem Präfix:
+(`Detach: Ctrl+B d, help: Ctrl+B ?`). Nach dem Präfix gilt eine feste Tabelle,
+dieselbe in `humanitl sandbox attach`, `humanitl run -- CMD` an einem Terminal
+und `humanitl go` (GitHub #10). Sie steht an einer Stelle im Code
+(`humanitl_config::prefix::TABLE`); die Hilfe hinter `?`, `--help` von
+`humanitl sandbox attach` und die Beschreibung von `terminal.prefix` entstehen
+daraus:
 
 | Taste | Wirkung |
 |---|---|
 | `d` | Trennen; die Session läuft weiter. |
-| `Ctrl+A` oder `a` | Ein `Ctrl+A` an den Agenten senden. |
-| alles andere | `Ctrl+A` und diese Taste unverändert senden. |
+| `,` | Einstellungen. Die Ansicht im Terminal der Session kommt mit #11; bis dahin sagt ein Kasten das, `humanitl settings` geht in einem anderen Terminal. |
+| `i` | Interceptor. Die Ansicht kommt mit #12; bis dahin sagt ein Kasten das, `humanitl intercept` geht. |
+| `?` | Diese Tabelle als kleiner Kasten über dem Agenten. |
+| `Ctrl+B` oder `b` | Ein `Ctrl+B` an den Agenten senden. |
+| alles andere | `Ctrl+B` und diese Taste unverändert senden. |
+
+Jede Taste schließt einen Kasten und erreicht den Agenten nicht. Solange ein
+Kasten steht, wartet die Ausgabe des Agenten im Befehl und folgt beim
+Schließen, in ganzen Stücken, wie der Daemon sie gefiltert hat, und höchstens
+1 MiB; ein Stück, das nicht mehr passt, fällt ganz weg, mit jedem weiteren,
+und der Agent zeichnet danach neu. Eingefügter Text (zwischen `ESC [200~` und
+`ESC [201~`) ist nie eine Taste: Ein `Ctrl+B d` darin erreicht den Agenten. Kommt das Ende nie an, endet der
+eingefügte Text nach einer halben Sekunde ohne Eingabe, und die Präfixtaste
+wirkt wieder. Über einer Shell nutzt der Kasten den Alternativschirm,
+das Terminal stellt das Bild selbst wieder her; über einem Vollbild-Agenten
+steht er darüber, und der Befehl bittet den Agenten danach, neu zu zeichnen
+(eine Größenänderung auf dieselbe Größe über die `Terminal`-RPC).
+
+**Zusammenstoß mit tmux und readline.** Ein tmux in der Sandbox hat dasselbe
+Präfix, und in Shells und readline heißt `Ctrl+B` ein Zeichen zurück. Beide
+bekommen ihre Taste, wenn man `Ctrl+B` zweimal drückt (oder `Ctrl+B b`).
 
 Das Präfix darf in einem Lesevorgang ankommen und die Taste im nächsten; es
-wartet ohne Zeitgrenze auf die nächste Taste. `--detach-keys SPEC` wählt für
-einen Aufruf ein anderes Präfix (`ctrl-a` bis `ctrl-z`, `ctrl-\`, `ctrl-]`,
-`ctrl-^`, `ctrl-_`), und `--detach-keys none` schaltet das Trennen ab, sodass
-jedes Byte an den Agenten geht. `terminal.detach_prefix` in `config.toml` setzt
-die Vorgabe; das Profil eines Projektordners darf es nicht setzen. `ctrl-[` wird
-abgewiesen, weil jede Pfeiltaste mit diesem Byte beginnt, und `ctrl-h`,
-`ctrl-i`, `ctrl-j` und `ctrl-m`, weil Rücktaste, Tab und Enter dieselben Bytes
-senden. `ctrl-c` und `ctrl-d` sind erlaubt, aber dann erreicht diese Taste den
-Agenten nur als zweimal gedrücktes Präfix. Bei einem anderen Präfix tritt dessen
-eigener Buchstabe an die Stelle von `a` (`Ctrl+] ]`).
+wartet ohne Zeitgrenze auf die nächste Taste. `--prefix SPEC` (der alte Name
+`--detach-keys` gilt weiter) wählt für einen Aufruf ein anderes Präfix
+(`ctrl-a` bis `ctrl-z`, `ctrl-\`, `ctrl-]`, `ctrl-^`, `ctrl-_`), und
+`--prefix none` schaltet die Präfixtaste ab, sodass jedes Byte an den Agenten
+geht. `terminal.prefix` in `config.toml` setzt die Vorgabe (der alte Name
+`terminal.detach_prefix` gilt weiter, mit einem Hinweis beim Laden); das Profil
+eines Projektordners darf es nicht setzen. `ctrl-[` wird abgewiesen, weil jede
+Pfeiltaste mit diesem Byte beginnt, und `ctrl-h`, `ctrl-i`, `ctrl-j` und
+`ctrl-m`, weil Rücktaste, Tab und Enter dieselben Bytes senden. `ctrl-c` und
+`ctrl-d` sind erlaubt, aber dann erreicht diese Taste den Agenten nur als
+zweimal gedrücktes Präfix. Bei einem anderen Präfix tritt dessen eigener
+Buchstabe an die Stelle von `b` (`Ctrl+] ]`); ist der Buchstabe eine Taste der
+Tabelle (`ctrl-d`), gilt die Tabelle.
+
+**Die Vorgabe wechselte von `Ctrl+A` zu `Ctrl+B`.** Wer keinen Wert gesetzt
+hatte, bekommt beim ersten Anhängen an einem Terminal danach eine Zeile auf
+`stderr`: `The prefix key is now Ctrl+B (was Ctrl+A). Keep the old one:
+humanitl config set terminal.prefix ctrl-a`. Sie kommt einmal je Nutzer und ist
+im Datenverzeichnis gemerkt (`prefix-notice-shown`), nie im Projekt. Ein
+ausdrücklich gesetztes `ctrl-a`, unter welchem Namen auch immer, bleibt.
+
+**`Ctrl+,` direkt.** Die meisten Terminals schicken für `Ctrl+,` nichts
+Eigenes. Hat der Agent das kitty-Tastaturprotokoll eingeschaltet (`CSI > Flags
+u` in seiner Ausgabe, abgeschaltet mit `CSI < u`), schickt das Terminal
+`CSI 44 ; 5 u`, und der Befehl öffnet die Einstellungen ohne Präfix. Den
+Zustand liest der Befehl aus der Ausgabe des Agenten; er schaltet das Protokoll
+nie selbst ein. `terminal.direct_keys = false` reicht die Folge an den Agenten
+weiter. Unter dem Protokoll kommt das Präfix selbst als `CSI 98 ; 5 u` und
+wirkt genauso. Beim Verlassen nimmt der Befehl die Flags des Protokolls zurück,
+die der Agent stehen ließ, damit die Shell nach dem Trennen wieder gewöhnliche
+Tasten bekommt.
 
 Liest die Session ihre Eingabe nicht, warten höchstens 1 MiB getippter oder
 eingefügter Text im Befehl; mehr wird verworfen, und die Trenntaste funktioniert
 weiterhin. Nach der Taste wartet der Befehl höchstens zwei Sekunden auf den
 Daemon, bevor er das Terminal zurückgibt.
 
-`--read-only` trennt auf dieselbe Taste. Es liest die Tastatur nur dafür und
+`--read-only` nutzt dieselbe Präfixtaste. Es liest die Tastatur nur dafür und
 sendet nichts hinauf; an einem Terminal nutzt es dafür den Raw-Modus, und
-`Ctrl+C` trennt ebenfalls. Mit `--detach-keys none` lässt es das Terminal in
+`Ctrl+C` trennt ebenfalls. Mit `--prefix none` lässt es das Terminal in
 Ruhe. Das Terminal der Anwendung ist nicht betroffen: Dort trennt das Schließen
 des Bereichs.
 
@@ -604,8 +649,9 @@ Signale sind derselbe Code wie bei `run`, und jede Fähigkeit dahinter ist die
 
 1. **Dieses Terminal geht an den Agenten**, sobald die Sitzung läuft, auch
    ohne `-- CMD`, also mit dem Agenten der Konfiguration: Man landet in seinem
-   Terminal wie nach einem nativen Start. Die Taste zum Abhängen von
-   `humanitl sandbox attach` gilt (`terminal.detach_prefix`, `Ctrl+A d`); nach
+   Terminal wie nach einem nativen Start. Die Präfixtaste von
+   `humanitl sandbox attach` gilt mit ihrer Tabelle (`terminal.prefix`,
+   `Ctrl+B d` hängt ab, `Ctrl+B ?` zeigt die Tabelle); nach
    dem Abhängen läuft die Sitzung weiter, und es wird nichts gefragt.
 2. **Eine Ladeanimation**: Während die Sitzung startet, dreht sich die Faust
    des Logos im Gelb der Marke, mindestens eine Sekunde und nie länger als der

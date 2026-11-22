@@ -129,19 +129,19 @@ pub async fn run(ctx: &Context, cmd: &SandboxCmd) -> Result<u8, Failure> {
         SandboxCmd::Plan => crate::cmd::plan::run(ctx).await,
         SandboxCmd::Attach {
             read_only,
-            detach_keys,
+            prefix,
             shell,
         } => {
             crate::cmd::attach::run(
                 ctx,
                 *read_only,
-                detach_keys.as_deref(),
+                prefix.as_deref(),
                 shell.as_deref().unwrap_or_default(),
             )
             .await
         }
-        SandboxCmd::Exec { detach_keys, cmd } => {
-            crate::cmd::exec::run(ctx, cmd, detach_keys.as_deref()).await
+        SandboxCmd::Exec { prefix, cmd } => {
+            crate::cmd::exec::run(ctx, cmd, prefix.as_deref()).await
         }
         SandboxCmd::Changes { stat } => crate::cmd::changes::changes(ctx, *stat).await,
         SandboxCmd::Apply {

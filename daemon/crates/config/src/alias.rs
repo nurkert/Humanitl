@@ -63,6 +63,13 @@ pub static ALIASES: &[Alias] = &[
         canonical: "limits.recorder_max_body_bytes",
         since: "HUM-057",
     },
+    // Dieselbe Gruppe: Aus der Taste zum Abhängen wurde die Präfixtaste mit
+    // ihrer Tabelle (GitHub #10, ADR-0024 Punkt 8).
+    Alias {
+        old: "terminal.detach_prefix",
+        canonical: "terminal.prefix",
+        since: "GitHub #10",
+    },
     Alias {
         old: "upstream.connect_timeout_secs",
         canonical: "limits.connect_timeout_secs",
@@ -234,6 +241,33 @@ mod tests {
                 alias.old
             );
         }
+    }
+
+    /// `terminal.detach_prefix = "ctrl-e"` wirkt als `terminal.prefix`, mit
+    /// einem Hinweis beim Laden, der den neuen Namen nennt (GitHub #10).
+    #[test]
+    fn the_old_detach_prefix_acts_as_the_prefix() {
+        let dir = tempfile::tempdir().unwrap();
+        let file = dir.path().join("config.toml");
+        std::fs::write(&file, "[terminal]\ndetach_prefix = \"ctrl-e\"\n").unwrap();
+        let resolved = crate::load(&crate::Sources {
+            global_toml: Some(file),
+            ..crate::Sources::empty()
+        })
+        .unwrap();
+        assert_eq!(resolved.config.terminal.prefix, "ctrl-e");
+        assert_eq!(
+            resolved.origin("terminal.prefix"),
+            Some(&crate::Origin::Global)
+        );
+        let notice = resolved
+            .diagnostics
+            .iter()
+            .find(|diagnostic| diagnostic.why.contains("terminal.detach_prefix"))
+            .expect("a notice names the old key");
+        assert_eq!(notice.code.as_str(), "CONFIG_005");
+        assert!(notice.why.contains("terminal.prefix"), "{}", notice.why);
+        assert_eq!(canonical("terminal.detach_prefix"), Some("terminal.prefix"));
     }
 
     #[test]

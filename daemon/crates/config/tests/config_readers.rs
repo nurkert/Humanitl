@@ -213,9 +213,11 @@ const REGISTER: &[(&str, &str)] = &[
     ("sandbox.qemu.virtiofsd", "effective"),
     ("sandbox.work_dir", "effective"),
     ("sandbox.work_mode", "effective"),
-    // Gelesen in `humanitl sandbox attach`, wenn `--detach-keys` fehlt
-    // (`cmd/attach.rs`, HUM-279). Daemon und Oberfläche lesen ihn nicht.
-    ("terminal.detach_prefix", "effective"),
+    // Gelesen in jedem Anschluss an das Terminal einer Sitzung, wenn
+    // `--prefix` fehlt: `sandbox attach`, `run -- CMD`, `go`
+    // (`cmd/attach.rs`, GitHub #10). Daemon und Oberfläche lesen beide nicht.
+    ("terminal.direct_keys", "effective"),
+    ("terminal.prefix", "effective"),
     // Gelesen in `humanitl go`, bevor die Ladeanimation startet
     // (`cmd/run.rs`, HUM-496). Daemon und Oberfläche lesen ihn nicht.
     ("terminal.splash", "effective"),

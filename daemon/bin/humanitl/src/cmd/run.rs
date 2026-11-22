@@ -26,11 +26,11 @@
 //! `humanitl run -- bash` mit einem Terminal auf `stdin` hängt dieses Terminal
 //! an die Sitzung wie `humanitl sandbox attach`: Rohmodus, Fenstergröße,
 //! Eingabe an die Shell und die Taste zum Abhängen von HUM-279
-//! (`terminal.detach_prefix`). Der Anschluss beginnt, sobald der Daemon
+//! (`terminal.prefix`, GitHub #10). Der Anschluss beginnt, sobald der Daemon
 //! `running` meldet; die Bytes kommen dann über die `Terminal`-RPC, samt dem
 //! Rückstand, und nicht mehr über den Ereignisstrom. `Ctrl+C` ist im
 //! Rohmodus ein Byte für die Shell, die es als steuerndes Terminal hat;
-//! `exit` beendet die Sitzung, `Ctrl+A d` hängt ab und lässt sie laufen.
+//! `exit` beendet die Sitzung, `Ctrl+B d` hängt ab und lässt sie laufen.
 //! Mit `--ask terminal` oder `--json` und ohne Terminal bleibt es beim
 //! Mitlesen unten.
 //!
@@ -290,17 +290,17 @@ pub(crate) async fn launch(
     Ok(code)
 }
 
-/// Die Taste zum Abhängen, wenn dieser Lauf sein Terminal anhängt.
+/// Die Präfixtaste, wenn dieser Lauf sein Terminal anhängt (GitHub #10).
 ///
 /// A command of the caller at a terminal works like `sandbox attach`
 /// (HUM-280). The key is read before the start, so a typo in
-/// `terminal.detach_prefix` stops nothing that already runs.
+/// `terminal.prefix` stops nothing that already runs.
 fn detach_keys(
     ctx: &Context,
     args: &RunArgs,
     go: bool,
     moderate: bool,
-) -> Result<Option<humanitl_config::DetachKeys>, Failure> {
+) -> Result<Option<crate::prefix::Keys>, Failure> {
     if attaches(
         args,
         go,
@@ -308,7 +308,7 @@ fn detach_keys(
         ctx.render.is_json(),
         stdin_is_terminal(),
     ) {
-        Ok(Some(crate::cmd::attach::resolve_detach_keys(ctx, None)?))
+        Ok(Some(crate::cmd::attach::resolve_keys(ctx, None)?))
     } else {
         Ok(None)
     }
@@ -406,7 +406,7 @@ async fn drive(
     client: &mut Client,
     start: v1::sandbox_request::Start,
     moderate: bool,
-    keys: Option<humanitl_config::DetachKeys>,
+    keys: Option<crate::prefix::Keys>,
     minor: u32,
     launch: &mut Launch,
 ) -> Result<u8, Failure> {

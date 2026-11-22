@@ -187,8 +187,8 @@ their own, where a human wrote it and the daemon reads it.
 
 `humanitl run -- bash` with a terminal on `stdin` attaches this terminal to
 the session, like `humanitl sandbox attach`: raw mode once the daemon reports
-`running`, the window size, every key to the shell, and the detach key
-`Ctrl+A d` (`terminal.detach_prefix`). The session's terminal is the daemon's
+`running`, the window size, every key to the shell, and the prefix key with
+its table (`Ctrl+B d` detaches, `terminal.prefix`). The session's terminal is the daemon's
 own pseudo-terminal, never this one; the bytes come back filtered as for
 `attach` (HUM-280).
 
@@ -199,7 +199,7 @@ HUM-278 and puts `/run/humanitl/agent` first on `PATH`. The adapter's files
 and environment are the same as for an agent the daemon starts itself:
 model, key file, CA and configuration. So `opencode` (or `pi`) starts with the
 configured model and key, `Ctrl+C` stops it and returns to the shell, `exit`
-ends the session, and `Ctrl+A d` leaves it running for a later
+ends the session, and `Ctrl+B d` leaves it running for a later
 `humanitl sandbox attach`. The command after `--` itself is never bound; it
 must be startable inside the sandbox. pi is a script and is never bound; it
 must lie under a mount such as `/usr/local`. If the key store does not give
@@ -229,11 +229,11 @@ shim, never by entering its namespaces from outside (HUM-299,
 ```text
 $ humanitl sandbox exec
 Shell 4f2a91c3-1 in sandbox 0193…
-Detach: Ctrl+A d
+Detach: Ctrl+B d, help: Ctrl+B ?
 agent@sandbox:/work$
 ```
 
-`Ctrl+A d` detaches and leaves the shell running; `humanitl sandbox attach
+`Ctrl+B d` detaches and leaves the shell running; `humanitl sandbox attach
 --shell 4f2a91c3-1` attaches again, with `--read-only` to watch; the id holds
 only for this session. A command that ends before the terminal is attached
 leaves its output and exit code for the first client, for 30 seconds. The
@@ -527,7 +527,7 @@ For this version that means:
   answer. For line-oriented runs that is no problem, for a full-screen TUI it
   is. Whoever wants to type attaches to the same session with
   `humanitl sandbox attach`; there every key goes to the agent, except the
-  detach key `Ctrl+A d`.
+  detach key `Ctrl+B d`.
 - A **raw mode** exists only with `--ask terminal`, and only for the keys of
   the box: the prompt needs single keys without a line ending. The terminal
   is restored on every exit — on the ordinary end, on every error path, on a
@@ -579,37 +579,82 @@ byte. Whoever detaches ends only their own
 stream; the session keeps running, and a later `attach` shows the
 backlog.
 
-The way out is a key, as in `screen`: **`Ctrl+A d`** detaches. The command
+The way out is a prefix key, as in tmux: **`Ctrl+B d`** detaches. The command
 sends `close`, gives the terminal back and ends with `0` and the line
 `Detached; the session keeps running. Attach again: humanitl sandbox attach`.
 Before the terminal goes into raw mode, a line on `stderr` names the key
-(`Detach: Ctrl+A d`). After the prefix:
+(`Detach: Ctrl+B d, help: Ctrl+B ?`). After the prefix comes a fixed table,
+the same in `humanitl sandbox attach`, `humanitl run -- CMD` at a terminal
+and `humanitl go` (GitHub #10). It lives in one place in the code
+(`humanitl_config::prefix::TABLE`); the help behind `?`, the `--help` of
+`humanitl sandbox attach` and the description of `terminal.prefix` are made
+from it:
 
 | Key | Effect |
 |---|---|
 | `d` | Detach; the session keeps running. |
-| `Ctrl+A` or `a` | Send one `Ctrl+A` to the agent. |
-| anything else | Send `Ctrl+A` and that key unchanged. |
+| `,` | Settings. The view in the session terminal comes with #11; until then a box says so, meanwhile `humanitl settings` works in another terminal. |
+| `i` | Interceptor. The view comes with #12; until then a box says so, meanwhile `humanitl intercept`. |
+| `?` | This table, as a small box over the agent. |
+| `Ctrl+B` or `b` | Send one `Ctrl+B` to the agent. |
+| anything else | Send `Ctrl+B` and that key unchanged. |
+
+Any key closes a box, and that key does not reach the agent. While a box
+stands, the agent's output waits in the command and follows when it closes,
+in whole chunks as the daemon filtered them and at most 1 MiB; a chunk that
+does not fit is dropped whole, with every later one, and the agent is asked
+to redraw. Pasted text (between `ESC [200~` and `ESC [201~`) is never a key:
+a `Ctrl+B d` inside it reaches the agent. A paste whose end never arrives
+ends after half a second without input, so the prefix key works again. Over a shell the box uses the alternate screen, so the
+terminal restores the screen by itself; over a full-screen agent the box is
+drawn on top and the command then asks the agent to redraw (a resize to the
+same size through the `Terminal` RPC).
+
+**Collision with tmux and readline.** A tmux inside the sandbox has the same
+prefix, and in shells and readline `Ctrl+B` means one character back. Both
+get their key by pressing `Ctrl+B` twice (or `Ctrl+B b`).
 
 The prefix may arrive in one read and the key in the next; it waits for the
-next key without a timeout. `--detach-keys SPEC` chooses another prefix for
-one call (`ctrl-a` to `ctrl-z`, `ctrl-\`, `ctrl-]`, `ctrl-^`, `ctrl-_`), and
-`--detach-keys none` turns detaching off, so every byte goes to the agent.
-`terminal.detach_prefix` in `config.toml` sets the default; the profile of a
-project folder may not set it. `ctrl-[` is refused because every arrow key
-starts with that byte, and `ctrl-h`, `ctrl-i`, `ctrl-j` and `ctrl-m` because
-Backspace, Tab and Enter send the same bytes. `ctrl-c` and `ctrl-d` are
-allowed, but then that key reaches the agent only as the prefix pressed twice.
-With a different prefix, its own letter takes the place of `a` (`Ctrl+] ]`).
+next key without a timeout. `--prefix SPEC` (the old name `--detach-keys`
+still works) chooses another prefix for one call (`ctrl-a` to `ctrl-z`,
+`ctrl-\`, `ctrl-]`, `ctrl-^`, `ctrl-_`), and `--prefix none` turns the prefix
+key off, so every byte goes to the agent. `terminal.prefix` in `config.toml`
+sets the default (the old name `terminal.detach_prefix` still works, with a
+notice when the config is loaded); the profile of a project folder may not
+set it. `ctrl-[` is refused because every arrow key starts with that byte,
+and `ctrl-h`, `ctrl-i`, `ctrl-j` and `ctrl-m` because Backspace, Tab and
+Enter send the same bytes. `ctrl-c` and `ctrl-d` are allowed, but then that
+key reaches the agent only as the prefix pressed twice. With a different
+prefix, its own letter takes the place of `b` (`Ctrl+] ]`); a letter that is
+a key of the table (`ctrl-d`, `ctrl-i` is refused anyway) acts as the table
+says.
+
+**The default changed from `Ctrl+A` to `Ctrl+B`.** Whoever had not set a
+value gets one line on `stderr` at the first attach at a terminal after the
+change: `The prefix key is now Ctrl+B (was Ctrl+A). Keep the old one:
+humanitl config set terminal.prefix ctrl-a`. It is shown once per user and
+remembered in the data folder (`prefix-notice-shown`), never in the project.
+An explicitly set `ctrl-a`, under either name, stays as it is.
+
+**`Ctrl+,` directly.** Most terminals send nothing of their own for
+`Ctrl+,`. When the agent has switched on the kitty keyboard protocol
+(`CSI > flags u` in its output, switched off again with `CSI < u`), the
+terminal sends it as `CSI 44 ; 5 u`, and the command opens the settings
+without the prefix. The command reads this state from the agent's output and
+never switches the protocol on itself; `terminal.direct_keys = false` sends
+the sequence on to the agent. Under the protocol the prefix itself arrives as
+`CSI 98 ; 5 u` and works the same. When the command leaves the terminal, it
+takes back the protocol flags the agent left switched on, so the shell after
+a detach gets ordinary keys again.
 
 If the session does not read its input, at most 1 MiB of typed or pasted
 text waits in the command; more is dropped, and the detach key still works.
 After the key, the command waits at most two seconds for the daemon before
 it gives the terminal back.
 
-`--read-only` detaches on the same key. It reads the keyboard only for that
+`--read-only` uses the same prefix key. It reads the keyboard only for that
 and sends nothing up; at a terminal it uses raw mode for it, and `Ctrl+C`
-detaches as well. With `--detach-keys none` it leaves the terminal alone.
+detaches as well. With `--prefix none` it leaves the terminal alone.
 The terminal of the application is not affected: there, closing the pane
 detaches.
 
@@ -664,8 +709,9 @@ capability behind it is the `Sandbox` RPC (ADR-018). What `go` adds:
 
 1. **This terminal goes to the agent** as soon as the session runs, also
    without `-- CMD`, so with the agent from the configuration: you land in its
-   terminal as after starting it natively. The detach key of
-   `humanitl sandbox attach` works (`terminal.detach_prefix`, `Ctrl+A d`);
+   terminal as after starting it natively. The prefix key of
+   `humanitl sandbox attach` works with its table (`terminal.prefix`,
+   `Ctrl+B d` detaches, `Ctrl+B ?` shows the table);
    after a detach the session keeps running and nothing is asked.
 2. **A boot animation**: while the session starts, the fist of the logo turns
    in brand yellow, at least one second and never longer than the start

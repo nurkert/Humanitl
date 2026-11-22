@@ -728,6 +728,20 @@ one-time hint: do not type secrets there, the agent can read that shell
 the capability `Ctrl+Shift+T` does nothing, and with the agent's tab alone
 `Ctrl+PageUp` and `Ctrl+PageDown` stay with the agent.
 
+**In the command-line terminal one prefix key is the only exception (GitHub
+#10).** `humanitl sandbox attach`, `humanitl run -- CMD` at a terminal and
+`humanitl go` hand every key to the agent except the prefix (`terminal.prefix`,
+default `Ctrl+B` as in tmux), followed by a fixed table: `d` detach, `,`
+settings, `i` interceptor, `?` help, the table itself in a small box. The
+prefix pressed twice, or followed by its letter, sends it once, so no key is
+lost to the agent. That matters twice for `Ctrl+B`: a tmux inside the
+sandbox has the same prefix, and in shells and readline `Ctrl+B` is "one
+character back"; both get it by pressing `Ctrl+B` twice. `Ctrl+,` opens the
+settings without the prefix only while the agent has switched on the kitty
+keyboard protocol, because only then does the terminal send a sequence of its
+own for it (`terminal.direct_keys`); the command never switches the protocol
+on itself. The application's terminal does not read the prefix key.
+
 ### 5.3 Every bound key does something
 
 Every activator in `interceptShortcuts()` has an action in the same screen. A widget test compares the two key sets and fails if they differ; a binding without an action is deleted, not disabled. Today `/`, `Ctrl+D` and `N` are bound and mute.

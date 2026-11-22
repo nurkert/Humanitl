@@ -34,6 +34,7 @@
 //! - [`pasted`] was eine Zwischenablage an einem eingefügten Wert hinterlässt
 //! - [`servers`] gespeicherte Modellserver und der aktive davon
 //! - [`assign`] wer welchen Server nutzt: Profil, Projekt, Bestätigung
+//! - [`prefix`] die feste Tabelle nach der Präfixtaste des Terminals
 //!
 //! ```
 //! use humanitl_config::{Env, Sources, load};
@@ -67,6 +68,7 @@ pub mod pasted;
 pub mod paths;
 pub mod pending;
 pub mod policy;
+pub mod prefix;
 pub mod private_dir;
 pub mod profile;
 pub mod project_choice;

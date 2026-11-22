@@ -1125,7 +1125,8 @@ pub enum Theme {
 }
 
 /// Das Terminal der Kommandozeile, wenn sie an einer Sitzung hängt
-/// (`humanitl sandbox attach`, HUM-279), und die Ladeanimation von
+/// (`humanitl sandbox attach`, `humanitl run -- CMD` an einem Terminal,
+/// `humanitl go`; HUM-279, GitHub #10), und die Ladeanimation von
 /// `humanitl go` (HUM-496).
 ///
 /// Die Oberfläche hat ihr eigenes Terminal und liest hier nichts: Dort hängt
@@ -1133,9 +1134,16 @@ pub enum Theme {
 #[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize, JsonSchema)]
 #[serde(default, deny_unknown_fields)]
 pub struct TerminalConfig {
-    /// Präfix der Taste, mit der sich `humanitl sandbox attach` abhängt: `ctrl-a` bis `ctrl-z`, `ctrl-\`, `ctrl-]`, `ctrl-^`, `ctrl-_`, oder `none`, dann gibt es keine. Nach dem Präfix hängt `d` ab und lässt die Sitzung laufen; das Präfix zweimal oder sein Buchstabe schickt es einmal an den Agenten, jede andere Taste geht mit dem Präfix unverändert weiter. `ctrl-[` ist ausgenommen, weil jede Pfeiltaste mit diesem Byte beginnt, `ctrl-h`, `ctrl-i`, `ctrl-j` und `ctrl-m`, weil Rücktaste, Tab und Enter dieselben Bytes schicken. `--detach-keys` überschreibt den Wert für einen Aufruf.
+    /// Die Präfixtaste mit ihrer festen Tabelle; die Beschreibung im Schema
+    /// entsteht aus [`crate::prefix::TABLE`] (GitHub #10).
+    #[schemars(
+        description = crate::prefix::schema_description(),
+        extend("x-tier" = "advanced", "x-project-scope" = "denied")
+    )]
+    pub prefix: String,
+    /// `Ctrl+,` öffnet die Einstellungen ohne Präfix, aber nur, solange der Agent im Terminal das kitty-Tastaturprotokoll eingeschaltet hat (`CSI > Flags u`, abgeschaltet mit `CSI < u`): Nur dann schickt das Terminal für diese Taste eine eigene Folge (`CSI 44 ; 5 u`). Die Kommandozeile schaltet das Protokoll nie selbst ein. Mit `false` oder ohne Präfix (`terminal.prefix = "none"`) geht auch diese Folge an den Agenten.
     #[schemars(extend("x-tier" = "advanced", "x-project-scope" = "denied"))]
-    pub detach_prefix: String,
+    pub direct_keys: bool,
     /// Die Ladeanimation von `humanitl go`: eine sich drehende Faust aus dem Logo, solange die Wegwerf-Sitzung startet, mindestens eine Sekunde lang und nie länger als der Start. Sie erscheint nur, wenn Ausgabe und Fehlerausgabe ein Terminal sind und `--json` fehlt, mit `NO_COLOR` ohne Farbe. `false` schaltet sie ab.
     #[schemars(extend("x-tier" = "advanced", "x-project-scope" = "denied"))]
     pub splash: bool,
@@ -1144,28 +1152,31 @@ pub struct TerminalConfig {
 impl Default for TerminalConfig {
     fn default() -> Self {
         Self {
-            detach_prefix: DetachKeys::DEFAULT_SPEC.to_owned(),
+            prefix: DetachKeys::DEFAULT_SPEC.to_owned(),
+            direct_keys: true,
             splash: true,
         }
     }
 }
 
-/// Die Taste, mit der sich ein angehängtes Terminal abhängt: ein Präfix oder
-/// keine.
+/// Die Präfixtaste eines angehängten Terminals: ein Präfix oder keines
+/// (HUM-279, GitHub #10).
 ///
-/// Eine Lesart für `terminal.detach_prefix` und `--detach-keys`, damit die
-/// Prüfung beim Laden und die der Kommandozeile dieselben Werte annehmen.
+/// Eine Lesart für `terminal.prefix` (alter Name `terminal.detach_prefix`),
+/// `--prefix` und `--detach-keys`, damit die Prüfung beim Laden und die der
+/// Kommandozeile dieselben Werte annehmen.
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
 pub enum DetachKeys {
-    /// Dieses Steuerbyte leitet die Taste ein (`0x01` für `ctrl-a`).
+    /// Dieses Steuerbyte leitet die Taste ein (`0x02` für `ctrl-b`).
     Prefix(u8),
-    /// Kein Abhängen über die Tastatur; jedes Byte geht an den Agenten.
+    /// Keine Präfixtaste; jedes Byte geht an den Agenten.
     Disabled,
 }
 
 impl DetachKeys {
-    /// Die Vorgabe, wie in `screen`.
-    pub const DEFAULT_SPEC: &'static str = "ctrl-a";
+    /// Die Vorgabe, wie in tmux (GitHub #10; bis dahin `ctrl-a` wie in
+    /// `screen`).
+    pub const DEFAULT_SPEC: &'static str = "ctrl-b";
 
     /// Was ein Befund als erlaubte Werte nennt.
     pub const ALLOWED: &'static str = "ctrl-a to ctrl-z except ctrl-h, ctrl-i, ctrl-j and ctrl-m, or \
@@ -1206,12 +1217,23 @@ impl DetachKeys {
         }
     }
 
-    /// Wie die Taste heißt, für den Hinweis beim Anhängen: `Ctrl+A d`.
-    /// `None` ohne Präfix.
+    /// Wie das Präfix heißt, für den Hinweis beim Anhängen und die Hilfe:
+    /// `Ctrl+B`. `None` ohne Präfix.
     #[must_use]
     pub fn label(self) -> Option<String> {
         match self {
-            Self::Prefix(byte) => Some(format!("Ctrl+{} d", char::from(byte | 0x40))),
+            Self::Prefix(byte) => Some(format!("Ctrl+{}", char::from(byte | 0x40))),
+            Self::Disabled => None,
+        }
+    }
+
+    /// Der Buchstabe des Präfixes: `b` für `Ctrl+B`, `]` für `Ctrl+]`. Nach
+    /// dem Präfix schickt er das Präfix selbst an den Agenten. `None` ohne
+    /// Präfix.
+    #[must_use]
+    pub const fn letter(self) -> Option<u8> {
+        match self {
+            Self::Prefix(byte) => Some((byte | 0x40).to_ascii_lowercase()),
             Self::Disabled => None,
         }
     }
@@ -1258,21 +1280,28 @@ mod tests {
     /// (HUM-279).
     #[test]
     fn a_detach_spec_names_the_byte_the_terminal_sends() {
-        for (spec, byte, label) in [
-            ("ctrl-a", 0x01, "Ctrl+A d"),
-            ("CTRL-B", 0x02, "Ctrl+B d"),
-            ("ctrl-z", 0x1a, "Ctrl+Z d"),
-            ("ctrl-\\", 0x1c, "Ctrl+\\ d"),
-            ("ctrl-]", 0x1d, "Ctrl+] d"),
-            ("ctrl-^", 0x1e, "Ctrl+^ d"),
-            ("ctrl-_", 0x1f, "Ctrl+_ d"),
+        for (spec, byte, label, letter) in [
+            ("ctrl-a", 0x01, "Ctrl+A", b'a'),
+            ("CTRL-B", 0x02, "Ctrl+B", b'b'),
+            ("ctrl-z", 0x1a, "Ctrl+Z", b'z'),
+            ("ctrl-\\", 0x1c, "Ctrl+\\", b'\\'),
+            ("ctrl-]", 0x1d, "Ctrl+]", b']'),
+            ("ctrl-^", 0x1e, "Ctrl+^", b'^'),
+            ("ctrl-_", 0x1f, "Ctrl+_", b'_'),
         ] {
             let keys = DetachKeys::parse(spec);
             assert_eq!(keys, Some(DetachKeys::Prefix(byte)), "{spec}");
             assert_eq!(keys.and_then(DetachKeys::label).as_deref(), Some(label));
+            assert_eq!(keys.and_then(DetachKeys::letter), Some(letter), "{spec}");
         }
         assert_eq!(DetachKeys::parse("none"), Some(DetachKeys::Disabled));
         assert_eq!(DetachKeys::Disabled.label(), None);
+        assert_eq!(DetachKeys::Disabled.letter(), None);
+        // Die Vorgabe ist `ctrl-b` wie in tmux (GitHub #10).
+        assert_eq!(
+            DetachKeys::parse(DetachKeys::DEFAULT_SPEC),
+            Some(DetachKeys::Prefix(0x02))
+        );
         for refused in [
             "ctrl-[", "ctrl-h", "ctrl-i", "ctrl-j", "ctrl-m", "Ctrl-M", "ctrl-@", "ctrl-1",
             "ctrl-", "ctrl-aa", "^a", "",

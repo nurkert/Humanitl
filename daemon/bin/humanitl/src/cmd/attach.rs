@@ -24,21 +24,25 @@
 //! Trennen beendet den Strom, nicht die Sitzung. Der Agent läuft weiter, und
 //! ein späteres `attach` zeigt den Rückstand.
 //!
-//! # Die Taste zum Abhängen (HUM-279)
+//! # Die Präfixtaste (HUM-279, GitHub #10)
 //!
-//! Wie in `screen`: Nach dem Präfix (Vorgabe `Ctrl+A`, `--detach-keys` oder
-//! `terminal.detach_prefix`) hängt `d` ab. Der Befehl schickt `close`, gibt
-//! das Terminal zurück und endet mit 0; die Sitzung läuft weiter. Das Präfix
-//! zweimal oder sein Buchstabe (`Ctrl+A a`) schickt es einmal an den Agenten,
-//! jede andere Taste geht mit dem Präfix davor unverändert weiter. Ein Präfix
-//! am Ende eines Lesevorgangs wartet auf das nächste Byte, ohne Frist: Ein
-//! Terminal liefert eine Taste nicht immer in einem Stück, und eine Frist
-//! machte aus einem langsamen `Ctrl+A d` zwei Tasten für den Agenten.
+//! Wie in tmux: Nach dem Präfix (Vorgabe `Ctrl+B`, `--prefix` oder
+//! `terminal.prefix`) gilt eine feste Tabelle ([`crate::prefix`]): `d` hängt
+//! ab, `,` und `i` öffnen Einstellungen und Interceptor, `?` die Hilfe. Beim
+//! Abhängen schickt der Befehl `close`, gibt das Terminal zurück und endet
+//! mit 0; die Sitzung läuft weiter. Das Präfix zweimal oder sein Buchstabe
+//! (`Ctrl+B b`) schickt es einmal an den Agenten, jede andere Taste geht mit
+//! dem Präfix davor unverändert weiter. Ein Präfix am Ende eines
+//! Lesevorgangs wartet auf das nächste Byte, ohne Frist: Ein Terminal liefert
+//! eine Taste nicht immer in einem Stück, und eine Frist machte aus einem
+//! langsamen `Ctrl+B d` zwei Tasten für den Agenten.
 //!
 //! Die Taste gehört dieser Kommandozeile allein. Das Terminal der Oberfläche
 //! liest sie nicht; dort hängt sich ab, wer den Bereich schließt.
 
-use std::io::{IsTerminal as _, Write as _};
+use std::io::{IsTerminal as _, Write};
+use std::sync::Arc;
+use std::sync::atomic::{AtomicBool, Ordering};
 use std::time::Duration;
 
 use humanitl_config::DetachKeys;
@@ -46,10 +50,14 @@ use humanitl_core::diagnostics::codes;
 use humanitl_core::{Diagnostic, FixAction, Severity};
 use humanitl_ipc::{notice_line, v1};
 use tokio::io::AsyncReadExt as _;
-use tokio::sync::{mpsc, oneshot};
+use tokio::sync::mpsc;
 use tokio_stream::wrappers::ReceiverStream;
 
 use crate::cmd::{Context, EXIT_OK, Failure, from_proto, status_diagnostic};
+use crate::prefix::Keys;
+use crate::prefix::keys::{KeyEvent, PrefixFilter, has_ctrl_c};
+use crate::prefix::stream::StreamState;
+use crate::prefix::view::AgentView;
 use crate::tty::{RawMode, window_size};
 
 /// Die Zeile nach dem Abhängen, auf `stderr` und auf einem gewöhnlichen
@@ -71,20 +79,12 @@ const INPUT_BUFFER: usize = 32;
 /// Wie viel Eingabe auf einmal gelesen wird.
 const INPUT_CHUNK: usize = 4096;
 
-/// Was der Befehl beim Verlassen in das eigene Terminal schreibt.
-///
-/// Ein Vollbild-Agent lässt den Alternativschirm an und den Cursor
-/// versteckt. Wer sich abhängt, bekäme sonst eine Shell ohne sichtbaren
-/// Cursor auf einem fremden Bild. Das sind die einzigen Folgen, die dieser
-/// Befehl selbst schreibt.
-const LEAVE_SCREEN: &[u8] = b"\x1b[?1049l\x1b[?25h\r\n";
-
 /// Führt `humanitl sandbox attach` aus.
 ///
 /// # Errors
 ///
-/// `CLI_004` für ein unlesbares `--detach-keys`, die Befunde des Ladens
-/// (`CONFIG_003` für ein unlesbares `terminal.detach_prefix`), `DAEMON_001`
+/// `CLI_004` für ein unlesbares `--prefix`, die Befunde des Ladens
+/// (`CONFIG_003` für ein unlesbares `terminal.prefix`), `DAEMON_001`
 /// ohne Daemon, `IPC_006`, wenn keine Sitzung läuft, `TERM_001`, wenn schon
 /// jemand schreibt, und die Befunde des Daemons für alles Weitere.
 ///
@@ -93,12 +93,12 @@ const LEAVE_SCREEN: &[u8] = b"\x1b[?1049l\x1b[?25h\r\n";
 pub async fn run(
     ctx: &Context,
     read_only: bool,
-    detach_keys: Option<&str>,
+    prefix: Option<&str>,
     shell: &str,
 ) -> Result<u8, Failure> {
     // Vor der Verbindung: Ein Tippfehler im Schalter soll nicht erst nach dem
     // Anhängen auffallen, und ohne Daemon soll er trotzdem auffallen.
-    let keys = resolve_detach_keys(ctx, detach_keys)?;
+    let keys = resolve_keys(ctx, prefix)?;
     let ending = attach_to(ctx, read_only, keys, shell).await?;
     if shell.is_empty() {
         finish(ctx, ending)
@@ -114,27 +114,50 @@ pub(crate) fn shell_detached(shell: &str) -> String {
     )
 }
 
-/// Die Taste zum Abhängen: der Schalter, sonst `terminal.detach_prefix`.
+/// Die Präfixtaste: der Schalter (`--prefix`, alter Name `--detach-keys`),
+/// sonst `terminal.prefix`; dazu `terminal.direct_keys` und ob die Zeile
+/// zur neuen Vorgabe fällig sein kann (GitHub #10).
 ///
 /// # Errors
 ///
-/// `CLI_004` für ein unlesbares `--detach-keys`, die Befunde des Ladens.
-pub(crate) fn resolve_detach_keys(
-    ctx: &Context,
-    detach_keys: Option<&str>,
-) -> Result<DetachKeys, Failure> {
-    let keys = if let Some(spec) = detach_keys {
-        DetachKeys::parse(spec).ok_or_else(|| invalid_detach_keys("--detach-keys", spec))?
+/// `CLI_004` für ein unlesbares `--prefix`, die Befunde des Ladens.
+pub(crate) fn resolve_keys(ctx: &Context, prefix: Option<&str>) -> Result<Keys, Failure> {
+    // Der Schalter zuerst: Ein Tippfehler darin fällt vor allem anderen auf.
+    let flag = prefix
+        .map(|spec| DetachKeys::parse(spec).ok_or_else(|| invalid_prefix("--prefix", spec)))
+        .transpose()?;
+    let resolved = ctx.config()?;
+    let terminal = &resolved.config.terminal;
+    let keys = if let Some(keys) = flag {
+        keys
     } else {
-        let config = ctx.config()?.config;
         // Beim Laden geprüft (`CONFIG_003`, `validate.rs`); ein Wert, der
         // trotzdem nicht passt, wäre ein Fehler dort und kein Grund, ohne
-        // Taste zum Abhängen zu starten.
-        let spec = config.terminal.detach_prefix;
-        DetachKeys::parse(&spec)
-            .ok_or_else(|| invalid_detach_keys("terminal.detach_prefix", &spec))?
+        // Präfixtaste zu starten.
+        DetachKeys::parse(&terminal.prefix)
+            .ok_or_else(|| invalid_prefix("terminal.prefix", &terminal.prefix))?
     };
-    Ok(keys)
+    Ok(Keys {
+        prefix: keys,
+        direct: terminal.direct_keys,
+        migration: prefix.is_none()
+            && humanitl_config::prefix::migration_due(&ctx.paths, &resolved),
+    })
+}
+
+/// Die Zeile zur neuen Vorgabe, einmal je Nutzer (GitHub #10): nur an einem
+/// Anschluss, der die Tastatur liest, und nur, solange der Merker im
+/// Datenverzeichnis fehlt. Ein Merker, der sich nicht schreiben lässt,
+/// bringt die Zeile beim nächsten Mal wieder; das ist die harmlose Seite.
+fn announce_new_prefix(ctx: &Context, keys: Keys) {
+    // Nur wer den Merker anlegt, zeigt die Zeile: Zwei erste Anschlüsse im
+    // selben Augenblick zeigen sie einmal. Der Merker liegt im
+    // Datenverzeichnis, geschrieben von der Kommandozeile und nicht über
+    // einen RPC; das ist ein Hinweis ohne Entscheidung (ADR-018, ein RPC
+    // dafür ist ein eigenes Issue).
+    if keys.migration && humanitl_config::prefix::claim_migration(&ctx.paths).unwrap_or(true) {
+        ctx.render.note(humanitl_config::prefix::MIGRATION_LINE);
+    }
 }
 
 /// Der Exit-Code eines Anschlusses, und nach dem Abhängen die Zeile dazu.
@@ -173,11 +196,7 @@ pub(crate) fn finish_with(ctx: &Context, ending: Ending, detached: &str) -> Resu
 ///
 /// `DAEMON_001` ohne Daemon und die Befunde der `Terminal`-RPC vor dem
 /// ersten Byte.
-pub(crate) async fn attach(
-    ctx: &Context,
-    read_only: bool,
-    keys: DetachKeys,
-) -> Result<Ending, Failure> {
+pub(crate) async fn attach(ctx: &Context, read_only: bool, keys: Keys) -> Result<Ending, Failure> {
     attach_to(ctx, read_only, keys, "").await
 }
 
@@ -190,7 +209,7 @@ pub(crate) async fn attach(
 pub(crate) async fn attach_to(
     ctx: &Context,
     read_only: bool,
-    keys: DetachKeys,
+    keys: Keys,
     shell: &str,
 ) -> Result<Ending, Failure> {
     attach_at(ctx, read_only, keys, shell, "").await
@@ -206,7 +225,7 @@ pub(crate) async fn attach_to(
 pub(crate) async fn attach_sandbox(
     ctx: &Context,
     read_only: bool,
-    keys: DetachKeys,
+    keys: Keys,
     sandbox: &str,
 ) -> Result<Ending, Failure> {
     attach_at(ctx, read_only, keys, "", sandbox).await
@@ -215,7 +234,7 @@ pub(crate) async fn attach_sandbox(
 async fn attach_at(
     ctx: &Context,
     read_only: bool,
-    keys: DetachKeys,
+    keys: Keys,
     shell: &str,
     sandbox: &str,
 ) -> Result<Ending, Failure> {
@@ -245,24 +264,37 @@ async fn attach_at(
     // der Kernel mit seinem Standardverhalten, und das Terminal bliebe roh.
     let mut signals = Signals::listen();
 
-    // Ein lesender Anschluss liest die Tastatur nur, um die Taste zum
-    // Abhängen zu sehen, und nur an einem Terminal: An einer Pipe gibt es
-    // niemanden, der sie drückt, und ihr Ende hängte ihn sonst ab.
-    let watches_keys =
-        !read_only || (keys != DetachKeys::Disabled && std::io::stdin().is_terminal());
-    if watches_keys && let Some(label) = keys.label() {
-        ctx.render.note(&format!("Detach: {label}"));
+    // Ein lesender Anschluss liest die Tastatur nur, um die Präfixtaste zu
+    // sehen, und nur an einem Terminal: An einer Pipe gibt es niemanden, der
+    // sie drückt, und ihr Ende hängte ihn sonst ab.
+    let watches_keys = !read_only || (!keys.disabled() && std::io::stdin().is_terminal());
+    if watches_keys && let Some(hint) = keys.hint() {
+        announce_new_prefix(ctx, keys);
+        ctx.render.note(&hint);
     }
 
     // Der Rohmodus steht erst, wenn der Strom offen ist: Ein Befund vor dem
     // ersten Byte soll auf einem gewöhnlichen Terminal lesbar sein. Ein
-    // lesender Anschluss braucht ihn für die Taste zum Abhängen; ohne sie
-    // bleibt sein Terminal gewöhnlich, und `Ctrl+C` beendet ihn wie bisher.
+    // lesender Anschluss braucht ihn für die Präfixtaste; ohne sie bleibt
+    // sein Terminal gewöhnlich, und `Ctrl+C` beendet ihn wie bisher.
     let raw = if watches_keys { RawMode::enter() } else { None };
-    let leaves_screen = !read_only || raw.is_some();
-    let (detach_tx, mut detached) = oneshot::channel();
+    // Aufgeräumt wird, wo die Ausgabe auf ein Terminal geht, unabhängig von
+    // Rohmodus, `--read-only` und `--prefix none`: Alternativschirm und
+    // Flags des kitty-Protokolls kommen mit der Ausgabe des Agenten, nicht
+    // mit der Tastatur (Review zu GitHub #10).
+    let leaves_screen = std::io::stdout().is_terminal();
+    // Ob der Agent das kitty-Protokoll eingeschaltet hat: geschrieben vom
+    // Leser der Ausgabe, gelesen vom Leser der Tastatur.
+    let kitty = Arc::new(AtomicBool::new(false));
+    let mut view = AgentView::new(
+        std::io::stdout(),
+        StreamState::new(Arc::clone(&kitty)),
+        keys.prefix,
+        crate::tui::Theme::from_env(),
+    );
+    let (events_tx, mut events) = mpsc::unbounded_channel();
     let forwarder = if watches_keys {
-        spawn_input(tx.clone(), keys, !read_only, detach_tx)
+        spawn_input(tx.clone(), keys, !read_only, events_tx, kitty)
     } else {
         None
     };
@@ -270,21 +302,14 @@ async fn attach_at(
         spawn_resizes(tx.clone());
     }
 
-    // `SIGTERM`, `SIGHUP` und `SIGINT` gehören diesem Befehl: Ohne eigenen Weg
-    // nähme der Kernel den Prozess weg, bevor `Drop` das Terminal zurückgibt,
-    // und die Shell des Menschen bliebe ohne Echo stehen (`tty.rs`).
-    //
-    // `biased` mit dem Abhängen zuerst: Endet der Strom im selben Moment, in
-    // dem die Taste kommt, gilt die Taste, und Exit-Code und Zeile hängen
-    // nicht vom Zufall der Reihenfolge ab.
-    let ending = tokio::select! {
-        biased;
-        // Ein Leser, der ohne Abhängen endet, lässt den Sender fallen; das
-        // ist `Err` und schaltet nur diesen Zweig ab.
-        Ok(()) = &mut detached => Ending::Detached,
-        number = signals.next() => Ending::Signal(number),
-        outcome = pump(&mut stream) => Ending::Stream(outcome),
-    };
+    let ending = follow(
+        &mut view,
+        &mut stream,
+        &mut events,
+        &mut signals,
+        (&tx, !read_only),
+    )
+    .await;
     if matches!(ending, Ending::Detached) {
         // `close` schickt dieser Rahmen und nicht der Leser: Schickte der es
         // vor seiner Meldung, könnte das Ende des Stroms das Rennen gegen die
@@ -306,12 +331,59 @@ async fn attach_at(
         .await;
     }
     drop(raw);
-    if leaves_screen {
-        let mut out = std::io::stdout();
-        let _ = out.write_all(LEAVE_SCREEN);
-        let _ = out.flush();
-    }
+    // Die Ansicht schließt auf jedem Weg; den Schirm räumt der Befehl nur
+    // auf, wo die Ausgabe ein Terminal ist.
+    view.leave(leaves_screen);
     Ok(ending)
+}
+
+/// Die Schleife eines Anschlusses: Ereignisse der Tastatur, Signale und der
+/// Strom des Daemons, bis einer davon ihn beendet.
+///
+/// `SIGTERM`, `SIGHUP` und `SIGINT` gehören diesem Befehl: Ohne eigenen Weg
+/// nähme der Kernel den Prozess weg, bevor `Drop` das Terminal zurückgibt,
+/// und die Shell des Menschen bliebe ohne Echo stehen (`tty.rs`).
+///
+/// `biased` mit der Tastatur zuerst: Endet der Strom im selben Moment, in dem
+/// die Taste zum Abhängen kommt, gilt die Taste, und Exit-Code und Zeile
+/// hängen nicht vom Zufall der Reihenfolge ab.
+///
+/// `input` ist der Kanal zum Daemon und ob dieser Anschluss schreibt; nur
+/// dann bittet er den Agenten nach einer Ansicht, neu zu zeichnen.
+async fn follow<W: Write>(
+    view: &mut AgentView<W>,
+    stream: &mut tonic::Streaming<v1::TerminalOutput>,
+    events: &mut mpsc::UnboundedReceiver<KeyEvent>,
+    signals: &mut Signals,
+    (tx, writes): (&mpsc::Sender<v1::TerminalInput>, bool),
+) -> Ending {
+    let mut code = EXIT_OK;
+    loop {
+        tokio::select! {
+            biased;
+            // Ein Leser, der ohne Abhängen endet, lässt den Sender fallen;
+            // dann passt das Muster nicht, und nur dieser Zweig ruht.
+            Some(event) = events.recv() => match event {
+                KeyEvent::Detach => return Ending::Detached,
+                KeyEvent::Open(action) => {
+                    let _ = view.open(action, window_size());
+                }
+                // Über einem Vollbild-Agenten: dieselbe Größe noch einmal,
+                // damit er neu zeichnet (ADR-0024 Punkt 9).
+                KeyEvent::Close => {
+                    if matches!(view.close(), Ok(true)) && writes {
+                        request_redraw(tx, window_size());
+                    }
+                }
+            },
+            number = signals.next() => return Ending::Signal(number),
+            message = stream.message() => {
+                if let Some(outcome) = take(view, message, &mut code) {
+                    return Ending::Stream(outcome);
+                }
+            }
+        }
+    }
 }
 
 /// Wie ein Anschluss endet.
@@ -330,83 +402,79 @@ async fn drain(stream: &mut tonic::Streaming<v1::TerminalOutput>) {
     while let Ok(Some(_)) = stream.message().await {}
 }
 
-/// Der Befund für eine Angabe, die keine Taste zum Abhängen nennt; `source`
-/// ist der Schalter oder der Schlüssel, aus dem sie kam.
-fn invalid_detach_keys(source: &str, spec: &str) -> Failure {
+/// Der Befund für eine Angabe, die keine Präfixtaste nennt; `source` ist der
+/// Schalter oder der Schlüssel, aus dem sie kam.
+fn invalid_prefix(source: &str, spec: &str) -> Failure {
     Failure::new(
         Diagnostic::builder(codes::CLI_004, Severity::Error)
             .why(format!(
-                "{source} {spec:?} names no detach key; allowed is {}",
+                "{source} {spec:?} names no prefix key; allowed is {}",
                 DetachKeys::ALLOWED
             ))
             .fix(FixAction::CopyCommand(format!(
-                "humanitl sandbox attach --detach-keys {}",
+                "humanitl sandbox attach --prefix {}",
                 DetachKeys::DEFAULT_SPEC
             )))
             .build(),
     )
 }
 
-/// Liest den Strom, bis er endet, und gibt den Exit-Code der Sitzung zurück.
-async fn pump(stream: &mut tonic::Streaming<v1::TerminalOutput>) -> Result<u8, Failure> {
-    let mut code = EXIT_OK;
-    loop {
-        let message = match stream.message().await {
-            Ok(Some(message)) => message,
-            Ok(None) => return Ok(code),
-            Err(status) => {
-                return Err(Failure::new(status_diagnostic(&status, "Terminal")));
-            }
-        };
-        match message.output {
-            Some(v1::terminal_output::Output::Data(data)) => {
-                let mut out = std::io::stdout();
-                if out.write_all(&data).is_err() || out.flush().is_err() {
-                    return Ok(code);
-                }
-            }
-            // Die Hinweiszeile des Daemons steht neben den Bytes und nicht
-            // darin (`ipc/src/terminal.rs`). Wer am Terminal sitzt, hat keine
-            // zweite Fläche dafür, also schreibt dieser Befehl sie zwischen
-            // die Bytes des Agenten -- an der Grenze, an der der Daemon sie
-            // geschickt hat, und in ihre eigene Zeile.
-            Some(v1::terminal_output::Output::Notice(text)) => {
-                let mut out = std::io::stdout();
-                if out.write_all(&notice_line(&text)).is_err() || out.flush().is_err() {
-                    return Ok(code);
-                }
-            }
-            Some(v1::terminal_output::Output::Exit(exit)) => {
-                code = u8::try_from(exit.code).unwrap_or(1);
-            }
-            // Ein Befund beendet den Strom des Clients; der Daemon schickt
-            // ihn genau dann, wenn er nichts mehr liefern wird. Einen Code,
-            // den diese Fassung nicht kennt, meldet sie nicht als eigenen
-            // Fehlschlag — dieselbe Regel wie in `humanitl run`.
-            Some(v1::terminal_output::Output::Diagnostic(diagnostic)) => {
-                match from_proto(&diagnostic) {
-                    Some(rebuilt) => return Err(Failure::new(rebuilt)),
-                    None => return Ok(code),
-                }
-            }
-            // Die Geometrie des Schreibers. Ein Leser rendert letterboxed;
-            // dieser Befehl schreibt in ein Terminal, das seine eigene Größe
-            // hat, und lässt sie deshalb stehen.
-            Some(v1::terminal_output::Output::Resize(_)) | None => {}
+/// Eine Nachricht des Stroms: Bytes auf das Terminal (über `view`), der
+/// Exit-Code in `code`. `Some` mit dem Ausgang, wenn der Strom damit endet.
+fn take<W: Write>(
+    view: &mut AgentView<W>,
+    message: Result<Option<v1::TerminalOutput>, tonic::Status>,
+    code: &mut u8,
+) -> Option<Result<u8, Failure>> {
+    let message = match message {
+        Ok(Some(message)) => message,
+        Ok(None) => return Some(Ok(*code)),
+        Err(status) => {
+            return Some(Err(Failure::new(status_diagnostic(&status, "Terminal"))));
         }
+    };
+    match message.output {
+        // Ein Terminal, das nicht mehr schreibt, beendet den Anschluss.
+        Some(v1::terminal_output::Output::Data(data)) => view.agent(&data).err().map(|_| Ok(*code)),
+        // Die Hinweiszeile des Daemons steht neben den Bytes und nicht darin
+        // (`ipc/src/terminal.rs`). Wer am Terminal sitzt, hat keine zweite
+        // Fläche dafür, also schreibt dieser Befehl sie zwischen die Bytes des
+        // Agenten -- an der Grenze, an der der Daemon sie geschickt hat, und
+        // in ihre eigene Zeile.
+        Some(v1::terminal_output::Output::Notice(text)) => {
+            view.agent(&notice_line(&text)).err().map(|_| Ok(*code))
+        }
+        Some(v1::terminal_output::Output::Exit(exit)) => {
+            *code = u8::try_from(exit.code).unwrap_or(1);
+            None
+        }
+        // Ein Befund beendet den Strom des Clients; der Daemon schickt ihn
+        // genau dann, wenn er nichts mehr liefern wird. Einen Code, den diese
+        // Fassung nicht kennt, meldet sie nicht als eigenen Fehlschlag --
+        // dieselbe Regel wie in `humanitl run`.
+        Some(v1::terminal_output::Output::Diagnostic(diagnostic)) => {
+            Some(from_proto(&diagnostic).map_or(Ok(*code), |rebuilt| Err(Failure::new(rebuilt))))
+        }
+        // Die Geometrie des Schreibers. Ein Leser rendert letterboxed; dieser
+        // Befehl schreibt in ein Terminal, das seine eigene Größe hat, und
+        // lässt sie deshalb stehen.
+        Some(v1::terminal_output::Output::Resize(_)) | None => None,
     }
 }
 
-/// Reicht jede Taste an den Agenten weiter, bis auf die Taste zum Abhängen.
+/// Reicht jede Taste an den Agenten weiter, bis auf die Präfixtaste und ihre
+/// Tabelle ([`PrefixFilter`]).
 ///
 /// Endet die Eingabe — an einem Terminal nie, an einer Pipe sofort —, schickt
 /// der Befehl `close` und hängt sich ab. Die Sitzung läuft weiter; das ist der
 /// Unterschied zwischen „ich sehe nicht mehr zu" und „hör auf".
 ///
-/// Kommt die Taste zum Abhängen, meldet der Leser es über `detach` und endet;
-/// `close` schickt der Aufrufer, nachdem der Weiterreicher die Bytes davor
-/// abgegeben hat. Ohne `forward` (ein lesender Anschluss) geht nichts hinauf,
-/// und das Ende der Eingabe beendet nur das Lesen.
+/// Was die Tabelle auslöst, meldet der Leser über `events`. Nach dem
+/// Abhängen endet er; `close` schickt der Aufrufer, nachdem der
+/// Weiterreicher die Bytes davor abgegeben hat. Ohne `forward` (ein lesender
+/// Anschluss) geht nichts hinauf, und das Ende der Eingabe beendet nur das
+/// Lesen. `kitty` sagt, ob der Agent das kitty-Tastaturprotokoll gerade
+/// eingeschaltet hat.
 ///
 /// **Lesen und Weiterreichen sind getrennt.** Liest die Sitzung ihre Eingabe
 /// nicht, staut sich ein eingefügter Text bis in den Kanal zum Daemon, und
@@ -420,9 +488,10 @@ async fn pump(stream: &mut tonic::Streaming<v1::TerminalOutput>) -> Result<u8, F
 /// warten kann; ohne `forward` gibt es keinen.
 fn spawn_input(
     tx: mpsc::Sender<v1::TerminalInput>,
-    keys: DetachKeys,
+    keys: Keys,
     forward: bool,
-    detach: oneshot::Sender<()>,
+    events: mpsc::UnboundedSender<KeyEvent>,
+    kitty: Arc<AtomicBool>,
 ) -> Option<tokio::task::JoinHandle<()>> {
     let (backlog, forwarder) = if forward {
         let (backlog, queued) = Backlog::new();
@@ -436,7 +505,7 @@ fn spawn_input(
     tokio::spawn(async move {
         let mut stdin = tokio::io::stdin();
         let mut buffer = vec![0u8; INPUT_CHUNK];
-        let mut filter = DetachFilter::new(keys);
+        let mut filter = PrefixFilter::new(keys.prefix, keys.direct);
         loop {
             let read = match stdin.read(&mut buffer).await {
                 Ok(read) if read > 0 => read,
@@ -453,23 +522,27 @@ fn spawn_input(
             let chunk = &buffer[..read];
             // Ein lesender Anschluss schickt nichts hinauf, also hat `Ctrl+C`
             // dort keinen Empfänger. Vor HUM-279 beendete es ihn als Signal;
-            // im Rohmodus ist es ein Byte, und es hängt ab wie die Taste --
-            // geprüft vor dem Filter, damit es auch dann abhängt, wenn
-            // `Ctrl+C` selbst das Präfix ist.
-            if !forward && chunk.contains(&CTRL_C) {
-                let _ = detach.send(());
+            // im Rohmodus ist es ein Byte (oder im kitty-Protokoll eine
+            // Folge), und es hängt ab wie die Taste -- geprüft vor dem
+            // Filter, damit es auch dann abhängt, wenn `Ctrl+C` selbst das
+            // Präfix ist.
+            if !forward && has_ctrl_c(chunk) {
+                let _ = events.send(KeyEvent::Detach);
                 return;
             }
-            let filtered = filter.feed(chunk);
+            let filtered = filter.feed(chunk, kitty.load(Ordering::SeqCst));
             if let Some(backlog) = &backlog {
                 backlog.push(filtered.forward);
             }
-            if filtered.detach {
-                // Die Warteschlange endet hier, ohne `close`: Das schickt der
-                // Aufrufer, nachdem sie leer ist.
-                drop(backlog);
-                let _ = detach.send(());
-                return;
+            for event in filtered.events {
+                if event == KeyEvent::Detach {
+                    // Die Warteschlange endet hier, ohne `close`: Das schickt
+                    // der Aufrufer, nachdem sie leer ist.
+                    drop(backlog);
+                    let _ = events.send(KeyEvent::Detach);
+                    return;
+                }
+                let _ = events.send(event);
             }
         }
     });
@@ -550,98 +623,10 @@ async fn forward_backlog(mut queued: Queued, tx: mpsc::Sender<v1::TerminalInput>
     }
 }
 
-/// `Ctrl+C` im Rohmodus.
-const CTRL_C: u8 = 0x03;
-
 /// Tastendrücke als Nachricht.
 fn data(bytes: Vec<u8>) -> v1::TerminalInput {
     v1::TerminalInput {
         input: Some(v1::terminal_input::Input::Data(bytes)),
-    }
-}
-
-/// Was von einem Lesevorgang hinaufgeht, und ob danach abgehängt wird.
-#[derive(Debug, PartialEq, Eq)]
-struct Filtered {
-    /// Die Bytes für den Agenten, in ihrer Reihenfolge.
-    forward: Vec<u8>,
-    /// Wahr, wenn in diesem Stück die Taste zum Abhängen stand. Was danach
-    /// kam, ist verworfen: Der Mensch geht.
-    detach: bool,
-}
-
-/// Sucht die Taste zum Abhängen im Strom der Tastendrücke.
-///
-/// Eine reine Zustandsmaschine ohne Ein- und Ausgabe, damit jeder Fall ohne
-/// Terminal prüfbar ist. Der einzige Zustand ist, ob das letzte Byte das
-/// Präfix war: Das Präfix kann am Ende eines Lesevorgangs stehen und die
-/// Taste dahinter im nächsten.
-#[derive(Debug)]
-struct DetachFilter {
-    /// Das Präfix, oder `None`, wenn es keine Taste zum Abhängen gibt.
-    prefix: Option<u8>,
-    /// Wahr, wenn das Präfix gelesen ist und das Byte danach noch aussteht.
-    pending: bool,
-}
-
-impl DetachFilter {
-    /// Ein Filter für diese Taste, ohne gelesenes Präfix.
-    const fn new(keys: DetachKeys) -> Self {
-        let prefix = match keys {
-            DetachKeys::Prefix(byte) => Some(byte),
-            DetachKeys::Disabled => None,
-        };
-        Self {
-            prefix,
-            pending: false,
-        }
-    }
-
-    /// Filtert ein gelesenes Stück.
-    fn feed(&mut self, chunk: &[u8]) -> Filtered {
-        let Some(prefix) = self.prefix else {
-            return Filtered {
-                forward: chunk.to_vec(),
-                detach: false,
-            };
-        };
-        // Der Buchstabe des Präfixes: `a` für `Ctrl+A`, `]` für `Ctrl+]`.
-        let letter = (prefix | 0x40).to_ascii_lowercase();
-        let mut forward = Vec::with_capacity(chunk.len());
-        for &byte in chunk {
-            if self.pending {
-                self.pending = false;
-                if byte == b'd' {
-                    return Filtered {
-                        forward,
-                        detach: true,
-                    };
-                }
-                forward.push(prefix);
-                if byte != prefix && byte != letter {
-                    forward.push(byte);
-                }
-            } else if byte == prefix {
-                self.pending = true;
-            } else {
-                forward.push(byte);
-            }
-        }
-        Filtered {
-            forward,
-            detach: false,
-        }
-    }
-
-    /// Was am Ende der Eingabe noch aussteht: ein Präfix ohne Taste danach.
-    fn finish(&mut self) -> Vec<u8> {
-        match (self.pending, self.prefix) {
-            (true, Some(prefix)) => {
-                self.pending = false;
-                vec![prefix]
-            }
-            _ => Vec::new(),
-        }
     }
 }
 
@@ -722,17 +707,30 @@ fn spawn_resizes(tx: mpsc::Sender<v1::TerminalInput>) {
             return;
         };
         while winch.recv().await.is_some() {
-            let (cols, rows) = window_size();
-            let message = v1::TerminalInput {
-                input: Some(v1::terminal_input::Input::Resize(
-                    v1::terminal_input::Resize { cols, rows },
-                )),
-            };
-            if tx.send(message).await.is_err() {
+            if tx.send(resize(window_size())).await.is_err() {
                 return;
             }
         }
     });
+}
+
+/// Bittet den Agenten, neu zu zeichnen, ohne je zu warten: Liest die Sitzung
+/// ihre Eingabe nicht und ist der Kanal voll, fällt die Bitte weg. Ein
+/// `send(..).await` hielte hier die Schleife fest, und eine spätere Taste
+/// zum Abhängen käme nie an (Review zu GitHub #10). Wahr, wenn die Bitte im
+/// Kanal steht.
+fn request_redraw(tx: &mpsc::Sender<v1::TerminalInput>, size: (u32, u32)) -> bool {
+    tx.try_send(resize(size)).is_ok()
+}
+
+/// Eine Fenstergröße als Nachricht. Dieselbe Größe noch einmal lässt den
+/// Agenten neu zeichnen (ADR-0024 Punkt 9).
+fn resize((cols, rows): (u32, u32)) -> v1::TerminalInput {
+    v1::TerminalInput {
+        input: Some(v1::terminal_input::Input::Resize(
+            v1::terminal_input::Resize { cols, rows },
+        )),
+    }
 }
 
 /// Der Befund, wenn der Eingangskanal des Stroms schon zu ist.
@@ -748,9 +746,26 @@ fn closed_input() -> Failure {
 mod tests {
     #![allow(clippy::expect_used)]
 
-    use humanitl_config::DetachKeys;
+    use super::{BACKLOG_LIMIT, Backlog, request_redraw};
 
-    use super::{BACKLOG_LIMIT, Backlog, DetachFilter, Filtered};
+    /// Die Bitte um ein neues Bild wartet nie, auch nicht auf einen vollen
+    /// Kanal zu einer Sitzung, die nichts liest: Sie fällt dann weg, und die
+    /// Schleife bleibt frei für die Taste zum Abhängen. Gemessen in einem
+    /// eigenen Faden mit Frist. Mutationsbeweis: warten, bis Platz ist, macht
+    /// ihn rot.
+    #[test]
+    fn a_redraw_never_waits_on_a_full_channel() {
+        let (tx, _rx) = tokio::sync::mpsc::channel(1);
+        assert!(request_redraw(&tx, (80, 24)), "room for one");
+        let (done, finished) = std::sync::mpsc::channel();
+        std::thread::spawn(move || {
+            let _ = done.send(request_redraw(&tx, (80, 24)));
+        });
+        let queued = finished
+            .recv_timeout(std::time::Duration::from_secs(5))
+            .expect("the redraw request returned within the deadline");
+        assert!(!queued, "a full channel drops the request");
+    }
 
     /// An der Grenze der Warteschlange geht mit, was passt, und nur der Rest
     /// fällt weg (HUM-279, Review): Mit 1 MiB weniger einem Byte in der
@@ -779,106 +794,5 @@ mod tests {
             queued.receiver.try_recv().is_err(),
             "a full backlog takes nothing more"
         );
-    }
-
-    /// `Ctrl+A`, wie die Vorgabe es nennt.
-    const CTRL_A: u8 = 0x01;
-
-    /// Ein Filter mit der Vorgabe `Ctrl+A`.
-    fn ctrl_a() -> DetachFilter {
-        DetachFilter::new(DetachKeys::Prefix(CTRL_A))
-    }
-
-    /// Was hinaufgeht, ohne abzuhängen.
-    fn forwarded(bytes: &[u8]) -> Filtered {
-        Filtered {
-            forward: bytes.to_vec(),
-            detach: false,
-        }
-    }
-
-    /// `Ctrl+A d` hängt ab; was davor stand, geht noch hinauf, das Präfix
-    /// und das `d` nicht.
-    #[test]
-    fn ctrl_a_d_detaches() {
-        let mut filter = ctrl_a();
-        assert_eq!(
-            filter.feed(b"ls\x01d"),
-            Filtered {
-                forward: b"ls".to_vec(),
-                detach: true,
-            }
-        );
-        assert_eq!(
-            ctrl_a().feed(b"\x01d"),
-            Filtered {
-                forward: Vec::new(),
-                detach: true,
-            }
-        );
-    }
-
-    /// `Ctrl+A Ctrl+A` und `Ctrl+A a` schicken genau ein `Ctrl+A` an den
-    /// Agenten, und danach steht kein Präfix mehr aus.
-    #[test]
-    fn ctrl_a_ctrl_a_sends_one_prefix() {
-        let mut filter = ctrl_a();
-        assert_eq!(filter.feed(b"\x01\x01"), forwarded(&[CTRL_A]));
-        assert_eq!(filter.feed(b"d"), forwarded(b"d"), "no prefix is pending");
-        assert_eq!(ctrl_a().feed(b"\x01a"), forwarded(&[CTRL_A]));
-    }
-
-    /// Das Präfix am Ende eines Lesevorgangs wartet auf den nächsten; das
-    /// `d` darin hängt trotzdem ab.
-    #[test]
-    fn a_prefix_split_across_reads_still_detaches() {
-        let mut filter = ctrl_a();
-        assert_eq!(filter.feed(b"x\x01"), forwarded(b"x"));
-        assert_eq!(
-            filter.feed(b"d"),
-            Filtered {
-                forward: Vec::new(),
-                detach: true,
-            }
-        );
-        // Und das Präfix allein, ohne Taste davor, ebenso.
-        let mut filter = ctrl_a();
-        assert_eq!(filter.feed(&[CTRL_A]), forwarded(b""));
-        assert!(filter.feed(b"d").detach);
-    }
-
-    /// Jede andere Taste nach dem Präfix geht mit dem Präfix davor
-    /// unverändert hinauf, auch über eine Lesegrenze.
-    #[test]
-    fn an_unknown_key_after_the_prefix_is_forwarded() {
-        assert_eq!(ctrl_a().feed(b"\x01x"), forwarded(b"\x01x"));
-        assert_eq!(ctrl_a().feed(b"\x01D"), forwarded(b"\x01D"));
-        assert_eq!(ctrl_a().feed(b"\x01\x03"), forwarded(b"\x01\x03"));
-        let mut filter = ctrl_a();
-        assert_eq!(filter.feed(b"\x01"), forwarded(b""));
-        assert_eq!(filter.feed(b"q"), forwarded(b"\x01q"));
-        // Ein Präfix, auf das nichts mehr folgt, gehört dem Agenten.
-        let mut filter = ctrl_a();
-        assert_eq!(filter.feed(b"\x01"), forwarded(b""));
-        assert_eq!(filter.finish(), vec![CTRL_A]);
-    }
-
-    /// `none`: Jedes Byte geht hinauf, `Ctrl+A d` eingeschlossen.
-    #[test]
-    fn none_disables_detaching() {
-        let mut filter = DetachFilter::new(DetachKeys::Disabled);
-        assert_eq!(filter.feed(b"\x01d"), forwarded(b"\x01d"));
-        assert_eq!(filter.feed(b"\x01"), forwarded(b"\x01"));
-        assert!(filter.finish().is_empty());
-    }
-
-    /// Ein anderes Präfix: `Ctrl+]` mit `]` als seinem Buchstaben, und
-    /// `Ctrl+A` ist dann eine gewöhnliche Taste.
-    #[test]
-    fn another_prefix_has_its_own_letter() {
-        let mut filter = DetachFilter::new(DetachKeys::Prefix(0x1d));
-        assert_eq!(filter.feed(b"\x01d"), forwarded(b"\x01d"));
-        assert_eq!(filter.feed(b"\x1d]"), forwarded(b"\x1d"));
-        assert!(filter.feed(b"\x1dd").detach);
     }
 }
