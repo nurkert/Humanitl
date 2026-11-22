@@ -453,7 +453,7 @@ fn found_lines<'a>(diagnostic: &v1::Diagnostic, theme: Theme) -> Vec<Line<'a>> {
 }
 
 /// Der Vorschlag eines Befunds in Wire-Form, wie [`fix_text`] ihn zeigt.
-fn proto_fix_text(fix: &v1::FixAction) -> Option<String> {
+pub(crate) fn proto_fix_text(fix: &v1::FixAction) -> Option<String> {
     use v1::fix_action::Action;
 
     Some(match fix.action.as_ref()? {
@@ -472,7 +472,7 @@ fn proto_fix_text(fix: &v1::FixAction) -> Option<String> {
 
 /// Der Vorschlag eines Befunds, wie er unter einer Zeile steht: ein Befehl
 /// zum Abtippen, oder was in dieser Ansicht zu ändern ist.
-fn fix_text(fix: &humanitl_core::FixAction) -> String {
+pub(crate) fn fix_text(fix: &humanitl_core::FixAction) -> String {
     use humanitl_core::FixAction;
 
     match fix {

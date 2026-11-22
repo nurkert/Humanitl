@@ -771,13 +771,15 @@ fn run_ask_terminal_without_a_terminal_is_cli_002() {
 /// `--json`, and not one byte of the boot animation. The fake's start ends
 /// without an exit code, so both end with `CLI_001`; what counts is that
 /// they end alike. The one line `go` adds for a project the register does
-/// not know yet (#8) is taken out before the comparison.
+/// not know yet (#9), with and without `--json`, is taken out before the
+/// comparison.
 #[test]
 fn go_without_a_terminal_behaves_like_run_disposable() {
-    let harness = Harness::new();
-    let _server = FakeServer::start(&harness);
-
     for json in [false, true] {
+        // Je ein eigenes Register: Nach dem ersten `go` kennt es den Ordner,
+        // und der zweite hätte keine Zeile des Erststarts mehr.
+        let harness = Harness::new();
+        let _server = FakeServer::start(&harness);
         let flag: &[&str] = if json { &["--json"] } else { &[] };
         let mut go = harness.run(flag.iter().copied().chain([
             "go",
@@ -788,23 +790,25 @@ fn go_without_a_terminal_behaves_like_run_disposable() {
             "exit 0",
         ]));
         let text = stderr(&go);
-        // Mit `--json` gibt es keine Hinweise auf stderr, also auch diese
-        // Zeile nicht.
+        // Die Zeile des Erststarts steht auch mit `--json` da: Sie sagt,
+        // welche Wahl der Lauf für das Projekt gespeichert hat (#9).
         assert_eq!(
-            text.contains("[humanitl] new project "),
-            !json,
+            text.lines()
+                .filter(|line| line.starts_with("[humanitl] first start in "))
+                .count(),
+            1,
             "json {json}: {text}"
         );
         let mut kept = String::new();
         for line in text
             .lines()
-            .filter(|line| !line.starts_with("[humanitl] new project "))
+            .filter(|line| !line.starts_with("[humanitl] first start in "))
         {
             kept.push_str(line);
             kept.push('\n');
         }
         go.stderr = kept.into_bytes();
-        let run = harness.run(flag.iter().copied().chain([
+        let mut run = harness.run(flag.iter().copied().chain([
             "run",
             "--disposable",
             "--",
@@ -812,6 +816,17 @@ fn go_without_a_terminal_behaves_like_run_disposable() {
             "-c",
             "exit 0",
         ]));
+        // Die Zeile des Erststarts nennt den Frage-Modus; der Hinweis zu
+        // Anfragen ohne Regel, den `run` schreibt, fehlt deshalb bei `go`.
+        let mut ran = String::new();
+        for line in stderr(&run)
+            .lines()
+            .filter(|line| !line.starts_with("[humanitl] a request without a rule"))
+        {
+            ran.push_str(line);
+            ran.push('\n');
+        }
+        run.stderr = ran.into_bytes();
         assert_eq!(code(&go), code(&run), "json {json}: {}", stderr(&go));
         assert_eq!(stdout(&go), stdout(&run), "json {json}");
         assert_eq!(stderr(&go), stderr(&run), "json {json}");

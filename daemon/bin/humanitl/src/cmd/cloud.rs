@@ -17,7 +17,7 @@
 //! Der Hinweis hält nichts auf, was bestätigt ist.
 
 use std::ffi::OsStr;
-use std::io::{BufRead, IsTerminal as _, Write};
+use std::io::{IsTerminal as _, Write};
 
 use humanitl_ipc::client::Client;
 use humanitl_ipc::v1;
@@ -112,17 +112,37 @@ pub(crate) enum Answer {
     Shown,
     /// Nicht bestätigt: Nichts startet.
     Declined,
+    /// Ein Signal kam, während die Frage stand (`Ctrl+C` nach einem
+    /// Bildschirm, #9): Nichts startet, Exit mit diesem Code (`128 + n`).
+    Interrupted(u8),
 }
 
 /// Schreibt den Hinweis und liest, in [`Mode::Ask`], genau eine Zeile.
 ///
 /// In [`Mode::Line`] und [`Mode::Confirmed`] liest diese Funktion nichts:
 /// ohne Terminal wartet niemand.
+#[cfg(test)]
 pub(crate) fn announce(
     mode: Mode,
     cloud: &v1::CloudInference,
     out: &mut dyn Write,
-    input: &mut dyn BufRead,
+    input: &mut dyn std::io::BufRead,
+) -> Answer {
+    announce_with(mode, cloud, out, || {
+        let mut answer = String::new();
+        let _ = input.read_line(&mut answer);
+        Ok(answer)
+    })
+}
+
+/// Wie `announce` (das die Tests benutzen), mit einer eigenen Art, die
+/// Antwort zu lesen: `Err` mit einem Exit-Code, wenn ein Signal das Lesen
+/// beendet hat.
+fn announce_with(
+    mode: Mode,
+    cloud: &v1::CloudInference,
+    out: &mut dyn Write,
+    answer: impl FnOnce() -> Result<String, u8>,
 ) -> Answer {
     let text = full_text(cloud);
     match mode {
@@ -143,8 +163,13 @@ pub(crate) fn announce(
                 crate::render::plain(&cloud.provider)
             );
             let _ = out.flush();
-            let mut answer = String::new();
-            let _ = input.read_line(&mut answer);
+            let answer = match answer() {
+                Ok(answer) => answer,
+                Err(code) => {
+                    let _ = writeln!(out);
+                    return Answer::Interrupted(code);
+                }
+            };
             if matches!(answer.trim().to_ascii_lowercase().as_str(), "y" | "yes") {
                 Answer::Confirmed
             } else {
@@ -161,8 +186,11 @@ pub(crate) fn announce(
 /// mit `--yes` (der Daemon merkt es beim Start), `cloud_notice_shown` nach
 /// der Zeile ohne Terminal (er merkt nichts).
 ///
-/// `Ok(false)` heißt: Der Mensch hat nicht bestätigt, und nichts darf
-/// starten. Lässt sich die Frage nicht stellen (ein älterer Daemon, eine
+/// `Ok(Some(code))` heißt: nichts darf starten, Exit mit `code`. Exit 1, wenn
+/// der Mensch nicht bestätigt hat, `128 + n` für ein Signal während der
+/// Frage oder davor, das die Merker eines Bildschirms gefangen haben (#9):
+/// Es kam, bevor die Signale von `tokio` im Lauf stehen, und darf den Start
+/// nicht übergehen. Lässt sich die Frage nicht stellen (ein älterer Daemon, eine
 /// Konfiguration, die nicht aufgeht), setzt diese Funktion nichts; der
 /// Start lehnt dann selbst sichtbar ab (`LLM_011`) oder meldet seinen
 /// Befund.
@@ -176,7 +204,26 @@ pub(crate) async fn prepare_start(
     minor: u32,
     mode: Mode,
     local: (&humanitl_config::Paths, &humanitl_config::Config),
-) -> Result<bool, Failure> {
+) -> Result<Option<u8>, Failure> {
+    let answered = Box::pin(ask_before_start(client, start, minor, mode, local)).await?;
+    Ok(settle(answered, crate::tui::signals::take()))
+}
+
+/// Was nach der Frage gilt: Ein Signal, das die Merker eines Bildschirms
+/// gefangen haben, gewinnt über jede Antwort, auch über ein leeres Nein
+/// (`Ctrl+C` nach einem leeren `Enter` ist 130, nicht 1).
+fn settle(answered: Option<u8>, signal: Option<crate::tui::signals::Signal>) -> Option<u8> {
+    crate::cmd::go::signalled(signal).or(answered)
+}
+
+/// [`prepare_start`] ohne den letzten Blick auf die Signale.
+async fn ask_before_start(
+    client: &mut Client,
+    start: &mut v1::sandbox_request::Start,
+    minor: u32,
+    mode: Mode,
+    local: (&humanitl_config::Paths, &humanitl_config::Config),
+) -> Result<Option<u8>, Failure> {
     // Ein Daemon vor 1.43 (etwa nach einem Update noch nicht neu gestartet)
     // kennt weder das Tor noch die Frage. Dann fragt die Kommandozeile an
     // der Konfiguration dieses Aufrufs, `--llm` eingeschlossen, wie
@@ -184,19 +231,22 @@ pub(crate) async fn prepare_start(
     if minor < CLOUD_MINOR {
         let (paths, config) = local;
         let Some(cloud) = old_daemon_notice(minor, paths, config) else {
-            return Ok(true);
+            return Ok(None);
         };
-        if decide(mode, &cloud) == Answer::Declined {
-            eprintln!("[humanitl] not started; the notice was not confirmed");
-            return Ok(false);
-        }
-        return Ok(true);
+        return Ok(match decide(mode, &cloud) {
+            Answer::Declined => {
+                eprintln!("[humanitl] not started; the notice was not confirmed");
+                Some(crate::cmd::EXIT_USER)
+            }
+            Answer::Interrupted(code) => Some(code),
+            Answer::Shown | Answer::Confirmed => None,
+        });
     }
     let Some(cloud) = checked(client, start.clone()).await else {
-        return Ok(true);
+        return Ok(None);
     };
     if cloud.acknowledged {
-        return Ok(true);
+        return Ok(None);
     }
     // Die Antwort nennt, wofür sie gilt; der Daemon nimmt sie nur für genau
     // diesen Agenten und Anbieter an.
@@ -209,10 +259,11 @@ pub(crate) async fn prepare_start(
         Answer::Confirmed => start.acknowledge_cloud_inference = shown,
         Answer::Declined => {
             eprintln!("[humanitl] not started; the notice was not confirmed");
-            return Ok(false);
+            return Ok(Some(crate::cmd::EXIT_USER));
         }
+        Answer::Interrupted(code) => return Ok(Some(code)),
     }
-    Ok(true)
+    Ok(None)
 }
 
 /// Wie [`prepare_start`] für `humanitl sandbox run`, das die Sandbox im
@@ -239,7 +290,7 @@ pub(crate) async fn confirm_local(
     };
     match decide(mode, &cloud) {
         Answer::Shown => Ok(true),
-        Answer::Declined => {
+        Answer::Declined | Answer::Interrupted(_) => {
             eprintln!("[humanitl] not started; the notice was not confirmed");
             Ok(false)
         }
@@ -280,9 +331,54 @@ pub(crate) fn local_notice(
 /// Der Hinweis auf `stderr`, in [`Mode::Ask`] mit der Frage auf `stdin`.
 fn decide(mode: Mode, cloud: &v1::CloudInference) -> Answer {
     let mut err = std::io::stderr();
-    let stdin = std::io::stdin();
-    let mut input = stdin.lock();
-    announce(mode, cloud, &mut err, &mut input)
+    announce_with(mode, cloud, &mut err, || {
+        read_answer(
+            std::time::Duration::from_millis(50),
+            crate::tui::signals::take,
+        )
+    })
+}
+
+/// Liest eine Zeile von `stdin` und sieht dabei alle `tick` nach Signalen.
+///
+/// Nach einem Bildschirm fangen dessen Merker `SIGINT`, `SIGTERM` und
+/// `SIGHUP` (`tui::signals`); ein `Ctrl+C` an der Frage beendete sonst
+/// nichts, und das Lesen liefe weiter. Gelesen wird deshalb in einem eigenen
+/// Thread, und ein beendendes Signal gibt `Err(128 + n)`. Der Thread bleibt
+/// dann im Lesen stehen, bis der Befehl endet; er hält nichts außer `stdin`.
+/// Ohne Bildschirm gibt es keine Merker, und das Signal wirkt wie immer.
+fn read_answer(
+    tick: std::time::Duration,
+    mut poll: impl FnMut() -> Option<crate::tui::signals::Signal>,
+) -> Result<String, u8> {
+    let (sender, answers) = std::sync::mpsc::channel();
+    std::thread::spawn(move || {
+        let mut answer = String::new();
+        let _ = std::io::stdin().read_line(&mut answer);
+        let _ = sender.send(answer);
+    });
+    wait_for_answer(&answers, tick, &mut poll)
+}
+
+/// Wartet auf die Zeile aus `answers` und sieht alle `tick` nach Signalen.
+fn wait_for_answer(
+    answers: &std::sync::mpsc::Receiver<String>,
+    tick: std::time::Duration,
+    poll: &mut dyn FnMut() -> Option<crate::tui::signals::Signal>,
+) -> Result<String, u8> {
+    use std::sync::mpsc::RecvTimeoutError;
+
+    loop {
+        match answers.recv_timeout(tick) {
+            Ok(answer) => return Ok(answer),
+            Err(RecvTimeoutError::Disconnected) => return Ok(String::new()),
+            Err(RecvTimeoutError::Timeout) => {
+                if let Some(code) = crate::cmd::go::signalled(poll()) {
+                    return Err(code);
+                }
+            }
+        }
+    }
 }
 
 /// `Status.cloud_inference` eines Starts mit genau diesen Angaben, oder
@@ -340,7 +436,7 @@ async fn acknowledge(client: &mut Client, cloud: &v1::CloudInference) -> Result<
 mod tests {
     #![allow(clippy::unwrap_used, clippy::expect_used, clippy::panic)]
 
-    use std::io::Read;
+    use std::io::{BufRead, Read};
 
     use super::*;
 
@@ -489,5 +585,55 @@ mod tests {
         let mut hostile = cloud();
         hostile.provider = "evil\x1b]0;x\x07.com".to_owned();
         assert!(!short_line(&hostile, false).contains('\x1b'));
+    }
+
+    /// Ein Signal gewinnt über jede Antwort: Ein leeres Nein mit `SIGINT`
+    /// ist 130, nicht 1; ohne Signal gilt die Antwort (#9, Review).
+    ///
+    /// Mutation proof: looking at the signal only when nothing stops the
+    /// start (the old `answered.is_none()` gate) returns 1 for the first
+    /// assertion.
+    #[test]
+    fn a_signal_wins_over_any_answer() {
+        use crate::tui::signals::Signal;
+
+        assert_eq!(settle(Some(1), Some(Signal::Interrupt)), Some(130));
+        assert_eq!(settle(None, Some(Signal::Terminate)), Some(143));
+        assert_eq!(settle(Some(1), None), Some(1));
+        assert_eq!(settle(None, Some(Signal::Stop)), None);
+    }
+
+    /// Ein Signal, das die Merker eines Bildschirms gefangen haben, beendet
+    /// die Frage zur Cloud-Inferenz mit `128 + n`, auch wenn keine Zeile
+    /// kommt (#9); ohne Signal wartet sie auf die Zeile.
+    ///
+    /// Mutation proof: `wait_for_answer` without the look at the signals
+    /// waits for ever here; the test ends at its deadline instead of with
+    /// `Err(130)`.
+    #[test]
+    fn ctrl_c_ends_the_question_after_a_screen() {
+        let (sender, answers) = std::sync::mpsc::channel::<String>();
+        let tick = std::time::Duration::from_millis(5);
+        let started = std::time::Instant::now();
+        let mut polls = 0;
+        let mut poll = || {
+            polls += 1;
+            assert!(
+                started.elapsed() < std::time::Duration::from_secs(10),
+                "the question did not end on the signal"
+            );
+            (polls > 3).then_some(crate::tui::signals::Signal::Interrupt)
+        };
+        assert_eq!(wait_for_answer(&answers, tick, &mut poll), Err(130));
+        sender.send("y\n".to_owned()).expect("sent");
+        assert_eq!(
+            wait_for_answer(&answers, tick, &mut || None),
+            Ok("y\n".to_owned())
+        );
+        let mut out = Vec::new();
+        assert_eq!(
+            announce_with(Mode::Ask, &cloud(), &mut out, || Err(130)),
+            Answer::Interrupted(130)
+        );
     }
 }

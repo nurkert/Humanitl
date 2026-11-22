@@ -95,6 +95,18 @@ fn classify(event: &Event) -> Step {
     }
 }
 
+/// Ob jetzt gezeichnet wird: nach einer Eingabe (`dirty`) oder wenn der
+/// Bildschirm sich von sich aus geändert hat.
+///
+/// [`Screen::changed`] läuft in jedem Schritt, auch wenn ohnehin gezeichnet
+/// wird: Erst die Antworten, die inzwischen kamen, dann das Bild und die
+/// nächste Taste. Eine Taste trifft so den Stand, den der Daemon schon
+/// gemeldet hat.
+fn needs_drawing(dirty: bool, screen: &mut impl Screen) -> bool {
+    let changed = screen.changed();
+    dirty || changed
+}
+
 /// Zeichnet ein Bild: den Bildschirm oder, unter dem Minimum, den Hinweis.
 fn draw(
     guard: &mut TerminalGuard,
@@ -160,7 +172,7 @@ pub fn run(
             Some(signal) => return Ok(Outcome::Signal(signal)),
             None => {}
         }
-        if dirty || screen.changed() {
+        if needs_drawing(dirty, screen) {
             draw(guard, screen, theme, min)?;
             dirty = false;
         }
@@ -188,7 +200,7 @@ pub fn run(
 mod tests {
     use crossterm::event::{Event, KeyCode, KeyEvent, KeyEventKind, KeyModifiers};
 
-    use super::{Step, classify, forget};
+    use super::{Flow, Screen, Step, classify, forget, needs_drawing};
 
     fn key(code: KeyCode, modifiers: KeyModifiers) -> Event {
         Event::Key(KeyEvent::new(code, modifiers))
@@ -221,6 +233,36 @@ mod tests {
             KeyEventKind::Release,
         ));
         assert_eq!(classify(&release), Step::Pass, "only a press counts");
+    }
+
+    /// Ein Bildschirm, der zählt, wie oft nach Antworten gefragt wurde.
+    struct Counting(usize);
+
+    impl Screen for Counting {
+        fn draw(&mut self, _frame: &mut ratatui::Frame<'_>, _theme: super::Theme) {}
+
+        fn on_event(&mut self, _event: &Event) -> Flow {
+            Flow::Continue
+        }
+
+        fn changed(&mut self) -> bool {
+            self.0 += 1;
+            false
+        }
+    }
+
+    /// Auch wenn ohnehin gezeichnet wird, nimmt der Bildschirm zuerst die
+    /// Antworten, die inzwischen kamen (#9, Review).
+    ///
+    /// Mutation proof: `dirty || screen.changed()` skips `changed` after an
+    /// input, and the count stays 0.
+    #[test]
+    fn replies_are_taken_before_every_frame() {
+        let mut screen = Counting(0);
+        assert!(needs_drawing(true, &mut screen));
+        assert_eq!(screen.0, 1, "changed ran although dirty");
+        assert!(!needs_drawing(false, &mut screen));
+        assert_eq!(screen.0, 2);
     }
 
     /// Der Text eines Einfügens ist danach überschrieben und leer; andere

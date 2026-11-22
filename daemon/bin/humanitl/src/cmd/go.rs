@@ -11,9 +11,10 @@
 //!    `Start.sandbox_mode` und `Start.work_mode`, die Kernel-Stufe als
 //!    Untergrenze `sandbox.min_isolation = "kernel"`. Ohne Wort und ohne
 //!    Schalter bleiben diese Felder leer, und der Daemon löst mit der
-//!    Projektwahl auf (HUM-532); für ein neues Projekt ist das der Vorschlag
-//!    (HUM-536). `go` ruft `Projects.save_choice` nie: Kein Schalter ändert
-//!    die gespeicherte Wahl.
+//!    Projektwahl auf (HUM-532). Kein Schalter ändert die gespeicherte Wahl;
+//!    `Projects.save_choice` ruft `go` nur einmal, beim ersten Start in einem
+//!    Ordner, den das Register nicht kennt, mit den Vorgaben des Vorschlags
+//!    oder der Wahl des Erststart-Bildschirms ([`first_start()`], #9).
 //! 2. **Der Ordner ist das aktuelle Verzeichnis** oder `--dir`, nicht der in
 //!    `config.toml` gespeicherte Ordner; `--work` und eine Variable
 //!    `HUMANITL_SANDBOX__WORK_DIR` gelten als Wunsch dieses Aufrufs weiter.
@@ -51,6 +52,9 @@ use crate::cli::{GoArgs, RunArgs};
 use crate::cmd::run::{Launch, launch};
 use crate::cmd::{Context, EXIT_USER, Failure, status_diagnostic};
 use crate::splash::{self, Palette};
+
+mod first_start;
+pub(crate) use first_start::{Next, first_start, signalled};
 
 /// Der Schlüssel des Schreibmodus, den `--rw` und `--ro` für diesen Aufruf
 /// setzen.
@@ -303,9 +307,9 @@ fn project_dir(cwd: &Path, dir: &Path) -> Result<PathBuf, Failure> {
     }
 }
 
-/// Eine Zeile für ein Projekt, das das Register noch nicht kennt: Es startet
-/// mit den Vorgaben des Vorschlags, bis es den Erststart-Bildschirm gibt
-/// (#9).
+/// Eine Zeile für ein Projekt, das das Register noch nicht kennt, an einem
+/// Daemon, der noch nicht am Ordner speichert (vor Minor 59): Es startet mit
+/// den Vorgaben, ohne Erststart-Bildschirm und ohne gespeicherte Wahl (#8).
 ///
 /// Ob der Ordner bekannt ist, sagt der Daemon (`Projects.get`); ein älterer
 /// Daemon oder einer ohne Register bekommt keine Zeile.

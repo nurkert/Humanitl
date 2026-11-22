@@ -52,6 +52,8 @@ use rustix::termios::{LocalModes, tcgetattr};
 
 mod common;
 
+#[cfg(target_os = "linux")]
+use common::FirstStartTweaks;
 use common::{FakeServer, Harness, PATIENCE};
 
 /// Ein Pseudoterminal: der Master, den der Test hält, und der Slave, den der
@@ -763,7 +765,8 @@ const SPLASH_RESTORE: &str = "\x1b[0m\x1b[?25h\x1b[?1049l";
 #[test]
 fn go_shows_the_splash_for_a_second_and_gives_the_terminal_back() {
     let harness = Harness::new();
-    let server = FakeServer::start(&harness);
+    // Ein bekanntes Projekt: Ein neues bekäme zuerst den Erststart (#9).
+    let server = FakeServer::start_with_known_project(&harness, &work(&harness));
     let pty = Pty::open();
 
     let begun = Instant::now();
@@ -809,7 +812,7 @@ fn go_without_colour_and_without_splash() {
         (&["--terminal-splash=false"][..], None, false, false),
     ] {
         let harness = Harness::new();
-        let _server = FakeServer::start(&harness);
+        let _server = FakeServer::start_with_known_project(&harness, &work(&harness));
         let pty = Pty::open();
         let mut child = go_at(&harness, &pty, extra, no_color);
         wait_for_raw(&mut child, &pty);
@@ -828,4 +831,273 @@ fn go_without_colour_and_without_splash() {
         );
         assert!(pty.is_cooked(), "{extra:?}");
     }
+}
+
+/// Das Arbeitsverzeichnis der Harness, wie der Prozess es sieht.
+fn work(harness: &Harness) -> std::path::PathBuf {
+    std::fs::canonicalize(harness.path("work")).expect("the work directory")
+}
+
+// ---------------------------------------------------------------------------
+// Der Erststart-Bildschirm von `humanitl go` (#9)
+// ---------------------------------------------------------------------------
+
+/// Ein Pseudoterminal mit Größe: Ohne sie gäbe es statt des Bildschirms
+/// `TERM_003` und die Zeile.
+#[cfg(target_os = "linux")]
+fn sized_pty() -> Pty {
+    let pty = Pty::open();
+    rustix::termios::tcsetwinsize(
+        &pty.slave,
+        rustix::termios::Winsize {
+            ws_row: 30,
+            ws_col: 100,
+            ws_xpixel: 0,
+            ws_ypixel: 0,
+        },
+    )
+    .expect("the size is set");
+    pty
+}
+
+/// Alle Einstellungen des Terminals, vergleichbar.
+#[cfg(target_os = "linux")]
+fn termios(pty: &Pty) -> String {
+    format!("{:?}", tcgetattr(pty.slave.as_fd()).expect("settings"))
+}
+
+/// Startet `humanitl go -- bash` an diesem Terminal, mit `TERM` und ohne
+/// `NO_COLOR`.
+#[cfg(target_os = "linux")]
+fn go_first(harness: &Harness, pty: &Pty) -> Child {
+    harness
+        .command()
+        .args(["go", "--", "bash"])
+        .env("TERM", "xterm-256color")
+        .env_remove("NO_COLOR")
+        .stdin(pty.stdio())
+        .stdout(pty.stdio())
+        .stderr(pty.stdio())
+        .spawn()
+        .expect("the binary starts")
+}
+
+/// Wartet, bis `text` in der Ausgabe steht; mit Frist, und ein Lauf, der
+/// vorher endet, ist ein Fehler mit seiner Ausgabe.
+#[cfg(target_os = "linux")]
+fn wait_for_text(child: &mut Child, pty: &Pty, text: &str) {
+    let deadline = Instant::now() + PATIENCE;
+    loop {
+        let said = String::from_utf8_lossy(&pty.read()).into_owned();
+        if said.contains(text) {
+            return;
+        }
+        if let Some(status) = child.try_wait().expect("the child can be polled") {
+            panic!("the command ended with {status:?} before {text:?}: {said:?}");
+        }
+        if Instant::now() >= deadline {
+            let _ = child.kill();
+            let _ = child.wait();
+            panic!("{text:?} did not appear within {PATIENCE:?}: {said:?}");
+        }
+        std::thread::sleep(Duration::from_millis(10));
+    }
+}
+
+/// Wo `needle` zuletzt in `haystack` steht.
+#[cfg(target_os = "linux")]
+fn last(haystack: &str, needle: &str) -> Option<usize> {
+    haystack.rfind(needle)
+}
+
+/// Erster `go` in einem neuen Ordner an einem Terminal: der Bildschirm,
+/// `Enter` genügt, die Wahl ist am Ordner gespeichert und der Agent
+/// startet. Der zweite `go` im selben Ordner zeigt keinen Bildschirm.
+///
+/// Mutation proof: dropping the `save` call after `Exit::Start` (the screen
+/// ends, nothing is stored) lets the second run show the screen again, and
+/// the test fails on `saved_paths` and on `Customize` in the second output.
+#[cfg(target_os = "linux")]
+#[test]
+fn go_first_start_enter_saves_and_the_second_go_shows_no_screen() {
+    let harness = Harness::new();
+    let server = FakeServer::start(&harness);
+
+    let pty = sized_pty();
+    let before = termios(&pty);
+    let mut child = go_first(&harness, &pty);
+    wait_for_text(&mut child, &pty, "Customize");
+    assert!(
+        server.starts().is_empty(),
+        "nothing starts under the screen"
+    );
+    pty.write(b"\r");
+    wait_for_text(&mut child, &pty, "Detach: Ctrl+A d");
+    pty.write(b"\x01d");
+    assert_eq!(wait_for_exit(&mut child, &pty), 0);
+    assert_eq!(termios(&pty), before, "the terminal is as before");
+    let said = String::from_utf8_lossy(&pty.read()).into_owned();
+    assert!(
+        !said.contains("first start in"),
+        "the screen, not the line: {said:?}"
+    );
+    assert_eq!(server.saved_paths(), [work(&harness)]);
+    assert_eq!(server.starts().len(), 1, "{:?}", server.starts());
+
+    let pty = sized_pty();
+    let mut child = go_first(&harness, &pty);
+    wait_for_text(&mut child, &pty, "Detach: Ctrl+A d");
+    pty.write(b"\x01d");
+    assert_eq!(wait_for_exit(&mut child, &pty), 0);
+    let said = String::from_utf8_lossy(&pty.read()).into_owned();
+    assert!(!said.contains("Customize"), "a second screen: {said:?}");
+    assert!(!said.contains("first start in"), "a line: {said:?}");
+    assert_eq!(server.saved_choices(), 1, "the second start saves nothing");
+    assert_eq!(server.starts().len(), 2, "{:?}", server.starts());
+}
+
+/// `Esc` und `q` auf dem Bildschirm: nichts startet, nichts ist gespeichert,
+/// Exit 130, und das Terminal steht wie vorher: dieselben `termios`, und
+/// alternativer Bildschirm, versteckter Cursor und Einfügeklammern sind nach
+/// ihrem letzten Einschalten wieder aus (wie in `tests/tui.rs`, #6).
+///
+/// Mutation proof: mapping `Esc` to `Exit::Start` saves and starts, and the
+/// counters fail.
+#[cfg(target_os = "linux")]
+#[test]
+fn go_first_start_escape_starts_nothing_and_restores_the_terminal() {
+    for key in [&b"\x1b"[..], b"q"] {
+        let harness = Harness::new();
+        let server = FakeServer::start(&harness);
+        let pty = sized_pty();
+        let before = termios(&pty);
+        let mut child = go_first(&harness, &pty);
+        wait_for_text(&mut child, &pty, "Customize");
+        pty.write(key);
+        assert_eq!(wait_for_exit(&mut child, &pty), 130, "{key:?}");
+        assert_eq!(termios(&pty), before, "{key:?}: the terminal is as before");
+        let said = String::from_utf8_lossy(&pty.read()).into_owned();
+        for (what, on, off) in [
+            ("the alternate screen", "\x1b[?1049h", "\x1b[?1049l"),
+            ("the hidden cursor", "\x1b[?25l", "\x1b[?25h"),
+            ("bracketed paste", "\x1b[?2004h", "\x1b[?2004l"),
+        ] {
+            let on_at = last(&said, on).unwrap_or_else(|| panic!("{what} was never on"));
+            assert!(
+                last(&said, off).is_some_and(|off_at| off_at > on_at),
+                "{key:?}: {what} is still on: {said:?}"
+            );
+        }
+        assert!(said.contains("not started; nothing was saved"), "{said:?}");
+        assert!(server.starts().is_empty(), "{key:?}: {:?}", server.starts());
+        assert_eq!(server.saved_choices(), 0, "{key:?}");
+    }
+}
+
+/// Ein Fake, der jedes `save_choice` eine Sekunde hält: Zeit für eine Taste
+/// oder ein Signal zwischen Bildschirm und Start. Mit `cloud` fragt `go`
+/// danach nach der Cloud-Inferenz (HUM-516).
+#[cfg(target_os = "linux")]
+fn slow_saving(harness: &Harness, cloud: bool) -> FakeServer {
+    FakeServer::start_with_first_start(
+        harness,
+        FirstStartTweaks {
+            slow_save: Some(Duration::from_secs(1)),
+            cloud,
+            ..FirstStartTweaks::default()
+        },
+    )
+}
+
+/// Der Bildschirm hat das Terminal zurückgegeben: Seine Umschaltung aus dem
+/// alternativen Bildschirm steht nach „Customize".
+#[cfg(target_os = "linux")]
+fn wait_for_screen_end(child: &mut Child, pty: &Pty) {
+    let deadline = Instant::now() + PATIENCE;
+    loop {
+        let said = String::from_utf8_lossy(&pty.read()).into_owned();
+        if let Some(screen) = said.find("Customize")
+            && said[screen..].contains("\x1b[?1049l")
+        {
+            return;
+        }
+        if let Some(status) = child.try_wait().expect("the child can be polled") {
+            panic!("the command ended with {status:?} under the screen: {said:?}");
+        }
+        if Instant::now() >= deadline {
+            let _ = child.kill();
+            let _ = child.wait();
+            panic!("the screen did not end within {PATIENCE:?}: {said:?}");
+        }
+        std::thread::sleep(Duration::from_millis(5));
+    }
+}
+
+/// Ein zweites `Enter`, das während des Speicherns kommt, beantwortet die
+/// Frage zur Cloud-Inferenz nicht und erreicht den Agenten nicht: Die
+/// Eingabe wird erst nach dem Speichern verworfen, unmittelbar vor der
+/// Übergabe (#9, Review). Die Frage wartet auf die Antwort des Menschen.
+///
+/// Mutation proof: dropping `flush_input` after the save (or flushing before
+/// it, as before the review) lets the second `Enter` answer the question
+/// with no; the command ends with "not confirmed" before `y` is typed.
+#[cfg(target_os = "linux")]
+#[test]
+fn go_first_start_a_second_enter_during_the_save_reaches_nobody() {
+    let harness = Harness::new();
+    let server = slow_saving(&harness, true);
+    let pty = sized_pty();
+    let mut child = go_first(&harness, &pty);
+    wait_for_text(&mut child, &pty, "Customize");
+    pty.write(b"\r");
+    wait_for_screen_end(&mut child, &pty);
+    pty.write(b"\r");
+    wait_for_text(&mut child, &pty, "[y/N]");
+    // Hätte das zweite `Enter` geantwortet, endete der Lauf jetzt; eine
+    // kurze, feste Frist reicht, das zu sehen.
+    let settle = Instant::now() + Duration::from_millis(500);
+    while Instant::now() < settle {
+        pty.drain();
+        std::thread::sleep(Duration::from_millis(10));
+    }
+    pty.write(b"y\r");
+    wait_for_text(&mut child, &pty, "Detach: Ctrl+A d");
+    // Was durchgereicht würde, käme gleich nach dem Anschluss; eine kurze,
+    // feste Frist reicht, ihn zu sehen.
+    let settle = Instant::now() + Duration::from_millis(500);
+    while Instant::now() < settle {
+        pty.drain();
+        std::thread::sleep(Duration::from_millis(10));
+    }
+    let inputs = server.terminal_inputs();
+    pty.write(b"\x01d");
+    assert_eq!(wait_for_exit(&mut child, &pty), 0);
+    assert!(
+        !inputs.contains(&"data"),
+        "the second Enter reached the agent: {inputs:?}"
+    );
+    assert_eq!(server.saved_paths(), [work(&harness)]);
+}
+
+/// `SIGTERM` während des Speicherns: Die Merker des Bildschirms fangen es,
+/// und der Befehl endet nach dem Speichern mit 143, ohne zu starten (#9,
+/// Review).
+///
+/// Mutation proof: without the look at `signals::take()` after the save the
+/// signal is lost, the session starts, and the exit code is not 143.
+#[cfg(target_os = "linux")]
+#[test]
+fn go_first_start_a_signal_during_the_save_starts_nothing() {
+    let harness = Harness::new();
+    let server = slow_saving(&harness, false);
+    let pty = sized_pty();
+    let before = termios(&pty);
+    let mut child = go_first(&harness, &pty);
+    wait_for_text(&mut child, &pty, "Customize");
+    pty.write(b"\r");
+    wait_for_screen_end(&mut child, &pty);
+    signal(&child, rustix::process::Signal::TERM);
+    assert_eq!(wait_for_exit(&mut child, &pty), 143);
+    assert!(server.starts().is_empty(), "{:?}", server.starts());
+    assert_eq!(termios(&pty), before);
 }

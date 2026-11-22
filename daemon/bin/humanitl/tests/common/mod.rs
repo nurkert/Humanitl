@@ -191,6 +191,9 @@ pub struct Recorded {
     pub starts: Vec<v1::sandbox_request::Start>,
     /// Wie oft `Projects.save_choice` kam.
     pub saved_choices: usize,
+    /// Die Ordner, deren Wahl `Projects.save_choice` gespeichert hat (#9):
+    /// Danach kennt der Fake sie als Projekte, wie das Register.
+    pub saved_paths: Vec<PathBuf>,
 }
 
 type Record = Arc<std::sync::Mutex<Recorded>>;
@@ -205,6 +208,21 @@ struct Tweaks {
     proto_minor: Option<u32>,
     cleanups: Option<Cleanups>,
     known_project: Option<PathBuf>,
+    first_start: FirstStartTweaks,
+}
+
+/// Wie der Fake den Erststart von `go` behandelt (#9).
+#[derive(Clone, Copy, Default)]
+pub struct FirstStartTweaks {
+    /// `Projects.proposal` scheitert mit `CONFIG_003`.
+    pub refuse_proposal: bool,
+    /// `Projects.save_choice` antwortet erst nach dieser Zeit.
+    pub slow_save: Option<Duration>,
+    /// `Projects.save_choice` scheitert mit `CONFIG_024`.
+    pub refuse_save: bool,
+    /// `Sandbox(CheckCloudInference)` meldet eine unbestätigte
+    /// Cloud-Inferenz: `go` stellt vor dem Start die Frage von HUM-516.
+    pub cloud: bool,
 }
 
 /// Was der Fake über `Terminal` empfangen hat: `open`, `data`, `resize` oder
@@ -229,6 +247,18 @@ impl FakeServer {
             harness,
             Tweaks {
                 known_project: Some(project.to_path_buf()),
+                ..Tweaks::default()
+            },
+        )
+    }
+
+    /// Wie [`FakeServer::start`], mit einem Erststart, der sich anders
+    /// verhält ([`FirstStartTweaks`], #9).
+    pub fn start_with_first_start(harness: &Harness, first_start: FirstStartTweaks) -> Self {
+        Self::start_with(
+            harness,
+            Tweaks {
+                first_start,
                 ..Tweaks::default()
             },
         )
@@ -358,6 +388,7 @@ impl FakeServer {
                             cleanups: tweaks.cleanups,
                             record: record_of_service,
                             known_project: tweaks.known_project,
+                            first_start: tweaks.first_start,
                         }),
                         token,
                     ));
@@ -407,6 +438,16 @@ impl FakeServer {
             .lock()
             .unwrap_or_else(std::sync::PoisonError::into_inner)
             .saved_choices
+    }
+
+    /// Die Ordner, deren Wahl `Projects.save_choice` bisher gespeichert hat
+    /// (#9).
+    pub fn saved_paths(&self) -> Vec<PathBuf> {
+        self.record
+            .lock()
+            .unwrap_or_else(std::sync::PoisonError::into_inner)
+            .saved_paths
+            .clone()
     }
 
     /// Die Arten der Nachrichten, die bisher über `Terminal` ankamen.
@@ -533,6 +574,23 @@ struct SilentExport {
     /// Ein Ordner, den `Projects.get` als Projekt mit gespeicherter Wahl
     /// kennt (#8).
     known_project: Option<PathBuf>,
+    /// Abweichungen beim Erststart (#9).
+    first_start: FirstStartTweaks,
+}
+
+impl SilentExport {
+    /// Ob das Register des Fakes `path` kennt: der bekannte Ordner oder einer,
+    /// dessen Wahl gespeichert wurde (#9).
+    fn knows(&self, path: &Path) -> bool {
+        self.known_project.as_deref() == Some(path)
+            || self
+                .record
+                .lock()
+                .unwrap_or_else(std::sync::PoisonError::into_inner)
+                .saved_paths
+                .iter()
+                .any(|saved| saved == path)
+    }
 }
 
 /// Ein Start, der die Kernel-Stufe verlangt, endet im Fake wie auf einem
@@ -653,6 +711,26 @@ impl DaemonApi for SilentExport {
         self.inner.rules(request).await
     }
     fn sandbox(&self, request: v1::SandboxRequest) -> BoxStream<v1::SandboxEvent> {
+        if self.first_start.cloud
+            && matches!(
+                request.op,
+                Some(v1::sandbox_request::Op::CheckCloudInference(_))
+            )
+        {
+            let check = v1::SandboxEvent {
+                event: Some(v1::sandbox_event::Event::CloudInferenceCheck(
+                    v1::sandbox_event::CloudInferenceCheck {
+                        cloud_inference: Some(v1::CloudInference {
+                            agent: "opencode".to_owned(),
+                            provider: "api.example.com".to_owned(),
+                            acknowledged: false,
+                            notice: None,
+                        }),
+                    },
+                )),
+            };
+            return Box::pin(tonic::codegen::tokio_stream::iter(vec![check]));
+        }
         if let Some(v1::sandbox_request::Op::Start(start)) = &request.op {
             self.record
                 .lock()
@@ -760,19 +838,62 @@ impl DaemonApi for SilentExport {
         request: v1::ProjectsRequest,
     ) -> Result<v1::ProjectsResponse, Diagnostic> {
         match &request.op {
-            Some(v1::projects_request::Op::SaveChoice(_)) => {
-                self.record
-                    .lock()
-                    .unwrap_or_else(std::sync::PoisonError::into_inner)
-                    .saved_choices += 1;
+            Some(v1::projects_request::Op::Proposal(_)) if self.first_start.refuse_proposal => {
+                return Err(Diagnostic::builder(
+                    humanitl_core::diagnostics::codes::CONFIG_003,
+                    humanitl_core::Severity::Error,
+                )
+                .why("the fake daemon refuses every start proposal".to_owned())
+                .build());
             }
-            Some(v1::projects_request::Op::Get(get))
-                if self
-                    .known_project
-                    .as_ref()
-                    .is_some_and(|known| Path::new(&get.path) == known) =>
+            Some(v1::projects_request::Op::SaveChoice(_)) if self.first_start.refuse_save => {
+                return Err(Diagnostic::builder(
+                    humanitl_core::diagnostics::codes::CONFIG_024,
+                    humanitl_core::Severity::Error,
+                )
+                .why("the fake daemon refuses every project choice".to_owned())
+                .build());
+            }
+            Some(v1::projects_request::Op::SaveChoice(_))
+                if self.first_start.slow_save.is_some() =>
             {
+                if let Some(wait) = self.first_start.slow_save {
+                    tokio::time::sleep(wait).await;
+                }
+            }
+            _ => {}
+        }
+        match &request.op {
+            Some(v1::projects_request::Op::SaveChoice(save)) => {
+                let mut record = self
+                    .record
+                    .lock()
+                    .unwrap_or_else(std::sync::PoisonError::into_inner);
+                record.saved_choices += 1;
+                // Am Ordner gespeichert (#9): Der Fake legt den Eintrag an wie
+                // das Register und kennt den Ordner danach.
+                if !save.path.is_empty() {
+                    record.saved_paths.push(PathBuf::from(&save.path));
+                    return Ok(known_project_answer(Path::new(&save.path)));
+                }
+            }
+            Some(v1::projects_request::Op::Get(get)) if self.knows(Path::new(&get.path)) => {
                 return Ok(known_project_answer(Path::new(&get.path)));
+            }
+            // Ein bekannter Ordner bekommt den Vorschlag mit seiner Kennung,
+            // wie im Daemon; `go` zeigt ihm keinen Erststart (#9).
+            Some(v1::projects_request::Op::Proposal(asked))
+                if asked.project_id.is_empty() && self.knows(Path::new(&asked.path)) =>
+            {
+                let mut answer = self.inner.projects(request.clone()).await?;
+                if let Some(proposal) = answer.proposal.as_mut() {
+                    proposal.project_id = known_project_answer(Path::new(&asked.path))
+                        .project
+                        .map(|project| project.project_id)
+                        .unwrap_or_default();
+                    proposal.has_choice = true;
+                }
+                return Ok(answer);
             }
             _ => {}
         }
