@@ -13,6 +13,7 @@
 //! - [`screen`]: die Schleife, in der jeder Bildschirm läuft.
 //! - [`backend`]: das Backend von ratatui mit der Größe von `stdin`.
 //! - [`settings`]: der Bildschirm `humanitl settings` (GitHub #7).
+//! - [`first_start`]: der Erststart-Bildschirm von `humanitl go` (GitHub #9).
 //!
 //! # Ohne Terminal
 //!
@@ -28,6 +29,7 @@
 //! nie durch diese Module; sie bleibt beim Filter `FullScreen`.
 
 pub mod backend;
+pub mod first_start;
 pub mod frame;
 pub mod guard;
 pub mod screen;

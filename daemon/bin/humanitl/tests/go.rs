@@ -2,7 +2,7 @@
 //! wenn ein Mensch ein Agentenwort und Schalter tippt, und was nie ankommt.
 //!
 //! Der Fake schreibt jeden `Sandbox(Start)` und jedes `Projects.save_choice`
-//! mit (`common::FakeServer::starts`, `saved_choices`). Er startet keine
+//! mit (`common::FakeServer::starts`, `saved_choices`, `saved_paths`). Er startet keine
 //! Sandbox; ein Start, der die Kernel-Stufe verlangt, endet bei ihm wie auf
 //! einem Rechner ohne sie, mit `SANDBOX_045`.
 
@@ -13,7 +13,7 @@ mod common;
 use std::path::{Path, PathBuf};
 use std::process::Output;
 
-use common::{FakeServer, Harness, PATIENCE, code, stderr};
+use common::{FakeServer, FirstStartTweaks, Harness, PATIENCE, code, stderr};
 use humanitl_ipc::v1;
 
 /// Ein Aufruf mit Frist: Ein Test, der hängt, wäre einer, der nichts prüft.
@@ -218,25 +218,86 @@ fn go_without_a_word_in_a_known_project_takes_the_agent_of_the_project_choice() 
     assert_eq!(start.work_mode, "", "the project choice decides: {start:?}");
     assert_eq!(Path::new(&start.work_dir), work(&harness), "{start:?}");
     let text = stderr(&output);
-    assert!(!text.contains("new project"), "a known project: {text}");
+    assert!(
+        first_start_lines(&text).is_empty(),
+        "a known project: {text}"
+    );
 }
 
-/// Ein Ordner, den das Register nicht kennt, startet mit den Vorgaben und
-/// einer Zeile dazu, bis es den Erststart-Bildschirm gibt.
+/// Die Zeilen des Erststarts ohne Bildschirm in `text` (#9).
+fn first_start_lines(text: &str) -> Vec<&str> {
+    text.lines()
+        .filter(|line| line.starts_with("[humanitl] first start in "))
+        .collect()
+}
+
+/// Ohne Terminal startet ein Ordner, den das Register nicht kennt, mit den
+/// Vorgaben und genau einer Zeile dazu: Ordnername, Vorgaben ohne Leitwort
+/// und wie man sie ändert (#9). Die Wahl des Vorschlags ist am Ordner
+/// gespeichert, bevor der Start geht, und der zweite `go` zeigt keine Zeile
+/// mehr und speichert nichts.
+///
+/// Mutation proof: dropping the `save` call of the path without a screen
+/// leaves the fake without the folder; the second run then shows the line
+/// again and the last assertions fail.
 #[test]
-fn go_in_a_new_project_says_so_in_one_line() {
+fn go_in_a_new_project_saves_the_defaults_and_says_so_once() {
     let harness = Harness::new();
     let server = FakeServer::start(&harness);
 
     let output = go(&harness, &["go"]);
     let _start = only_start(&server, &output);
     let text = stderr(&output);
-    let lines: Vec<&str> = text
-        .lines()
-        .filter(|line| line.contains("new project"))
-        .collect();
+    let lines = first_start_lines(&text);
     assert_eq!(lines.len(), 1, "{text}");
-    assert!(lines[0].contains("starting with the defaults"), "{text}");
+    let name = work(&harness)
+        .file_name()
+        .and_then(|name| name.to_str())
+        .expect("a name")
+        .to_owned();
+    assert!(
+        lines[0].contains(&format!("first start in {name}, defaults saved: ")),
+        "{text}"
+    );
+    assert!(!lines[0].contains("Defaults:"), "{text}");
+    assert!(
+        lines[0].contains("Change them with humanitl settings --project "),
+        "{text}"
+    );
+    assert_eq!(server.saved_paths(), [work(&harness)]);
+
+    let again = go(&harness, &["go"]);
+    let text = stderr(&again);
+    assert!(first_start_lines(&text).is_empty(), "{text}");
+    assert_eq!(server.saved_choices(), 1, "the second start saves nothing");
+    assert_eq!(server.starts().len(), 2);
+}
+
+/// `--yes` zeigt keinen Bildschirm, auch nicht mit `--json`: kein Byte einer
+/// Steuerfolge und nichts vom Erststart auf `stdout`, genau eine Zeile des
+/// Erststarts auf `stderr`, die Wahl gespeichert (#9).
+#[test]
+fn go_yes_and_json_say_the_first_start_in_one_line() {
+    for flags in [
+        &["go", "--yes"][..],
+        &["--json", "go"],
+        &["--json", "go", "--yes"],
+    ] {
+        let harness = Harness::new();
+        let server = FakeServer::start(&harness);
+        let output = go(&harness, flags);
+        let out = common::stdout(&output);
+        let text = stderr(&output);
+        assert!(
+            !out.contains('\u{1b}'),
+            "{flags:?}: an escape on stdout: {out:?}"
+        );
+        assert!(!out.contains("first start"), "{flags:?}: {out}");
+        assert!(!out.contains("Customize"), "{flags:?}: {out}");
+        assert_eq!(first_start_lines(&text).len(), 1, "{flags:?}: {text}");
+        assert_eq!(server.saved_paths(), [work(&harness)], "{flags:?}");
+        assert_eq!(server.starts().len(), 1, "{flags:?}");
+    }
 }
 
 /// `--rw`, `--ro` und `--disposable` setzen Modus und Schreibmodus des
@@ -335,8 +396,8 @@ fn kernel_without_a_kernel_level_is_its_finding() {
     assert!(!text.contains("CLI_001"), "nothing ran: {text}");
 }
 
-/// Kein Schalter ändert die gespeicherte Projektwahl: `go` ruft
-/// `Projects.save_choice` nie.
+/// Kein Schalter ändert die gespeicherte Projektwahl: Für das bekannte
+/// Projekt ruft `go` `Projects.save_choice` nie.
 ///
 /// Mutation proof: a `save_choice` call in `go` (for instance saving the
 /// agent word as the project's agent) fails this test.
@@ -354,7 +415,10 @@ fn switches_leave_the_stored_project_choice_alone() {
         let _ = go(&harness, args);
     }
     assert_eq!(server.starts().len(), 3, "{:?}", server.starts());
-    assert_eq!(server.saved_choices(), 0);
+    // Nur der neue Ordner `sub` bekommt seinen Erststart, mit der Wahl des
+    // Vorschlags (#9); die Wahl des bekannten Projekts bleibt unberührt.
+    assert_eq!(server.saved_paths(), [work(&harness).join("sub")]);
+    assert_eq!(server.saved_choices(), 1);
 }
 
 /// `go foo` ist ein Befund mit der Liste der Agenten und Exit 1, bevor
@@ -391,4 +455,88 @@ fn the_words_after_the_dashes_go_to_the_agent() {
         Some("claude"),
         "{start:?}"
     );
+}
+
+/// `go --yes` in einem neuen Ordner: genau eine Zeile des Erststarts vor
+/// allem anderen auf `stderr`, kein Hinweis zu Anfragen ohne Regel daneben
+/// (die Zeile nennt den Frage-Modus), und nichts vom Erststart auf
+/// `stdout`. Ein bekannter Ordner bekommt den Hinweis weiter (#9).
+///
+/// Mutation proof: printing `where_decisions_happen` also after the line
+/// (dropping the check of `first_line`) puts a second line before the
+/// agent's output, and the exact comparison fails.
+#[test]
+fn go_yes_says_one_line_and_not_the_note_on_requests_without_a_rule() {
+    let harness = Harness::new();
+    let server = FakeServer::start(&harness);
+    let output = go(&harness, &["go", "--yes"]);
+    let text = stderr(&output);
+    let lines: Vec<&str> = text.lines().collect();
+    assert!(
+        lines
+            .first()
+            .is_some_and(|line| line.starts_with("[humanitl] first start in ")),
+        "the line comes first: {text}"
+    );
+    assert_eq!(first_start_lines(&text).len(), 1, "{text}");
+    assert!(!text.contains("a request without a rule"), "{text}");
+    assert!(
+        common::stdout(&output).is_empty(),
+        "{:?}",
+        common::stdout(&output)
+    );
+    assert_eq!(server.starts().len(), 1);
+
+    let again = go(&harness, &["go", "--yes"]);
+    let text = stderr(&again);
+    assert!(text.contains("a request without a rule"), "{text}");
+}
+
+/// Scheitert `Projects.proposal`, startet in einem neuen Ordner nichts: der
+/// Befund des Daemons, Exit 1, keine Wahl gespeichert (#9).
+///
+/// Mutation proof: answering a failed proposal with `Ok(None)` (the old
+/// silent fallback) lets the fake record a start.
+#[test]
+fn a_failed_proposal_starts_nothing() {
+    let harness = Harness::new();
+    let server = FakeServer::start_with_first_start(
+        &harness,
+        FirstStartTweaks {
+            refuse_proposal: true,
+            ..FirstStartTweaks::default()
+        },
+    );
+    for flags in [&["go"][..], &["go", "--yes"]] {
+        let output = go(&harness, flags);
+        let text = stderr(&output);
+        assert_eq!(code(&output), 1, "{flags:?}: {text}");
+        assert!(text.contains("CONFIG_003"), "{flags:?}: {text}");
+        assert!(text.contains("refuses every start proposal"), "{text}");
+    }
+    assert!(server.starts().is_empty(), "{:?}", server.starts());
+    assert_eq!(server.saved_choices(), 0);
+}
+
+/// Lehnt der Daemon das Speichern ab, steht keine Zeile des Erststarts da
+/// (sie sagt, die Vorgaben seien gespeichert), und nichts startet (#9,
+/// Review).
+///
+/// Mutation proof: printing the line before `save` puts it on stderr here.
+#[test]
+fn a_refused_save_prints_no_line_and_starts_nothing() {
+    let harness = Harness::new();
+    let server = FakeServer::start_with_first_start(
+        &harness,
+        FirstStartTweaks {
+            refuse_save: true,
+            ..FirstStartTweaks::default()
+        },
+    );
+    let output = go(&harness, &["go", "--yes"]);
+    let text = stderr(&output);
+    assert_eq!(code(&output), 1, "{text}");
+    assert!(text.contains("CONFIG_024"), "{text}");
+    assert!(first_start_lines(&text).is_empty(), "{text}");
+    assert!(server.starts().is_empty(), "{:?}", server.starts());
 }

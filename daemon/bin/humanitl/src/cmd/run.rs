@@ -138,6 +138,9 @@ pub(crate) struct Launch {
     /// `true`, wenn der Daemon nach dem Lauf wartende Änderungen der
     /// Wegwerf-Schicht gemeldet hat.
     pub changes_waiting: bool,
+    /// `humanitl go`: Die Zeile des Erststarts steht schon da (#9); sie nennt
+    /// den Frage-Modus, und der Hinweis zu Anfragen ohne Regel entfällt.
+    pub first_line: bool,
 }
 
 /// Führt einen Lauf aus, für `humanitl run` und `humanitl go`.
@@ -184,14 +187,19 @@ pub(crate) async fn launch(
         .into_inner();
     crate::cmd::daemon::check_proto(&info)?;
 
-    let (work_dir, work_dir_source) = Box::pin(folder_of(
-        ctx,
-        &mut client,
-        &resolved,
-        launch,
+    let (work_dir, work_dir_source) = folder_of(ctx, &resolved, launch);
+    // Die Werte der Sitzung stehen vor dem Erststart fest: Ein Wert, den
+    // dieser Daemon ablehnte, beendet den Lauf, bevor eine Wahl gespeichert
+    // ist, und der Vorschlag rechnet mit genau den Werten des Starts.
+    let cli_overrides = session_overrides(ctx, &resolved, info.proto_minor)?;
+    let first = (
+        work_dir.as_path(),
+        cli_overrides.as_slice(),
         info.proto_minor,
-    ))
-    .await;
+    );
+    if let Some(code) = Box::pin(first_start(ctx, &mut client, launch, args, first)).await? {
+        return Ok(code);
+    }
     let chosen = Box::pin(wish::chosen_ask_mode(
         &mut client,
         &resolved,
@@ -220,7 +228,7 @@ pub(crate) async fn launch(
             .collect(),
         session_profile: ctx.profile_flag().unwrap_or_default().to_owned(),
         ask_mode: wish::ask_mode(&resolved, named_config),
-        cli_overrides: session_overrides(ctx, &resolved, info.proto_minor)?,
+        cli_overrides,
         work_dir_source: Some(humanitl_ipc::work_dir::source_to_proto(&work_dir_source)),
         sandbox_mode: start_mode(args, wish::mode(&resolved, named_config), info.proto_minor),
         // `--llm NAME`: der gespeicherte Server für genau diesen Lauf
@@ -242,7 +250,7 @@ pub(crate) async fn launch(
     // Antwort selbst ab (`LLM_011`).
     let mut start = start;
     let mode = crate::cmd::cloud::mode(args.yes, ctx.render.is_json(), on_terminal);
-    if !crate::cmd::cloud::prepare_start(
+    if let Some(code) = crate::cmd::cloud::prepare_start(
         &mut client,
         &mut start,
         info.proto_minor,
@@ -251,10 +259,12 @@ pub(crate) async fn launch(
     )
     .await?
     {
-        return Ok(EXIT_USER);
+        return Ok(code);
     }
 
-    ctx.render.note(&where_decisions_happen(config));
+    if !launch.first_line {
+        ctx.render.note(&where_decisions_happen(config));
+    }
     let moderate = config.hold.ask_mode == AskMode::Terminal;
     let keys = detach_keys(ctx, args, launch.go, moderate)?;
     // Die Ladeanimation nur für `go` und nie neben dem Kasten von
@@ -304,25 +314,43 @@ fn detach_keys(
     }
 }
 
-/// Der Ordner dieses Laufs und woher er kommt: unter `go` der, den der
-/// Aufruf gewählt hat (das aktuelle Verzeichnis oder `--dir`, nicht der
-/// gespeicherte Ordner, #8), samt der Zeile für ein neues Projekt; sonst
-/// wie [`Context::work_dir`].
-async fn folder_of(
+/// Der erste `go` in einem Ordner, den das Register nicht kennt: der
+/// Erststart-Bildschirm oder die eine Zeile, und die Wahl gespeichert, bevor
+/// irgendetwas sie liest (#9). `Some(code)`: abgebrochen, nichts startet.
+/// Unter `run` nichts.
+async fn first_start(
     ctx: &Context,
     client: &mut Client,
+    launch: &mut Launch,
+    args: &RunArgs,
+    (work_dir, overrides, minor): (&std::path::Path, &[v1::sandbox_request::CliOverride], u32),
+) -> Result<Option<u8>, Failure> {
+    use crate::cmd::go::Next;
+
+    if !launch.go {
+        return Ok(None);
+    }
+    match crate::cmd::go::first_start(ctx, client, (work_dir, overrides), minor, args.yes).await? {
+        Next::Start { said } => {
+            launch.first_line = said;
+            Ok(None)
+        }
+        Next::Stop(code) => Ok(Some(code)),
+    }
+}
+
+/// Der Ordner dieses Laufs und woher er kommt: unter `go` der, den der
+/// Aufruf gewählt hat (das aktuelle Verzeichnis oder `--dir`, nicht der
+/// gespeicherte Ordner, #8); sonst wie [`Context::work_dir`].
+fn folder_of(
+    ctx: &Context,
     resolved: &Resolved,
     launch: &Launch,
-    minor: u32,
 ) -> (std::path::PathBuf, humanitl_sandbox::WorkDirSource) {
-    let (work_dir, source) = launch
+    launch
         .folder
         .clone()
-        .unwrap_or_else(|| ctx.work_dir(resolved));
-    if launch.go {
-        crate::cmd::go::announce_new_project(ctx, client, &work_dir, minor).await;
-    }
-    (work_dir, source)
+        .unwrap_or_else(|| ctx.work_dir(resolved))
 }
 
 /// Ob `stdin` ein Terminal ist.
@@ -405,6 +433,20 @@ async fn drive(
     // dieser Strom stünde, und niemand am Terminal erführe davon; der Agent
     // liefe in die Frist.
     let (mut flows, mut moderation) = open_moderation(client, moderate).await?;
+
+    // Ein Signal, das bis hierher kam, beendet den Befehl, bevor
+    // `Sandbox(Start)` hinausgeht: aus den Merkern eines Bildschirms (#9),
+    // oder aus den Strömen oben, während die Moderation aufgebaut wurde.
+    if let Some(code) = stop_before_start(
+        crate::tui::signals::take(),
+        [
+            arrived(&mut terminate),
+            arrived(&mut hangup),
+            arrived(&mut interrupt),
+        ],
+    ) {
+        return Ok(code);
+    }
 
     // Die Ladeanimation von `humanitl go` steht ab hier, nach den Signalen
     // und vor dem Start; solange sie steht, hält `hold` die Ereignisse des
@@ -877,6 +919,32 @@ async fn moderated_flow(
 /// Ein Signalstrom, oder `None`, wenn der Handler nicht anzulegen ist.
 fn signal_stream(kind: tokio::signal::unix::SignalKind) -> Option<tokio::signal::unix::Signal> {
     tokio::signal::unix::signal(kind).ok()
+}
+
+/// Ob auf `stream` schon ein Signal wartet, ohne zu warten.
+fn arrived(stream: &mut Option<tokio::signal::unix::Signal>) -> bool {
+    stream.as_mut().is_some_and(|stream| {
+        let mut context = std::task::Context::from_waker(std::task::Waker::noop());
+        stream.poll_recv(&mut context).is_ready()
+    })
+}
+
+/// Der Exit-Code, wenn vor dem Start ein Signal kam: aus den Merkern eines
+/// Bildschirms (`flag`) oder aus den Strömen `[SIGTERM, SIGHUP, SIGINT]`;
+/// `None`, wenn keines kam.
+fn stop_before_start(
+    flag: Option<crate::tui::signals::Signal>,
+    [terminate, hangup, interrupt]: [bool; 3],
+) -> Option<u8> {
+    crate::cmd::go::signalled(flag).or(if terminate {
+        Some(143)
+    } else if hangup {
+        Some(129)
+    } else if interrupt {
+        Some(130)
+    } else {
+        None
+    })
 }
 
 /// Das nächste `SIGTERM` oder `SIGHUP`, als Signalnummer.
@@ -1628,12 +1696,33 @@ mod tests {
     #![allow(clippy::unwrap_used, clippy::expect_used, clippy::panic)]
 
     use humanitl_config::{AskMode, Env, ProfileSelection, resolve};
+
+    /// Ein Signal vor dem Start beendet mit `128 + n`, ob es in den Merkern
+    /// eines Bildschirms steht oder in einem Strom von `tokio` wartet; ohne
+    /// Signal geht der Start (#9, Review).
+    ///
+    /// Mutation proof: `stop_before_start` returning `None` for a waiting
+    /// stream fails the second to fourth assertions.
+    #[test]
+    fn a_signal_before_the_start_stops_it() {
+        use crate::tui::signals::Signal;
+
+        assert_eq!(
+            stop_before_start(Some(Signal::Interrupt), [false; 3]),
+            Some(130)
+        );
+        assert_eq!(stop_before_start(None, [true, false, false]), Some(143));
+        assert_eq!(stop_before_start(None, [false, true, false]), Some(129));
+        assert_eq!(stop_before_start(None, [false, false, true]), Some(130));
+        assert_eq!(stop_before_start(Some(Signal::Continue), [false; 3]), None);
+        assert_eq!(stop_before_start(None, [false; 3]), None);
+    }
     use humanitl_ipc::session::SESSION_OVERRIDE_KEYS;
     use humanitl_ipc::v1;
 
     use super::{
         Config, attaches, chain, check_line, inline_rules, refusal_summary, refuse_terminal_ask,
-        session_lines, signal_stops_session, start_mode, state_name,
+        session_lines, signal_stops_session, start_mode, state_name, stop_before_start,
     };
     use crate::cli::RunArgs;
 

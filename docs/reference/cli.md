@@ -319,7 +319,7 @@ Options:
 ```text
 Start an agent in a project folder and land in its terminal; afterwards choose what to keep.
 
-`humanitl go claude` starts Claude Code in the current folder. A known project starts with its project choice, a new one with the defaults of the start proposal (`humanitl projects proposal`). The agent word and the switches hold for this start only and never change the stored project choice. This terminal is handed to the agent as soon as the session runs. While the session starts, a rotating fist is shown for at least one second (off with `terminal.splash = false`, without colour with `NO_COLOR`, never with --json or without a terminal). When the agent ends and changes wait in the disposable layer, the command lists them and asks whether to apply, discard or keep them for later.
+`humanitl go claude` starts Claude Code in the current folder. A known project starts with its project choice. The first start in a new project shows one screen with the defaults of the start proposal: Enter starts with them, `a` customizes, Esc or q cancels (nothing is saved or started, exit 130); the choice is kept for the project, and the next start shows no screen. With --yes, --json or without a terminal there is no screen: one line on stderr names the defaults, they are saved, and the agent starts. The agent word and the switches hold for this start only and never change the stored project choice. This terminal is handed to the agent as soon as the session runs. While the session starts, a rotating fist is shown for at least one second (off with `terminal.splash = false`, without colour with `NO_COLOR`, never with --json or without a terminal). When the agent ends and changes wait in the disposable layer, the command lists them and asks whether to apply, discard or keep them for later.
 
 Usage: humanitl go [OPTIONS] [AGENT] [-- <CMD>...]
 
@@ -362,7 +362,7 @@ Options:
           Use this profile for the session; falls back to the sandbox profile of that name when no session profile exists
 
       --yes
-          Do not ask before the first start of an agent whose model provider lies outside this machine (cloud inference); the notice still goes to stderr, and this counts as confirmed for that agent and provider. Without a terminal or with --json nobody is asked either: the notice is one line on stderr and the next start shows it again
+          Start a new project without the first-start screen: one line on stderr names the defaults of the start proposal, they are saved as the project choice, and the agent starts. Do not ask before the first start of an agent whose model provider lies outside this machine (cloud inference) either; the notice still goes to stderr, and this counts as confirmed for that agent and provider. Without a terminal or with --json nobody is asked: the notice is one line on stderr and the next start shows it again
 
   -h, --help
           Print help (see a summary with '-h')
