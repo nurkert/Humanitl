@@ -268,7 +268,11 @@ die Aufzeichnung jedes Bodys auf 1 KiB verkleinern, während eine Freigabe den g
 schickte. Die vollständige Liste ist die Spalte „Projekt" in
 [`CONFIG.md`](CONFIG.md). Unter `llm` darf ein Projekt-Profil genau einen Schlüssel setzen,
 `llm.server` (HUM-400): Er wählt einen der Modellserver, die der Nutzer gespeichert hat, und kann
-nie einen Endpunkt, ein Modell oder einen Schlüssel festlegen (Abschnitt 5.1).
+nie einen Endpunkt, ein Modell oder einen Schlüssel festlegen (Abschnitt 5.1). Sein `name` wählt
+nur unter den mitgelieferten Profilen (`CONFIG_009` für jedes andere), und ein Profil, das es
+wählt, lädt seinen eingebetteten Text, Schlüssel und Regeln: Die eigene Datei des Nutzers gleichen
+Namens unter `profiles/` gilt nur, wenn der Mensch das Profil wählt (`--profile`, das Profil der
+Session).
 
 Toolchain für reproduzierbare Builds: Rust 1.95.0 (festgelegt in `daemon/rust-toolchain.toml`,
 mindestens 1.89), Flutter 3.47.2 (festgelegt in `app/.fvmrc`), `bubblewrap` 0.8 oder neuer.
@@ -1067,9 +1071,13 @@ Servern des Nutzers wählen. Ein feindliches Repository kann damit den Modellver
 eigenen Session (Prompts, den Code, den der Agent liest) an einen anderen gespeicherten Server
 lenken als den aktiven, etwa an einen Firmenserver statt an einen lokalen. Es kann keinen Server
 anlegen, keinen Endpunkt ändern, keinen Schlüssel lesen und nie den Schlüssel eines Servers an den
-Origin eines anderen schicken. Gegen eine Rückfrage bei der ersten Wahl eines Projekts haben wir
-uns entschieden: Die Wahl ist auf Server begrenzt, die der Nutzer bewusst gespeichert hat, jeder
-mit eigenem Schlüssel, und sie ist vor und bei jedem Start sichtbar. Der Kopf der Sandbox in der
+Origin eines anderen schicken. Die Wahl ist auf Server begrenzt, die der Nutzer bewusst
+gespeichert hat, jeder mit eigenem Schlüssel, und sie ist vor und bei jedem Start sichtbar. Wählt
+das Projekt einen anderen Server als den Standard (`llm.active`) und hat der Mensch diesen Server
+für diesen Projektordner nicht bestätigt, startet die Session nicht (`CONFIG_022`, HUM-405); die
+App fragt einmal vor dem Start, die Kommandozeile nennt
+`humanitl llm server confirm NAME --project DIR`, und die Bestätigung liegt im Datenverzeichnis
+des Daemons, nie im Projekt. Der Kopf der Sandbox in der
 App zeigt den Server mit seiner Herkunft (das Abzeichen nimmt die Farbe des Haltens an, wenn das
 Projekt gewählt hat), der Hinweis nennt die Projektdatei, `humanitl sandbox plan` und
 `humanitl run` geben Server und Herkunft aus, und `SandboxEvent.Status.llm_server` trägt beides

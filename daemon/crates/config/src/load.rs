@@ -296,12 +296,12 @@ pub fn load(sources: &Sources) -> Result<Resolved, Diagnostic> {
     // kein Schlüssel der Datei, sondern das Ergebnis des Projizierens.
     config.llm.choice = projection.choice;
     // Wählt das Projekt-Profil mit `name` ein mitgeliefertes Profil, und
-    // trägt dieses (oder die eigene Kopie, die es verdeckt) die Wahl des
-    // Servers, ist die Wahl die des Projekts: Sonst brächte ein Repository
-    // einen Server, den der Mensch einem Profil zugeordnet hat, ohne die
-    // Bestätigung für diesen Ordner (HUM-405, Review). Das gilt auch, wenn
-    // der Mensch dasselbe Profil zugleich selbst nennt; dann fragt der Start
-    // einmal mehr, nie einmal weniger.
+    // trägt dieses die Wahl des Servers, ist die Wahl die des Projekts: Sonst
+    // brächte ein Repository einen Server, den der Mensch einem Profil
+    // zugeordnet hat, ohne die Bestätigung für diesen Ordner (HUM-405,
+    // Review). Das gilt auch, wenn der Mensch dasselbe Profil zugleich selbst
+    // nennt und deshalb seine eigene Datei gilt; dann fragt der Start einmal
+    // mehr, nie einmal weniger.
     project_owns_profile_choice(&mut config.llm.choice, &profiles);
 
     Ok(Resolved {
@@ -862,15 +862,13 @@ pub(crate) fn retired_value(path: &str, value: Option<&str>, shown: &str) -> Opt
 /// Ein Projekt wählt das Backend auch nicht über ein Profil (HUM-431).
 ///
 /// Das Projekt-Profil darf mit `name` ein mitgeliefertes Profil als Basis
-/// nennen (`crate::resolve`), und gibt es eine eigene Datei dieses Namens, gilt
-/// die Datei des Nutzers. Setzt diese `sandbox.backend` oder einen Schlüssel
-/// der Container-Engine, hätte das Projekt das Backend über den Umweg
-/// gewählt, den ihm die Projekt-Ebene verwehrt; ebenso einen der Kernel-Stufe.
-/// Ein Profil, das das Projekt-Profil nennt, darf diese Schlüssel deshalb
-/// nicht setzen; das gilt auch, wenn der Mensch dasselbe Profil zugleich
-/// selbst nennt, wie bei der
-/// Wahl des Servers ([`project_owns_profile_choice`]): lieber einmal zu streng
-/// als einmal zu nachgiebig. Die Untergrenze braucht diese Prüfung nicht: Über
+/// nennen (`crate::resolve`); dieses lädt dann seinen eingebetteten Text, nie
+/// eine eigene Datei gleichen Namens. Die Datei gilt nur, wenn der Mensch das
+/// Profil selbst wählt. Nennt er dasselbe Profil, das auch das Projekt-Profil
+/// nennt, darf dessen Datei weder `sandbox.backend` noch einen Schlüssel der
+/// Container-Engine oder der Kernel-Stufe setzen, wie bei der Wahl des
+/// Servers ([`project_owns_profile_choice`]): lieber einmal zu streng als
+/// einmal zu nachgiebig. Die Untergrenze braucht diese Prüfung nicht: Über
 /// alle Ebenen gilt dort ohnehin der strengste Wert.
 fn project_cannot_choose_the_backend_through_a_profile(
     profiles: &[Profile],

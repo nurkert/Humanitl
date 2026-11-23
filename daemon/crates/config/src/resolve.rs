@@ -31,6 +31,12 @@
 //! unter [`crate::profile::BUILTIN_PROFILES`]; jeder andere Wunsch wird
 //! übergangen und gemeldet (`CONFIG_009`). Wer ein eigenes Profil meint,
 //! schreibt `--profile` auf die Kommandozeile.
+//!
+//! **Ein Profil, das das Projekt-Profil wählt, lädt seinen eingebetteten
+//! Text**, Schlüssel und Regeln. Eine Datei gleichen Namens im
+//! Profilverzeichnis des Nutzers gilt nur, wenn der Mensch das Profil selbst
+//! wählt (`--profile`, das Profil der Sitzung). Die Ebene 3, `default`,
+//! bleibt davon unberührt: Sie gilt in jeder Sitzung, mit oder ohne Projekt.
 
 use std::path::{Path, PathBuf};
 
@@ -211,11 +217,14 @@ pub fn sources_with_global(
     let project = work_dir
         .map(|dir| paths.project_profile_path(&dir))
         .filter(|path| path.is_file());
-    let selected = selected_name(selection.name.as_deref(), project.as_deref());
+    let profiles = match project_wish(selection.name.as_deref(), project.as_deref()) {
+        Some(name) => embedded_layers(&paths, name),
+        None => layers_or_refuse(&paths, requested)?,
+    };
 
     Ok(Sources {
         global_toml: global,
-        profiles: layers_or_refuse(&paths, &selected)?,
+        profiles,
         profile_project: project,
         project_choice: None,
         policy: crate::PolicyLocks::of_policy(&paths),
@@ -234,25 +243,42 @@ fn layers_or_refuse(paths: &Paths, selected: &str) -> Result<Vec<ProfileSource>,
     Ok(profiles)
 }
 
-/// Der Name des Profils, das die Ebene 4 besetzt.
+/// Das mitgelieferte Profil, das das Projekt-Profil für die Ebene 4 wählt.
 ///
-/// Die Kommandozeile geht vor. Ohne sie darf das Projekt-Profil mit `name`
-/// seine Basis benennen, aber nur unter den mitgelieferten Profilen: Ein
-/// geklontes Repository, das ein beliebiges Profil des Nutzers einsetzen
-/// dürfte, käme über diesen Umweg an jeden Schlüssel, den ihm die
-/// Projekt-Ebene verwehrt. Ein anderer Wunsch wird übergangen; den Befund
-/// dazu (`CONFIG_009`) erzeugt das Laden, wo das Projekt-Profil ohnehin
-/// gelesen wird.
-fn selected_name(requested: Option<&str>, project: Option<&Path>) -> String {
-    if let Some(name) = requested {
-        return name.to_owned();
+/// Die Kommandozeile geht vor: Nennt der Mensch ein Profil, wählt das Projekt
+/// keines (`None`). Ohne sie darf das Projekt-Profil mit `name` seine Basis
+/// benennen, aber nur unter den mitgelieferten Profilen: Ein geklontes
+/// Repository, das ein beliebiges Profil des Nutzers einsetzen dürfte, käme
+/// über diesen Umweg an jeden Schlüssel, den ihm die Projekt-Ebene verwehrt.
+/// Ein anderer Wunsch wird übergangen; den Befund dazu (`CONFIG_009`) erzeugt
+/// das Laden, wo das Projekt-Profil ohnehin gelesen wird.
+///
+/// `default` ist keine Wahl: Die Ebene 3 ist in jeder Sitzung `default`, mit
+/// der Datei des Nutzers, wenn es sie gibt, sonst dem eingebetteten Text.
+/// Nennt das Projekt-Profil `default`, kommt keine Ebene dazu, und Reihenfolge
+/// und Herkunft jedes Schlüssels bleiben dieselben wie ohne den Namen.
+fn project_wish(requested: Option<&str>, project: Option<&Path>) -> Option<&'static str> {
+    if requested.is_some() {
+        return None;
     }
     project
         .map(|path| ProfileSource::Project(path.to_owned()))
         .and_then(|source| source.load().ok())
         .and_then(|profile| profile.declared_name)
         .and_then(|name| builtin_name(&name))
-        .map_or_else(|| DEFAULT_PROFILE.to_owned(), ToOwned::to_owned)
+        .filter(|name| *name != DEFAULT_PROFILE)
+}
+
+/// Die Profil-Ebenen 3 und 4, wenn das Projekt-Profil die Ebene 4 wählt.
+///
+/// Die Ebene 3 wie immer ([`profile_layers`]), die Ebene 4 als eingebetteter
+/// Text des mitgelieferten Profils, Schlüssel und Regeln. Eine Datei gleichen
+/// Namens im Profilverzeichnis gehört dem Menschen und gilt nur, wenn er das
+/// Profil selbst wählt; die Wahl des Projekts lädt sie nie.
+fn embedded_layers(paths: &Paths, name: &'static str) -> Vec<ProfileSource> {
+    let mut sources = profile_layers(paths, DEFAULT_PROFILE);
+    sources.push(ProfileSource::Builtin(name));
+    sources
 }
 
 /// Die Profil-Ebenen 3 und 4 für einen gewählten Namen.

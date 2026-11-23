@@ -33,6 +33,20 @@ fn render() -> String {
     out
 }
 
+/// Wo das Projekt-Profil gesucht wird und welches Profil es wählen darf.
+fn render_project_directory(out: &mut String) {
+    out.push_str(
+        "`<projekt>` ist `sandbox.work_dir`, sonst das aktuelle Verzeichnis — nicht umgekehrt:\n\
+         Wer mit `--work` aus einem fremden Verzeichnis heraus arbeitet, bekommt das Profil des\n\
+         Projekts, an dem er arbeitet. Der Schlüssel ist auf der Projekt-Ebene gesperrt, deshalb\n\
+         kann das Projekt-Profil nicht bestimmen, wo nach ihm gesucht wird. Sein `name` wählt nur\n\
+         unter den mitgelieferten Profilen; jeder andere Wunsch wird übergangen und mit\n\
+         `CONFIG_009` gemeldet (`docs/profiles.md`). Ein Profil, das das Projekt-Profil wählt,\n\
+         lädt seinen eingebetteten Text, Schlüssel und Regeln; eine eigene Datei gleichen Namens\n\
+         unter `profiles/` gilt nur, wenn der Mensch das Profil selbst wählt (`--profile`).\n\n",
+    );
+}
+
 /// Titel, Sichtbarkeitsstufen, Projekt-Profil und Reihenfolge der Quellen.
 fn render_preamble(out: &mut String) {
     out.push_str("# Konfiguration\n\n");
@@ -122,14 +136,7 @@ fn render_preamble(out: &mut String) {
          `default` setzt mit Absicht keinen Wert: es liegt über `config.toml` und machte sie\n\
          sonst für jeden Schlüssel wirkungslos, den es nennt.\n\n",
     );
-    out.push_str(
-        "`<projekt>` ist `sandbox.work_dir`, sonst das aktuelle Verzeichnis — nicht umgekehrt:\n\
-         Wer mit `--work` aus einem fremden Verzeichnis heraus arbeitet, bekommt das Profil des\n\
-         Projekts, an dem er arbeitet. Der Schlüssel ist auf der Projekt-Ebene gesperrt, deshalb\n\
-         kann das Projekt-Profil nicht bestimmen, wo nach ihm gesucht wird. Sein `name` wählt nur\n\
-         unter den mitgelieferten Profilen; jeder andere Wunsch wird übergangen und mit\n\
-         `CONFIG_009` gemeldet (`docs/profiles.md`).\n\n",
-    );
+    render_project_directory(out);
     out.push_str(
         "Eine Umgebungsvariable heißt wie ihr Pfad in Großbuchstaben, mit `__` zwischen den\n\
          Ebenen: `hold.timeout_secs` wird zu `HUMANITL_HOLD__TIMEOUT_SECS`. Der Wert wird nach dem\n\

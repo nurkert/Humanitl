@@ -76,7 +76,9 @@ whoever works with `--work` from some other directory gets the profile of the
 project they are working on. The key is locked at the project layer, so the project
 profile cannot decide where it is looked for. Its `name` only chooses
 among the bundled profiles; any other wish is skipped and reported with
-`CONFIG_009` (`docs/profiles.md`).
+`CONFIG_009` (`docs/profiles.md`). A profile the project profile chooses loads its
+embedded text, keys and rules; an own file of the same name under `profiles/` applies
+only when the human chooses that profile themselves (`--profile`).
 
 An environment variable is named like its path in upper case, with `__` between the
 levels: `hold.timeout_secs` becomes `HUMANITL_HOLD__TIMEOUT_SECS`. The value is read according

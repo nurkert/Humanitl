@@ -226,8 +226,10 @@ source in the sandbox header, in `humanitl sandbox plan` and at the start of `hu
 HUM-405 a choice of a server other than the default starts only after the human confirmed that
 server once for that project folder (`CONFIG_022`); the confirmation lives in the daemon's data
 directory, outside every project, so the agent, which can rewrite the project profile, cannot
-issue it. A bundled profile the project names with `name`, whose copy carries a server the human
-assigned, counts as the project's choice and asks the same question. The confirmation names a folder
+issue it. A bundled profile the project names with `name` loads its embedded text, so a server
+the human assigned to that profile in their own copy does not reach the project's session; when
+the human names the same profile at the same time, its server counts as the project's choice and
+asks the same question. The confirmation names a folder
 and a server, not the content of the repository: a repository that changes under a confirmed folder
 keeps the confirmation for the same name; removing, renaming or re-adding a server, or a new origin
 of its endpoint, drops it. An edit that moves a server to another origin drops its key, so a stored
@@ -1371,6 +1373,7 @@ These attackers are not defended against, and Humanitl does not claim to:
 | 2026-11-22 | K-02: a third way to enter the provider access key and the proxy credentials: the settings view `humanitl settings`, typed without echo, sent once through `LlmKey` or `Egress(SetAuth)`, never through `SetConfig`, never shown; the input buffer is overwritten on every delete, cancel, growth and drop, a pasted text once taken over, and the secret stays under `Zeroizing` until the request is built; not overwritten: the request field handed to tonic, the prost/tonic encode buffers and crossterm's read buffers | GitHub #7 |
 | 2026-11-23 | K-39: closing the terminal of `humanitl go` detaches it (`terminal.on_close`, default `detach`, closed to project profiles); held requests wait for a person or their deadline, which blocks; the daemon counts the clients of the agent's terminal and `humanitl sessions` and the start window show a session without one; `humanitl run` and `SIGTERM` still stop | GitHub #13 |
 | 2026-11-23 | K-37: the project choice also carries the source of the agent (`agents.<id>.source`, host or depot); a company lock of the source keeps it out of the choice (`CONFIG_024`), and a start never falls back to the other source | #15 |
+| 2026-11-23 | K-02: a bundled profile the project profile chooses with `name` loads its embedded text, keys and rules; the user's own file of the same name applies only when the human chooses that profile (`--profile`, the profile of the session) | #90 |
 
 Every security-relevant change to the shim, the mount allowlist, the filter or the passthrough gets
 a line here. Vulnerabilities are reported as described in

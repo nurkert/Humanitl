@@ -246,7 +246,10 @@ off the hard block for IBANs and card numbers, or shrink the recording of every 
 while an approval sent the whole body. The full list is the column "Projekt" in
 [`CONFIG.md`](CONFIG.md). Under `llm` a project profile may set exactly one key, `llm.server`
 (HUM-400): it chooses one of the model servers the user saved and can never define an endpoint,
-a model or a key (section 5.1).
+a model or a key (section 5.1). Its `name` chooses only among the bundled profiles
+(`CONFIG_009` for any other), and a profile it chooses loads its embedded text, keys and rules:
+the user's own file of the same name under `profiles/` applies only when the human chooses that
+profile (`--profile`, the profile of the session).
 
 Toolchain for reproducible builds: Rust 1.95.0 (pinned in `daemon/rust-toolchain.toml`,
 minimum 1.89), Flutter 3.47.2 (pinned in `app/.fvmrc`), `bubblewrap` 0.8 or newer. `socat` is
@@ -1059,9 +1062,10 @@ folder and server name in `$XDG_DATA_HOME/humanitl/project-servers.toml`, in the
 directory and never in the project, so the agent cannot issue it itself. A choice of the default
 needs no confirmation: the traffic then goes where it would go without the project; without saved
 entries the server `default` derived from the flat values counts as the default. A choice the
-project makes indirectly counts as the project's: when the project profile names a bundled profile
-with `name` and that profile (or the user's own copy of it, which shadows it) carries `llm.server`,
-the start asks the same question, also when the human names the same profile at the same time. A
+project makes indirectly counts as the project's: a bundled profile the project profile names with
+`name` loads its embedded text, so a server the human assigned to that profile in their own copy
+does not reach the session through the project; when the human names the same profile at the same
+time and their copy carries `llm.server`, the start asks the same question. A
 confirmation covers one server under one name: a project that switches to another non-default
 server asks again, and removing, renaming or re-adding a server, renaming another server to that
 name, or giving it an endpoint of another origin drops every confirmation of that name, before the
