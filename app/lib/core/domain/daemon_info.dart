@@ -82,6 +82,13 @@ abstract class DaemonInfo with _$DaemonInfo {
   /// start in the stored folder; the app then sends the folder instead.
   bool get startsByProjectId => isFake || (protoMajor == 1 && protoMinor >= 58);
 
+  /// Whether the daemon counts the clients on the terminal of a running
+  /// session (`ProjectEntry.terminal_clients`, contract 1.62, #13). An older
+  /// one sends 0 for every session, which would read as "no terminal
+  /// attached".
+  bool get countsTerminalClients =>
+      isFake || (protoMajor == 1 && protoMinor >= 62);
+
   /// Whether `Projects.save_choice` takes a folder the register does not
   /// know yet (`SaveChoice.path`, contract 1.59, HUM-538). Without it the
   /// first-start screen cannot keep the choice of a new folder, and the app

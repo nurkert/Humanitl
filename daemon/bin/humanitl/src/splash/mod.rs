@@ -144,6 +144,9 @@ pub struct Splash {
     /// Gesetzt, sobald die Animation enden soll; der Thread prüft es vor
     /// jedem Bild.
     cancel: Arc<AtomicBool>,
+    /// Gesetzt, wenn der Thread danach nichts mehr schreiben soll, auch
+    /// [`RESTORE`] nicht ([`Splash::abandon`]).
+    mute: Arc<AtomicBool>,
     /// Meldet, dass der Thread das Terminal zurückgegeben hat.
     done: Option<std::sync::mpsc::Receiver<()>>,
     /// Der Zeichen-Thread, bis [`Splash::stop`] ihn einsammelt.
@@ -170,20 +173,23 @@ impl Splash {
     #[must_use]
     pub fn start_on(palette: Palette, out: Box<dyn Write + Send>) -> Option<Self> {
         let cancel = Arc::new(AtomicBool::new(false));
+        let mute = Arc::new(AtomicBool::new(false));
         let (tell, done) = std::sync::mpsc::channel();
         let started = Instant::now();
         let thread = std::thread::Builder::new()
             .name("humanitl-splash".to_owned())
             .spawn({
                 let cancel = Arc::clone(&cancel);
+                let mute = Arc::clone(&mute);
                 move || {
-                    draw(out, &cancel, started, palette);
+                    draw(out, &cancel, &mute, started, palette);
                     let _ = tell.send(());
                 }
             })
             .ok()?;
         Some(Self {
             cancel,
+            mute,
             done: Some(done),
             thread: Some(thread),
             started,
@@ -227,6 +233,19 @@ impl Splash {
     }
 }
 
+impl Splash {
+    /// Beendet die Animation ohne [`RESTORE`] und ohne zu warten: nach
+    /// `SIGHUP`, wenn es das Terminal nicht mehr gibt und jedes Schreiben
+    /// `EIO` bekäme (GitHub #13). Der Thread endet nach seinem laufenden
+    /// Bild von selbst; der Befehl wartet nicht auf ihn. Idempotent.
+    pub fn abandon(&mut self) {
+        self.mute.store(true, Ordering::SeqCst);
+        self.cancel.store(true, Ordering::SeqCst);
+        self.done = None;
+        self.thread = None;
+    }
+}
+
 impl Drop for Splash {
     fn drop(&mut self) {
         self.stop();
@@ -235,7 +254,13 @@ impl Drop for Splash {
 
 /// Der Zeichen-Thread: [`ENTER`], ein Bild je [`FRAME`], bis `cancel`
 /// gesetzt ist, dann [`RESTORE`].
-fn draw(mut out: Box<dyn Write + Send>, cancel: &AtomicBool, started: Instant, palette: Palette) {
+fn draw(
+    mut out: Box<dyn Write + Send>,
+    cancel: &AtomicBool,
+    mute: &AtomicBool,
+    started: Instant,
+    palette: Palette,
+) {
     let model = render::Model::fist();
     let mut size = (0, 0);
     let mut pending = String::from(ENTER);
@@ -253,7 +278,11 @@ fn draw(mut out: Box<dyn Write + Send>, cancel: &AtomicBool, started: Instant, p
         }
         pending.push_str(&screen(&model, started.elapsed(), now.0, now.1, palette));
         // Ein Bild ist ein Schreiben; ein Fehler ist kein Grund, den Start
-        // aufzuhalten.
+        // aufzuhalten. Nach `SIGHUP` (`Splash::abandon`) geht kein Bild mehr
+        // hinaus, auch keines, das schon gebaut war (GitHub #13).
+        if mute.load(Ordering::SeqCst) {
+            return;
+        }
         let _ = out.write_all(pending.as_bytes());
         let _ = out.flush();
         pending.clear();
@@ -265,8 +294,9 @@ fn draw(mut out: Box<dyn Write + Send>, cancel: &AtomicBool, started: Instant, p
             std::thread::sleep(Duration::from_millis(5).min(until - Instant::now()));
         }
     }
-    // Wer nie ein Bild schrieb, hat auch nichts zurückzugeben.
-    if pending.is_empty() {
+    // Wer nie ein Bild schrieb, hat auch nichts zurückzugeben; ein Terminal,
+    // das es nicht mehr gibt, auch nicht.
+    if pending.is_empty() && !mute.load(Ordering::SeqCst) {
         let _ = out.write_all(RESTORE.as_bytes());
         let _ = out.flush();
     }

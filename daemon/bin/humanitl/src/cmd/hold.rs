@@ -80,6 +80,16 @@ impl Hold {
         self.until = None;
     }
 
+    /// Beendet die Animation, ohne dass sie noch etwas schreibt
+    /// ([`Splash::abandon`]): nach `SIGHUP`, wenn es das Terminal nicht mehr
+    /// gibt (GitHub #13). Idempotent.
+    pub(crate) fn abandon(&mut self) {
+        if let Some(mut splash) = self.splash.take() {
+            splash.abandon();
+        }
+        self.until = None;
+    }
+
     /// Der Strom des Starts ist zu Ende. Lief die Sitzung, bleibt die
     /// Animation bis zum Ende ihrer Mindestzeit; sonst geht sie sofort.
     pub(crate) fn stream_ended(&mut self) {

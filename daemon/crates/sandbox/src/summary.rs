@@ -1001,6 +1001,16 @@ fn lines(bytes: &[u8]) -> impl Iterator<Item = &[u8]> {
 /// Sonst: `None`. Der Befund zeigt den Pfad dann nur an.
 #[must_use]
 pub fn copy_command(host_path: &Path) -> Option<String> {
+    literal_word(host_path).map(|quoted| format!("rm -- {quoted}"))
+}
+
+/// Ein Host-Pfad als ein wörtliches Wort für eine POSIX-Shell, nach genau
+/// den vier Bedingungen von [`copy_command`]; `None`, wenn eine fehlt.
+///
+/// Für jeden Befehl, den ein Befund mit einem Host-Pfad zum Kopieren
+/// anbietet, etwa `humanitl go --dir PFAD` in `CLI_005` (#13).
+#[must_use]
+pub fn literal_word(host_path: &Path) -> Option<String> {
     let text = host_path.to_str()?;
     if text.is_empty() || text != sanitize_note(text) {
         return None;
@@ -1013,7 +1023,7 @@ pub fn copy_command(host_path: &Path) -> Option<String> {
     if back.len() != 1 || back.first().map(String::as_str) != Some(text) {
         return None;
     }
-    Some(format!("rm -- {quoted}"))
+    Some(quoted.into_owned())
 }
 
 /// Ob `quoted` ein wörtliches Wort für `text` ist: unverändert oder genau ein

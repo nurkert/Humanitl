@@ -136,6 +136,8 @@ struct HubState {
     rows: u16,
     /// Ob ein Schreiber angemeldet ist.
     writer: bool,
+    /// Wie viele Clients angemeldet sind, schreibend und lesend (#13).
+    clients: usize,
     /// Die Zeilen, die auf die nächste Grenze warten.
     pending: Vec<Arc<str>>,
     /// Der Exit-Code, sobald der Agent beendet ist.
@@ -245,6 +247,7 @@ impl TerminalHub {
                     cols,
                     rows,
                     writer: false,
+                    clients: 0,
                     pending: Vec::new(),
                     finished: None,
                 }),
@@ -392,6 +395,15 @@ impl TerminalHub {
         self.inner.target.write_input(bytes)
     }
 
+    /// Wie viele Clients an diesem Terminal hängen, schreibend und lesend
+    /// (#13). Ein Client zählt vom erfolgreichen [`TerminalHub::attach`] bis
+    /// zum Fallenlassen seiner [`Attachment`], gleich auf welchem Weg sein
+    /// Strom endet.
+    #[must_use]
+    pub fn clients(&self) -> usize {
+        lock(&self.inner.state).clients
+    }
+
     /// Meldet einen Client an.
     ///
     /// # Errors
@@ -419,6 +431,7 @@ impl TerminalHub {
                 }
                 state.writer = true;
             }
+            state.clients = state.clients.saturating_add(1);
             let backlog: Vec<u8> = state.ring.iter().copied().collect();
             (
                 backlog,
@@ -435,6 +448,7 @@ impl TerminalHub {
             rows,
             finished,
             writer: (!read_only).then(|| WriterSlot { hub: self.clone() }),
+            _client: ClientSlot { hub: self.clone() },
         })
     }
 
@@ -460,6 +474,29 @@ impl TerminalHub {
     /// Gibt den Schreiber-Platz wieder frei.
     fn release_writer(&self) {
         lock(&self.inner.state).writer = false;
+    }
+
+    /// Meldet einen Client ab.
+    fn release_client(&self) {
+        let mut state = lock(&self.inner.state);
+        state.clients = state.clients.saturating_sub(1);
+    }
+}
+
+/// Die Anmeldung eines Clients, solange er hängt (#13).
+///
+/// Wie [`WriterSlot`] gibt sie sich beim Fallenlassen selbst frei: Ein Strom,
+/// der abreißt, zählt danach nicht mehr als angehängtes Terminal, und
+/// `humanitl sessions` nennt keinen Client an einer Sitzung, an der niemand
+/// mehr hängt.
+#[derive(Debug)]
+struct ClientSlot {
+    hub: TerminalHub,
+}
+
+impl Drop for ClientSlot {
+    fn drop(&mut self) {
+        self.hub.release_client();
     }
 }
 
@@ -493,6 +530,8 @@ pub struct Attachment {
     finished: Option<i32>,
     /// Der Platz des Schreibers, falls dieser Client schreiben darf.
     writer: Option<WriterSlot>,
+    /// Die Zählung dieses Clients (#13).
+    _client: ClientSlot,
 }
 
 /// Macht aus einem Pfad von der Leitung das, was in der Hinweiszeile stehen
@@ -694,6 +733,9 @@ async fn session(
         mut rows,
         finished,
         writer,
+        // Gebunden und nicht `_`: Die Zählung gilt bis zum Ende dieser
+        // Sitzung des Clients (#13).
+        _client: _counted,
     } = attachment;
 
     // Die Geometrie des Schreibers gilt, bevor der Rückstand abläuft: Sonst

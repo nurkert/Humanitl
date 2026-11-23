@@ -52,9 +52,9 @@ use rustix::termios::{LocalModes, tcgetattr};
 
 mod common;
 
-#[cfg(target_os = "linux")]
-use common::FirstStartTweaks;
 use common::{FakeServer, Harness, PATIENCE};
+#[cfg(target_os = "linux")]
+use common::{FirstStartTweaks, Tracking};
 
 /// Ein Pseudoterminal: der Master, den der Test hält, und der Slave, den der
 /// Lauf als sein Terminal bekommt.
@@ -1592,4 +1592,273 @@ fn a_held_request_rings_exactly_once_between_chunks() {
     pty.write(b"\x02d");
     assert_eq!(wait_for_exit(&mut child, &pty), 0);
     assert!(pty.is_cooked(), "modes {:?}", pty.modes());
+}
+
+// ---------------------------------------------------------------------------
+// Das Schließen des Terminals von `humanitl go` (GitHub #13)
+// ---------------------------------------------------------------------------
+
+/// Wartet höchstens `limit` auf das Ende des Laufs: `None`, wenn er dann
+/// noch steht; er wird danach beendet, damit keine Waise bleibt.
+#[cfg(target_os = "linux")]
+fn exit_within(child: &mut Child, pty: &Pty, limit: Duration) -> Option<i32> {
+    let deadline = Instant::now() + limit;
+    loop {
+        pty.drain();
+        if let Some(status) = child.try_wait().expect("the child can be polled") {
+            return Some(status.code().unwrap_or(-1));
+        }
+        if Instant::now() >= deadline {
+            let _ = child.kill();
+            let _ = child.wait();
+            return None;
+        }
+        std::thread::sleep(Duration::from_millis(10));
+    }
+}
+
+/// Der Zustand der Sitzung, wie `humanitl --json sessions` ihn vom Daemon
+/// liest.
+#[cfg(target_os = "linux")]
+fn session_state(harness: &Harness) -> String {
+    let output = harness
+        .run_bounded(["--json", "sessions"], PATIENCE)
+        .expect("sessions ends");
+    let value: serde_json::Value =
+        serde_json::from_slice(&output.stdout).expect("sessions answers in JSON");
+    value["state"].as_str().expect("a state").to_owned()
+}
+
+/// Ein `SIGHUP` an diesem Lauf, und danach geht das Terminal weg wie bei
+/// einem geschlossenen Fenster: Der Lauf endet binnen 2 s mit 129. Den
+/// Zustand des Terminals danach kann niemand mehr prüfen; dass er endet,
+/// heißt, dass er nichts in ein Terminal schrieb, das es nicht mehr gibt,
+/// und dass nichts ihn am Leben hält.
+#[cfg(target_os = "linux")]
+fn hang_up(child: &mut Child, pty: &mut Pty) {
+    signal(child, rustix::process::Signal::HUP);
+    pty.close_master();
+    assert_eq!(
+        exit_within(child, pty, Duration::from_secs(2)),
+        Some(129),
+        "the command did not end within 2 s of SIGHUP with 129"
+    );
+}
+
+/// `SIGHUP` an `humanitl go` mit der Vorgabe `terminal.on_close =
+/// "detach"`: Der Befehl endet, die Sitzung läuft weiter, kein
+/// `Sandbox(Stop)`. Ein zweites `go` im selben Ordner hängt sich an sie an,
+/// ohne Ladeanimation und ohne zweiten Start.
+///
+/// Mutation proof: inverting the `on_close` condition in `OnSignal::stops`
+/// sends a stop here and fails `stops() == 0`, and fails the `stop` test
+/// below; dropping the running check in `go::rejoin` starts a second time.
+#[cfg(target_os = "linux")]
+#[test]
+fn sighup_detaches_go_and_a_second_go_attaches() {
+    let harness = Harness::new();
+    let server = FakeServer::start_tracking_sessions(&harness, &work(&harness));
+    let mut pty = Pty::open();
+    let mut child = go_at(&harness, &pty, &[], None);
+    wait_for_raw(&mut child, &pty);
+    hang_up(&mut child, &mut pty);
+
+    assert_eq!(server.stops(), 0, "SIGHUP stopped the session");
+    assert_eq!(server.starts().len(), 1);
+    assert_eq!(session_state(&harness), "running");
+
+    let pty = Pty::open();
+    let mut again = go_at(&harness, &pty, &[], None);
+    wait_for_raw(&mut again, &pty);
+    pty.write(b"\x02d");
+    assert_eq!(wait_for_exit(&mut again, &pty), 0);
+    let said = String::from_utf8_lossy(&pty.read()).into_owned();
+    assert!(
+        said.contains("Attached to the running session in work"),
+        "{said:?}"
+    );
+    assert!(
+        !said.contains(SPLASH_ENTER),
+        "no splash for an attach: {said:?}"
+    );
+    assert_eq!(server.starts().len(), 1, "the second go started nothing");
+    assert_eq!(server.stops(), 0);
+    assert_eq!(
+        server
+            .terminal_inputs()
+            .iter()
+            .filter(|kind| **kind == "open")
+            .count(),
+        2,
+        "{:?}",
+        server.terminal_inputs()
+    );
+}
+
+/// `terminal.on_close = "stop"`: `SIGHUP` an `humanitl go` stoppt die
+/// Sitzung wie vor GitHub #13.
+#[cfg(target_os = "linux")]
+#[test]
+fn sighup_stops_go_with_on_close_stop() {
+    let harness = Harness::new();
+    let server = FakeServer::start_tracking_sessions(&harness, &work(&harness));
+    let mut pty = Pty::open();
+    let mut child = go_at(&harness, &pty, &["--terminal-on-close", "stop"], None);
+    wait_for_raw(&mut child, &pty);
+    hang_up(&mut child, &mut pty);
+
+    assert_eq!(server.stops(), 1, "SIGHUP did not stop the session");
+    assert_eq!(session_state(&harness), "stopped");
+}
+
+/// `humanitl run -- bash` an einem Terminal stoppt auf `SIGHUP`, auch mit
+/// `terminal.on_close = "detach"`: Der Schlüssel gilt nur für `go`.
+///
+/// Mutation proof: evaluating the key for `run` too (dropping `self.go &&`
+/// in `OnSignal::stops`) sends no stop and fails this test.
+#[cfg(target_os = "linux")]
+#[test]
+fn sighup_stops_run_whatever_the_key_says() {
+    let harness = Harness::new();
+    let server = FakeServer::start_tracking_sessions(&harness, &work(&harness));
+    let mut pty = Pty::open();
+    let mut child = harness
+        .command()
+        .args(["--terminal-on-close", "detach", "run", "--", "bash"])
+        .stdin(pty.stdio())
+        .stdout(pty.stdio())
+        .stderr(pty.stdio())
+        .spawn()
+        .expect("the binary starts");
+    wait_for_raw(&mut child, &pty);
+    hang_up(&mut child, &mut pty);
+
+    assert_eq!(server.stops(), 1, "run left its session running");
+}
+
+/// Ein Lauf, der seine eigene Sitzung nur noch lesend sieht, weil schon ein
+/// anderer Client schreibt (die Oberfläche etwa, `TERM_001`), besitzt sie
+/// weiter: `SIGHUP` an `run` und an `go` mit `terminal.on_close = "stop"`
+/// stoppt sie (GitHub #13, Review).
+///
+/// Mutation proof: passing `false` for the owner in `drive` (the rule of
+/// HUM-280, a watcher never stops) sends no stop and fails both rows.
+#[cfg(target_os = "linux")]
+#[test]
+fn a_run_that_only_watches_still_stops_its_own_session() {
+    for (extra, sub) in [
+        (&[][..], &["run", "--", "bash"][..]),
+        (
+            &["--terminal-on-close", "stop"][..],
+            &["go", "--", "bash"][..],
+        ),
+    ] {
+        let harness = Harness::new();
+        let server = FakeServer::start_tracking(
+            &harness,
+            &work(&harness),
+            Tracking {
+                writer_taken: true,
+                ..Tracking::default()
+            },
+        );
+        let mut pty = Pty::open();
+        let mut child = harness
+            .command()
+            .args(extra)
+            .args(sub)
+            .stdin(pty.stdio())
+            .stdout(pty.stdio())
+            .stderr(pty.stdio())
+            .spawn()
+            .expect("the binary starts");
+        wait_for_raw(&mut child, &pty);
+        hang_up(&mut child, &mut pty);
+        assert_eq!(
+            server.stops(),
+            1,
+            "{sub:?}: the watching run left its session"
+        );
+    }
+}
+
+/// Ein zweites `go` hängt sich nur an die Sitzung, die der Daemon für den
+/// Ordner genannt hat: Ist sie inzwischen eine andere, lehnt der Anschluss
+/// mit `IPC_006` ab, und nichts startet oder stoppt (GitHub #13, Review).
+///
+/// Mutation proof: attaching with an empty sandbox id in `go::rejoin`
+/// attaches to whatever runs and fails the exit and `IPC_006` assertions.
+#[cfg(target_os = "linux")]
+#[test]
+fn a_second_go_attaches_only_to_the_session_the_daemon_named() {
+    let harness = Harness::new();
+    let server = FakeServer::start_tracking(
+        &harness,
+        &work(&harness),
+        Tracking {
+            stale_sandbox: true,
+            ..Tracking::default()
+        },
+    );
+    let pty = Pty::open();
+    let mut child = go_at(&harness, &pty, &[], None);
+    wait_for_raw(&mut child, &pty);
+    pty.write(b"\x02d");
+    assert_eq!(wait_for_exit(&mut child, &pty), 0);
+
+    let pty = Pty::open();
+    let mut again = go_at(&harness, &pty, &[], None);
+    let code = wait_for_exit(&mut again, &pty);
+    let said = String::from_utf8_lossy(&pty.read()).into_owned();
+    assert_ne!(code, 0, "{said:?}");
+    assert!(said.contains("IPC_006"), "{said:?}");
+    assert_eq!(server.starts().len(), 1, "the second go started nothing");
+    assert_eq!(server.stops(), 0);
+    assert!(pty.is_cooked(), "modes {:?}", pty.modes());
+}
+
+/// Ein zweites `go` hat die Sitzung nicht gestartet und stoppt sie nie:
+/// weder auf `SIGTERM` noch mit `terminal.on_close = "stop"` auf `SIGHUP`
+/// (GitHub #13, Entscheidung aus dem Review). Es hängt nur ab.
+///
+/// Mutation proof: `REJOINED_OWNS = true` in `go::rejoin` sends a stop and
+/// fails both rows.
+#[cfg(target_os = "linux")]
+#[test]
+fn a_rejoined_go_never_stops_the_session() {
+    for (extra, number, code) in [
+        (&[][..], rustix::process::Signal::TERM, 143),
+        (
+            &["--terminal-on-close", "stop"][..],
+            rustix::process::Signal::HUP,
+            129,
+        ),
+    ] {
+        let harness = Harness::new();
+        let server = FakeServer::start_tracking_sessions(&harness, &work(&harness));
+        let pty = Pty::open();
+        let mut first = go_at(&harness, &pty, &[], None);
+        wait_for_raw(&mut first, &pty);
+        pty.write(b"\x02d");
+        assert_eq!(wait_for_exit(&mut first, &pty), 0);
+
+        let pty = Pty::open();
+        let mut again = go_at(&harness, &pty, extra, None);
+        wait_for_raw(&mut again, &pty);
+        let said = String::from_utf8_lossy(&pty.read()).into_owned();
+        assert!(said.contains("Attached to the running session"), "{said:?}");
+        signal(&again, number);
+        assert_eq!(
+            exit_within(&mut again, &pty, Duration::from_secs(2)),
+            Some(code),
+            "{extra:?}"
+        );
+        assert_eq!(server.starts().len(), 1, "{extra:?}");
+        assert_eq!(
+            server.stops(),
+            0,
+            "{extra:?}: the rejoined go stopped the session"
+        );
+        assert_eq!(session_state(&harness), "running", "{extra:?}");
+    }
 }

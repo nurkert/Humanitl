@@ -204,6 +204,7 @@ below lists the flag names and their short aliases.
 | `--sandbox-work-mode` | `--work-mode` | `ro`, `rw` | `sandbox.work_mode` |
 | `--terminal-bell-on-hold` | - | `true`, `false` | `terminal.bell_on_hold` |
 | `--terminal-direct-keys` | - | `true`, `false` | `terminal.direct_keys` |
+| `--terminal-on-close` | - | `detach`, `stop` | `terminal.on_close` |
 | `--terminal-prefix` | - | `STRING` | `terminal.prefix` |
 | `--terminal-splash` | - | `true`, `false` | `terminal.splash` |
 | `--tls-trust-system-store` | - | `true`, `false` | `tls.trust_system_store` |

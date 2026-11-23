@@ -105,6 +105,10 @@ pub struct ProjectActivity {
     pub changes_waiting: bool,
     /// The session of this daemon.
     pub session: SessionId,
+    /// How many clients hang on the terminal of its agent (#13).
+    pub terminal_clients: u32,
+    /// The id of its sandbox while one is held (#13), empty otherwise.
+    pub sandbox: String,
 }
 
 /// What an answer needs from the daemon.
@@ -505,6 +509,14 @@ pub fn entry(row: &ProjectRow, activity: Option<&ProjectActivity>) -> v1::Projec
         has_choice: row.choice.is_some(),
         choice_saved_at: row.choice_saved_at.map(convert::timestamp),
         version: row.version,
+        // Only while its session runs (#13).
+        terminal_clients: active
+            .filter(|_| running)
+            .map_or(0, |activity| activity.terminal_clients),
+        sandbox_id: active
+            .filter(|_| running)
+            .map(|activity| activity.sandbox.clone())
+            .unwrap_or_default(),
     }
 }
 

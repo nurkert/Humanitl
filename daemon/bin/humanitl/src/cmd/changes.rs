@@ -269,7 +269,11 @@ pub async fn review(ctx: &Context) -> Result<Option<u8>, Failure> {
     let changes = tokio::select! {
         biased;
         number = signals.next() => {
-            ctx.render.note(KEPT);
+            // Nach `SIGHUP` ist das Terminal weg: kein Wort mehr hinein
+            // (GitHub #13). Die Änderungen warten im Daemon.
+            if number != crate::cmd::run::SIGHUP {
+                ctx.render.note(KEPT);
+            }
             return Ok(Some(number));
         }
         fetched = fetch(ctx) => fetched?,
@@ -290,8 +294,10 @@ pub async fn review(ctx: &Context) -> Result<Option<u8>, Failure> {
         let answer = match line_or_signal(read_line(), signals.next()).await {
             Answer::Line(answer) => answer,
             Answer::Signal(number) => {
-                let _ = writeln!(stderr);
-                ctx.render.note(KEPT);
+                if number != crate::cmd::run::SIGHUP {
+                    let _ = writeln!(stderr);
+                    ctx.render.note(KEPT);
+                }
                 return Ok(Some(number));
             }
         };

@@ -13,7 +13,7 @@ use humanitl_config::{ProjectChoice, Sources};
 use humanitl_core::diagnostics::codes;
 use humanitl_core::{Diagnostic, Severity};
 
-use super::state::SessionMeta;
+use super::state::{FakeState, SessionMeta};
 use crate::v1;
 
 /// Beantwortet eine Anfrage an das Register des Fakes.
@@ -23,10 +23,16 @@ use crate::v1;
 /// `CONFIG_003` ohne Operation und für ein Projekt, das nicht das der
 /// Sitzung ist, `IPC_006` für `save_choice`.
 pub(super) fn answer(
-    session: &SessionMeta,
+    state: &FakeState,
     request: v1::ProjectsRequest,
 ) -> Result<v1::ProjectsResponse, Diagnostic> {
-    let project = entry(session);
+    let running = state.sandbox().1 == v1::SandboxState::Running;
+    let project = entry(&state.session(), running, state.terminal_clients()).map(|mut project| {
+        if running {
+            project.sandbox_id = state.sandbox().0.to_string();
+        }
+        project
+    });
     match request.op {
         Some(v1::projects_request::Op::List(_)) => Ok(v1::ProjectsResponse {
             projects: project.into_iter().collect(),
@@ -178,7 +184,9 @@ fn proposal(
 }
 
 /// Das eine Projekt des Fakes; keines, wenn die Sitzung keinen Ordner nennt.
-fn entry(session: &SessionMeta) -> Option<v1::ProjectEntry> {
+/// Es läuft, solange die gespielte Sandbox läuft, mit den Clients an ihrem
+/// Terminal (#13).
+fn entry(session: &SessionMeta, running: bool, clients: u32) -> Option<v1::ProjectEntry> {
     let path = session.work_dir.trim();
     if path.is_empty() {
         return None;
@@ -195,9 +203,14 @@ fn entry(session: &SessionMeta) -> Option<v1::ProjectEntry> {
         display_name: name,
         last_agent: "opencode".to_owned(),
         runs: 1,
-        running: true,
-        session_id: session.id.to_string(),
+        running,
+        session_id: if running {
+            session.id.to_string()
+        } else {
+            String::new()
+        },
         version: 1,
+        terminal_clients: if running { clients } else { 0 },
         ..v1::ProjectEntry::default()
     })
 }

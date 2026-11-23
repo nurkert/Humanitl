@@ -264,6 +264,8 @@ async fn list_names_the_running_session_and_a_missing_folder() {
         running: true,
         changes_waiting: true,
         session: fixture.session,
+        terminal_clients: 2,
+        sandbox: "sbx-new".to_owned(),
     };
     let list = |cursor: &str, limit: u32| v1::ProjectsRequest {
         op: Some(v1::projects_request::Op::List(v1::projects_request::List {
@@ -282,6 +284,9 @@ async fn list_names_the_running_session_and_a_missing_folder() {
     assert_eq!(first.project_id, new.id.to_string());
     assert!(first.running && first.changes_waiting && !first.missing);
     assert_eq!(first.session_id, fixture.session.to_string());
+    // Die Clients am Terminal der laufenden Sitzung (#13).
+    assert_eq!(first.terminal_clients, 2);
+    assert_eq!(first.sandbox_id, "sbx-new");
     assert_eq!(first.last_agent, "claude");
     assert_eq!(first.runs, 1);
     assert!(!page.next_cursor.is_empty());
@@ -297,6 +302,8 @@ async fn list_names_the_running_session_and_a_missing_folder() {
     assert!(rest.projects[0].missing);
     assert!(!rest.projects[0].running);
     assert!(rest.projects[0].session_id.is_empty());
+    assert_eq!(rest.projects[0].terminal_clients, 0);
+    assert!(rest.projects[0].sandbox_id.is_empty());
     assert!(rest.next_cursor.is_empty());
 }
 

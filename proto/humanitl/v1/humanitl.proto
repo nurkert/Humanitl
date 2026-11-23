@@ -1738,6 +1738,15 @@ message SandboxEvent {
     // Oberflaeche zeigt es als Tag oben in der Sitzung, die Kommandozeile
     // beim Start und in der Statuszeile.
     CloudInference cloud_inference = 24;
+    // Wie viele Clients gerade am Terminal des Agenten haengen, schreibend
+    // und lesend zusammen (#13): `humanitl go`, `sandbox attach`, `run -- CMD`
+    // an einem Terminal, der Bereich der Oberflaeche. 0 waehrend eine
+    // Sandbox laeuft heisst, sie laeuft ohne angehaengtes Terminal, etwa nach
+    // dem Schliessen des Terminals von `humanitl go`. Die Terminals weiterer
+    // Shells zaehlen nicht. 0 ohne laufende Sandbox, im Schnappschuss eines
+    // Befunds und bei einem Daemon vor Minor 62; ein Client liest das Feld
+    // erst ab 1.62.
+    uint32 terminal_clients = 25;
   }
 
   // Eine Zeile aus dem Log der Sandbox.
@@ -3473,6 +3482,18 @@ message ProjectEntry {
   google.protobuf.Timestamp choice_saved_at = 14;
   // Steigt bei jeder Aenderung des Eintrags (HUM-533 bindet sie).
   uint64 version = 15;
+  // Wie viele Clients am Terminal des Agenten der laufenden Sitzung dieses
+  // Projekts haengen, wie `SandboxEvent.Status.terminal_clients` (#13): 0
+  // mit `running` heisst, die Sitzung laeuft ohne angehaengtes Terminal.
+  // Steigt nicht mit `version`. 0 ohne laufende Sitzung und bei einem
+  // Daemon vor Minor 62.
+  uint32 terminal_clients = 16;
+  // Die Kennung der Sandbox, die in diesem Projekt laeuft (#13): Ein Client,
+  // der sich an genau diese Sitzung haengen will, nennt sie in
+  // `TerminalInput.Open.sandbox_id`; laeuft inzwischen eine andere, lehnt der
+  // Daemon mit `IPC_006` ab. Leer ohne laufende Sitzung und bei einem Daemon
+  // vor Minor 62.
+  string sandbox_id = 17;
 }
 
 // Ein Schluessel der Projektwahl, wie er fuer dieses Projekt gilt.

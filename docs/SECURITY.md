@@ -1808,6 +1808,30 @@ The pause is a decision of the person, made in advance for every request until i
 `allow` rule for `**` that cannot be saved. Whoever pauses accepts that what the agent sends in
 that time leaves unseen; the recording shows afterwards what it was.
 
+### A session without a terminal (GitHub #13)
+
+Closing the terminal of `humanitl go` detaches it (`terminal.on_close = "detach"`, the default,
+closed to project profiles): `SIGHUP` ends the command and leaves the session running in the
+daemon, as closing the window or the terminal pane of the app always did. `SIGTERM` still stops
+it, `terminal.on_close = "stop"` restores the old behaviour, and `humanitl run` stops its session on
+`SIGHUP` whatever the key says. Nothing of the claim changes:
+
+- **Held requests wait as before.** A request the session holds while no terminal hangs on it waits
+  until a person decides it (the app, the interceptor of a new attach, `humanitl intercept`) or its
+  deadline expires; expiry is a **block** (`hold.timeout_secs`, `504`, `BlockReason::Timeout`),
+  never an allow. Nobody watching never lets a request out.
+- **The guarantees do not depend on a client.** The sandbox, its one door and its filter are the
+  daemon's; a closed terminal removes no check, and the verdict on the three guarantees was never a
+  client's (HUM-585).
+- **The session stays visible.** `humanitl sessions` names a running session without a terminal
+  (`SandboxEvent.Status.terminal_clients`, contract 1.62), the start window of the app lists it
+  under "Running" with the same mark, and the tray shows it; `humanitl go` in its folder,
+  `humanitl sandbox attach` or the app attach to it again. A second start in another folder is
+  refused with `CLI_005`, whose fix leads to the running session.
+- **Waiting changes stay waiting.** When a detached disposable session ends, its changes wait in
+  the daemon as after every other end (section 5.2); the next `humanitl go` in that folder or the
+  start window asks about them before anything starts there.
+
 ### Updates from inside the app
 
 Since HUM-382 the daemon asks GitHub at most once a day whether a newer release exists, and
@@ -2223,6 +2247,7 @@ passthrough or the audit chain gets a line here and in the change history of
 | 0.1.x | The project choice: a per-project configuration layer the daemon keeps on the host in its register, written only through `Projects.save_choice`, never read from the project folder; a fixed allow-list of keys, the isolation floor only raised, company locks win, `CONFIG_024` otherwise; a start without a project folder is refused with `SANDBOX_053` instead of taking the daemon's working directory (HUM-532, [section 5.2](#the-project-choice-hum-532), K-37). |
 | 0.1.x | A rule of `rules.yaml` that cannot be read costs only itself instead of every rule of the file; in its place stands the rule itself (action and match readable) or `ask` for its host or for every host and address, never nothing unless it is an `allow`; the entry is written back in its place, and a file that cannot be read as a whole is never overwritten (HUM-561, [section 7](#7-the-rules-engine)). |
 | 0.1.x | The credential files of the agent depot optionally encrypted at rest (`agents.encrypt_credentials`, off by default, closed to project profiles): ChaCha20-Poly1305 from `ring` with a fresh random nonce per write, the key only in the system keyring and never in a file next to the data, the setting refused without a keyring that answers (`AGENT_020`); the switch converts every file atomically under the depots' locks, all or nothing; the daemon still decrypts for every session (HUM-523, [section 5.7](#57-the-credential-file-of-the-depot), K-36). |
+| 0.1.x | Closing the terminal of `humanitl go` detaches it (`terminal.on_close`, default `detach`, closed to project profiles): the session keeps running in the daemon, held requests wait for a person or their deadline (expiry blocks), `humanitl sessions` and the start window show the session without a terminal; `SIGTERM` stops, `humanitl run` stops on `SIGHUP` as before; no guarantee depends on a client (GitHub #13, [section 6](#a-session-without-a-terminal-github-13), K-39). |
 
 ## 12. macOS: Seatbelt instead of bubblewrap
 

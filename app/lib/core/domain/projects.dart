@@ -24,6 +24,7 @@ final class ProjectEntry {
     this.missing = false,
     this.replaced = false,
     this.hasChoice = false,
+    this.terminalClients = 0,
   });
 
   /// The stable id of the project.
@@ -62,6 +63,13 @@ final class ProjectEntry {
   /// True when the register holds a project choice for it.
   final bool hasChoice;
 
+  /// How many clients hang on the terminal of its running session, writing
+  /// and reading (#13): 0 with [running] means the session runs without an
+  /// attached terminal, for example after the terminal of `humanitl go`
+  /// closed. Read only from a daemon that counts them
+  /// (`DaemonInfo.countsTerminalClients`); an older one always says 0.
+  final int terminalClients;
+
   /// Whether a start from the list of recent projects is possible: the
   /// folder is there and the row is the current one at its path.
   bool get startable => !missing && !replaced;
@@ -80,7 +88,8 @@ final class ProjectEntry {
       other.changesWaiting == changesWaiting &&
       other.missing == missing &&
       other.replaced == replaced &&
-      other.hasChoice == hasChoice;
+      other.hasChoice == hasChoice &&
+      other.terminalClients == terminalClients;
 
   @override
   int get hashCode => Object.hash(
@@ -96,6 +105,7 @@ final class ProjectEntry {
     missing,
     replaced,
     hasChoice,
+    terminalClients,
   );
 }
 

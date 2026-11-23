@@ -287,6 +287,20 @@ impl TerminalGuard {
         }
     }
 
+    /// Gibt den Rohmodus zurück, ohne zu schreiben: nach `SIGHUP`, wenn es das
+    /// Terminal nicht mehr gibt und jedes Schreiben `EIO` bekäme (GitHub #13).
+    /// Die `termios` gehen mit `tcsetattr` zurück, die Folge zum Verlassen
+    /// des Schirms nicht. Danach tut `Drop` nichts mehr.
+    pub fn abandon(&mut self) {
+        let Some(raw) = self.raw.take() else {
+            return;
+        };
+        self.muted.store(true, Ordering::SeqCst);
+        drop(take_active());
+        drop(raw);
+        signals::screen_leave();
+    }
+
     /// Gibt das Terminal zurück, hält den Prozess an wie `SIGTSTP` es täte,
     /// und setzt nach `SIGCONT` alles wieder.
     ///

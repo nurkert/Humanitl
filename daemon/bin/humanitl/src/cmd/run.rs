@@ -56,7 +56,7 @@
 
 use std::ffi::OsString;
 
-use humanitl_config::{AskMode, Config, Resolved};
+use humanitl_config::{AskMode, Config, OnClose, Resolved};
 use humanitl_core::block::sanitize_note;
 use humanitl_core::diagnostics::codes;
 use humanitl_core::{Diagnostic, FixAction, Severity};
@@ -141,7 +141,70 @@ pub(crate) struct Launch {
     /// `humanitl go`: Die Zeile des Erststarts steht schon da (#9); sie nennt
     /// den Frage-Modus, und der Hinweis zu Anfragen ohne Regel entfällt.
     pub first_line: bool,
+    /// `humanitl go`: was `SIGHUP` mit der Sitzung tut
+    /// (`terminal.on_close`, GitHub #13); [`launch`] setzt es nach der
+    /// Konfiguration. Unter `run` ohne Bedeutung.
+    pub on_close: OnClose,
+    /// Das Signal, auf das der Befehl endete (GitHub #13). Nach `SIGHUP`
+    /// ist das Terminal weg, und danach schreibt niemand mehr hinein, weder
+    /// JSON noch die Frage nach den Änderungen ([`Launch::hung_up`]).
+    pub signalled: Option<u8>,
+    /// `humanitl go`: die Signale, die schon vor der ersten Anfrage an den
+    /// Daemon standen (`go::rejoin`, GitHub #13). [`drive`] fragt sie, bevor
+    /// es startet, damit ein Signal aus der Lücke bis zu seinen eigenen
+    /// Strömen nicht verloren geht.
+    pub early_signals: Option<crate::cmd::attach::Signals>,
 }
+
+impl Launch {
+    /// Ob der Befehl auf `SIGHUP` endete: Sein Terminal ist weg.
+    pub(crate) fn hung_up(&self) -> bool {
+        self.signalled == Some(SIGHUP)
+    }
+
+    /// Was ein Signal an diesem Lauf mit der Sitzung tut.
+    pub(crate) const fn on_signal(&self) -> OnSignal {
+        OnSignal {
+            go: self.go,
+            on_close: self.on_close,
+        }
+    }
+}
+
+/// Die Nummer von `SIGHUP`: Das Terminal des Befehls ist geschlossen.
+pub(crate) const SIGHUP: u8 = 1;
+
+/// Was ein Signal an einem Lauf mit seiner Sitzung tut (HUM-280, GitHub #13).
+#[derive(Debug, Clone, Copy, Default, PartialEq, Eq)]
+pub(crate) struct OnSignal {
+    /// `humanitl go` und nicht `humanitl run`.
+    pub go: bool,
+    /// `terminal.on_close`; gilt nur unter `go`.
+    pub on_close: OnClose,
+}
+
+impl OnSignal {
+    /// Ob das Signal `number` die Sitzung stoppt.
+    ///
+    /// `owns`: Dieser Befehl hat die Sitzung gestartet, oder er hängt als
+    /// Schreiber an der Sitzung, an die sich ein zweites `go` gehängt hat.
+    /// Ein Lauf, der seine eigene Sitzung nur noch lesend sieht, weil ein
+    /// anderer Client schreibt (`TERM_001`), besitzt sie weiter (GitHub #13,
+    /// Review); nur ein reiner Zuschauer (`sandbox attach --read-only`, ein
+    /// zweites `go` als Leser) stoppt nie. Nein auch für `SIGHUP` an
+    /// `humanitl go` mit `terminal.on_close = "detach"`: Das Terminal ist
+    /// geschlossen, die Sitzung läuft im Daemon weiter. `humanitl run` liest
+    /// den Schlüssel nie und stoppt auf jedes dieser Signale; `SIGTERM` und
+    /// `SIGINT` stoppen auch unter `go`.
+    pub(crate) const fn stops(self, owns: bool, number: u8) -> bool {
+        let detaches = self.go && number == SIGHUP && matches!(self.on_close, OnClose::Detach);
+        owns && !detaches
+    }
+}
+
+/// [`drive`] hat die Sitzung gestartet und besitzt sie, auch wenn sein
+/// Terminal nur noch zusieht ([`OnSignal::stops`]).
+const STARTED: bool = true;
 
 /// Führt einen Lauf aus, für `humanitl run` und `humanitl go`.
 ///
@@ -188,6 +251,10 @@ pub(crate) async fn launch(
     crate::cmd::daemon::check_proto(&info)?;
 
     let (work_dir, work_dir_source) = folder_of(ctx, &resolved, launch);
+    let here = (work_dir.as_path(), info.proto_minor, on_terminal);
+    if let Some(code) = Box::pin(rejoin(ctx, &mut client, &resolved, args, launch, here)).await? {
+        return Ok(code);
+    }
     // Die Werte der Sitzung stehen vor dem Erststart fest: Ein Wert, den
     // dieser Daemon ablehnte, beendet den Lauf, bevor eine Wahl gespeichert
     // ist, und der Vorschlag rechnet mit genau den Werten des Starts.
@@ -282,12 +349,57 @@ pub(crate) async fn launch(
         launch,
     )
     .await?;
-    if ctx.render.is_json() {
-        let mut value = session;
-        value["exit_code"] = json!(code);
-        ctx.render.value(&value);
-    }
+    report(ctx, launch, session, code);
     Ok(code)
+}
+
+/// Der JSON-Wert am Ende eines Laufs mit `--json`. Nach `SIGHUP` gibt es
+/// kein Terminal mehr, in das etwas ginge (GitHub #13).
+fn report(ctx: &Context, launch: &Launch, mut session: serde_json::Value, code: u8) {
+    if ctx.render.is_json() && !launch.hung_up() {
+        session["exit_code"] = json!(code);
+        ctx.render.value(&session);
+    }
+}
+
+/// Setzt [`Launch::on_close`] aus der Konfiguration.
+///
+/// `humanitl go` in einem Ordner, dessen Sitzung läuft, hängt sich an sie an,
+/// statt zu starten; wartende Änderungen dort fragt es vorher ab (GitHub
+/// #13, [`crate::cmd::go::rejoin`]). Ob die Sitzung hier läuft, sagt der
+/// Daemon. Unter `run` nichts. `Some(code)`: fertig, nichts startet.
+async fn rejoin(
+    ctx: &Context,
+    client: &mut Client,
+    resolved: &Resolved,
+    args: &RunArgs,
+    launch: &mut Launch,
+    (work_dir, minor, on_terminal): (&std::path::Path, u32, bool),
+) -> Result<Option<u8>, Failure> {
+    launch.on_close = resolved.config.terminal.on_close;
+    if !launch.go {
+        return Ok(None);
+    }
+    let here = crate::cmd::go::Here {
+        work_dir,
+        minor,
+        attaching: attaches(
+            args,
+            true,
+            resolved.config.hold.ask_mode == AskMode::Terminal,
+            ctx.render.is_json(),
+            stdin_is_terminal(),
+        ),
+        asking: on_terminal && !ctx.render.is_json(),
+        wishes: !args.cmd.is_empty()
+            || args.disposable
+            || args.direct
+            || ctx
+                .cli_config
+                .iter()
+                .any(|(key, _)| key == AGENT_ADAPTER_KEY || key == SANDBOX_MIN_ISOLATION_KEY),
+    };
+    Box::pin(crate::cmd::go::rejoin(ctx, client, launch, here)).await
 }
 
 /// Die Präfixtaste, wenn dieser Lauf sein Terminal anhängt (GitHub #10).
@@ -437,6 +549,12 @@ async fn drive(
     // Ein Signal, das bis hierher kam, beendet den Befehl, bevor
     // `Sandbox(Start)` hinausgeht: aus den Merkern eines Bildschirms (#9),
     // oder aus den Strömen oben, während die Moderation aufgebaut wurde.
+    // Dazu die Signale, die `go` vor seiner ersten Anfrage angemeldet hat
+    // (GitHub #13); danach stehen die eigenen.
+    let early = launch
+        .early_signals
+        .take()
+        .and_then(|mut early| early.pending());
     if let Some(code) = stop_before_start(
         crate::tui::signals::take(),
         [
@@ -444,7 +562,11 @@ async fn drive(
             arrived(&mut hangup),
             arrived(&mut interrupt),
         ],
-    ) {
+    )
+    .or(early.map(|number| 128_u8.saturating_add(number)))
+    {
+        // Nach `SIGHUP` schreibt auch `--json` nichts mehr.
+        launch.signalled = Some(code.saturating_sub(128));
         return Ok(code);
     }
 
@@ -474,11 +596,9 @@ async fn drive(
     let mut attach_code: Option<u8> = None;
     // A writer that is already there (the app's pane, `TERM_001`) leaves this
     // terminal a reader: it still shows the backlog and the session, and the
-    // detach key still works (HUM-280).
+    // detach key still works (HUM-280). The session stays this run's: a
+    // signal stops it as if it still wrote (GitHub #13, review).
     let mut reader_keys = keys;
-    // Set once this terminal only watches: a signal then ends the viewer and
-    // leaves the session to whoever writes, as `sandbox attach --read-only`.
-    let mut watching = false;
 
     let mut clock = tokio::time::interval(std::time::Duration::from_secs(1));
     clock.set_missed_tick_behavior(tokio::time::MissedTickBehavior::Skip);
@@ -509,6 +629,7 @@ async fn drive(
             // Der Anschluss an das Terminal ist zu Ende (HUM-280).
             ended = next_attached(&mut attached), if attached.is_some() => {
                 attached = None;
+                let ended = ended.map(crate::cmd::attach::Ending::or_hung_up);
                 match ended {
                     // Abgehängt: Die Sitzung läuft weiter, und dieser Befehl
                     // endet, ohne sie zu stoppen.
@@ -519,10 +640,9 @@ async fn drive(
                         );
                     }
                     Ok(crate::cmd::attach::Ending::Signal(number)) => {
-                        if !signal_stops_session(watching) {
-                            return Ok(leave_on_signal(number));
-                        }
-                        return Ok(end_on_signal(ctx, &mut stopper, None, number).await);
+                        return Ok(
+                            on_signal(ctx, &mut stopper, None, launch, STARTED, number).await,
+                        );
                     }
                     // Die Sitzung ist zu Ende; der Ereignisstrom bringt noch
                     // den Exit-Code und die Zusammenfassung.
@@ -541,7 +661,6 @@ async fn drive(
                              only watches",
                         );
                         if let Some(keys) = reader_keys.take() {
-                            watching = true;
                             attached =
                                 Some(Box::pin(crate::cmd::attach::attach(ctx, true, keys)));
                         }
@@ -605,7 +724,7 @@ async fn drive(
                 // Die Zeile über das Stoppen soll auf dem gewöhnlichen
                 // Bildschirm stehen, nicht auf dem der Animation.
                 hold.stop();
-                if !signal_stops_session(watching) {
+                if !launch.on_signal().stops(STARTED, 2) {
                     return Ok(leave_on_signal(2));
                 }
                 if interrupted {
@@ -625,12 +744,19 @@ async fn drive(
             // weil der Agent auf das erste nicht hört --, muss noch ankommen.
             // Sonst hinge der Befehl bis zu einem `SIGKILL`, und das ließe das
             // Terminal im Rohmodus zurück.
+            // `SIGHUP` an `humanitl go` hängt mit `terminal.on_close =
+            // "detach"` nur ab (GitHub #13); das Terminal ist dann weg, und
+            // auch die Animation schreibt nichts mehr hinein.
             number = next_signal(&mut terminate, &mut hangup) => {
-                hold.stop();
-                if !signal_stops_session(watching) {
-                    return Ok(leave_on_signal(number));
+                if number == SIGHUP {
+                    hold.abandon();
+                } else {
+                    hold.stop();
                 }
-                return Ok(end_on_signal(ctx, &mut stopper, moderation.as_mut(), number).await);
+                return Ok(
+                    on_signal(ctx, &mut stopper, moderation.as_mut(), launch, STARTED, number)
+                        .await,
+                );
             }
             }
         };
@@ -837,33 +963,55 @@ async fn next_of(stream: &mut Option<tokio::signal::unix::Signal>) {
     }
 }
 
-/// Ob ein Signal die Sitzung stoppt (HUM-280).
+/// Endet auf ein Signal hin: Die Sitzung stoppt oder bleibt, wie
+/// [`OnSignal::stops`] es sagt, und der Exit-Code ist `128 + n`.
 ///
-/// Nein, wenn dieses Terminal nur zusieht, weil schon ein anderer Client
-/// schreibt: Dann endet nur dieser Befehl, wie `sandbox attach --read-only`,
-/// und die Sitzung gehört weiter dem, der schreibt.
-const fn signal_stops_session(watching: bool) -> bool {
-    !watching
+/// Der Lauf merkt sich das Signal; nach `SIGHUP` ist sein Terminal weg
+/// ([`Launch::hung_up`]).
+pub(crate) async fn on_signal(
+    ctx: &Context,
+    stopper: &mut Client,
+    moderation: Option<&mut crate::cmd::moderate::Moderation>,
+    launch: &mut Launch,
+    owns: bool,
+    number: u8,
+) -> u8 {
+    launch.signalled = Some(number);
+    if launch.on_signal().stops(owns, number) {
+        end_on_signal(ctx, stopper, moderation, number).await
+    } else {
+        leave_on_signal(number)
+    }
 }
 
 /// Endet auf ein Signal hin, ohne die Sitzung anzufassen: Terminal zurück,
 /// Exit-Code `128 + n`.
-fn leave_on_signal(number: u8) -> u8 {
+///
+/// Das Zurückgeben ist `tcsetattr` und kein Schreiben: Nach `SIGHUP` gibt es
+/// das Terminal nicht mehr, und ein Schreiben bekäme `EIO` (GitHub #13).
+pub(crate) fn leave_on_signal(number: u8) -> u8 {
     crate::tty::restore_now();
     128_u8.saturating_add(number)
 }
 
 /// Beendet die Sitzung auf ein Signal hin und liefert den Exit-Code `128 + n`.
-async fn end_on_signal(
+///
+/// Nach `SIGHUP` schreibt dieser Weg nichts, weder die Zeile noch den Puffer
+/// des Kastens: Das Terminal ist weg, ein Schreiben bekäme `EIO`, und
+/// `eprintln!` machte daraus eine Panik, bevor `Sandbox(Stop)` hinausginge
+/// (GitHub #13).
+pub(crate) async fn end_on_signal(
     ctx: &Context,
     stopper: &mut Client,
     moderation: Option<&mut crate::cmd::moderate::Moderation>,
     number: u8,
 ) -> u8 {
-    if let Some(open) = moderation {
-        open.finish();
+    if number != SIGHUP {
+        if let Some(open) = moderation {
+            open.finish();
+        }
+        ctx.render.note("[humanitl] stopping the session");
     }
-    ctx.render.note("[humanitl] stopping the session");
     stop(stopper).await;
     crate::tty::restore_now();
     128_u8.saturating_add(number)
@@ -1721,8 +1869,9 @@ mod tests {
     use humanitl_ipc::v1;
 
     use super::{
-        Config, attaches, chain, check_line, inline_rules, refusal_summary, refuse_terminal_ask,
-        session_lines, signal_stops_session, start_mode, state_name, stop_before_start,
+        Config, OnClose, OnSignal, SIGHUP, attaches, chain, check_line, inline_rules,
+        refusal_summary, refuse_terminal_ask, session_lines, start_mode, state_name,
+        stop_before_start,
     };
     use crate::cli::RunArgs;
 
@@ -1800,12 +1949,38 @@ mod tests {
         );
     }
 
-    /// A viewer that fell back to watching (`TERM_001`) never stops the
-    /// session on a signal; a run that owns the session does (HUM-280).
+    /// A pure watcher never stops the session on a signal; a run that owns
+    /// it does (HUM-280), also when it fell back to watching (GitHub #13,
+    /// review). `SIGHUP` leaves the session of `go` running under the
+    /// default `terminal.on_close = "detach"`, never that of `run`.
+    ///
+    /// Mutation proof: dropping `self.go &&` from `OnSignal::stops` fails
+    /// the `run` row; inverting the `on_close` match fails both `go` rows.
     #[test]
-    fn a_watching_run_leaves_the_session_on_a_signal() {
-        assert!(signal_stops_session(false));
-        assert!(!signal_stops_session(true));
+    fn a_watcher_leaves_the_session_on_a_signal() {
+        let run = OnSignal::default();
+        for number in [SIGHUP, 2, 15] {
+            assert!(run.stops(true, number), "run, signal {number}");
+            assert!(!run.stops(false, number), "watcher, signal {number}");
+        }
+        let run_with_detach = OnSignal {
+            go: false,
+            on_close: OnClose::Detach,
+        };
+        assert!(run_with_detach.stops(true, SIGHUP), "run ignores the key");
+        let detach = OnSignal {
+            go: true,
+            on_close: OnClose::Detach,
+        };
+        assert!(!detach.stops(true, SIGHUP), "go detaches on SIGHUP");
+        assert!(detach.stops(true, 15), "SIGTERM stops go");
+        assert!(detach.stops(true, 2), "SIGINT stops go");
+        let stop = OnSignal {
+            go: true,
+            on_close: OnClose::Stop,
+        };
+        assert!(stop.stops(true, SIGHUP), "go with stop stops on SIGHUP");
+        assert!(!stop.stops(false, SIGHUP), "a watcher never stops");
     }
 
     /// The summary after the run names every pair and the total, and says

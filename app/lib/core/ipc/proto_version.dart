@@ -165,7 +165,11 @@ abstract final class ProtoVersion {
   /// Raised to 60 with `humanitl app`: the event stream of the app carries
   /// `SubscribeRequest.desktop_app`, and the start window preselects the
   /// folder of `FlowEvent.open_in_app` (HUM-539).
-  static const int minor = 60;
+  /// Raised to 62 with the session that runs without a terminal: the entry
+  /// under "Running" in the start window reads
+  /// `ProjectEntry.terminal_clients` and says when no terminal hangs on it
+  /// (#13). 61 has no reader here.
+  static const int minor = 62;
 
   /// `major.minor` as text.
   static const String text = '$major.$minor';

@@ -545,8 +545,9 @@ der Diagnostic.
 ### Eine Session pro Daemon
 
 Der Daemon betreibt genau eine Sandbox. Ein zweites `humanitl run`, während eine
-läuft, bekommt `CLI_005` mit der Kennung der laufenden Session. Wer sie sehen
-will, hängt sich an: `humanitl sandbox attach` verbindet dieses Terminal mit der
+läuft, bekommt `CLI_005` mit Kennung und Ordner der laufenden Session; sein Fix
+ist `humanitl go --dir ORDNER` mit diesem Ordner, das sich an sie anhängt
+(GitHub #13). Wer sie sehen will, hängt sich an: `humanitl sandbox attach` verbindet dieses Terminal mit der
 laufenden Session, `--read-only` schaut nur zu. Genau ein Client darf schreiben;
 ein zweiter bekommt `TERM_001` und den Hinweis auf `--read-only`.
 `Ctrl+C` geht als Byte `0x03` an das Pseudo-Terminal der Session; der erste
@@ -790,6 +791,35 @@ Signale sind derselbe Code wie bei `run`, und jede Fähigkeit dahinter ist die
    Änderungen für `humanitl sandbox changes|apply|discard` warten. Eine
    abgelehnte Übernahme (etwa ein Konflikt) steht als ihr Befund da, und der
    Exit-Code bleibt der des Agenten.
+4. **Schließen hängt ab** (GitHub #13). Geht das Terminal von `humanitl go`
+   zu (`SIGHUP`: ein geschlossenes Fenster, eine abgerissene SSH-Verbindung),
+   endet der Befehl, und die Session läuft im Daemon weiter wie nach
+   `Ctrl+B d`. `terminal.on_close = "stop"` (für Projekt-Profile gesperrt)
+   stoppt sie statt dessen wie bisher, eine Session, die dieses `go`
+   gestartet hat; `SIGTERM` stoppt immer, und
+   `humanitl run` stoppt seine Session beim Schließen immer. Nach `SIGHUP`
+   schreibt der Befehl nichts mehr, das Terminal ist weg. Was die Session
+   inzwischen hält, wartet auf eine Entscheidung in der Oberfläche, im
+   Interceptor eines neuen Anschlusses oder unter `humanitl intercept`, oder
+   bis `hold.timeout_secs` es blockiert. `humanitl sessions` zeigt eine
+   Session ohne Terminal, das Startfenster der Oberfläche markiert sie unter
+   „Running".
+5. **Ein zweites `go` im selben Ordner hängt sich an** die laufende Session
+   an, statt zu starten: eine Zeile `Attached to the running session in NAME`,
+   keine Animation, danach dasselbe Terminal mit Präfixtaste und Signalen wie
+   beim ersten. Es hängt sich an genau die Sandbox, die der Daemon für den
+   Ordner genannt hat; läuft inzwischen eine andere, lehnt es mit `IPC_006`
+   ab. Agentenwort, Wörter nach `--`, `--disposable`, `--rw`, `--ro` und
+   `--kernel` gelten für eine laufende Session nicht, eine Zeile sagt es. Ein
+   zweites `go` stoppt die Session nie, denn es hat sie nicht gestartet:
+   Schließen seines Terminals, `SIGTERM` und `SIGINT` hängen nur ab, gleich
+   was `terminal.on_close` sagt. Beendet wird sie, wo sie gestartet wurde, in
+   der Oberfläche mit dem bestätigten Stopp. Das braucht einen Daemon ab
+   Vertrag 1.62; ein älterer bekommt den Start und antwortet `CLI_005`. In einem anderen Ordner lehnt der Start mit `CLI_005` ab,
+   dessen Fix `humanitl go --dir ORDNER` der laufenden Session ist;
+   `humanitl sandbox attach` geht von überall. Warten in einem Ordner noch
+   Änderungen eines Wegwerf-Laufs, der ohne Anschluss endete, fragt das
+   nächste `go` dort zuerst nach ihnen, mit der Frage aus Punkt 3.
 
 ```sh
 $ humanitl go                       # der Agent der Konfiguration, zum Wegwerfen
@@ -798,8 +828,9 @@ $ humanitl go -- bash               # eine Shell statt des Agenten
 ```
 
 Ohne Terminal auf `stdin` oder mit `--json` verhält sich `humanitl go` wie
-`humanitl run --disposable`: Es liest mit, zeigt keine Animation und fragt
-nichts. Wo das System den Projektordner nicht unberührt halten kann, lehnt der
+`humanitl run --disposable`: Es liest mit, zeigt keine Animation, fragt
+nichts und hängt sich nicht an eine laufende Session (der Daemon antwortet
+`CLI_005`). Wo das System den Projektordner nicht unberührt halten kann, lehnt der
 Start ab, wie bei `run --disposable`.
 
 Mit `--ask terminal`, vom Schalter oder aus `hold.ask_mode`, lehnt

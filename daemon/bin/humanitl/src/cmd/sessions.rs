@@ -45,6 +45,9 @@ use crate::cli::SessionsCmd;
 use crate::cmd::{Context, EXIT_OK, Failure, from_proto, status_diagnostic};
 use crate::render::table;
 
+/// Ab dieser Minor zählt der Daemon die Clients am Terminal (GitHub #13).
+const TERMINAL_CLIENTS_MINOR: u32 = 62;
+
 /// Die Spalten von `sessions summary`.
 const CHANGE_HEADERS: [&str; 4] = ["KIND", "SIZE", "PATH", "NOTE"];
 
@@ -98,6 +101,8 @@ async fn current(ctx: &Context) -> Result<u8, Failure> {
                 "provider": cloud.provider,
                 "acknowledged": cloud.acknowledged,
             })),
+            // `null` an einem Daemon, der nicht zählt (GitHub #13).
+            "terminal_clients": (minor >= TERMINAL_CLIENTS_MINOR).then_some(status.terminal_clients),
         }));
         return Ok(EXIT_OK);
     }
@@ -106,8 +111,11 @@ async fn current(ctx: &Context) -> Result<u8, Failure> {
     } else {
         format!(", sandbox {}", clean(&status.sandbox_id))
     };
-    ctx.render
-        .line(&format!("session {} ({state}{sandbox})", status.session_id));
+    let terminal = terminal_part(&status, minor);
+    ctx.render.line(&format!(
+        "session {} ({state}{sandbox}{terminal})",
+        status.session_id
+    ));
     ctx.render
         .line(&crate::cmd::plan::decided_by_line(&status, minor));
     // Die Statuszeile nennt, wohin die Inferenz geht (HUM-516).
@@ -120,6 +128,24 @@ async fn current(ctx: &Context) -> Result<u8, Failure> {
             .line(&crate::cmd::cloud::short_line(cloud, colour));
     }
     Ok(EXIT_OK)
+}
+
+/// Was am Terminal einer laufenden Sitzung hängt, als Teil der Zeile
+/// (GitHub #13): „no terminal attached" für eine Sitzung, deren Terminal
+/// geschlossen wurde und die weiterläuft, sonst die Zahl der Clients. Leer
+/// ohne laufende Sandbox und an einem Daemon, der nicht zählt (vor 1.62):
+/// Dort hieße eine 0 nichts.
+fn terminal_part(status: &v1::sandbox_event::Status, minor: u32) -> String {
+    if minor < TERMINAL_CLIENTS_MINOR || status.state != v1::SandboxState::Running as i32 {
+        return String::new();
+    }
+    match status.terminal_clients {
+        0 => ", no terminal attached; humanitl go in its folder or humanitl sandbox attach \
+              attaches"
+            .to_owned(),
+        1 => ", 1 terminal attached".to_owned(),
+        clients => format!(", {clients} terminals attached"),
+    }
 }
 
 /// `sessions summary ID`.
@@ -357,7 +383,38 @@ mod tests {
 
     use humanitl_ipc::v1;
 
-    use super::{change_kind_name, change_row, clean, summary_json, symlink_row, tier_name};
+    use super::{
+        change_kind_name, change_row, clean, summary_json, symlink_row, terminal_part, tier_name,
+    };
+
+    /// Die Zeile sagt, dass eine laufende Sitzung ohne Terminal läuft, und
+    /// schweigt ohne Sitzung und an einem Daemon vor 1.62, wo eine 0 nichts
+    /// hieße (GitHub #13).
+    ///
+    /// Mutation proof: dropping the minor gate fails the old-daemon row;
+    /// dropping the state check fails the stopped row.
+    #[test]
+    fn the_line_says_when_no_terminal_hangs_on() {
+        let status = |state: v1::SandboxState, clients: u32| v1::sandbox_event::Status {
+            state: state as i32,
+            terminal_clients: clients,
+            ..v1::sandbox_event::Status::default()
+        };
+        assert!(
+            terminal_part(&status(v1::SandboxState::Running, 0), 62)
+                .starts_with(", no terminal attached")
+        );
+        assert_eq!(
+            terminal_part(&status(v1::SandboxState::Running, 1), 62),
+            ", 1 terminal attached"
+        );
+        assert_eq!(
+            terminal_part(&status(v1::SandboxState::Running, 2), 62),
+            ", 2 terminals attached"
+        );
+        assert_eq!(terminal_part(&status(v1::SandboxState::Running, 0), 61), "");
+        assert_eq!(terminal_part(&status(v1::SandboxState::Stopped, 0), 62), "");
+    }
 
     fn change(path: &str) -> v1::FileChange {
         v1::FileChange {

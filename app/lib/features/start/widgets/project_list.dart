@@ -363,6 +363,27 @@ class _ProjectRow extends ConsumerWidget {
                           color: tokens.state.held,
                         ),
                       ],
+                      // Die Sitzung läuft, aber kein Terminal hängt an ihr
+                      // (#13): das Terminal von `humanitl go` ist zu, oder
+                      // der Bereich der App. Die Zahl sagt der Daemon; einer
+                      // vor 1.62 zählt nicht, dann steht hier nichts.
+                      if (entry.running &&
+                          entry.terminalClients == 0 &&
+                          (info?.countsTerminalClients ?? false)) ...<Widget>[
+                        SizedBox(width: tokens.spacing.x2),
+                        // Biegsam und mit Auslassung, wie das Abzeichen der
+                        // Cloud-Inferenz (HUM-516): In einem schmalen Fenster
+                        // weicht es vor dem Namen und den anderen Abzeichen.
+                        Flexible(
+                          child: HBadge(
+                            key: Key('start-no-terminal-${entry.projectId}'),
+                            text: l10n.startNoTerminal,
+                            semanticsLabel: l10n.startNoTerminal,
+                            color: tokens.colors.fg2,
+                            overflow: TextOverflow.ellipsis,
+                          ),
+                        ),
+                      ],
                     ],
                   ),
                 ),

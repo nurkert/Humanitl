@@ -1403,6 +1403,7 @@ extension ProjectEntryToDomain on pb.ProjectEntry {
     missing: missing,
     replaced: replaced,
     hasChoice: hasChoice,
+    terminalClients: terminalClients,
   );
 }
 

@@ -27,6 +27,13 @@
 //!    ([`crate::cmd::changes::review`]): übernehmen, verwerfen oder warten
 //!    lassen. Nur auf einem Terminal und nur, wenn der Daemon nach dem Lauf
 //!    Änderungen gemeldet hat.
+//! 6. **Das Schließen des Terminals hängt ab** (GitHub #13): `SIGHUP` lässt
+//!    die Sitzung mit `terminal.on_close = "detach"` (Vorgabe) im Daemon
+//!    weiterlaufen; `SIGTERM` stoppt sie wie bisher, `"stop"` auch bei
+//!    `SIGHUP` (`cmd::run::OnSignal`). Ein zweites `go` im Ordner einer
+//!    laufenden Sitzung hängt sich an sie an, statt zu starten, und wartende
+//!    Änderungen eines beendeten Laufs fragt es vor dem nächsten Start ab
+//!    ([`rejoin()`]).
 //!
 //! Der Befehl entscheidet nichts selbst (ADR-018): Ob die Kernel-Stufe geht,
 //! welcher Ordnermodus gilt und was die Projektwahl sagt, entscheidet der
@@ -54,7 +61,9 @@ use crate::cmd::{Context, EXIT_USER, Failure, status_diagnostic};
 use crate::splash::{self, Palette};
 
 mod first_start;
+mod rejoin;
 pub(crate) use first_start::{Next, first_start, signalled};
+pub(crate) use rejoin::{Here, rejoin};
 
 /// Der Schlüssel des Schreibmodus, den `--rw` und `--ro` für diesen Aufruf
 /// setzen.
@@ -94,7 +103,10 @@ pub async fn run(ctx: &Context, args: &GoArgs) -> Result<u8, Failure> {
         ..Launch::default()
     };
     let code = Box::pin(launch(ctx, &run_args, &mut state)).await?;
-    if state.changes_waiting && asks(ctx.render.is_json()) {
+    // Nach `SIGHUP` ist das Terminal weg; niemand beantwortet die Frage, und
+    // ein Schreiben bekäme `EIO` (GitHub #13). Die Änderungen warten, und
+    // das nächste `go` im Ordner fragt.
+    if state.changes_waiting && !state.hung_up() && asks(ctx.render.is_json()) {
         // Der Exit-Code bleibt der des Agenten: Eine Übernahme, die der
         // Daemon ablehnt, steht als Befund da, und die Änderungen warten
         // weiter.
