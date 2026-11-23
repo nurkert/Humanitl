@@ -267,11 +267,14 @@ impl Inner {
     /// Das Projekt des letzten Starts samt Lauf und wartenden Änderungen.
     fn project_activity(&self) -> Option<ProjectActivity> {
         let project: ProjectId = (*lock(&self.project))?;
+        let facts = self.running_facts();
         Some(ProjectActivity {
             project,
             running: self.is_running(),
             changes_waiting: lock(&self.disposable).is_some(),
             session: self.session,
+            terminal_clients: facts.terminal_clients,
+            sandbox: facts.id.unwrap_or_default(),
         })
     }
 }

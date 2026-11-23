@@ -1207,6 +1207,26 @@ that has left the registry loses what only the registry knew (whether the scan s
 request, the hard-block finding of its row), and without a recording `ListFlows` shows only the last
 finished flows.
 
+### K-39 A session without a terminal
+
+**Attacker:** an agent (b) that waits until nobody watches. Since GitHub #13 closing the terminal
+of `humanitl go` leaves the session running (`terminal.on_close = "detach"`, default), as closing
+the app always did. Without a terminal nobody may notice a held request for a while, and a session
+nobody sees could run on unnoticed. **Defence:** a held request leaves only after a person allows
+it; when its deadline expires it is blocked (`hold.timeout_secs`, `BlockReason::Timeout`), so an
+unwatched session cannot turn waiting into an allow. The three guarantees, the door and the filter
+are the daemon's and stay in force whoever is attached; the check verdict was never a client's
+(HUM-585). The running session stays visible: `humanitl sessions` says when no terminal hangs on it
+(the daemon counts the clients of the agent's terminal, `Status.terminal_clients`, contract 1.62),
+the start window marks it under "Running", the tray shows it, and a second start in another folder
+is refused with `CLI_005`, whose fix leads to it. The key is closed to project profiles, so a
+cloned project cannot keep its own sessions alive behind a closed terminal; `humanitl run` and
+`SIGTERM` still stop. After `SIGHUP` the command writes nothing into the closed terminal and ends;
+nothing it started keeps it alive. *Residual risk:* a detached session keeps its agent working, and
+what it does within its allowed rules (the LLM passthrough, `allow` rules, the project folder) goes
+on without anyone watching, until someone stops it or the agent ends. That is the same as a session
+whose app window was closed before #13.
+
 ## Assumptions
 
 | ID | Assumption | How to check it | If it breaks |
@@ -1347,6 +1367,7 @@ These attackers are not defended against, and Humanitl does not claim to:
 | 2026-11-20 | K-02: the passthrough pairs each method with its paths: an adapter gives one rule per set of methods (fixed ids `…00ff`, `…00fe`, `…00fd`). Codex passes `POST` only on `/responses` and `GET` only on `/models`; `agy` `POST` only on `models/{model}:generateContent` and `:streamGenerateContent` and `GET` only on the model list; Claude Code `POST` only on the Messages endpoints; OpenCode and pi `POST` on the endpoints that compute and `GET` on `/v1/models`, `/api/tags`, `/api/ps`, `/api/version`. `POST /models`, `GET /responses` and `GET` on an inference endpoint are now held. A path a human writes into `llm.passthrough_paths` keeps both methods. Narrows, weakens nothing | HUM-568 |
 | 2026-11-21 | K-15: the verdict on the three guarantees and the stop after a red or missing result no longer depend on the starting client. Before, a client that closed its event stream after `Status(starting)` ended the check before the verdict, and a sandbox with a red result kept running; the folder check and the register entry of a green start were skipped the same way. The daemon now stops the sandbox before it sends the results, records the finding in the session summary (`stopped_by`) and stops it a second time if the stopping thread fails | HUM-585 |
 | 2026-11-22 | K-02: a third way to enter the provider access key and the proxy credentials: the settings view `humanitl settings`, typed without echo, sent once through `LlmKey` or `Egress(SetAuth)`, never through `SetConfig`, never shown; the input buffer is overwritten on every delete, cancel, growth and drop, a pasted text once taken over, and the secret stays under `Zeroizing` until the request is built; not overwritten: the request field handed to tonic, the prost/tonic encode buffers and crossterm's read buffers | GitHub #7 |
+| 2026-11-23 | K-39: closing the terminal of `humanitl go` detaches it (`terminal.on_close`, default `detach`, closed to project profiles); held requests wait for a person or their deadline, which blocks; the daemon counts the clients of the agent's terminal and `humanitl sessions` and the start window show a session without one; `humanitl run` and `SIGTERM` still stop | GitHub #13 |
 
 Every security-relevant change to the shim, the mount allowlist, the filter or the passthrough gets
 a line here. Vulnerabilities are reported as described in

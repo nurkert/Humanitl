@@ -4782,5 +4782,7 @@
   "diagTERM003Title": "Terminal unsuitable for a full-screen view",
   "@diagTERM003Title": {"description": "Title of the diagnostic TERM_003 (docs/DIAGNOSTICS.md, GitHub #6): a terminal screen of the humanitl command line cannot be shown, the terminal is too small or cannot place the cursor."},
   "diagTERM003Why": "The terminal is smaller than the view needs, or it cannot place the cursor. Nothing was changed on the terminal.",
-  "@diagTERM003Why": {"description": "Generic cause of TERM_003. Stands in the cause slot only when the diagnostic carries no sentence of the daemon's own (HUM-052)."}
+  "@diagTERM003Why": {"description": "Generic cause of TERM_003. Stands in the cause slot only when the diagnostic carries no sentence of the daemon's own (HUM-052)."},
+  "startNoTerminal": "No terminal attached",
+  "@startNoTerminal": {"description": "Start window (#13): badge on a running session that no terminal hangs on, for example after the terminal of humanitl go closed; attach brings it back. The count comes from the daemon."}
 }

@@ -86,6 +86,7 @@ env_ca_only = "only the CA variable of a TLS_001 fix goes through SetConfig, nev
 "sandbox.work_mode" = "project_only"
 "terminal.bell_on_hold" = "terminal"
 "terminal.direct_keys" = "terminal"
+"terminal.on_close" = "terminal"
 "terminal.prefix" = "terminal"
 "terminal.splash" = "terminal"
 "ui.terminal_notices" = "terminal"

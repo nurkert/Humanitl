@@ -102,7 +102,7 @@ pub use crate::load::{
 pub use crate::model::{
     AgentBriefing, AgentRef, AskMode, AuditConfig, Config, DetachKeys, EgressConfig, Experimental,
     FindingsConfig, HoldConfig, IpPreference, Language, Limits, LlmConfig, LlmServer, MinIsolation,
-    PiAgentConfig, PiWebAccess, PodmanConfig, PodmanRootfs, PodmanRuntime, ProxyResolve,
+    OnClose, PiAgentConfig, PiWebAccess, PodmanConfig, PodmanRootfs, PodmanRuntime, ProxyResolve,
     PseudonymConfig, QemuConfig, RecorderConfig, ResolverConfig, SandboxBackendName, SandboxMode,
     SandboxRef, TerminalConfig, Theme, TlsConfig, UiConfig, UpdateConfig, WorkMode,
 };

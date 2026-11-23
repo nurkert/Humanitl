@@ -60,6 +60,13 @@ fn saved() -> &'static Mutex<Option<(OwnedFd, Termios)>> {
 }
 
 /// Die eigene Eingabe: Deskriptor `0`, mit der Lebensdauer des Prozesses.
+/// Ob das Terminal auf `stdin` weg ist: Nach dem Auflegen antwortet
+/// `tcgetattr` mit `EIO` (gemessen, `tests/tty.rs`). Eine Pipe oder eine
+/// Datei ist kein Terminal, das weg sein könnte (`ENOTTY`).
+pub fn terminal_gone() -> bool {
+    matches!(tcgetattr(stdin_fd()), Err(rustix::io::Errno::IO))
+}
+
 fn stdin_fd() -> BorrowedFd<'static> {
     rustix::stdio::stdin()
 }

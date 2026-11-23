@@ -194,6 +194,13 @@ pub struct Recorded {
     /// Die Ordner, deren Wahl `Projects.save_choice` gespeichert hat (#9):
     /// Danach kennt der Fake sie als Projekte, wie das Register.
     pub saved_paths: Vec<PathBuf>,
+    /// Wie oft `Sandbox(Stop)` kam (GitHub #13).
+    pub stops: usize,
+    /// Mit [`FakeServer::start_tracking_sessions`]: der Ordner der Sitzung,
+    /// die der Fake seit dem letzten Start ohne Stopp laufen lässt.
+    pub running_in: Option<String>,
+    /// Und ihre Kennung, `fake-N` für den N-ten Start.
+    pub running_sandbox: Option<String>,
 }
 
 type Record = Arc<std::sync::Mutex<Recorded>>;
@@ -222,6 +229,19 @@ struct Tweaks {
     known_project: Option<PathBuf>,
     first_start: FirstStartTweaks,
     held_after: Option<Duration>,
+    tracks_sessions: bool,
+    tracking: Tracking,
+}
+
+/// Abweichungen der Buchführung über die Sitzung (GitHub #13, Review).
+#[derive(Clone, Copy, Debug, Default)]
+pub struct Tracking {
+    /// Schon ein anderer Client schreibt: Jedes schreibende `Open` bekommt
+    /// `TERM_001`, ein lesendes geht durch.
+    pub writer_taken: bool,
+    /// `Projects.get` nennt eine Sandbox, die nicht (mehr) läuft: Ein
+    /// `Open` mit ihrer Kennung bekommt `IPC_006`.
+    pub stale_sandbox: bool,
 }
 
 /// Wie der Fake den Erststart von `go` behandelt (#9).
@@ -260,6 +280,31 @@ impl FakeServer {
             harness,
             Tweaks {
                 known_project: Some(project.to_path_buf()),
+                ..Tweaks::default()
+            },
+        )
+    }
+
+    /// Wie [`FakeServer::start_with_known_project`], und der Fake führt Buch
+    /// über die Sitzung wie der Daemon (GitHub #13): Ein Start läuft, bis ein
+    /// `Sandbox(Stop)` kommt; `Projects.get` meldet den bekannten Ordner
+    /// solange als `running`, und ein Start in einem anderen Ordner bekommt
+    /// `CLI_005`, mit demselben Befund wie im Daemon
+    /// (`humanitl_ipc::sandbox::second_start_refused`).
+    pub fn start_tracking_sessions(harness: &Harness, project: &Path) -> Self {
+        Self::start_tracking(harness, project, Tracking::default())
+    }
+
+    /// Wie [`FakeServer::start_tracking_sessions`], mit [`Tracking`]. Ein
+    /// `Open` mit einer Kennung, die nicht die der laufenden Sitzung ist,
+    /// bekommt immer `IPC_006`, wie im Daemon.
+    pub fn start_tracking(harness: &Harness, project: &Path, tracking: Tracking) -> Self {
+        Self::start_with(
+            harness,
+            Tweaks {
+                known_project: Some(project.to_path_buf()),
+                tracks_sessions: true,
+                tracking,
                 ..Tweaks::default()
             },
         )
@@ -431,6 +476,8 @@ impl FakeServer {
                             known_project: tweaks.known_project,
                             first_start: tweaks.first_start,
                             held_after: tweaks.held_after,
+                            tracks_sessions: tweaks.tracks_sessions,
+                            tracking: tweaks.tracking,
                         }),
                         token,
                     ));
@@ -490,6 +537,14 @@ impl FakeServer {
             .unwrap_or_else(std::sync::PoisonError::into_inner)
             .saved_paths
             .clone()
+    }
+
+    /// Wie oft `Sandbox(Stop)` bisher ankam (GitHub #13).
+    pub fn stops(&self) -> usize {
+        self.record
+            .lock()
+            .unwrap_or_else(std::sync::PoisonError::into_inner)
+            .stops
     }
 
     /// Die Arten der Nachrichten, die bisher über `Terminal` ankamen.
@@ -621,11 +676,108 @@ struct SilentExport {
     /// Jeder Strom von `Subscribe` meldet nach dieser Zeit genau ein
     /// `FlowEvent.held` (GitHub #12): die Glocke eines Anschlusses.
     held_after: Option<Duration>,
+    /// Buchführung über die laufende Sitzung (GitHub #13).
+    tracks_sessions: bool,
+    /// Ihre Abweichungen.
+    tracking: Tracking,
 }
 
 impl SilentExport {
+    /// `Terminal` wie bisher: mitgeschrieben, dann an den Fake oder einen
+    /// der Stellvertreter.
+    fn recorded_terminal(
+        &self,
+        input: BoxStream<v1::TerminalInput>,
+    ) -> BoxStream<v1::TerminalOutput> {
+        use tokio_stream::StreamExt as _;
+        use v1::terminal_input::Input;
+
+        let recorded = Arc::clone(&self.terminal_inputs);
+        if self.terminal == TerminalKind::WinchAgent {
+            return winch_agent(input, recorded);
+        }
+        if self.terminal == TerminalKind::Stalled {
+            // Das `Open` lesen, eine Zeile schicken, dann die Eingabe halten,
+            // ohne sie je wieder zu lesen, bis der Client geht.
+            let (out, rx) = tokio::sync::mpsc::channel(4);
+            tokio::spawn(async move {
+                let mut input = input;
+                if input.next().await.is_some() {
+                    recorded
+                        .lock()
+                        .unwrap_or_else(std::sync::PoisonError::into_inner)
+                        .push("open");
+                }
+                let greeting = v1::TerminalOutput {
+                    output: Some(v1::terminal_output::Output::Data(
+                        b"humanitl fake terminal: input is never read\r\n".to_vec(),
+                    )),
+                };
+                if out.send(greeting).await.is_ok() {
+                    out.closed().await;
+                }
+                drop(input);
+            });
+            return Box::pin(tokio_stream::wrappers::ReceiverStream::new(rx));
+        }
+        let input = input.map(move |message| {
+            let kind = match &message.input {
+                // The terminal of a further shell (HUM-299), and only the
+                // one `exec` below hands out.
+                Some(Input::Open(open)) if open.shell_id == "1" => "open-shell-1",
+                Some(Input::Open(open)) if !open.shell_id.is_empty() => "open-shell-other",
+                Some(Input::Open(_)) => "open",
+                Some(Input::Data(_)) => "data",
+                Some(Input::Resize(_)) => "resize",
+                Some(Input::Close(())) => "close",
+                None => "empty",
+            };
+            recorded
+                .lock()
+                .unwrap_or_else(std::sync::PoisonError::into_inner)
+                .push(kind);
+            message
+        });
+        self.inner.terminal(Box::pin(input))
+    }
+
     /// Ob das Register des Fakes `path` kennt: der bekannte Ordner oder einer,
     /// dessen Wahl gespeichert wurde (#9).
+    /// `Projects.get` für einen bekannten Ordner: mit `running` und der
+    /// Kennung der Sandbox, wenn die Sitzung, über die der Fake Buch führt,
+    /// dort läuft (GitHub #13).
+    fn known_entry(&self, path: &Path) -> v1::ProjectsResponse {
+        let mut answer = known_project_answer(path);
+        if let Some(project) = answer.project.as_mut() {
+            project.running = self.runs_in(path);
+            if project.running {
+                project.sandbox_id = if self.tracking.stale_sandbox {
+                    "fake-stale".to_owned()
+                } else {
+                    self.record
+                        .lock()
+                        .unwrap_or_else(std::sync::PoisonError::into_inner)
+                        .running_sandbox
+                        .clone()
+                        .unwrap_or_default()
+                };
+            }
+        }
+        answer
+    }
+
+    /// Ob die Sitzung, über die der Fake Buch führt, in `path` läuft.
+    fn runs_in(&self, path: &Path) -> bool {
+        self.tracks_sessions
+            && self
+                .record
+                .lock()
+                .unwrap_or_else(std::sync::PoisonError::into_inner)
+                .running_in
+                .as_deref()
+                .is_some_and(|running| Path::new(running) == path)
+    }
+
     fn knows(&self, path: &Path) -> bool {
         self.known_project.as_deref() == Some(path)
             || self
@@ -671,6 +823,10 @@ fn known_project_answer(path: &Path) -> v1::ProjectsResponse {
         project: Some(v1::ProjectEntry {
             project_id: "0190a6d4-0000-7000-8000-000000000008".to_owned(),
             path: path.display().to_string(),
+            display_name: path
+                .file_name()
+                .map(|name| name.to_string_lossy().into_owned())
+                .unwrap_or_default(),
             ..v1::ProjectEntry::default()
         }),
         choice: vec![v1::ProjectChoiceField {
@@ -798,14 +954,28 @@ impl DaemonApi for SilentExport {
             return Box::pin(tonic::codegen::tokio_stream::iter(vec![check]));
         }
         if let Some(v1::sandbox_request::Op::Start(start)) = &request.op {
-            self.record
+            let mut record = self
+                .record
                 .lock()
-                .unwrap_or_else(std::sync::PoisonError::into_inner)
-                .starts
-                .push(start.clone());
+                .unwrap_or_else(std::sync::PoisonError::into_inner);
+            record.starts.push(start.clone());
             if asks_for_the_kernel_level(start) {
                 return Box::pin(tonic::codegen::tokio_stream::iter(vec![no_kernel_level()]));
             }
+            if self.tracks_sessions
+                && let Some(refused) = track_start(&mut record, start)
+            {
+                return Box::pin(tonic::codegen::tokio_stream::iter(vec![refused]));
+            }
+        }
+        if matches!(request.op, Some(v1::sandbox_request::Op::Stop(()))) {
+            let mut record = self
+                .record
+                .lock()
+                .unwrap_or_else(std::sync::PoisonError::into_inner);
+            record.stops += 1;
+            record.running_in = None;
+            record.running_sandbox = None;
         }
         if self.idle && matches!(request.op, Some(v1::sandbox_request::Op::RetireIfIdle(()))) {
             return Box::pin(tonic::codegen::tokio_stream::iter(vec![v1::SandboxEvent {
@@ -817,56 +987,20 @@ impl DaemonApi for SilentExport {
         self.inner.sandbox(request)
     }
     fn terminal(&self, input: BoxStream<v1::TerminalInput>) -> BoxStream<v1::TerminalOutput> {
-        use tokio_stream::StreamExt as _;
-        use v1::terminal_input::Input;
-
-        let recorded = Arc::clone(&self.terminal_inputs);
-        if self.terminal == TerminalKind::WinchAgent {
-            return winch_agent(input, recorded);
+        if !self.tracks_sessions {
+            return self.recorded_terminal(input);
         }
-        if self.terminal == TerminalKind::Stalled {
-            // Das `Open` lesen, eine Zeile schicken, dann die Eingabe halten,
-            // ohne sie je wieder zu lesen, bis der Client geht.
-            let (out, rx) = tokio::sync::mpsc::channel(4);
-            tokio::spawn(async move {
-                let mut input = input;
-                if input.next().await.is_some() {
-                    recorded
-                        .lock()
-                        .unwrap_or_else(std::sync::PoisonError::into_inner)
-                        .push("open");
-                }
-                let greeting = v1::TerminalOutput {
-                    output: Some(v1::terminal_output::Output::Data(
-                        b"humanitl fake terminal: input is never read\r\n".to_vec(),
-                    )),
-                };
-                if out.send(greeting).await.is_ok() {
-                    out.closed().await;
-                }
-                drop(input);
-            });
-            return Box::pin(tokio_stream::wrappers::ReceiverStream::new(rx));
-        }
-        let input = input.map(move |message| {
-            let kind = match &message.input {
-                // The terminal of a further shell (HUM-299), and only the
-                // one `exec` below hands out.
-                Some(Input::Open(open)) if open.shell_id == "1" => "open-shell-1",
-                Some(Input::Open(open)) if !open.shell_id.is_empty() => "open-shell-other",
-                Some(Input::Open(_)) => "open",
-                Some(Input::Data(_)) => "data",
-                Some(Input::Resize(_)) => "resize",
-                Some(Input::Close(())) => "close",
-                None => "empty",
-            };
-            recorded
-                .lock()
-                .unwrap_or_else(std::sync::PoisonError::into_inner)
-                .push(kind);
-            message
-        });
-        self.inner.terminal(Box::pin(input))
+        // Mit Buchführung prüft der Fake das `Open` wie der Daemon, bevor es
+        // an den Fake geht (GitHub #13, Review).
+        let (feed, feed_rx) = tokio::sync::mpsc::channel(16);
+        let inner = self.recorded_terminal(Box::pin(tokio_stream::wrappers::ReceiverStream::new(
+            feed_rx,
+        )));
+        let record = Arc::clone(&self.record);
+        let tracking = self.tracking;
+        gated_terminal(input, feed, inner, move |open| {
+            refusal(&record, tracking, open)
+        })
     }
     /// One further shell, always id 1 (HUM-299); the command is recorded as
     /// the kind `exec` so a test sees that the RPC came before the terminal.
@@ -947,7 +1081,7 @@ impl DaemonApi for SilentExport {
                 }
             }
             Some(v1::projects_request::Op::Get(get)) if self.knows(Path::new(&get.path)) => {
-                return Ok(known_project_answer(Path::new(&get.path)));
+                return Ok(self.known_entry(Path::new(&get.path)));
             }
             // Ein bekannter Ordner bekommt den Vorschlag mit seiner Kennung,
             // wie im Daemon; `go` zeigt ihm keinen Erststart (#9).
@@ -1274,4 +1408,107 @@ fn winch_agent(
         }
     });
     Box::pin(tokio_stream::wrappers::ReceiverStream::new(rx))
+}
+
+/// Was ein `Open` beim Fake mit Buchführung bekommt, statt durchzugehen:
+/// `TERM_001` für einen Schreiber, wenn schon einer schreibt, `IPC_006` für
+/// eine Kennung, die nicht die der laufenden Sitzung ist (GitHub #13).
+fn refusal(
+    record: &Record,
+    tracking: Tracking,
+    open: &v1::terminal_input::Open,
+) -> Option<Diagnostic> {
+    use humanitl_core::Severity;
+    use humanitl_core::diagnostics::codes;
+
+    if tracking.writer_taken && !open.read_only {
+        return Some(
+            Diagnostic::builder(codes::TERM_001, Severity::Error)
+                .why("sandbox fake already has a terminal client that writes".to_owned())
+                .build(),
+        );
+    }
+    let running = record
+        .lock()
+        .unwrap_or_else(std::sync::PoisonError::into_inner)
+        .running_sandbox
+        .clone();
+    (!open.sandbox_id.is_empty() && running.as_deref() != Some(open.sandbox_id.as_str())).then(
+        || {
+            Diagnostic::builder(codes::IPC_006, Severity::Error)
+                .why(format!("sandbox {} is not running", open.sandbox_id))
+                .build()
+        },
+    )
+}
+
+/// Reicht einen Strom von `Terminal` an `inner` weiter, aber erst, wenn sein
+/// `Open` an `refuse` vorbeikommt; sonst geht nur der Befund zurück.
+fn gated_terminal(
+    mut input: BoxStream<v1::TerminalInput>,
+    feed: tokio::sync::mpsc::Sender<v1::TerminalInput>,
+    mut inner: BoxStream<v1::TerminalOutput>,
+    refuse: impl Fn(&v1::terminal_input::Open) -> Option<Diagnostic> + Send + 'static,
+) -> BoxStream<v1::TerminalOutput> {
+    use tokio_stream::StreamExt as _;
+
+    let (out, rx) = tokio::sync::mpsc::channel(16);
+    tokio::spawn(async move {
+        let Some(first) = input.next().await else {
+            return;
+        };
+        if let Some(v1::terminal_input::Input::Open(open)) = &first.input
+            && let Some(found) = refuse(open)
+        {
+            let refused = v1::TerminalOutput {
+                output: Some(v1::terminal_output::Output::Diagnostic(
+                    humanitl_ipc::diagnostic_to_proto(&found),
+                )),
+            };
+            let _ = out.send(refused).await;
+            return;
+        }
+        if feed.send(first).await.is_err() {
+            return;
+        }
+        let feeder = tokio::spawn(async move {
+            while let Some(message) = input.next().await {
+                if feed.send(message).await.is_err() {
+                    return;
+                }
+            }
+        });
+        while let Some(message) = inner.next().await {
+            if out.send(message).await.is_err() {
+                break;
+            }
+        }
+        feeder.abort();
+    });
+    Box::pin(tokio_stream::wrappers::ReceiverStream::new(rx))
+}
+
+/// Ein Start beim Fake mit Buchführung: `CLI_005` wie im Daemon, wenn schon
+/// eine Sitzung in einem anderen Ordner läuft, sonst läuft danach diese
+/// (`fake-N` für den N-ten Start).
+fn track_start(
+    record: &mut Recorded,
+    start: &v1::sandbox_request::Start,
+) -> Option<v1::SandboxEvent> {
+    match record.running_in.clone() {
+        Some(running) if running != start.work_dir => {
+            let refused =
+                humanitl_ipc::sandbox::second_start_refused("fake", Some(Path::new(&running)));
+            Some(v1::SandboxEvent {
+                event: Some(v1::sandbox_event::Event::Diagnostic(
+                    humanitl_ipc::diagnostic_to_proto(&refused),
+                )),
+            })
+        }
+        _ => {
+            record.running_in = Some(start.work_dir.clone());
+            record.running_sandbox = Some(format!("fake-{}", record.starts.len()));
+            None
+        }
+    }
 }

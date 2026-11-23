@@ -287,6 +287,9 @@ struct Inner {
     intercept_paused_since: Option<SystemTime>,
     /// Die Revision der Pause, wie im echten Dienst.
     intercept_revision: u64,
+    /// Wie viele Ströme von `Terminal` gerade offen sind (#13), wie die
+    /// Clients am Terminal des Agenten im echten Dienst.
+    terminal_clients: u32,
 }
 
 impl FakeState {
@@ -315,6 +318,7 @@ impl FakeState {
                 sandbox_state: v1::SandboxState::Running,
                 hold_bytes: 0,
                 hold_count: 0,
+                terminal_clients: 0,
             }),
             events,
         }
@@ -665,6 +669,22 @@ impl FakeState {
     /// Setzt den Zustand der simulierten Sandbox.
     pub fn set_sandbox_state(&self, state: v1::SandboxState) {
         self.lock().sandbox_state = state;
+    }
+
+    /// Wie viele Clients am Terminal hängen (#13).
+    #[must_use]
+    pub fn terminal_clients(&self) -> u32 {
+        self.lock().terminal_clients
+    }
+
+    /// Ein Client hängt sich an (`true`) oder geht (`false`).
+    pub fn count_terminal_client(&self, attached: bool) {
+        let mut inner = self.lock();
+        inner.terminal_clients = if attached {
+            inner.terminal_clients.saturating_add(1)
+        } else {
+            inner.terminal_clients.saturating_sub(1)
+        };
     }
 
     /// Legt die Antwort bereit, die dieser Flow bekommt, sobald er darf.

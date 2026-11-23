@@ -996,6 +996,9 @@ async fn one_writer_many_readers() {
         !read.contains("c2VjcmV0"),
         "the ring holds filtered bytes only, so a re-attach cannot replay the raw stream: {read:?}"
     );
+    // Gezählt werden Schreiber und Leser, der abgewiesene zweite Schreiber
+    // nicht (GitHub #13).
+    assert_eq!(hub.clients(), 2, "one writer and one reader");
 
     // Was der Leser schickt, fällt hier weg — nicht im Client.
     reader
@@ -1046,6 +1049,14 @@ async fn one_writer_many_readers() {
     // Frist wie jedes andere Warten hier.
     drop(writer);
     let mut third = wait_for_writer_slot(&hub).await;
+    // Ein Client, der geht, zählt nicht mehr (GitHub #13): `humanitl
+    // sessions` sagt sonst „angehängt" über eine Sitzung ohne Terminal.
+    drop(reader);
+    assert!(
+        wait_for_clients(&hub, 1).await,
+        "only the third client hangs on: {}",
+        hub.clients()
+    );
     let mut again = String::new();
     assert!(
         third.wait_for(&mut again, "READY").await,
@@ -1067,6 +1078,20 @@ async fn one_writer_many_readers() {
     );
     })
     .await;
+}
+
+/// Wartet, bis genau `count` Clients am Terminal hängen; `false` nach der
+/// Frist. Das Abmelden geschieht im Dienst nebenher, wie das Freigeben des
+/// Schreiber-Platzes.
+async fn wait_for_clients(hub: &TerminalHub, count: usize) -> bool {
+    let deadline = tokio::time::Instant::now() + Duration::from_secs(10);
+    while tokio::time::Instant::now() < deadline {
+        if hub.clients() == count {
+            return true;
+        }
+        tokio::time::sleep(Duration::from_millis(10)).await;
+    }
+    false
 }
 
 /// Liest den Strom eines Clients leer, nachdem er `close` geschickt hat.

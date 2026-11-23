@@ -1150,6 +1150,9 @@ pub struct TerminalConfig {
     /// Eine neu gehaltene Anfrage klingelt im Terminal der Sitzung (`humanitl sandbox attach`, `humanitl run -- CMD` an einem Terminal, `humanitl go`): ein `BEL`-Byte zwischen zwei ganzen Stücken der Ausgabe des Agenten, nie mitten in einer Steuerfolge, höchstens eines je Sekunde. Text schreibt die Kommandozeile dafür nie in das Terminal des Agenten. Solange eine Ansicht über dem Agenten steht (Einstellungen, Interceptor, Hilfe), klingelt nichts; der Interceptor zeigt die neue Anfrage selbst. `false` schaltet die Glocke ab; die Oberfläche und die Benachrichtigung des Systems melden die Anfrage weiter.
     #[schemars(extend("x-tier" = "advanced", "x-project-scope" = "denied"))]
     pub bell_on_hold: bool,
+    /// Was das Schließen des Terminals von `humanitl go` mit der Sitzung tut (GitHub #13): `detach` (Vorgabe) hängt nur dieses Terminal ab, die Sitzung läuft im Daemon weiter, ein späteres `humanitl go` im selben Ordner, `humanitl sandbox attach` oder die Oberfläche hängen sich wieder an, und `humanitl sessions` zeigt sie ohne angehängtes Terminal. `stop` beendet die Sitzung wie vor #13. Der Schlüssel gilt für eine Sitzung, die dieses `go` gestartet hat: Ein zweites `go`, das sich an eine laufende Sitzung gehängt hat, stoppt sie nie, auch nicht auf `SIGTERM`. Geschlossen heißt `SIGHUP`, etwa durch ein geschlossenes Fenster oder eine abgerissene SSH-Verbindung; `SIGTERM` stoppt eine Sitzung, die dieses `go` gestartet hat, immer. Gilt nur für `humanitl go`: `humanitl run` stoppt seine Sitzung beim Schließen immer, die Oberfläche lässt sie immer laufen. Eine abgehängte Sitzung mit gehaltenen Anfragen wartet, bis jemand entscheidet oder `hold.timeout_secs` abläuft; ihre Anfragen stehen weiter in der Oberfläche, im Interceptor eines neuen Anschlusses und unter `humanitl intercept`.
+    #[schemars(extend("x-tier" = "advanced", "x-project-scope" = "denied"))]
+    pub on_close: OnClose,
 }
 
 impl Default for TerminalConfig {
@@ -1159,6 +1162,30 @@ impl Default for TerminalConfig {
             direct_keys: true,
             splash: true,
             bell_on_hold: true,
+            on_close: OnClose::Detach,
+        }
+    }
+}
+
+/// Was das Schließen des Terminals von `humanitl go` mit der Sitzung tut
+/// (`terminal.on_close`, GitHub #13).
+#[derive(Debug, Clone, Copy, Default, PartialEq, Eq, Serialize, Deserialize, JsonSchema)]
+#[serde(rename_all = "snake_case")]
+pub enum OnClose {
+    /// Nur das Terminal abhängen; die Sitzung läuft weiter.
+    #[default]
+    Detach,
+    /// Die Sitzung stoppen, wie vor GitHub #13.
+    Stop,
+}
+
+impl OnClose {
+    /// Der Name, wie er in `config.toml` steht.
+    #[must_use]
+    pub const fn as_str(self) -> &'static str {
+        match self {
+            Self::Detach => "detach",
+            Self::Stop => "stop",
         }
     }
 }

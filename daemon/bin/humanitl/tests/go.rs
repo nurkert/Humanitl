@@ -540,3 +540,34 @@ fn a_refused_save_prints_no_line_and_starts_nothing() {
     assert!(first_start_lines(&text).is_empty(), "{text}");
     assert!(server.starts().is_empty(), "{:?}", server.starts());
 }
+
+/// `humanitl go` in einem anderen Ordner, während eine Sitzung läuft
+/// (GitHub #13): `CLI_005`, und der Fix führt zur laufenden Sitzung,
+/// `humanitl go --dir` mit ihrem Ordner; der Text nennt auch `humanitl
+/// sandbox attach`. Nichts stoppt die laufende Sitzung.
+///
+/// Der Befund kommt aus dem Daemon (`second_start_refused`); der Fake
+/// schickt denselben. Mutation proof: the fix of before #13 (none) in
+/// `second_start_refused` fails the assertion on the fix.
+#[test]
+fn go_in_another_folder_gets_cli_005_with_the_way_to_the_running_session() {
+    let harness = Harness::new();
+    let server = FakeServer::start_tracking_sessions(&harness, &work(&harness));
+
+    // Ohne Terminal liest `go` nur mit; der Fake lässt die Sitzung laufen.
+    let _first = go(&harness, &["go"]);
+    assert_eq!(server.starts().len(), 1);
+
+    let other = harness.path("other");
+    std::fs::create_dir_all(&other).expect("a second folder");
+    let output = go(&harness, &["go", "--dir", other.to_str().expect("a path")]);
+    let text = stderr(&output);
+    assert_ne!(code(&output), 0, "{text}");
+    assert!(text.contains("CLI_005"), "{text}");
+    assert!(
+        text.contains(&format!("humanitl go --dir {}", work(&harness).display())),
+        "the fix leads to the running session: {text}"
+    );
+    assert!(text.contains("humanitl sandbox attach"), "{text}");
+    assert_eq!(server.stops(), 0, "nothing stopped the running session");
+}

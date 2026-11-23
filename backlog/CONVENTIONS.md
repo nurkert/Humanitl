@@ -4193,3 +4193,62 @@ gespeicherte Ordner: Für `go` ist der Ordner das Projekt. Der gewählte Ordner
 steht als `sandbox.work_dir` unter den Werten der Kommandozeile, damit auch
 die Auflösung des Clients sein Projekt-Profil liest und nicht das des
 gespeicherten Ordners (Nachtrag aus dem Review).
+
+### 4.61 Aus der Umsetzung von „Schließen hängt ab" (#13, vormals HUM-547, 2026-11-23)
+
+**`terminal.on_close`** (`detach`, Vorgabe, oder `stop`; Typ `OnClose`,
+Stufe `advanced`, für Projekt-Profile gesperrt wie jeder Schlüssel unter
+`terminal`): Was `SIGHUP` mit der Sitzung von `humanitl go` tut. Gelesen
+nur in `go` (`cmd::run::OnSignal::stops`); `humanitl run` stoppt auf
+`SIGHUP` immer, `SIGTERM` stoppt auch unter `go`. Gestoppt wird nur, was
+dieser Befehl besitzt: die Sitzung, die er gestartet hat, auch wenn er sie
+nach `TERM_001` nur noch lesend sieht (Nachtrag aus dem Review, die Regel
+von HUM-280 galt bis dahin für jeden Zuschauer); ein reiner Zuschauer
+(`sandbox attach --read-only`) und ein zweites `go` stoppen nie, auch nicht
+auf `SIGTERM` und gleich was `terminal.on_close` sagt: Sie haben die Sitzung
+nicht gestartet (Entscheidung des Besitzers aus dem Review: eine Sitzung der
+Oberfläche endet nur mit der bestätigten Handlung). Nach
+`SIGHUP` schreibt der Befehl nichts mehr: keine Zeile, kein Aufräumen des
+Schirms (`attach`, `TerminalGuard::abandon` des Erststart-Bildschirms), kein
+`RESTORE` und kein Bild der Ladeanimation (`Splash::abandon`), kein JSON,
+keine Frage und kein Hinweis zu den Änderungen; der Rohmodus geht mit
+`tcsetattr` zurück. Ein Terminal, das weg ist (`tcgetattr` antwortet `EIO`),
+gilt als `SIGHUP`, auch wenn das Ende der Eingabe oder ein gescheitertes
+Schreiben vor dem Signal ankommt (`Ending::or_hung_up`); `sandbox attach`
+endet dann weiter mit 0, schreibt aber nichts. Das gilt auch für `run`, das
+seine Sitzung stoppt: Ein `eprintln!` auf ein geschlossenes Terminal ist
+`EIO` und eine Panik vor `Sandbox(Stop)`.
+
+**Ein zweites `go` im selben Ordner hängt sich an** (`cmd/go/rejoin.rs`).
+Ob die Sitzung dort läuft, sagt der Daemon (`Projects.get`,
+`ProjectEntry.running`); der Befehl vergleicht keine Pfade. Er hängt sich an
+genau die Sandbox, die der Daemon genannt hat (`ProjectEntry.sandbox_id` in
+`TerminalInput.Open.sandbox_id`); ist sie inzwischen eine andere, lehnt der
+Daemon mit `IPC_006` ab. Nur ab Vertrag 1.62 und nur mit einer genannten
+Kennung (`go::rejoin::rejoinable`); davor startet `go` wie vor #13, und der
+Daemon antwortet `CLI_005`. Seine Signale stehen vor der
+ersten Anfrage (`attach::Signals`) und gehen an den Lauf weiter, wenn er
+startet (`Launch::early_signals`). Wörter, Agent und Schalter eines Starts
+gelten für die laufende Sitzung nicht; eine Zeile sagt es. Nur an einem
+Terminal und ohne `--json`; sonst startet er, und der Daemon antwortet
+`CLI_005`. Warten in dem Ordner Änderungen (`ProjectEntry.changes_waiting`),
+fragt `go` vor dem Start (`changes::review`).
+
+**`CLI_005` nennt den Weg zur laufenden Sitzung**
+(`sandbox::second_start_refused`, öffentlich, damit ein Fake denselben
+Befund schickt): Ordner im Text, Fix `humanitl go --dir ORDNER`, wenn sich
+der Ordner als ein wörtliches Wort kopieren lässt
+(`humanitl_sandbox::summary::literal_word`, dieselben vier Bedingungen wie
+`copy_command`), sonst `humanitl sandbox attach`. Die Regel von 4.26 („kein
+Anhänge-Befehl, weil es keinen gibt") gilt damit nicht mehr.
+
+**Vertrag 1.62**: `SandboxEvent.Status.terminal_clients` (Feld 25) und
+`ProjectEntry.terminal_clients` (Feld 16) zählen die Clients am Terminal des
+Agenten, schreibend und lesend, die Terminals weiterer Shells nicht;
+`ProjectEntry.sandbox_id` (Feld 17) nennt die laufende Sandbox. Gezählt
+wird im `TerminalHub` von `attach` bis zum Fallenlassen der `Attachment`
+(`ClientSlot`). Ein Client liest die Felder erst ab 1.62
+(`humanitl sessions`, `DaemonInfo.countsTerminalClients`); davor hieße eine
+0 nichts. Die Oberfläche (Spiegel-Minor 62) zeigt unter „Running" ein
+Abzeichen „No terminal attached"; Schließen von Fenster und Terminalbereich
+schickt dort weiter nie `Sandbox(Stop)`.

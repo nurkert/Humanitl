@@ -994,15 +994,14 @@ registry! {
     ///
     /// Ein zweites `humanitl run` würde die erste nicht ersetzen und auch
     /// nicht daneben laufen; es bekäme eine Sandbox, die einem anderen
-    /// Projektverzeichnis gehört. Der Befund nennt die Kennung der laufenden
-    /// Sitzung. Ein Befehl zum Anhängen steht nicht darin: `attach` gibt es
-    /// nicht, und die Oberfläche sieht die Sitzung ohnehin. Auch ein Vorschlag
-    /// zum Beheben steht nicht darin, weil es keinen Befehl gibt, der eine
-    /// fremde Sitzung beendet — wer sie gestartet hat, beendet sie dort
-    /// (HUM-067).
+    /// Projektverzeichnis gehört. Der Befund nennt die Kennung und den Ordner
+    /// der laufenden Sitzung und seit GitHub #13 den Weg zu ihr: `humanitl
+    /// go` in ihrem Ordner hängt sich an, statt zu starten, `humanitl sandbox
+    /// attach` von überall. Einen Befehl, der eine fremde Sitzung beendet,
+    /// nennt er nicht — wer sie gestartet hat, beendet sie dort (HUM-067).
     CLI_005 => "cli", "Es läuft schon eine Sitzung", "#cli_005",
         "In diesem Daemon läuft schon eine Sitzung.",
-        "Kein Fix: Wer sie gestartet hat, beendet sie dort.";
+        "`CopyCommand` `humanitl go --dir ORDNER` mit dem Ordner der laufenden Sitzung, sonst `humanitl sandbox attach`: Beide hängen sich an sie an. Beendet wird sie, wo sie gestartet wurde.";
 
     // HUM-103: der Meta-Fluss in der Historie.
     /// Etwas wollte einen Fluss als vom Proxy selbst beantwortet abschließen,

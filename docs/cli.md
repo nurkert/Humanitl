@@ -568,8 +568,9 @@ alone reads the last line. A failure is instead a line with the Diagnostic.
 ### One session per daemon
 
 The daemon runs exactly one sandbox. A second `humanitl run` while one is
-running gets `CLI_005` with the identifier of the running session. Whoever
-wants to see it attaches: `humanitl sandbox attach` connects this terminal to
+running gets `CLI_005` with the identifier and the folder of the running
+session; its fix is `humanitl go --dir FOLDER` with that folder, which attaches
+to it (GitHub #13). Whoever wants to see it attaches: `humanitl sandbox attach` connects this terminal to
 the running session, `--read-only` only watches. Exactly one client may
 write; a second one gets `TERM_001` and the hint at `--read-only`.
 `Ctrl+C` goes to the session's pseudo-terminal as the byte `0x03`; the
@@ -839,6 +840,35 @@ capability behind it is the `Sandbox` RPC (ADR-018). What `go` adds:
    the changes waiting for `humanitl sandbox changes|apply|discard`. A
    refused apply (a conflict, for example) is shown as its diagnostic, and
    the exit code stays the agent's.
+4. **Closing the terminal detaches** (GitHub #13). When the terminal of
+   `humanitl go` closes (`SIGHUP`: a closed window, a lost SSH connection),
+   the command ends and the session keeps running in the daemon, as after
+   `Ctrl+B d`. `terminal.on_close = "stop"` (closed to project profiles)
+   stops it instead, as before, for a session this `go` started; `SIGTERM` always stops it, and
+   `humanitl run` always stops its session when its terminal closes. After
+   `SIGHUP` the command writes nothing more, since the terminal is gone.
+   Requests the session holds meanwhile wait for a decision in the app, in
+   the interceptor of a new attach or under `humanitl intercept`, or until
+   `hold.timeout_secs` blocks them. `humanitl sessions` shows a session that
+   runs without a terminal, the start window of the app marks it under
+   "Running".
+5. **A second `go` in the same folder attaches** to the running session
+   instead of starting: one line `Attached to the running session in NAME`,
+   no animation, then the same terminal, prefix key and signals as the first.
+   It attaches to exactly the sandbox the daemon named for the folder; if
+   another one runs by then, it refuses with `IPC_006`. The agent word, the
+   words after `--`, `--disposable`, `--rw`, `--ro` and `--kernel` do not
+   apply to a running session, and a line says so. A second `go` never
+   stops the session, because it did not start it: closing its terminal,
+   `SIGTERM` and `SIGINT` only detach it, whatever `terminal.on_close` says.
+   The session ends where it was started, in the app through the confirmed
+   stop. This needs a daemon from contract 1.62; an older one gets the start
+   and answers `CLI_005`.
+   In another folder the start is refused with `CLI_005`, whose fix is
+   `humanitl go --dir FOLDER` of the running session; `humanitl sandbox
+   attach` works from anywhere. When changes of a disposable run that ended
+   without anyone attached still wait in a folder, the next `go` there asks
+   about them first, with the question of point 3.
 
 ```sh
 $ humanitl go                       # the agent of the project choice
@@ -849,7 +879,8 @@ $ humanitl go -- bash               # a shell instead of the agent
 ```
 
 Without a terminal on `stdin`, or with `--json`, `humanitl go` behaves like
-`humanitl run`: it reads along, shows no animation and asks nothing. With
+`humanitl run`: it reads along, shows no animation, asks nothing and does
+not attach to a running session (the daemon answers `CLI_005`). With
 `--disposable`, where the system cannot keep the project folder untouched, the
 start refuses, as with `run --disposable`.
 
@@ -2139,8 +2170,12 @@ reason. OpenCode and pi have no depot recipe; for them `install` answers `AGENT_
 get with the same flags as `humanitl run` (`--profile`, `--ask`, `--llm`), its state and its mode
 line: who decides a request without a rule. With `hold.ask_mode = "upstream"` the line reads
 `without a rule: decided by HOST:PORT` and says who resolves names and what follows from that
-(HUM-512); `humanitl sandbox plan` prints the same line. `--json` prints `session_id`, `state`,
-`ask_mode` and `egress`. `humanitl sessions summary ID` shows what a sandbox run left in the project.
+(HUM-512); `humanitl sandbox plan` prints the same line. While a session runs, the first line says
+how many terminals hang on it, and `no terminal attached` when none does, for example after the
+terminal of `humanitl go` closed (GitHub #13); the daemon counts them, a daemon before contract
+1.62 does not, and then the line says nothing about it. `--json` prints `session_id`, `state`,
+`ask_mode`, `egress` and `terminal_clients` (`null` before 1.62). `humanitl sessions summary ID`
+shows what a sandbox run left in the project.
 
 ## The global switches
 

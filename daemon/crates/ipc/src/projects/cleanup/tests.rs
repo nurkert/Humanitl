@@ -329,6 +329,8 @@ async fn forgetting_a_running_project_is_sandbox_054() {
         running: true,
         changes_waiting: false,
         session,
+        terminal_clients: 0,
+        sandbox: String::new(),
     };
     let refused = answer(
         fixture.context(Some(activity)),

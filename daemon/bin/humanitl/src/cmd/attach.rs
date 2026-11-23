@@ -212,7 +212,10 @@ pub(crate) fn finish_with(ctx: &Context, ending: Ending, detached: &str) -> Resu
     match ending {
         Ending::Stream(outcome) => outcome,
         Ending::Detached => {
-            ctx.render.note(detached);
+            // Ein Terminal, das weg ist, bekommt keine Zeile mehr (GitHub #13).
+            if !crate::tty::terminal_gone() {
+                ctx.render.note(detached);
+            }
             Ok(EXIT_OK)
         }
         Ending::Signal(number) => Ok(128_u8.saturating_add(number)),
@@ -272,11 +275,38 @@ async fn attach_at(
     shell: &str,
     sandbox: &str,
 ) -> Result<Ending, Failure> {
-    let mut client = ctx.connect().await?;
-    let (cols, rows) = window_size();
+    // Erst die Signale, dann Verbindung und Rohmodus: Ein Signal während des
+    // Aufbaus nähme der Kernel sonst mit seinem Standardverhalten, und ein
+    // Signal zwischen Rohmodus und Schleife ließe das Terminal roh
+    // (GitHub #13).
+    let mut signals = Signals::listen();
+    attach_with(ctx, read_only, keys, (shell, sandbox), &mut signals).await
+}
 
-    let (tx, rx) = mpsc::channel(INPUT_BUFFER);
-    let open = v1::TerminalInput {
+/// Wie [`attach_sandbox`] (leer heißt die laufende Sitzung), mit Signalen,
+/// die der Aufrufer schon vor seinen
+/// eigenen Anfragen angemeldet hat (GitHub #13: ein zweites `humanitl go`
+/// hört ab dem ersten RPC). Ein Signal, das schon wartet, beendet den
+/// Anschluss, bevor er etwas schreibt.
+///
+/// # Errors
+///
+/// Wie [`attach`]; `IPC_006`, wenn `sandbox` nicht mehr die laufende
+/// Sitzung ist.
+pub(crate) async fn attach_pinned(
+    ctx: &Context,
+    read_only: bool,
+    keys: Keys,
+    sandbox: &str,
+    signals: &mut Signals,
+) -> Result<Ending, Failure> {
+    attach_with(ctx, read_only, keys, ("", sandbox), signals).await
+}
+
+/// Das `Open` eines Anschlusses, mit der Größe dieses Terminals.
+fn open_message(read_only: bool, shell: &str, sandbox: &str) -> v1::TerminalInput {
+    let (cols, rows) = window_size();
+    v1::TerminalInput {
         input: Some(v1::terminal_input::Input::Open(v1::terminal_input::Open {
             // Leer heißt „die Sitzung, die läuft"; ein Daemon führt eine.
             sandbox_id: sandbox.to_owned(),
@@ -285,18 +315,31 @@ async fn attach_at(
             read_only,
             shell_id: shell.to_owned(),
         })),
-    };
-    tx.send(open).await.map_err(|_| closed_input())?;
+    }
+}
 
+/// Der Anschluss selbst. Ein Signal aus dem Aufbau beendet ihn, bevor er
+/// irgendetwas schreibt (GitHub #13).
+async fn attach_with(
+    ctx: &Context,
+    read_only: bool,
+    keys: Keys,
+    (shell, sandbox): (&str, &str),
+    signals: &mut Signals,
+) -> Result<Ending, Failure> {
+    let mut client = ctx.connect().await?;
+    let (tx, rx) = mpsc::channel(INPUT_BUFFER);
+    tx.send(open_message(read_only, shell, sandbox))
+        .await
+        .map_err(|_| closed_input())?;
     let mut stream = client
         .terminal(ReceiverStream::new(rx))
         .await
         .map_err(|status| Failure::new(status_diagnostic(&status, "Terminal")))?
         .into_inner();
-
-    // Erst die Signale, dann der Rohmodus: Ein `SIGTERM` zwischen beidem nähme
-    // der Kernel mit seinem Standardverhalten, und das Terminal bliebe roh.
-    let mut signals = Signals::listen();
+    if let Some(number) = signals.pending() {
+        return Ok(Ending::Signal(number));
+    }
 
     // Ein lesender Anschluss liest die Tastatur nur, um die Präfixtaste zu
     // sehen, und nur an einem Terminal: An einer Pipe gibt es niemanden, der
@@ -363,7 +406,7 @@ async fn attach_at(
         &mut view,
         &mut stream,
         &mut events,
-        &mut signals,
+        signals,
         &mut screen,
         &mut watch,
         &Wiring {
@@ -407,10 +450,19 @@ async fn attach_at(
         control.finish().await;
     }
     drop(raw);
-    // Die Ansicht schließt auf jedem Weg; den Schirm räumt der Befehl nur
-    // auf, wo die Ausgabe ein Terminal ist.
-    view.leave(leaves_screen);
+    close_view(&mut view, &ending, leaves_screen);
     Ok(ending)
+}
+
+/// Die Ansicht schließt auf jedem Weg; den Schirm räumt der Befehl nur auf,
+/// wo die Ausgabe ein Terminal ist (`terminal`). Nach `SIGHUP` gibt es das
+/// Terminal nicht mehr: Dann schreibt der Anschluss nichts, denn jedes
+/// Schreiben bekäme `EIO` (GitHub #13); der Rohmodus geht davor mit
+/// `tcsetattr` zurück, ohne zu schreiben.
+fn close_view<W: Write>(view: &mut AgentView<W>, ending: &Ending, terminal: bool) {
+    if !matches!(ending, Ending::Signal(crate::cmd::run::SIGHUP)) && !crate::tty::terminal_gone() {
+        view.leave(terminal);
+    }
 }
 
 /// Was die Schleife eines Anschlusses außer Terminal und Strom braucht.
@@ -676,6 +728,26 @@ pub(crate) enum Ending {
     Signal(u8),
 }
 
+impl Ending {
+    /// Ein Ende, das nur so aussieht, weil das Terminal weg ist, ist
+    /// `SIGHUP` (GitHub #13): Geht das Terminal zu, kann das Ende der Eingabe
+    /// (ein lesender Anschluss hängt dann ab) oder ein Schreiben, das nicht
+    /// mehr geht, vor dem Signal ankommen. Danach schreibt niemand mehr
+    /// hinein, und das Signal entscheidet, ob die Sitzung stoppt.
+    ///
+    /// Für `humanitl run` und `humanitl go`, deren Sitzung am Signal hängt;
+    /// `sandbox attach` endet an einem verschwundenen Terminal weiter mit 0,
+    /// schreibt aber auch nichts mehr ([`finish_with`]).
+    pub(crate) fn or_hung_up(self) -> Self {
+        match self {
+            Self::Detached | Self::Stream(Ok(_)) if crate::tty::terminal_gone() => {
+                Self::Signal(crate::cmd::run::SIGHUP)
+            }
+            other => other,
+        }
+    }
+}
+
 /// Liest den Strom bis zu seinem Ende und verwirft, was kommt.
 async fn drain(stream: &mut tonic::Streaming<v1::TerminalOutput>) {
     while let Ok(Some(_)) = stream.message().await {}
@@ -750,7 +822,8 @@ fn take<W: Write>(
 /// Menschen stünde ohne Echo da. Genau diese Lücke ist am 2026-09-07 im Test
 /// `every_signal_gives_the_terminal_back` aufgefallen: unter Last endete der
 /// Lauf mit einem Signal statt mit `128 + n`.
-struct Signals {
+#[derive(Debug)]
+pub(crate) struct Signals {
     /// Die Ströme und ihre Nummern, in der Reihenfolge `TERM`, `HUP`, `INT`.
     streams: Vec<(tokio::signal::unix::Signal, u8)>,
 }
@@ -758,7 +831,7 @@ struct Signals {
 impl Signals {
     /// Meldet die Handler an. Was sich nicht anmelden lässt, fehlt still; dann
     /// gilt für dieses eine Signal das Standardverhalten.
-    fn listen() -> Self {
+    pub(crate) fn listen() -> Self {
         use tokio::signal::unix::{SignalKind, signal};
 
         Self {
@@ -771,6 +844,14 @@ impl Signals {
             .filter_map(|(kind, number)| signal(kind).ok().map(|stream| (stream, number)))
             .collect(),
         }
+    }
+
+    /// Das Signal, das schon wartet, ohne zu warten; `None` ohne.
+    pub(crate) fn pending(&mut self) -> Option<u8> {
+        let mut context = std::task::Context::from_waker(std::task::Waker::noop());
+        self.streams.iter_mut().find_map(|(stream, number)| {
+            stream.poll_recv(&mut context).is_ready().then_some(*number)
+        })
     }
 
     /// Wartet auf das erste Signal und nennt seine Nummer.

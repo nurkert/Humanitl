@@ -220,6 +220,9 @@ const REGISTER: &[(&str, &str)] = &[
     // für neu gehaltene Anfragen einschaltet (GitHub #12).
     ("terminal.bell_on_hold", "effective"),
     ("terminal.direct_keys", "effective"),
+    // Gelesen in `humanitl go`, wenn sein Terminal mit `SIGHUP` geht
+    // (`cmd/run.rs`, GitHub #13). `run`, Daemon und Oberfläche lesen ihn nicht.
+    ("terminal.on_close", "effective"),
     ("terminal.prefix", "effective"),
     // Gelesen in `humanitl go`, bevor die Ladeanimation startet
     // (`cmd/run.rs`, HUM-496). Daemon und Oberfläche lesen ihn nicht.

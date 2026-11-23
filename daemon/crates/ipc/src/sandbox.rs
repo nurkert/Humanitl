@@ -448,6 +448,14 @@ struct Running {
     depot_agent: Option<String>,
 }
 
+impl Running {
+    /// Wie viele Clients am Terminal des Agenten hängen (#13), für den
+    /// Schnappschuss und den Eintrag des Registers.
+    fn terminal_clients(&self) -> u32 {
+        u32::try_from(self.terminal.clients()).unwrap_or(u32::MAX)
+    }
+}
+
 /// Das Kommando dieser Sitzung und der `PATH`, unter dem es gesucht wird.
 ///
 /// Beides wird beim Start festgehalten und nicht beim Ende neu gebaut: Am Ende
@@ -4066,6 +4074,8 @@ impl Inner {
             started_at,
             held,
             agent_running,
+            terminal_clients,
+            ..
         } = self.running_facts();
         // Der Zustand kommt vom gehaltenen Handle, nicht von der Lebendigkeit
         // des Kindes: Eine Sitzung, deren Agent sich beendet hat, läuft weiter
@@ -4132,6 +4142,8 @@ impl Inner {
             // Wohin die Inferenz geht (HUM-516), aus derselben Konfiguration
             // wie `llm_endpoint`.
             cloud_inference: crate::cloud::status(&self.paths, config),
+            // Wer am Terminal des Agenten hängt (#13); ohne Sandbox niemand.
+            terminal_clients,
         })
     }
 
@@ -4219,6 +4231,9 @@ impl Inner {
             ask_mode: String::new(),
             // Ebenso der Hinweis auf Cloud-Inferenz (HUM-516).
             cloud_inference: None,
+            // Und wer am Terminal hängt (#13): Im Schnappschuss eines
+            // Befunds ist nicht sicher, welche Sitzung gemeint war.
+            terminal_clients: 0,
         }
     }
 
@@ -4260,6 +4275,8 @@ impl Inner {
                 started_at: Some(running.started_at),
                 held: true,
                 agent_running: running.handle.try_wait().is_none(),
+                terminal_clients: running.terminal_clients(),
+                work_dir: Some(running.work_dir.clone()),
             })
     }
 
@@ -5190,6 +5207,11 @@ struct Facts {
     held: bool,
     /// Ob in ihr noch ein Prozess lebt. Das ist etwas anderes.
     agent_running: bool,
+    /// Wie viele Clients an ihrem Terminal hängen (#13).
+    terminal_clients: u32,
+    /// Ihr Projektordner auf dem Host, für den Befund eines zweiten Starts
+    /// (`CLI_005`, #13).
+    work_dir: Option<PathBuf>,
 }
 
 /// The agent program bound from the host (HUM-278, HUM-280): beside a
@@ -5582,13 +5604,6 @@ fn check_profile_name(name: &str) -> Result<(), Diagnostic> {
     humanitl_config::profile::check_name(name, "the Sandbox request")
 }
 
-/// Der Befund für einen Start, während schon eine Sitzung läuft.
-///
-/// Der Daemon führt genau eine; eine zweite bekäme eine Sandbox, die einem
-/// anderen Projektverzeichnis gehört. Weder ein Befehl zum Anhängen noch einer
-/// zum Beheben steht im Text: `attach` gibt es nicht, und es gibt auch keinen
-/// Befehl, der eine fremde Sitzung beendet. Wer sie gestartet hat, beendet sie
-/// dort (HUM-067, Nicht-Ziel).
 /// Der Befund, wenn es kein Terminal gibt, an das man sich hängen könnte.
 ///
 /// Derselbe Code wie bei einer `Sandbox`-Anfrage an einen Daemon ohne
@@ -5601,14 +5616,50 @@ fn no_terminal(why: String) -> Diagnostic {
         .build()
 }
 
+/// Der Befund für einen Start, während schon eine Sitzung läuft
+/// ([`second_start_refused`] mit dem, was von ihr bekannt ist).
 fn already_running(facts: &Facts) -> Diagnostic {
-    let id = facts.id.as_deref().unwrap_or("unknown");
+    second_start_refused(
+        facts.id.as_deref().unwrap_or("unknown"),
+        facts.work_dir.as_deref(),
+    )
+}
+
+/// `CLI_005` für einen Start neben der Sitzung `sandbox_id` im Ordner
+/// `work_dir`. Öffentlich, damit ein Fake denselben Befund schickt wie der
+/// Daemon.
+///
+/// Der Daemon führt genau eine Sitzung; eine zweite bekäme eine Sandbox, die
+/// einem anderen Projektverzeichnis gehört. Seit #13 nennt der Befund den Weg
+/// zu der laufenden: `humanitl go` in ihrem Ordner hängt sich an sie an,
+/// statt zu starten, und `humanitl sandbox attach` tut es von überall. Der
+/// Fix ist `humanitl go --dir ORDNER`, wenn sich der Ordner als ein
+/// wörtliches Wort kopieren lässt
+/// ([`humanitl_sandbox::summary::literal_word`]), sonst `humanitl sandbox
+/// attach`. Einen Befehl, der eine fremde Sitzung beendet, nennt er weiter
+/// nicht: Wer sie gestartet hat, beendet sie dort (HUM-067).
+#[must_use]
+pub fn second_start_refused(sandbox_id: &str, work_dir: Option<&Path>) -> Diagnostic {
+    let place = work_dir.map_or_else(String::new, |dir| {
+        format!(
+            " in {}",
+            humanitl_core::block::sanitize_note(&dir.display().to_string())
+        )
+    });
+    let fix = work_dir
+        .and_then(humanitl_sandbox::summary::literal_word)
+        .map_or_else(
+            || "humanitl sandbox attach".to_owned(),
+            |dir| format!("humanitl go --dir {dir}"),
+        );
     Diagnostic::builder(codes::CLI_005, Severity::Blocking)
         .why(format!(
-            "a session is already running in this daemon (sandbox {id}); it keeps its own \
-             project directory, and a second one would not get it. End it where it was started, \
-             or watch it in the app."
+            "a session is already running in this daemon (sandbox {sandbox_id}{place}); it keeps \
+             its own project directory, and a second one would not get it. humanitl go at a \
+             terminal in its folder attaches to it; humanitl sandbox attach does from anywhere, \
+             also without a terminal. End it where it was started, or watch it in the app."
         ))
+        .fix(FixAction::CopyCommand(fix))
         .build()
 }
 
@@ -9613,6 +9664,61 @@ mod tests {
         assert_eq!(restless, SNAPSHOT_ATTEMPTS);
     }
 
+    /// A second start names the folder of the running session and the way
+    /// to it (GitHub #13): `humanitl go --dir FOLDER` as the fix when the
+    /// folder copies as one literal word, `humanitl sandbox attach`
+    /// otherwise, and `humanitl sandbox attach` in the text either way.
+    ///
+    /// Mutation proof: the fix of before #13 (none) fails the first
+    /// assertion on `fix`; quoting with `{dir:?}` fails the second.
+    #[test]
+    fn a_second_start_names_the_way_to_the_running_session() {
+        use humanitl_core::FixAction;
+
+        let refused = already_running(&Facts {
+            id: Some("sbx".to_owned()),
+            work_dir: Some(PathBuf::from("/home/dev/my api")),
+            ..Facts::default()
+        });
+        assert_eq!(refused.code, codes::CLI_005);
+        assert_eq!(
+            refused.fix,
+            Some(FixAction::CopyCommand(
+                "humanitl go --dir '/home/dev/my api'".to_owned()
+            ))
+        );
+        assert!(
+            refused.why.contains("sandbox sbx in /home/dev/my api"),
+            "{}",
+            refused.why
+        );
+        assert!(
+            refused.why.contains("humanitl sandbox attach"),
+            "{}",
+            refused.why
+        );
+
+        let plain = second_start_refused("sbx", Some(Path::new("/home/dev/api")));
+        assert_eq!(
+            plain.fix,
+            Some(FixAction::CopyCommand(
+                "humanitl go --dir /home/dev/api".to_owned()
+            ))
+        );
+        // Ein Ordner, der sich nicht wörtlich kopieren lässt, steht nicht im
+        // Befehl.
+        let odd = second_start_refused("sbx", Some(Path::new("/home/dev/it's\nhere")));
+        assert_eq!(
+            odd.fix,
+            Some(FixAction::CopyCommand("humanitl sandbox attach".to_owned()))
+        );
+        let unknown = already_running(&Facts::default());
+        assert_eq!(
+            unknown.fix,
+            Some(FixAction::CopyCommand("humanitl sandbox attach".to_owned()))
+        );
+    }
+
     /// A start after an agent that exited, without a Stop in between, reads
     /// the saved configuration: the exited session is replaced, and only an
     /// agent that still runs keeps its configuration (HUM-277).
@@ -9623,6 +9729,7 @@ mod tests {
             started_at: Some(SystemTime::now()),
             held: true,
             agent_running: false,
+            ..Facts::default()
         };
         assert!(
             start_may_refresh(&exited),

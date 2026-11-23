@@ -1588,7 +1588,7 @@ Es läuft schon eine Sitzung
 
 **Auslöser.** In diesem Daemon läuft schon eine Sitzung.
 
-**Fix.** Kein Fix: Wer sie gestartet hat, beendet sie dort.
+**Fix.** `CopyCommand` `humanitl go --dir ORDNER` mit dem Ordner der laufenden Sitzung, sonst `humanitl sandbox attach`: Beide hängen sich an sie an. Beendet wird sie, wo sie gestartet wurde.
 
 #### CLI_007
 

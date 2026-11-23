@@ -527,7 +527,13 @@ impl DaemonApi for FakeDaemon {
 
     fn terminal(&self, input: BoxStream<v1::TerminalInput>) -> BoxStream<v1::TerminalOutput> {
         let (tx, rx) = mpsc::unbounded_channel();
-        tokio::spawn(echo_terminal(input, tx));
+        // Gezählt wie im echten Dienst, solange der Strom steht (#13).
+        let state = Arc::clone(&self.state);
+        state.count_terminal_client(true);
+        tokio::spawn(async move {
+            echo_terminal(input, tx).await;
+            state.count_terminal_client(false);
+        });
         Box::pin(UnboundedReceiverStream::new(rx))
     }
 
@@ -935,7 +941,7 @@ impl DaemonApi for FakeDaemon {
         if let Some(v1::projects_request::Op::OpenInApp(asked)) = &request.op {
             return self.app_requests.open_in_app(asked);
         }
-        projects::answer(&self.state.session(), request)
+        projects::answer(&self.state, request)
     }
 
     /// Das Agent-Depot (HUM-518): Der Fake hat keines und keine Sperre;
@@ -1603,6 +1609,13 @@ impl FakeDaemon {
                     // Der gespielte Agent fragt kein Modell außerhalb dieses
                     // Rechners (HUM-516).
                     cloud_inference: None,
+                    // Die offenen Ströme von `Terminal` (#13), nur solange
+                    // die Sandbox läuft.
+                    terminal_clients: if running {
+                        self.state.terminal_clients()
+                    } else {
+                        0
+                    },
                 },
             )),
         }

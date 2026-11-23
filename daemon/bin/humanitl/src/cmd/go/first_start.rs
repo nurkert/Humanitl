@@ -62,6 +62,9 @@ pub(crate) const FOLDER_CHOICE_MINOR: u32 = 59;
 /// Exit-Code eines Abbruchs, wie eine Shell ihn für `SIGINT` meldet.
 const EXIT_CANCELLED: u8 = 130;
 
+/// Der Exit-Code nach `SIGHUP`: Das Terminal ist weg.
+const HANGUP_EXIT: u8 = 129;
+
 /// So viele Ereignisse liest das Verwerfen höchstens.
 const DISCARD_LIMIT: usize = 4096;
 
@@ -134,7 +137,10 @@ pub(crate) async fn first_start(
                 return Ok(Next::Start { said: false });
             }
             Shown::Ended(code) => {
-                eprintln!("[humanitl] not started; nothing was saved");
+                // Nach `SIGHUP` ist das Terminal weg (GitHub #13).
+                if code != HANGUP_EXIT {
+                    eprintln!("[humanitl] not started; nothing was saved");
+                }
                 return Ok(Next::Stop(code));
             }
             Shown::Unavailable(found) => {
@@ -373,7 +379,13 @@ fn present(screen: &mut FirstStartScreen) -> Result<std::io::Result<Outcome>, Un
     };
     let mut guard = TerminalGuard::enter(&options)?;
     let outcome = crate::tui::run(&mut guard, screen, Theme::from_env(), first_start::MIN);
-    discard_events();
+    // Nach `SIGHUP` gibt es das Terminal nicht mehr: Rohmodus zurück, aber
+    // keine Folge zum Verlassen des Schirms (GitHub #13).
+    if matches!(outcome, Ok(Outcome::Signal(Signal::HangUp))) {
+        guard.abandon();
+    } else {
+        discard_events();
+    }
     drop(guard);
     Ok(outcome)
 }
