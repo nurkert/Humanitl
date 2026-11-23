@@ -12,8 +12,8 @@ use humanitl_core::{Diagnostic, SessionId, Severity};
 use humanitl_recorder::{ProjectRow, ProjectStart, Recorder, RecorderSettings, SessionMeta};
 
 use super::{
-    AGENT, ASK_MODE, BackendFacts, FOLDER_MODE, ISOLATION, Inputs, KERNEL, LLM_SERVER, PROFILE,
-    Ports, SHARED_KERNEL, ServerFacts, build,
+    AGENT, AGENT_SOURCE, ASK_MODE, BackendFacts, FOLDER_MODE, ISOLATION, Inputs, KERNEL,
+    LLM_SERVER, PROFILE, Ports, SHARED_KERNEL, ServerFacts, build,
 };
 use crate::projects::{Context, ProjectIdentity, answer};
 use crate::v1;
@@ -271,80 +271,6 @@ async fn a_kernel_floor_makes_the_shared_kernel_unavailable_with_a_reason() {
     );
 }
 
-/// An agent installed only in the depot, with the default configuration
-/// (source `host`), through the real per-agent path: the default source
-/// stays `host` as the start would take it (ADR-0023, no fallback), not
-/// available, with `AGENT_001`; the depot is named available beside it.
-#[test]
-fn an_agent_only_in_the_depot_keeps_the_host_source_unavailable_and_names_the_depot() {
-    use std::os::unix::fs::PermissionsExt as _;
-
-    let fixture = Fixture::new("");
-    let paths = fixture.paths();
-    // An installed depot of claude, the one agent with a recipe today.
-    let depot = paths.agents_dir().join("claude");
-    let version = depot.join("program/2.1.0");
-    for dir in [
-        paths.agents_dir(),
-        depot.clone(),
-        depot.join("program"),
-        version.clone(),
-        depot.join("credentials"),
-    ] {
-        std::fs::create_dir_all(&dir).unwrap();
-        std::fs::set_permissions(&dir, std::fs::Permissions::from_mode(0o700)).unwrap();
-    }
-    std::fs::write(
-        version.join("manifest.json"),
-        r#"{"version":"2.1.0","signature":"verified"}"#,
-    )
-    .unwrap();
-    std::fs::set_permissions(
-        version.join("manifest.json"),
-        std::fs::Permissions::from_mode(0o600),
-    )
-    .unwrap();
-    std::os::unix::fs::symlink("program/2.1.0", depot.join("current")).unwrap();
-
-    let resolved = humanitl_config::load(&humanitl_config::Sources::empty()).unwrap();
-    let facts = super::agent_facts(
-        &paths,
-        &resolved.config,
-        &humanitl_config::agents::SourceLock::none(),
-        "claude",
-        "claude",
-    );
-    assert_eq!(facts.source, AgentSource::Host);
-    assert!(facts.depot.is_ok(), "{facts:?}");
-    let built = build(&Inputs {
-        resolved: &resolved,
-        locks: &PolicyLocks::none(),
-        plan: super::assumed_plan(&resolved.config),
-        backends: &[],
-        agents: vec![facts],
-        servers: Vec::new(),
-        profiles: vec![default_profile()],
-        cloud: None,
-    });
-    let agent = built.fields.iter().find(|field| field.id == AGENT).unwrap();
-    let claude = option(agent, "claude");
-    assert_eq!(claude.source, "host");
-    assert!(!claude.available, "{claude:?}");
-    assert_eq!(codes(&claude.reasons), ["AGENT_001"]);
-    let host = claude
-        .sources
-        .iter()
-        .find(|source| source.source == "host")
-        .unwrap();
-    assert!(!host.available && host.selected, "{host:?}");
-    let depot = claude
-        .sources
-        .iter()
-        .find(|source| source.source == "depot")
-        .unwrap();
-    assert!(depot.available && !depot.selected, "{depot:?}");
-}
-
 /// The host search finds a program in the user's program folders and names
 /// a missing one with `AGENT_001`.
 #[test]
@@ -534,7 +460,15 @@ async fn the_fields_come_in_screen_order_and_their_choice_saves() {
         .collect();
     assert_eq!(
         ids,
-        [AGENT, FOLDER_MODE, ISOLATION, ASK_MODE, LLM_SERVER, PROFILE]
+        [
+            AGENT,
+            AGENT_SOURCE,
+            FOLDER_MODE,
+            ISOLATION,
+            ASK_MODE,
+            LLM_SERVER,
+            PROFILE
+        ]
     );
     for field in &proposal.fields {
         assert!(
@@ -1027,3 +961,5 @@ async fn an_undeclared_folder_outside_home_is_named_in_the_proposal() {
         proposal.diagnostics
     );
 }
+
+mod source;

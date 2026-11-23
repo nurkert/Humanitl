@@ -108,7 +108,8 @@ switch it.
 
 By default the agent comes from the host: the adapter finds its program on the daemon's `PATH` or in
 the user's bin directories, and the daemon binds that one native file read-only (HUM-278). With
-`agents.source = "depot"` or `agents.<id>.source = "depot"` (both closed to project profiles), and
+`agents.source = "depot"` or `agents.<id>.source = "depot"` (both closed to project profiles;
+the project choice may set `agents.<id>.source` per project, never past a company lock), and
 always when a company policy locks the source to the depot, the agent comes from the **agent
 depot** instead: a store per agent under the daemon's data directory
 (`$XDG_DATA_HOME/humanitl/agents/<id>/`, directories `0700`, files `0600` or `0700`, owned by the
@@ -1315,8 +1316,8 @@ duration of the run, nothing more.
 
 #### The project choice (HUM-532)
 
-What a person chose for a project on the first-start screen (agent, folder mode, backend, isolation
-floor, ask mode, model server, sandbox profile) is the **project choice**. It is a configuration
+What a person chose for a project on the first-start screen (agent and its source, folder mode,
+backend, isolation floor, ask mode, model server, sandbox profile) is the **project choice**. It is a configuration
 layer on the host: the daemon keeps it in its project register (`projects` in its SQLite store under
 `$XDG_DATA_HOME/humanitl`, `0600`) and writes it only through the RPC `Projects.save_choice` on its
 socket. It is never read from the project folder, so neither a cloned repository nor the agent in a
@@ -1324,7 +1325,10 @@ session with a writable `/work` can write it; the agent has no way to the daemon
 or to its socket. It ranks above the project profile and below the environment and the command
 line (origin `project-choice`). It carries only the keys of a fixed allow-list, never
 `sandbox.work_dir`, `agent.command`, mounts or rules; it raises `sandbox.min_isolation` and never
-lowers it, nor leaves a backend below it; and a value a company policy locks cannot be chosen. Each of these is `CONFIG_024` when
+lowers it, nor leaves a backend below it; and a value a company policy locks cannot be chosen,
+including the source of an agent the policy locks to the depot (#15). The source only picks where
+the program comes from, host or depot; both run in the same sandbox, and a start never falls back
+to the other source. Each of these is `CONFIG_024` when
 the choice is saved and when a start loads it, never dropped in silence. A folder replaced at the
 same path (another device and inode) is a new project and starts without the old choice; the folder is checked again once the sandbox has mounted it, and
 a start that cannot be recorded in the register is stopped. A start

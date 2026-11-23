@@ -38,8 +38,8 @@ use std::path::Path;
 use std::sync::Arc;
 use std::time::Instant;
 
-use humanitl_config::agents::{SourceLock, effective_source};
-use humanitl_config::{Config, Env, Paths, ProjectChoice, Resolved, SandboxMode};
+use humanitl_config::agents::{SourceLock, SourceOrigin, effective_source};
+use humanitl_config::{Config, Env, Origin, Paths, ProjectChoice, Resolved, SandboxMode};
 use humanitl_core::block::sanitize_note;
 use humanitl_core::diagnostics::codes::{AGENT_001, AGENT_009, AGENT_015};
 use humanitl_core::{Diagnostic, FixAction, Severity};
@@ -53,8 +53,8 @@ use crate::v1;
 mod fields;
 
 pub use fields::{
-    AGENT, ASK_MODE, AgentFacts, Built, DISPOSABLE, FOLDER_MODE, ISOLATION, Inputs, KERNEL,
-    LLM_SERVER, PROFILE, PlanFacts, ProfileFacts, READ_ONLY, READ_WRITE, SHARED_KERNEL,
+    AGENT, AGENT_SOURCE, ASK_MODE, AgentFacts, Built, DISPOSABLE, FOLDER_MODE, ISOLATION, Inputs,
+    KERNEL, LLM_SERVER, PROFILE, PlanFacts, ProfileFacts, READ_ONLY, READ_WRITE, SHARED_KERNEL,
     ServerFacts, build,
 };
 
@@ -190,7 +190,13 @@ fn resolve_with_session(
     choice: &ProjectChoice,
     overrides: &[(String, String)],
 ) -> Result<Resolved, Diagnostic> {
-    let checked = check_for(&ctx.paths, &ctx.locks, path, choice)?;
+    let checked = check_for(
+        &ctx.paths,
+        &ctx.locks,
+        &ctx.proposal.source_lock,
+        path,
+        choice,
+    )?;
     if overrides.is_empty() {
         return Ok(checked);
     }
@@ -283,6 +289,10 @@ fn propose(
 ) -> Result<v1::StartProposal, Diagnostic> {
     let resolved = resolve_with_session(ctx, path, choice, overrides)?;
     let config = &resolved.config;
+    let stored = row.is_some_and(|row| row.choice.is_some());
+    let all_set = resolved
+        .origin("agents.source")
+        .is_some_and(|origin| *origin != Origin::Default);
     let searched = match &ctx.proposal.backends {
         BackendFacts::Searches { searches, deadline } => Some((searches, *deadline)),
         BackendFacts::Given(_) => None,
@@ -322,7 +332,17 @@ fn propose(
         locks: &ctx.locks,
         plan,
         backends: &backends,
-        agents: agents(&ctx.paths, config, &ctx.proposal.source_lock),
+        agents: agents(&ctx.paths, config, &ctx.proposal.source_lock)
+            .into_iter()
+            .map(|mut facts| {
+                // Eine gespeicherte Wahl ohne Quelle (vor #15) startet mit der
+                // wirksamen Quelle; der Vorschlag zeigt genau diesen Start.
+                // Ob `agents.source` gesetzt ist, sagt seine Herkunft, nicht
+                // sein Wert: Auch ein ausdrückliches `host` steht fest.
+                facts.fixed |= stored || all_set;
+                facts
+            })
+            .collect(),
         servers: servers(ctx, path, choice, overrides, &resolved),
         profiles,
         cloud: crate::cloud::status(&ctx.paths, config),
@@ -334,7 +354,18 @@ fn propose(
     // Vorgaben speichert, schriebe sonst etwa das Backend dieses Aufrufs in
     // die Projektwahl. Die Felder zeigen den Start mit ihnen.
     if !overrides.is_empty() {
+        let shown = source_pair_of(&built, &config.agent.adapter);
         built.choice = propose(ctx, row, path, choice, &[])?.choice;
+        // Der Agent eines Aufrufs (`humanitl go claude`) gilt nur für diesen
+        // Start, seine Quelle aber für das Projekt (#15): Ohne ihr Paar
+        // startete die gespeicherte Wahl ihn aus der wirksamen Quelle, nicht
+        // aus der gezeigten.
+        if let Some(pair) = shown {
+            match built.choice.iter_mut().find(|known| known.key == pair.key) {
+                Some(known) => known.value = pair.value,
+                None => built.choice.push(pair),
+            }
+        }
     }
     Ok(proposal(row, path, built))
 }
@@ -410,7 +441,8 @@ pub fn assumed_plan(config: &Config) -> Result<PlanFacts, Diagnostic> {
 
 /// Je Adapter, woher sein Programm käme: die wirksame Quelle, ob es auf dem
 /// Host liegt, ob das Depot es hält, und der Hinweis auf Cloud-Inferenz.
-/// Blockierend: sieht in Verzeichnisse.
+/// Ob die Quelle fest steht ([`AgentFacts::fixed`]), trägt der Aufrufer aus
+/// der Auflösung nach. Blockierend: sieht in Verzeichnisse.
 #[must_use]
 pub fn agents(paths: &Paths, config: &Config, lock: &SourceLock) -> Vec<AgentFacts> {
     let registry = AdapterRegistry::builtin();
@@ -424,6 +456,13 @@ pub fn agents(paths: &Paths, config: &Config, lock: &SourceLock) -> Vec<AgentFac
         .collect()
 }
 
+/// Das Paar `agents.<adapter>.source` der Wahl der gezeigten Vorgaben, wenn
+/// sie eines trägt.
+fn source_pair_of(built: &Built, adapter: &str) -> Option<v1::ChoiceValue> {
+    let key = format!("agents.{adapter}.source");
+    built.choice.iter().find(|pair| pair.key == key).cloned()
+}
+
 /// Die Tatsachen eines Agenten mit dieser Kennung und diesem Programm.
 pub(crate) fn agent_facts(
     paths: &Paths,
@@ -435,10 +474,16 @@ pub(crate) fn agent_facts(
     let known = humanitl_sandbox::agent::depot::recipe::known(id);
     let mut with_agent = config.clone();
     id.clone_into(&mut with_agent.agent.adapter);
+    let effective = effective_source(id, config, lock);
     AgentFacts {
         id: id.to_owned(),
         display_name: known.map_or(id, |agent| agent.display_name).to_owned(),
-        source: effective_source(id, config, lock).source,
+        source: effective.source,
+        // Jede gesetzte Quelle steht fest, aus welcher Ebene auch immer
+        // (`config.toml`, Umgebung, Wahl, Sperre); vorgewählt wird nur eine
+        // ungesetzte (#15).
+        fixed: effective.origin != SourceOrigin::Default,
+        locked_by: effective.locked.map(|locked| locked.by),
         host: host_program(paths.env(), config, program),
         depot: depot_state(paths, id, known),
         cloud: crate::cloud::status(paths, &with_agent),

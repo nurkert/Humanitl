@@ -40,8 +40,9 @@
 use std::os::unix::fs::MetadataExt as _;
 use std::path::{Path, PathBuf};
 
+use humanitl_config::agents::SourceLock;
 use humanitl_config::{
-    Paths, PolicyLocks, ProfileSelection, ProjectChoice, Resolved, check_choice,
+    Paths, PolicyLocks, ProfileSelection, ProjectChoice, Resolved, check_choice, check_source_lock,
 };
 use humanitl_core::block::sanitize_note;
 use humanitl_core::diagnostics::codes::{CONFIG_003, CONFIG_024, IPC_006, SANDBOX_035};
@@ -196,6 +197,7 @@ pub async fn lookup(recorder: &Recorder, project_id: &str) -> Result<ProjectRow,
 pub fn resolve_for(
     paths: &Paths,
     locks: &PolicyLocks,
+    source_lock: &SourceLock,
     row: &ProjectRow,
 ) -> (Result<Resolved, Diagnostic>, Option<Diagnostic>) {
     let without = resolve_at(paths, locks, &row.path, None);
@@ -207,7 +209,7 @@ pub fn resolve_for(
     let with = without
         .as_ref()
         .map_err(Clone::clone)
-        .and_then(|_below| check_for(paths, locks, &row.path, &choice));
+        .and_then(|_below| check_for(paths, locks, source_lock, &row.path, &choice));
     match with {
         Ok(resolved) => (Ok(resolved), None),
         Err(found) => (without, Some(found)),
@@ -219,7 +221,8 @@ pub fn resolve_for(
 /// ihr:
 ///
 /// 1. gegen die Auflösung dieses Ordners ohne Wahl und gegen die Sperren
-///    einer Firmenvorgabe ([`check_choice`]),
+///    einer Firmenvorgabe ([`check_choice`]), auch die Sperre der Quelle
+///    der Agenten ([`check_source_lock`], GitHub #15),
 /// 2. die Auflösung mit der Wahl (Typen, Untergrenze beim Mischen),
 /// 3. das Backend, das danach gälte, gegen die Untergrenze der Isolation:
 ///    Eine Wahl, die ein Backend unter der Untergrenze nennt oder die
@@ -236,11 +239,13 @@ pub fn resolve_for(
 pub fn check_for(
     paths: &Paths,
     locks: &PolicyLocks,
+    source_lock: &SourceLock,
     path: &str,
     choice: &ProjectChoice,
 ) -> Result<Resolved, Diagnostic> {
     let below = resolve_at(paths, locks, path, None)?;
     check_choice(choice, &below.config, locks)?;
+    check_source_lock(choice, source_lock)?;
     let with = resolve_at(paths, locks, path, Some(choice))?;
     let touches_level =
         choice.get("sandbox.backend").is_some() || choice.get("sandbox.min_isolation").is_some();
@@ -352,9 +357,9 @@ async fn save_choice(
             .map(|value| (value.key.trim().to_owned(), value.value)),
     )?;
     let (paths, locks, path) = (ctx.paths.clone(), ctx.locks.clone(), row.path.clone());
-    let checked = choice.clone();
+    let (checked, source_lock) = (choice.clone(), ctx.proposal.source_lock.clone());
     blocking("Projects", move || {
-        check_for(&paths, &locks, &path, &checked).map(|_resolved| ())
+        check_for(&paths, &locks, &source_lock, &path, &checked).map(|_resolved| ())
     })
     .await??;
     let stored = (!choice.is_empty()).then(|| choice.to_json());
@@ -397,13 +402,14 @@ async fn save_folder_choice(
     )?;
     let (paths, locks, path) = (ctx.paths.clone(), ctx.locks.clone(), identity.path_text());
     let (checked, folder) = (choice.clone(), PathBuf::from(asked));
+    let source_lock = ctx.proposal.source_lock.clone();
     blocking("Projects", move || {
         // Derselbe Ordner-Test wie beim Start (`check_work_dir`): Das
         // Heimatverzeichnis selbst, was darüber liegt, die Verzeichnisse von
         // Humanitl und alles außerhalb der Projekte kommen nicht ins
         // Register, auch nicht ohne Start.
         check_project_folder(&paths, &locks, &folder)?;
-        check_for(&paths, &locks, &path, &checked).map(|_resolved| ())
+        check_for(&paths, &locks, &source_lock, &path, &checked).map(|_resolved| ())
     })
     .await??;
     let stored = (!choice.is_empty()).then(|| choice.to_json());
@@ -423,7 +429,8 @@ async fn save_folder_choice(
 
 async fn detail(ctx: Context, row: ProjectRow) -> Result<v1::ProjectsResponse, Diagnostic> {
     blocking("Projects", move || {
-        let (resolved, found) = resolve_for(&ctx.paths, &ctx.locks, &row);
+        let (resolved, found) =
+            resolve_for(&ctx.paths, &ctx.locks, &ctx.proposal.source_lock, &row);
         let chosen = row
             .choice
             .as_deref()

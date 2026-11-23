@@ -96,10 +96,12 @@ impl Inner {
                         let paths = self.paths.clone();
                         let path = identity.path_text();
                         let checked = choice.clone();
+                        let source_lock = self.source_lock.clone();
                         tokio::task::spawn_blocking(move || {
                             crate::projects::check_for(
                                 &paths,
                                 &PolicyLocks::of_policy(&paths),
+                                &source_lock,
                                 &path,
                                 &checked,
                             )

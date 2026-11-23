@@ -137,6 +137,8 @@ fn proposal(
                     .map_or(id, |agent| agent.display_name)
                     .to_owned(),
                 source: humanitl_config::agents::AgentSource::Host,
+                fixed: false,
+                locked_by: None,
                 host: Ok(()),
                 depot: Err(Diagnostic::builder(codes::AGENT_008, Severity::Error)
                     .why("the fake daemon has no agent depot".to_owned())

@@ -340,6 +340,54 @@ named and absolute, a plain program name, a credential file inside the configura
 same identifiers in both places), so a new entry is checked without a new test. What cannot be
 data stays in the agent's adapter (`AgentAdapter::depot_recipe` may override the table).
 
+## Addendum 2026-11-23: The source as part of the project choice (#15)
+
+Point 1 makes the source a setting per agent, and a start never falls back
+to the other source. On the first-start screen (ADR-0024 point 3) that left
+an agent that lies only in the depot with the default `host`, not
+available, and the screen could not change it; the person had to know
+`humanitl agents source`. That contradicts "everything preset, nothing
+required". The source therefore also becomes a key of the project choice:
+
+1. **Allow-list.** `PROJECT_CHOICE_KEYS` carries `agents.<id>.source` for
+   every registered agent (`SOURCE_KEYS`, from the same `known_agents!`
+   line, so a new agent needs no third place). The project choice
+   overrides `agents.<id>.source` and `agents.source` per project; the
+   project profile from the repository stays closed to both
+   (`x-project-scope = denied`). The source picks only where the program
+   comes from; both sources run in the same sandbox, so the choice touches
+   none of the three guarantees.
+2. **Proposal.** `Projects.proposal` (HUM-536) decides, never a client
+   (ADR-0018). The option of every agent carries `agents.<id>.source` in
+   its pairs, and a field `agent_source` after `agent` offers `host` and
+   `depot` for the chosen agent, each with its pairs, its availability and
+   its reason. The preselected source is, in this order: `depot` under a
+   lock; the effective source when it is set anywhere (`agents.<id>.source`
+   or `agents.source` in `config.toml`, the environment, the project choice,
+   the company policy) or when the project already has a stored choice,
+   also one from before this addendum without a source, because that is
+   the source its start takes; only an unset source of a project without a
+   stored choice is preselected by readiness, `host` where the agent is
+   ready there, else the depot where it is ready there. So the default is
+   always the start that the saved choice would make, and nothing the
+   person set is switched silently. The defaults line names it ("Claude
+   Code from the depot"). With `Proposal.cli_overrides` (`humanitl go
+   claude`) the choice to save comes without the session values but keeps
+   the shown agent's `agents.<id>.source`. The contract stays at 1.62: the field and its pairs
+   are values of the existing generic messages, and a client that does not
+   know `agent_source` shows it under its id.
+3. **Start.** A start without a screen and with a stored project choice
+   takes its source. Without a project choice point 1 applies unchanged:
+   the effective source, and never a fallback to the other one. The
+   preselection never reaches a start that nobody saved; the line of
+   `humanitl go --yes` saves the defaults before it starts.
+4. **Lock.** A company lock of the source wins: the field `agent_source` is
+   read only with the policy as its origin (`SettingLock`), `host` is not
+   available and names the policy (`AGENT_010`), no pair carries the
+   source, and a choice that names it is `CONFIG_024` when it is saved and
+   when a start loads it, whatever its value, like any locked key of the
+   choice (HUM-534).
+
 ## Affected issues
 
 `HUM-518` (depot core, configuration, policy lock, RPC, CLI status, source

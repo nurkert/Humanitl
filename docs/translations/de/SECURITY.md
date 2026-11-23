@@ -118,7 +118,8 @@ kann also in der Sandbox tun, was ein gesteuerter Agent dort tun könnte.
 Ohne Opt-in kommt der Agent vom Host: Der Adapter findet sein Programm im `PATH` des Daemons oder in
 den Programmordnern des Nutzers, und der Daemon bindet diese eine native Datei nur lesbar ein
 (HUM-278). Mit `agents.source = "depot"` oder `agents.<id>.source = "depot"` (beide im
-Projekt-Profil gesperrt), und immer, wenn eine Firmenvorgabe die Quelle auf das Depot sperrt, kommt
+Projekt-Profil gesperrt; die Projektwahl darf `agents.<id>.source` je Projekt setzen, nie an einer
+Sperre der Firmenvorgabe vorbei), und immer, wenn eine Firmenvorgabe die Quelle auf das Depot sperrt, kommt
 der Agent stattdessen aus dem **Agent-Depot**: einer Ablage je Agent unter dem Datenordner des
 Daemons (`$XDG_DATA_HOME/humanitl/agents/<id>/`, Ordner `0700`, Dateien `0600` bzw. `0700`, Besitzer
 der Nutzer des Daemons), die der Daemon bei jedem Öffnen prüft (Besitzer, Rechte, kein Symlink nach
@@ -1308,8 +1309,8 @@ des Laufs den Schreibweg ins Projekt weg, mehr nicht.
 
 #### Die Projektwahl (HUM-532)
 
-Was ein Mensch auf dem Erststart-Bildschirm für ein Projekt gewählt hat (Agent, Ordnermodus,
-Backend, Untergrenze der Isolation, Frage-Modus, Modellserver, Sandbox-Profil), ist die
+Was ein Mensch auf dem Erststart-Bildschirm für ein Projekt gewählt hat (Agent und seine Quelle,
+Ordnermodus, Backend, Untergrenze der Isolation, Frage-Modus, Modellserver, Sandbox-Profil), ist die
 **Projektwahl**. Sie ist eine Ebene der Konfiguration auf dem Host: Der Daemon hält sie in seinem
 Projektregister (`projects` in seiner SQLite-Datenbank unter `$XDG_DATA_HOME/humanitl`, `0600`) und
 schreibt sie nur über die RPC `Projects.save_choice` an seinem Socket. Sie wird nie aus dem
@@ -1319,7 +1320,9 @@ Daemons oder zu seinem Socket. Sie liegt über dem Projekt-Profil und unter Umge
 Kommandozeile (Herkunft `project-choice`). Sie trägt nur die Schlüssel einer festen
 Erlaubnisliste, nie `sandbox.work_dir`, `agent.command`, Einhängungen oder Regeln; sie hebt
 `sandbox.min_isolation`, senkt sie nie und lässt kein Backend darunter; und einen Wert, den eine Firmenvorgabe sperrt, kann sie
-nicht wählen. Jeder dieser Fälle ist `CONFIG_024`, beim Speichern und wenn ein Start die Wahl lädt,
+nicht wählen, auch nicht die Quelle eines Agenten, den die Vorgabe auf das Depot sperrt (#15). Die
+Quelle wählt nur, woher das Programm kommt, Host oder Depot; beide laufen in derselben Sandbox, und
+ein Start fällt nie auf die andere Quelle zurück. Jeder dieser Fälle ist `CONFIG_024`, beim Speichern und wenn ein Start die Wahl lädt,
 nie still verworfen. Ein Ordner, der am selben Pfad ersetzt wurde (anderes Gerät und anderer
 Inode), ist ein neues Projekt und startet ohne die alte Wahl. Ein Start ohne Projektordner wird mit
 `SANDBOX_053` abgelehnt; der Daemon nimmt nicht mehr sein eigenes Arbeitsverzeichnis.

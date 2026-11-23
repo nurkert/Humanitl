@@ -76,6 +76,13 @@ set agents.claude.source depot`). `humanitl agents source claude host` schaltet 
 das Depot bis `humanitl agents remove claude`. `agents.source` setzt die Vorgabe für jeden Agenten.
 Keinen dieser Schlüssel kann ein Projekt-Profil setzen.
 
+Für ein einzelnes Projekt hat der Erststart-Bildschirm (`humanitl go` oder „New" im Startfenster der
+App) neben dem Agenten ein Feld „Quelle": Es speichert die Quelle in der Projektwahl, über der
+`config.toml`. Ist keine Quelle gesetzt, wählt es das Depot vor, wenn der Agent nur dort installiert
+ist; eine gesetzte Quelle bleibt, wie sie ist. Ein Start dieses
+Projekts nimmt dann die gespeicherte Quelle und nie die andere. Ohne Projektwahl gilt die
+Einstellung oben.
+
 ### 2. Installieren
 
 ```sh

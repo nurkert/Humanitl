@@ -7062,6 +7062,7 @@ fn projects_proposal_answers_as_json() {
         ids,
         [
             "agent",
+            "agent_source",
             "folder_mode",
             "isolation",
             "ask_mode",

@@ -75,6 +75,7 @@ const FIELD_KEYS: &[Key<'static>] = &[
 pub fn field_label(id: &str) -> &str {
     match id {
         "agent" => "Agent",
+        "agent_source" => "Source",
         "folder_mode" => "Folder",
         "isolation" => "Isolation",
         "ask_mode" => "Questions",
@@ -361,7 +362,15 @@ fn field_rows(
         ));
     }
     body.spans(spans, MARGIN, " ");
+    // Ein Daemon mit dem Feld der Quelle (GitHub #15) zeigt beide Quellen
+    // dort, wählbar; nur ohne es stehen sie als Hinweis unter dem Agenten.
+    let source_field = screen
+        .proposal
+        .fields
+        .iter()
+        .any(|field| field.id == "agent_source");
     if field.id == "agent"
+        && !source_field
         && let Some(option) = chosen(field)
     {
         for (text, warn) in source_notes(option) {

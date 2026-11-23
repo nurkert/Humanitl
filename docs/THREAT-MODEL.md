@@ -1138,7 +1138,9 @@ profile `<project>/.humanitl/profile.toml`. **Defence:** the choice is not in th
 lives in the daemon's SQLite store under its data directory and is written only through
 `Projects.save_choice` on the daemon socket, which the sandbox cannot reach (guarantee 2). Its keys
 are a fixed allow-list (`CONFIG_024` for any other), it never lowers `sandbox.min_isolation`, and a
-company lock wins over it; the same checks run when a start loads it, so a choice that no longer
+company lock wins over it, also a lock of an agent's source to the depot, which keeps
+`agents.<id>.source` out of the choice (#15); the source only picks host or depot, both in the same
+sandbox, and a start never falls back to the other source; the same checks run when a start loads it, so a choice that no longer
 holds stops the start instead of vanishing. The register recognises a folder by its canonical path
 together with device and inode: another folder at the same path is a new project without the old
 choice. A start without a project folder is refused (`SANDBOX_053`) instead of mounting the
@@ -1368,6 +1370,7 @@ These attackers are not defended against, and Humanitl does not claim to:
 | 2026-11-21 | K-15: the verdict on the three guarantees and the stop after a red or missing result no longer depend on the starting client. Before, a client that closed its event stream after `Status(starting)` ended the check before the verdict, and a sandbox with a red result kept running; the folder check and the register entry of a green start were skipped the same way. The daemon now stops the sandbox before it sends the results, records the finding in the session summary (`stopped_by`) and stops it a second time if the stopping thread fails | HUM-585 |
 | 2026-11-22 | K-02: a third way to enter the provider access key and the proxy credentials: the settings view `humanitl settings`, typed without echo, sent once through `LlmKey` or `Egress(SetAuth)`, never through `SetConfig`, never shown; the input buffer is overwritten on every delete, cancel, growth and drop, a pasted text once taken over, and the secret stays under `Zeroizing` until the request is built; not overwritten: the request field handed to tonic, the prost/tonic encode buffers and crossterm's read buffers | GitHub #7 |
 | 2026-11-23 | K-39: closing the terminal of `humanitl go` detaches it (`terminal.on_close`, default `detach`, closed to project profiles); held requests wait for a person or their deadline, which blocks; the daemon counts the clients of the agent's terminal and `humanitl sessions` and the start window show a session without one; `humanitl run` and `SIGTERM` still stop | GitHub #13 |
+| 2026-11-23 | K-37: the project choice also carries the source of the agent (`agents.<id>.source`, host or depot); a company lock of the source keeps it out of the choice (`CONFIG_024`), and a start never falls back to the other source | #15 |
 
 Every security-relevant change to the shim, the mount allowlist, the filter or the passthrough gets
 a line here. Vulnerabilities are reported as described in
