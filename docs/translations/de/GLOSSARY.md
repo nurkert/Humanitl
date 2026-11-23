@@ -24,7 +24,7 @@ je Sprache, dasselbe in der Kommandozeile, den Terminal-Ansichten, der App, der
 Dokumentation und den Diagnosen. Die Abschnitte „Begriffe",
 „Isolationsstufen" und „Einstellungsebenen" legen diese Wörter fest. Wo die
 heutigen Texte noch ein älteres Wort benutzen, nennt es die
-[Ersetzungstabelle](#ersetzungstabelle); sie ist die Arbeitsliste der
+[Ersetzungstabelle](#replacement-table); sie ist die Arbeitsliste der
 Begriffsbereinigung, die als eigenes Issue folgt. Bis diese Bereinigung landet,
 beschreibt die Tabelle „UI terms" die ARB-Dateien, wie sie sind, und die
 Bereinigung ändert dort eine Zeile zusammen mit ihrem Schlüssel.
