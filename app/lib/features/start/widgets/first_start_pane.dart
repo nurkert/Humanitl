@@ -217,24 +217,36 @@ class _Fields extends StatelessWidget {
   final bool enabled;
 
   @override
-  Widget build(BuildContext context) => StartCard(
-    child: Column(
-      crossAxisAlignment: CrossAxisAlignment.stretch,
-      children: <Widget>[
-        for (final (int index, ProposalField field)
-            in proposal.fields.indexed) ...<Widget>[
-          if (index > 0) const HHairline(),
-          _FieldRow(field: field, enabled: enabled),
+  Widget build(BuildContext context) {
+    // A daemon with the source field (#15) offers both sources there,
+    // choosable; only without it do they stand as notes under the agent.
+    final bool sourceField = proposal.fields.any(
+      (ProposalField field) => field.id == 'agent_source',
+    );
+    return StartCard(
+      child: Column(
+        crossAxisAlignment: CrossAxisAlignment.stretch,
+        children: <Widget>[
+          for (final (int index, ProposalField field)
+              in proposal.fields.indexed) ...<Widget>[
+            if (index > 0) const HHairline(),
+            _FieldRow(
+              field: field,
+              enabled: enabled,
+              sourceNotes: !sourceField,
+            ),
+          ],
         ],
-      ],
-    ),
-  );
+      ),
+    );
+  }
 }
 
 /// The label of a field in the person's language; an id this build does
 /// not know keeps the daemon's id.
 String fieldLabel(AppLocalizations l10n, String id) => switch (id) {
   'agent' => l10n.firstStartFieldAgent,
+  'agent_source' => l10n.firstStartFieldSource,
   'folder_mode' => l10n.firstStartFieldFolder,
   'isolation' => l10n.firstStartFieldIsolation,
   'ask_mode' => l10n.firstStartFieldAsk,
@@ -258,10 +270,18 @@ String sourceName(AppLocalizations l10n, String source) => switch (source) {
 
 /// One field: label, options, and the lines under them.
 class _FieldRow extends ConsumerWidget {
-  const _FieldRow({required this.field, required this.enabled});
+  const _FieldRow({
+    required this.field,
+    required this.enabled,
+    required this.sourceNotes,
+  });
 
   final ProposalField field;
   final bool enabled;
+
+  /// Whether the sources of the chosen agent stand as notes under the
+  /// agent: only for a daemon without the source field.
+  final bool sourceNotes;
 
   @override
   Widget build(BuildContext context, WidgetRef ref) {
@@ -277,7 +297,7 @@ class _FieldRow extends ConsumerWidget {
           color: tokens.colors.fg2,
           text: l10n.firstStartLockedBy(lock.lockedBy),
         ),
-      if (field.id == 'agent' && chosen != null)
+      if (field.id == 'agent' && sourceNotes && chosen != null)
         ..._sourceNotes(tokens, l10n, chosen),
       if (lock == null)
         for (final ProposalOption option in field.options)
@@ -365,9 +385,9 @@ class _FieldRow extends ConsumerWidget {
     );
   }
 
-  /// Both sources of the chosen agent with their state, read-only until
-  /// the source becomes part of the choice (HUM-554): the one a start uses
-  /// first, then the other; a source without the program names why.
+  /// Both sources of the chosen agent with their state, for a daemon
+  /// without the source field (before #15): the one a start uses first,
+  /// then the other; a source without the program names why.
   static List<Widget> _sourceNotes(
     HTokens tokens,
     AppLocalizations l10n,

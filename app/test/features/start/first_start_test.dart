@@ -335,9 +335,11 @@ void main() {
     expect(client.startProjectIds, isEmpty);
   });
 
-  testWidgets('both sources of the chosen agent stand with their state; the '
-      'one without the program says why', (WidgetTester tester) async {
-    final FakeDaemonClient client = _client();
+  testWidgets('a daemon without the source field: both sources of the chosen '
+      'agent stand with their state; the one without the program says why', (
+    WidgetTester tester,
+  ) async {
+    final FakeDaemonClient client = _client()..proposalSourceField = false;
     await _pump(tester, client);
     await _openNew(tester);
     await _customize(tester);
@@ -353,6 +355,74 @@ void main() {
     expect(note('host'), 'Program from the host');
     expect(note('depot'), startsWith('Agent depot: '));
     expect(note('depot'), contains('not installed in the agent depot'));
+  });
+
+  testWidgets('the source is a field of its own: host and agent depot '
+      'choosable as the daemon says, the one without the program with its '
+      'reason, and no second note under the agent (#15)', (
+    WidgetTester tester,
+  ) async {
+    // Mutationsbeweis: Stehen die Hinweise der Quellen wieder immer unter dem
+    // Agenten (`sourceNotes` ignoriert), findet der Test
+    // `first-start-source-host` und wird rot.
+    final FakeDaemonClient client = _client();
+    await _pump(tester, client);
+    await _openNew(tester);
+    await _customize(tester);
+
+    final Finder row = find.byKey(const Key('first-start-field-agent_source'));
+    expect(row, findsOneWidget);
+    expect(
+      find.descendant(of: row, matching: find.text('Source')),
+      findsOneWidget,
+    );
+    expect(_segment(tester, 'agent_source', 'host').enabled, isTrue);
+    expect(_segment(tester, 'agent_source', 'agent depot').enabled, isFalse);
+    final Text reason = tester.widget<Text>(
+      find.descendant(
+        of: find.byKey(const Key('first-start-reason-agent_source-depot')),
+        matching: find.byType(Text),
+      ),
+    );
+    expect(reason.data, contains('not installed in the agent depot'));
+    expect(find.byKey(const Key('first-start-source-host')), findsNothing);
+    expect(find.byKey(const Key('first-start-source-depot')), findsNothing);
+    // Die Zeile der Vorgaben nennt die Quelle beim Agenten, nicht doppelt.
+    expect(
+      tester.widget<Text>(find.byKey(const Key('first-start-defaults'))).data,
+      isNot(contains('agent depot')),
+    );
+  });
+
+  testWidgets('a company lock of the source stands read-only with the policy '
+      'named (#15)', (WidgetTester tester) async {
+    final FakeDaemonClient client = _client()
+      ..proposalLocks = <String, String>{
+        'agent_source': '/etc/humanitl/policy.toml',
+      };
+    await _pump(tester, client);
+    await _openNew(tester);
+    await _customize(tester);
+
+    expect(
+      find.byKey(const Key('first-start-options-agent_source')),
+      findsNothing,
+    );
+    expect(
+      tester
+          .widget<Text>(find.byKey(const Key('first-start-value-agent_source')))
+          .data,
+      'agent depot',
+    );
+    final Text locked = tester.widget<Text>(
+      find.descendant(
+        of: find.byKey(const Key('first-start-locked-agent_source')),
+        matching: find.byType(Text),
+      ),
+    );
+    expect(locked.data, contains('/etc/humanitl/policy.toml'));
+    // Der Agent daneben bleibt wählbar.
+    expect(_segment(tester, 'agent', 'Codex').enabled, isTrue);
   });
 
   testWidgets('a failed proposal keeps the choice before it', (

@@ -2087,5 +2087,6 @@
   "startAppRequestNoticePlain": "Wechsle zum Fenster von Humanitl.",
   "diagTERM003Title": "Terminal für eine Vollbildansicht ungeeignet",
   "diagTERM003Why": "Das Terminal ist kleiner, als die Ansicht braucht, oder es kann den Cursor nicht setzen. Am Terminal wurde nichts verändert.",
-  "startNoTerminal": "Kein Terminal angehängt"
+  "startNoTerminal": "Kein Terminal angehängt",
+  "firstStartFieldSource": "Quelle"
 }

@@ -4784,5 +4784,7 @@
   "diagTERM003Why": "The terminal is smaller than the view needs, or it cannot place the cursor. Nothing was changed on the terminal.",
   "@diagTERM003Why": {"description": "Generic cause of TERM_003. Stands in the cause slot only when the diagnostic carries no sentence of the daemon's own (HUM-052)."},
   "startNoTerminal": "No terminal attached",
-  "@startNoTerminal": {"description": "Start window (#13): badge on a running session that no terminal hangs on, for example after the terminal of humanitl go closed; attach brings it back. The count comes from the daemon."}
+  "@startNoTerminal": {"description": "Start window (#13): badge on a running session that no terminal hangs on, for example after the terminal of humanitl go closed; attach brings it back. The count comes from the daemon."},
+  "firstStartFieldSource": "Source",
+  "@firstStartFieldSource": {"description": "First-start screen (#15): label of the field that chooses where the program of the chosen agent comes from, the host or the agent depot."}
 }

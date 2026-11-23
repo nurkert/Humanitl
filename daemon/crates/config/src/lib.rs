@@ -117,7 +117,8 @@ pub use crate::profile::{
     builtin_text,
 };
 pub use crate::project_choice::{
-    LockedValue, PROJECT_CHOICE_KEYS, PolicyLocks, ProjectChoice, check_choice, is_choice_key,
+    LockedValue, PROJECT_CHOICE_KEYS, PolicyLocks, ProjectChoice, check_choice, check_source_lock,
+    is_choice_key,
 };
 pub use crate::resolve::{
     ProfileSelection, available_profiles, discover, discover_with, profile_exists, profile_layers,

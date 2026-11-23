@@ -91,6 +91,12 @@ macro_rules! known_agents {
         /// Anzeige; das Schema kennt jeden, auch ohne Adapter oder Rezept.
         pub const KNOWN_AGENTS: &[&str] = &[$(stringify!($id)),+];
 
+        /// `agents.<id>.source` je bekanntem Agenten, in derselben
+        /// Reihenfolge: die Schlüssel, die eine Projektwahl über die Quelle
+        /// trägt (GitHub #15, ADR-0023 Nachtrag).
+        pub const SOURCE_KEYS: [&str; [$(stringify!($id)),+].len()] =
+            [$(concat!("agents.", stringify!($id), ".source")),+];
+
         /// Der Abschnitt `agents`: die Quelle je Agent (ADR-0023).
         #[derive(Debug, Clone, PartialEq, Eq, Default, Serialize, Deserialize, JsonSchema)]
         #[serde(default, deny_unknown_fields)]
@@ -133,7 +139,7 @@ known_agents! {
 #[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize, JsonSchema)]
 #[serde(default, deny_unknown_fields)]
 pub struct AgentSourceSettings {
-    /// Woher dieser Agent kommt, `host` oder `depot`; ungesetzt gilt `agents.source`. Zurück auf `host` behält das Depot, bis `humanitl agents remove` es entfernt. Im Projekt-Profil gesperrt.
+    /// Woher dieser Agent kommt, `host` oder `depot`; ungesetzt gilt `agents.source`. Zurück auf `host` behält das Depot, bis `humanitl agents remove` es entfernt. Im Projekt-Profil gesperrt; die Projektwahl des Erststart-Bildschirms darf sie je Projekt setzen, eine Sperre der Firmenvorgabe nicht.
     #[schemars(
         schema_with = "optional_source_schema",
         extend("x-tier" = "advanced", "x-project-scope" = "denied")
@@ -179,6 +185,13 @@ pub struct Locked {
     pub by: String,
 }
 
+impl Locked {
+    /// Die Quelle, auf die jede Sperre festlegt. [`SourceLock::lock`] baut
+    /// nur Sperren auf `depot` (ADR-0023 Punkt 1); Texte über eine Sperre
+    /// nehmen den Wert von hier, statt ihn zu wiederholen.
+    pub const SOURCE: AgentSource = AgentSource::Depot;
+}
+
 /// Die Sperren einer Firmenvorgabe. Jede nennt `depot`; eine auf `host` lässt
 /// sich nicht bauen ([`SourceLock::lock`]).
 #[derive(Debug, Clone, Default, PartialEq, Eq)]
@@ -218,7 +231,7 @@ impl SourceLock {
         by: impl Into<String>,
     ) -> Result<Self, Diagnostic> {
         let by = by.into();
-        if source != AgentSource::Depot {
+        if source != Locked::SOURCE {
             return Err(Diagnostic::builder(AGENT_010, Severity::Error)
                 .why(format!(
                     "the company policy {by} fixes an agent source to {}; a policy may only fix \

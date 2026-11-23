@@ -3753,7 +3753,9 @@ Projektwahl (`humanitl_config::ProjectChoice`, Herkunft `project-choice`,
 `Projects.save_choice` geschrieben. Ihre Grenze ist die feste Erlaubnisliste
 `humanitl_config::PROJECT_CHOICE_KEYS` (`agent.adapter`, `sandbox.mode`,
 `sandbox.work_mode`, `sandbox.backend`, `sandbox.min_isolation`,
-`hold.ask_mode`, `llm.server`, `sandbox.profile`), nicht `x-project-scope`.
+`hold.ask_mode`, `llm.server`, `sandbox.profile`, seit #15 dazu
+`agents.<id>.source` je bekanntem Agenten, `humanitl_config::agents::SOURCE_KEYS`),
+nicht `x-project-scope`.
 Ein Schlüssel außerhalb der Liste, ein Wert unter der Untergrenze der Ebenen
 darunter und ein Wert, den eine Firmenvorgabe sperrt (`PolicyLocks`), sind
 `CONFIG_024`, beim Speichern und beim Laden. Die Herkunft heißt auf der
@@ -3959,9 +3961,9 @@ nichts. Die Wegwerf-Schicht fragt das Backend an einem Plan mit schreibbarem
 Ordner (`SANDBOX_030`). Der Agent: die wirksame Quelle (`agents.<id>.source`,
 Sperre) bestimmt Vorgabe und Verfügbarkeit, beide Quellen stehen mit Grund da
 (Host: `AGENT_001`, Depot: `AGENT_015` ohne Rezept, `AGENT_008` nicht
-installiert, `AGENT_009` als Hinweis). Die Quelle ist keine Projektwahl;
-gewechselt wird sie mit `humanitl agents source`, ein Start nimmt nie die
-andere. `upstream` braucht `egress.proxy`.
+installiert, `AGENT_009` als Hinweis). Seit #15 ist die Quelle Teil der
+Projektwahl (Abschnitt 4.62); ein Start nimmt nie die andere. `upstream`
+braucht `egress.proxy`.
 
 **Cloud-Inferenz** je Agent (Konfiguration mit diesem Adapter) und je Server
 (neu aufgelöst mit `llm.server` in der Wahl) und für die Vorgabe, über
@@ -4252,3 +4254,57 @@ wird im `TerminalHub` von `attach` bis zum Fallenlassen der `Attachment`
 0 nichts. Die Oberfläche (Spiegel-Minor 62) zeigt unter „Running" ein
 Abzeichen „No terminal attached"; Schließen von Fenster und Terminalbereich
 schickt dort weiter nie `Sandbox(Stop)`.
+
+### 4.62 Aus der Umsetzung der Quelle in der Projektwahl (#15, vormals HUM-554, 2026-11-23)
+
+**Die Quelle ist ein Schlüssel der Projektwahl.** `PROJECT_CHOICE_KEYS` trägt
+nach den acht Schlüsseln des Bildschirms `agents.<id>.source` je bekanntem
+Agenten (`humanitl_config::agents::SOURCE_KEYS`, aus derselben Zeile von
+`known_agents!`). Das Projekt-Profil bleibt für beide Quellen-Schlüssel
+gesperrt. Eine Sperre der Quelle (`SourceLock`) hält den Schlüssel aus der
+Wahl, mit jedem Wert (`humanitl_config::check_source_lock`, `CONFIG_024`),
+beim Speichern und beim Laden für den Start; `projects::check_for` und
+`resolve_for` nehmen die Sperre dafür mit.
+
+**Feld `agent_source`** direkt nach `agent`, Schlüssel
+`agents.<adapter>.source` des gewählten Agenten, Optionen `host` und `depot`
+mit Paaren, Verfügbarkeit und Grund. Das Feld `agent` schreibt zusätzlich zu
+`agent.adapter` jeden Quellen-Schlüssel (`ProposalField.keys`), und jede
+Option eines Agenten trägt `agents.<id>.source` mit der vorgewählten Quelle in
+ihren Paaren: Wer einen anderen Agenten wählt, nimmt die Quelle des bisherigen
+aus der Wahl. `StartProposal.choice` nennt jeden Schlüssel einmal. Die Zeile
+der Vorgaben nennt die Quelle beim Agenten, nicht als eigenes Feld.
+
+**Vorwahl** (`proposal::preselected`): unter einer Sperre `depot`; sonst
+steht eine Quelle fest (`AgentFacts::fixed`), wenn sie in irgendeiner Ebene
+gesetzt ist (`agents.<id>.source` oder `agents.source` aus `config.toml`,
+Umgebung, Wahl, Firmenvorgabe; für `agents.source` entscheidet die Herkunft
+`Resolved::origin`, nicht der Wert, ein ausdrückliches `host` steht also
+fest) oder das
+Projekt schon eine gespeicherte Wahl hat (auch eine vor #15 ohne Quelle);
+dann gilt die wirksame Quelle, wie der Start sie nähme. Nur eine ungesetzte
+Quelle eines Projekts ohne gespeicherte Wahl wird umgestellt: `host`, wo der
+Agent dort bereitliegt, sonst das Depot, wo er dort bereitliegt. Die
+Vorgabe ist also immer der Start, den die gespeicherte Wahl ergäbe.
+**Bedeutungswechsel ohne neue Minor:** `AgentSourceOption.selected` und
+`ProposalOption.source` nennen seit #15 die für den Bildschirm vorgewählte
+Quelle, nicht mehr die wirksame ohne Wahl.
+
+**Agent eines Starts.** Mit `Proposal.cli_overrides` (`humanitl go claude`)
+zeigen Felder und Zeile den Agenten des Starts; die Wahl zum Speichern kommt
+ohne die Werte der Sitzung, behält aber das Paar `agents.<id>.source` des
+gezeigten Agenten, damit der nächste `go claude` aus der gezeigten Quelle
+startet.
+
+**Befund mit Ausweg.** `CONFIG_024` einer gesperrten Quelle trägt als `fix`
+`humanitl settings`; der Text nennt den Wert der Sperre aus
+`agents::Locked::SOURCE`.
+
+**Sperre.** Unter `SourceLock` ist `agent_source` nur lesbar
+(`SettingLock`, Herkunft `policy`), `host` nicht wählbar mit `AGENT_010`, und
+kein Paar trägt den Schlüssel.
+
+**Kein neuer Vertrag.** Feld und Paare sind Werte der vorhandenen Nachrichten;
+der Vertrag bleibt 1.62. CLI-Bildschirm und App zeigen das Feld wie jedes
+andere (Name „Source"/„Quelle"); die Hinweise zu den Quellen unter dem
+Agenten stehen nur noch bei einem Daemon ohne das Feld.

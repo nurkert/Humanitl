@@ -22,6 +22,8 @@ use crate::{convert, v1};
 
 /// Das Feld des Agenten.
 pub const AGENT: &str = "agent";
+/// Das Feld der Quelle des gewählten Agenten (GitHub #15).
+pub const AGENT_SOURCE: &str = "agent_source";
 /// Das Feld des Ordnermodus.
 pub const FOLDER_MODE: &str = "folder_mode";
 /// Das Feld der Isolation.
@@ -73,6 +75,16 @@ pub struct AgentFacts {
     pub display_name: String,
     /// Die wirksame Quelle (`agents.<id>.source`, Sperre).
     pub source: AgentSource,
+    /// Ob die Quelle feststeht und der Vorschlag sie nicht übergeht (GitHub
+    /// #15): gesetzt in irgendeiner Ebene (`agents.<id>.source` oder
+    /// `agents.source` aus `config.toml`, Umgebung, Projektwahl, Sperre),
+    /// oder das Projekt hat eine gespeicherte Wahl, mit der ein Start die
+    /// wirksame Quelle nähme. Nur sonst wählt er die Quelle vor, in der der
+    /// Agent bereitliegt.
+    pub fixed: bool,
+    /// Die Firmenvorgabe, die die Quelle sperrt (ADR-0023 Punkt 1), wenn
+    /// eine es tut; dann ist `source` immer `depot`.
+    pub locked_by: Option<String>,
     /// Auf dem Host: gefunden, oder warum nicht.
     pub host: Result<(), Diagnostic>,
     /// Im Depot: bereit mit Hinweisen (etwa nicht angemeldet), oder warum
@@ -146,6 +158,7 @@ pub struct Built {
 pub fn build(inputs: &Inputs<'_>) -> Built {
     let fields = vec![
         agent_field(inputs),
+        source_field(inputs),
         folder_field(inputs),
         isolation_field(inputs),
         ask_field(inputs),
@@ -183,7 +196,10 @@ pub fn build(inputs: &Inputs<'_>) -> Built {
             }
         }
     }
-    let choice = fields
+    // Agent und Quelle tragen beide `agents.<id>.source`, mit demselben
+    // Wert; die Wahl nennt jeden Schlüssel einmal.
+    let mut choice: Vec<v1::ChoiceValue> = Vec::new();
+    for pair in fields
         .iter()
         .filter_map(|field| {
             field
@@ -191,8 +207,12 @@ pub fn build(inputs: &Inputs<'_>) -> Built {
                 .iter()
                 .find(|option| option.value == field.value)
         })
-        .flat_map(|option| option.choice.iter().cloned())
-        .collect();
+        .flat_map(|option| option.choice.iter())
+    {
+        if !choice.iter().any(|known| known.key == pair.key) {
+            choice.push(pair.clone());
+        }
+    }
     Built {
         defaults_line: defaults_line(&fields),
         fields,
@@ -205,8 +225,10 @@ pub fn build(inputs: &Inputs<'_>) -> Built {
 /// `Defaults: OpenCode from the host · disposable folder · …`: die Labels
 /// der Vorgaben, ein Feld ohne Vorgabe mit seinem Hinweis.
 fn defaults_line(fields: &[v1::ProposalField]) -> String {
+    // Die Quelle steht schon beim Agenten („… from the depot").
     let parts: Vec<String> = fields
         .iter()
+        .filter(|field| field.id != AGENT_SOURCE)
         .map(|field| {
             let chosen = field
                 .options
@@ -305,57 +327,195 @@ fn field(
     }
 }
 
+/// Der Schlüssel der Quelle eines Agenten in der Projektwahl.
+fn source_key(agent: &str) -> String {
+    format!("agents.{agent}.source")
+}
+
+/// Was eine Quelle eines Agenten hat: bereit mit Hinweisen, oder warum
+/// nicht.
+fn source_state(agent: &AgentFacts, source: AgentSource) -> Result<Vec<Diagnostic>, Diagnostic> {
+    match source {
+        AgentSource::Host => agent.host.clone().map(|()| Vec::new()),
+        AgentSource::Depot => agent.depot.clone(),
+    }
+}
+
+/// Die Quelle, die der Vorschlag für einen Agenten vorwählt (GitHub #15,
+/// Nachtrag zu ADR-0023):
+///
+/// 1. die Sperre der Firmenvorgabe, immer `depot`;
+/// 2. eine feststehende Quelle, so wie der Start sie nähme
+///    ([`AgentFacts::fixed`]): gesetzt in irgendeiner Ebene, oder das
+///    Projekt hat schon eine gespeicherte Wahl;
+/// 3. sonst, für eine ungesetzte Quelle, die Vorgabe `host`, wenn der Agent
+///    dort bereitliegt, und wenn nicht, das Depot, wenn er dort bereitliegt;
+///    liegt er nirgends, bleibt `host`.
+///
+/// Gespeichert gilt die Wahl für den Start; ohne Projektwahl gilt ADR-0023
+/// unverändert, ohne Rückfall auf die andere Quelle.
+#[must_use]
+pub fn preselected(agent: &AgentFacts) -> AgentSource {
+    if agent.locked_by.is_some() {
+        return humanitl_config::agents::Locked::SOURCE;
+    }
+    if agent.fixed || source_state(agent, agent.source).is_ok() {
+        return agent.source;
+    }
+    let other = match agent.source {
+        AgentSource::Host => AgentSource::Depot,
+        AgentSource::Depot => AgentSource::Host,
+    };
+    if source_state(agent, other).is_ok() {
+        other
+    } else {
+        agent.source
+    }
+}
+
+/// Das Paar einer Quelle eines Agenten, außer die Sperre der Quelle hält
+/// den Schlüssel aus der Wahl. Einen gesperrten Schlüssel der Firmenvorgabe
+/// nimmt [`option`] heraus, wie bei jedem Feld.
+fn source_pair(agent: &AgentFacts, source: AgentSource) -> Option<(String, &'static str)> {
+    agent
+        .locked_by
+        .is_none()
+        .then(|| (source_key(&agent.id), source.as_str()))
+}
+
+/// Der Satz einer Sperre der Quelle: Die Firmenvorgabe legt die Quelle des
+/// Agenten auf das Depot fest.
+fn source_locked(agent: &AgentFacts, by: &str) -> Diagnostic {
+    humanitl_config::agents::locked_refusal(
+        &agent.id,
+        &humanitl_config::agents::Locked { by: by.to_owned() },
+        "the source host",
+    )
+}
+
 fn agent_field(inputs: &Inputs<'_>) -> v1::ProposalField {
     let options = inputs
         .agents
         .iter()
         .map(|agent| {
-            let host = agent.host.clone().map(|()| Vec::new());
-            let (host_ok, host_reasons) = split(&host);
-            let (depot_ok, depot_reasons) = split(&agent.depot);
+            let chosen = preselected(agent);
+            let (host_ok, mut host_reasons) = split(&source_state(agent, AgentSource::Host));
+            let (depot_ok, depot_reasons) = split(&source_state(agent, AgentSource::Depot));
+            if let Some(by) = &agent.locked_by {
+                host_reasons.push(convert::diagnostic_to_proto(&source_locked(agent, by)));
+            }
             let sources = vec![
                 v1::AgentSourceOption {
                     source: AgentSource::Host.as_str().to_owned(),
-                    available: host_ok,
+                    available: host_ok && agent.locked_by.is_none(),
                     reasons: host_reasons,
-                    selected: agent.source == AgentSource::Host,
+                    selected: chosen == AgentSource::Host,
                 },
                 v1::AgentSourceOption {
                     source: AgentSource::Depot.as_str().to_owned(),
                     available: depot_ok,
                     reasons: depot_reasons,
-                    selected: agent.source == AgentSource::Depot,
+                    selected: chosen == AgentSource::Depot,
                 },
             ];
-            // Die Gründe der wirksamen Quelle: Ein Start nimmt nie die andere
-            // (ADR-0023, `AGENT_008`).
-            let effective = match agent.source {
-                AgentSource::Host => host,
-                AgentSource::Depot => agent.depot.clone(),
-            };
-            let ready = effective.is_ok();
-            let reasons = effective.unwrap_or_else(|missing| vec![missing]);
+            // Die Gründe der vorgewählten Quelle: Ein Start nimmt nie die
+            // andere (ADR-0023, `AGENT_008`).
+            let state = source_state(agent, chosen);
+            let ready = state.is_ok();
+            let reasons = state.unwrap_or_else(|missing| vec![missing]);
+            // Die Paare tragen die Quelle (GitHub #15): Wer diesen Agenten
+            // wählt und speichert, startet ihn aus der vorgewählten Quelle.
+            let source = source_pair(agent, chosen);
+            let mut pairs: Vec<(&str, &str)> = vec![("agent.adapter", agent.id.as_str())];
+            if let Some((key, value)) = &source {
+                pairs.push((key.as_str(), value));
+            }
             let mut built = option(
                 inputs.locks,
                 &agent.id,
                 &agent.display_name,
-                &[("agent.adapter", agent.id.as_str())],
+                &pairs,
                 reasons,
             );
             built.available &= ready;
-            agent.source.as_str().clone_into(&mut built.source);
+            chosen.as_str().clone_into(&mut built.source);
             built.sources = sources;
             built.cloud_inference.clone_from(&agent.cloud);
             built
         })
         .collect();
-    field(
+    let mut built = field(
         inputs,
         AGENT,
         &["agent.adapter"],
         &inputs.resolved.config.agent.adapter,
         options,
-    )
+    );
+    // Wer einen anderen Agenten wählt, nimmt die Quelle des bisherigen aus
+    // der Wahl: Das Feld schreibt auch jeden Schlüssel einer Quelle. Die
+    // Sperre des Felds bleibt die von `agent.adapter`.
+    built
+        .keys
+        .extend(inputs.agents.iter().map(|agent| source_key(&agent.id)));
+    built
+}
+
+/// Die Quelle des gewählten Agenten als eigenes Feld (GitHub #15): `host`
+/// und `depot`, jede mit ihren Paaren, ihrer Verfügbarkeit und ihrem Grund.
+/// Eine Sperre der Quelle macht das Feld nur lesbar, mit der Vorgabe als
+/// Herkunft; `host` ist dann nicht wählbar und sagt warum.
+fn source_field(inputs: &Inputs<'_>) -> v1::ProposalField {
+    let adapter = &inputs.resolved.config.agent.adapter;
+    let key = source_key(adapter);
+    let Some(agent) = inputs.agents.iter().find(|agent| &agent.id == adapter) else {
+        // Ein Agent ohne Tatsachen (kein Adapter dieses Namens): keine
+        // Option; der Start scheitert ohnehin am Adapter.
+        return field(inputs, AGENT_SOURCE, &[key.as_str()], "", Vec::new());
+    };
+    let chosen = preselected(agent);
+    let options = [
+        (AgentSource::Host, "host"),
+        (AgentSource::Depot, "agent depot"),
+    ]
+    .into_iter()
+    .map(|(source, label)| {
+        let state = source_state(agent, source);
+        let ready = state.is_ok();
+        let mut reasons = state.unwrap_or_else(|missing| vec![missing]);
+        if source == AgentSource::Host
+            && let Some(by) = &agent.locked_by
+        {
+            reasons.push(source_locked(agent, by));
+        }
+        let pairs: Vec<(String, &str)> = source_pair(agent, source).into_iter().collect();
+        let pairs: Vec<(&str, &str)> = pairs
+            .iter()
+            .map(|(key, value)| (key.as_str(), *value))
+            .collect();
+        let mut built = option(inputs.locks, source.as_str(), label, &pairs, reasons);
+        built.available &= ready;
+        built
+    })
+    .collect();
+    let mut built = field(
+        inputs,
+        AGENT_SOURCE,
+        &[key.as_str()],
+        chosen.as_str(),
+        options,
+    );
+    if let Some(by) = &agent.locked_by {
+        built.lock = Some(v1::SettingLock {
+            locked_by: sanitize_note(by),
+            read_only: true,
+            reason: sanitize_note(&format!(
+                "the company policy fixes {key} to {}",
+                humanitl_config::agents::Locked::SOURCE.as_str()
+            )),
+        });
+        "policy".clone_into(&mut built.origin);
+    }
+    built
 }
 
 /// Ob eine Quelle bereit ist, und ihre Sätze: Fehlt das Programm, der

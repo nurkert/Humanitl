@@ -636,3 +636,117 @@ fn a_failed_refresh_holds_start_until_r_asks_again() {
         Exit::Start(proposal("claude", "disposable").choice)
     );
 }
+
+/// Der Vorschlag eines Daemons mit dem Feld der Quelle (GitHub #15): Claude
+/// Code liegt auf dem Host und im Depot, vorgewählt ist das Depot.
+fn with_source_field() -> v1::StartProposal {
+    let mut claude = option(
+        "claude",
+        "Claude Code",
+        &[
+            ("agent.adapter", "claude"),
+            ("agents.claude.source", "depot"),
+        ],
+    );
+    claude.source = "depot".to_owned();
+    claude.sources = vec![
+        v1::AgentSourceOption {
+            source: "host".to_owned(),
+            available: true,
+            ..v1::AgentSourceOption::default()
+        },
+        v1::AgentSourceOption {
+            source: "depot".to_owned(),
+            available: true,
+            selected: true,
+            ..v1::AgentSourceOption::default()
+        },
+    ];
+    let mut shown = proposal("claude", "disposable");
+    shown.fields[0] = field(
+        "agent",
+        &["agent.adapter", "agents.claude.source"],
+        "claude",
+        vec![claude],
+    );
+    shown.fields.insert(
+        1,
+        field(
+            "agent_source",
+            &["agents.claude.source"],
+            "depot",
+            vec![
+                option("host", "host", &[("agents.claude.source", "host")]),
+                option("depot", "agent depot", &[("agents.claude.source", "depot")]),
+            ],
+        ),
+    );
+    shown
+}
+
+/// Das Feld der Quelle wählt die Quelle wie jedes Feld: `Enter` auf `host`
+/// fragt mit genau dem Paar der Quelle neu. Unter dem Agenten stehen die
+/// Quellen dann nicht noch einmal als Hinweis.
+///
+/// Mutation proof: dropping `!source_field` in `field_rows` puts "Program
+/// from the agent depot" under the agent row again, and the test is red.
+#[test]
+fn the_source_field_chooses_the_source_and_replaces_the_notes() {
+    let (link, mut far) = link::pair();
+    let mut screen = FirstStartScreen::new(link, PATH.to_owned(), with_source_field(), Vec::new());
+    press(&mut screen, KeyCode::Char('a'));
+    let lines = shot(&mut screen, "source", (90, 30));
+    let text = lines.join("\n");
+    assert!(
+        lines
+            .iter()
+            .any(|line| line == " Source         host  [agent depot]"),
+        "{text}"
+    );
+    assert!(!text.contains("Program from the"), "{text}");
+    assert!(!text.contains("Agent depot:"), "{text}");
+
+    press(&mut screen, KeyCode::Down);
+    press(&mut screen, KeyCode::Down);
+    press(&mut screen, KeyCode::Left);
+    press(&mut screen, KeyCode::Enter);
+    let asked = proposals(&mut far);
+    assert_eq!(asked.len(), 1);
+    assert_eq!(asked[0].1.values, [pair("agents.claude.source", "host")]);
+}
+
+/// Eine Firmenvorgabe sperrt die Quelle: Das Feld steht nur lesbar da, mit
+/// der Vorgabe als Herkunft, und nimmt keine Wahl.
+#[test]
+fn a_locked_source_is_read_only_with_the_policy() {
+    let (link, mut far) = link::pair();
+    let mut shown = with_source_field();
+    shown.fields[1].origin = "policy".to_owned();
+    shown.fields[1].lock = Some(v1::SettingLock {
+        locked_by: "/etc/humanitl/policy.toml".to_owned(),
+        read_only: true,
+        reason: "the company policy fixes agents.claude.source to depot".to_owned(),
+    });
+    let mut screen = FirstStartScreen::new(link, PATH.to_owned(), shown, Vec::new());
+    press(&mut screen, KeyCode::Char('a'));
+    let lines = shot(&mut screen, "source-locked", (100, 30));
+    let text = lines.join("\n");
+    assert!(
+        lines
+            .iter()
+            .any(|line| line == " Source        agent depot (locked)"),
+        "{text}"
+    );
+    assert!(
+        text.contains("Set by the company policy /etc/humanitl/policy.toml"),
+        "{text}"
+    );
+    press(&mut screen, KeyCode::Down);
+    press(&mut screen, KeyCode::Down);
+    press(&mut screen, KeyCode::Left);
+    press(&mut screen, KeyCode::Enter);
+    assert!(
+        proposals(&mut far).is_empty(),
+        "a locked field takes nothing"
+    );
+}

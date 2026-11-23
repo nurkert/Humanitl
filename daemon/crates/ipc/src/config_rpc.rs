@@ -524,7 +524,8 @@ pub fn project_snapshot(
     locks: &PolicyLocks,
     row: &humanitl_recorder::ProjectRow,
 ) -> v1::ConfigSnapshot {
-    let (resolved, found) = crate::projects::resolve_for(paths, locks, row);
+    let (resolved, found) =
+        crate::projects::resolve_for(paths, locks, &SourceLock::of_policy(paths), row);
     finish(paths, resolved, found)
 }
 

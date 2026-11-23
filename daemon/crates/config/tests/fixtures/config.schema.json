@@ -141,7 +141,7 @@
             },
             "source": {
               "default": null,
-              "description": "Woher dieser Agent kommt, `host` oder `depot`; ungesetzt gilt `agents.source`. Zurück auf `host` behält das Depot, bis `humanitl agents remove` es entfernt. Im Projekt-Profil gesperrt.",
+              "description": "Woher dieser Agent kommt, `host` oder `depot`; ungesetzt gilt `agents.source`. Zurück auf `host` behält das Depot, bis `humanitl agents remove` es entfernt. Im Projekt-Profil gesperrt; die Projektwahl des Erststart-Bildschirms darf sie je Projekt setzen, eine Sperre der Firmenvorgabe nicht.",
               "enum": [
                 "host",
                 "depot",
@@ -176,7 +176,7 @@
             },
             "source": {
               "default": null,
-              "description": "Woher dieser Agent kommt, `host` oder `depot`; ungesetzt gilt `agents.source`. Zurück auf `host` behält das Depot, bis `humanitl agents remove` es entfernt. Im Projekt-Profil gesperrt.",
+              "description": "Woher dieser Agent kommt, `host` oder `depot`; ungesetzt gilt `agents.source`. Zurück auf `host` behält das Depot, bis `humanitl agents remove` es entfernt. Im Projekt-Profil gesperrt; die Projektwahl des Erststart-Bildschirms darf sie je Projekt setzen, eine Sperre der Firmenvorgabe nicht.",
               "enum": [
                 "host",
                 "depot",
@@ -211,7 +211,7 @@
             },
             "source": {
               "default": null,
-              "description": "Woher dieser Agent kommt, `host` oder `depot`; ungesetzt gilt `agents.source`. Zurück auf `host` behält das Depot, bis `humanitl agents remove` es entfernt. Im Projekt-Profil gesperrt.",
+              "description": "Woher dieser Agent kommt, `host` oder `depot`; ungesetzt gilt `agents.source`. Zurück auf `host` behält das Depot, bis `humanitl agents remove` es entfernt. Im Projekt-Profil gesperrt; die Projektwahl des Erststart-Bildschirms darf sie je Projekt setzen, eine Sperre der Firmenvorgabe nicht.",
               "enum": [
                 "host",
                 "depot",
@@ -253,7 +253,7 @@
             },
             "source": {
               "default": null,
-              "description": "Woher dieser Agent kommt, `host` oder `depot`; ungesetzt gilt `agents.source`. Zurück auf `host` behält das Depot, bis `humanitl agents remove` es entfernt. Im Projekt-Profil gesperrt.",
+              "description": "Woher dieser Agent kommt, `host` oder `depot`; ungesetzt gilt `agents.source`. Zurück auf `host` behält das Depot, bis `humanitl agents remove` es entfernt. Im Projekt-Profil gesperrt; die Projektwahl des Erststart-Bildschirms darf sie je Projekt setzen, eine Sperre der Firmenvorgabe nicht.",
               "enum": [
                 "host",
                 "depot",
@@ -288,7 +288,7 @@
             },
             "source": {
               "default": null,
-              "description": "Woher dieser Agent kommt, `host` oder `depot`; ungesetzt gilt `agents.source`. Zurück auf `host` behält das Depot, bis `humanitl agents remove` es entfernt. Im Projekt-Profil gesperrt.",
+              "description": "Woher dieser Agent kommt, `host` oder `depot`; ungesetzt gilt `agents.source`. Zurück auf `host` behält das Depot, bis `humanitl agents remove` es entfernt. Im Projekt-Profil gesperrt; die Projektwahl des Erststart-Bildschirms darf sie je Projekt setzen, eine Sperre der Firmenvorgabe nicht.",
               "enum": [
                 "host",
                 "depot",

@@ -1149,7 +1149,9 @@ Projektordner, sondern in der SQLite-Datenbank des Daemons unter seinem Datenver
 wird nur über `Projects.save_choice` am Socket des Daemons geschrieben, den die Sandbox nicht
 erreicht (Garantie 2). Ihre Schlüssel sind eine feste Erlaubnisliste (`CONFIG_024` für jeden
 anderen), sie senkt `sandbox.min_isolation` nie, und eine Sperre der Firmenvorgabe gewinnt gegen
-sie; dieselben Prüfungen laufen, wenn ein Start sie lädt, so dass eine Wahl, die nicht mehr gilt,
+sie, auch eine Sperre der Quelle eines Agenten auf das Depot, die `agents.<id>.source` aus der Wahl
+hält (#15); die Quelle wählt nur Host oder Depot, beide in derselben Sandbox, und ein Start fällt nie
+auf die andere Quelle zurück; dieselben Prüfungen laufen, wenn ein Start sie lädt, so dass eine Wahl, die nicht mehr gilt,
 den Start anhält, statt zu verschwinden. Das Register erkennt einen Ordner an seinem kanonischen
 Pfad zusammen mit Gerät und Inode: Ein anderer Ordner am selben Pfad ist ein neues Projekt ohne die
 alte Wahl. Ein Start ohne Projektordner wird abgelehnt (`SANDBOX_053`), statt das
@@ -1355,6 +1357,7 @@ Gegen diese Angreifer gibt es keine Abwehr, und Humanitl behauptet das auch nich
 | 2026-11-20 | K-02: Die Durchleitung paart jede Methode mit ihren Pfaden: Ein Adapter gibt je Satz von Methoden eine Regel (feste IDs `…00ff`, `…00fe`, `…00fd`). Codex reicht `POST` nur an `/responses` und `GET` nur an `/models` durch; `agy` `POST` nur an `models/{model}:generateContent` und `:streamGenerateContent` und `GET` nur an die Modellliste; Claude Code `POST` nur an die Messages-Endpunkte; OpenCode und pi `POST` an die Endpunkte, die rechnen, und `GET` an `/v1/models`, `/api/tags`, `/api/ps`, `/api/version`. `POST /models`, `GET /responses` und `GET` an einen Inferenz-Endpunkt werden jetzt angehalten. Ein Pfad, den ein Mensch in `llm.passthrough_paths` schreibt, behält beide Methoden. Verengt, schwächt nichts | HUM-568 |
 | 2026-11-21 | K-15: Das Urteil über die drei Garantien und das Anhalten nach einem roten oder fehlenden Ergebnis hängen nicht mehr am startenden Client. Bisher beendete ein Client, der seinen Ereignisstrom nach `Status(starting)` schloss, die Prüfung vor dem Urteil, und eine Sandbox mit rotem Ergebnis lief weiter; Ordnerprüfung und Registereintrag eines grünen Starts entfielen auf demselben Weg. Der Daemon hält die Sandbox jetzt an, bevor er die Ergebnisse sendet, hält den Befund in der Zusammenfassung der Session fest (`stopped_by`) und beendet sie ein zweites Mal, wenn der Faden, der beendet, scheitert | HUM-585 |
 | 2026-11-22 | K-02: Ein dritter Weg für den Zugangsschlüssel des Anbieters und die Zugangsdaten des Proxys: die Einstellungsansicht `humanitl settings`, ohne Echo getippt, einmal über `LlmKey` oder `Egress(SetAuth)` geschickt, nie über `SetConfig`, nie gezeigt; der Eingabepuffer wird bei jedem Löschen, Abbrechen, Wachsen und Fallenlassen überschrieben, ein eingefügter Text, sobald er übernommen ist, und das Geheimnis bleibt bis zum Bau der Anfrage unter `Zeroizing`; nicht überschrieben: das Feld der Anfrage, die tonic übergeben wird, die Kodierpuffer von prost/tonic und die Lesepuffer von crossterm | GitHub #7 |
+| 2026-11-23 | K-37: Die Projektwahl trägt auch die Quelle des Agenten (`agents.<id>.source`, Host oder Depot); eine Sperre der Quelle durch die Firmenvorgabe hält sie aus der Wahl (`CONFIG_024`), und ein Start fällt nie auf die andere Quelle zurück | #15 |
 
 Jede sicherheitsrelevante Änderung am Shim, an der Mount-Erlaubnisliste, am Filter oder an der
 Durchleitung bekommt hier eine Zeile. Schwachstellen werden gemeldet, wie in

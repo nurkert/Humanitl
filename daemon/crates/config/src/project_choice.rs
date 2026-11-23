@@ -30,18 +30,14 @@
 use std::collections::BTreeMap;
 
 use humanitl_core::diagnostics::codes::CONFIG_024;
-use humanitl_core::{Diagnostic, Severity};
+use humanitl_core::{Diagnostic, FixAction, Severity};
 
+use crate::agents::{Locked, SOURCE_KEYS, SourceLock};
 use crate::model::{Config, MinIsolation};
 pub use crate::policy::{LockedValue, PolicyLocks};
 
-/// Die Schlüssel, die eine Projektwahl tragen darf: genau die des
-/// Erststart-Bildschirms (ADR-0024 Punkt 1).
-///
-/// Wer diese Liste erweitert, erweitert, was ein Client je Projekt dauerhaft
-/// bestimmen darf, und schreibt dazu, warum der neue Schlüssel keine Garantie
-/// berührt.
-pub const PROJECT_CHOICE_KEYS: [&str; 8] = [
+/// Die Schlüssel des Erststart-Bildschirms ohne die Quelle der Agenten.
+const SCREEN_KEYS: [&str; 8] = [
     "agent.adapter",
     "sandbox.mode",
     "sandbox.work_mode",
@@ -51,6 +47,35 @@ pub const PROJECT_CHOICE_KEYS: [&str; 8] = [
     crate::servers::SERVER,
     "sandbox.profile",
 ];
+
+/// Die Schlüssel, die eine Projektwahl tragen darf: genau die des
+/// Erststart-Bildschirms (ADR-0024 Punkt 1), dazu je bekanntem Agenten
+/// `agents.<id>.source` (GitHub #15, Nachtrag zu ADR-0023).
+///
+/// Wer diese Liste erweitert, erweitert, was ein Client je Projekt dauerhaft
+/// bestimmen darf, und schreibt dazu, warum der neue Schlüssel keine Garantie
+/// berührt. Die Quelle berührt keine: Sie wählt nur, woher das Programm
+/// kommt; beide Quellen laufen in derselben Sandbox, ein Start fällt nie auf
+/// die andere zurück, und eine Sperre der Firmenvorgabe auf die Quelle hält
+/// sie aus der Wahl ([`check_source_lock`]).
+pub const PROJECT_CHOICE_KEYS: [&str; SCREEN_KEYS.len() + SOURCE_KEYS.len()] = choice_keys();
+
+/// [`SCREEN_KEYS`] und danach [`SOURCE_KEYS`].
+const fn choice_keys() -> [&'static str; SCREEN_KEYS.len() + SOURCE_KEYS.len()] {
+    let mut keys = [""; SCREEN_KEYS.len() + SOURCE_KEYS.len()];
+    let mut index = 0;
+    while index < SCREEN_KEYS.len() {
+        keys[index] = SCREEN_KEYS[index];
+        index += 1;
+    }
+    let mut source = 0;
+    while source < SOURCE_KEYS.len() {
+        keys[index] = SOURCE_KEYS[source];
+        index += 1;
+        source += 1;
+    }
+    keys
+}
 
 /// Der Schlüssel der Untergrenze, die eine Wahl nur heben darf.
 const MIN_ISOLATION: &str = "sandbox.min_isolation";
@@ -179,6 +204,42 @@ pub fn check_choice(
     Ok(())
 }
 
+/// Prüft die Quellen einer Wahl gegen die Sperre der Quelle einer
+/// Firmenvorgabe (ADR-0023 Punkt 1, Nachtrag GitHub #15): Ein
+/// `agents.<id>.source` eines gesperrten Agenten ist nur lesbar und steht nie
+/// in der Wahl, mit welchem Wert auch immer, wie ein gesperrter Schlüssel in
+/// [`check_choice`].
+///
+/// # Errors
+///
+/// `CONFIG_024`, dessen `why` die Vorgabe nennt.
+pub fn check_source_lock(choice: &ProjectChoice, lock: &SourceLock) -> Result<(), Diagnostic> {
+    for (key, value) in choice.iter() {
+        let Some(agent) = key
+            .strip_prefix("agents.")
+            .and_then(|rest| rest.strip_suffix(".source"))
+        else {
+            continue;
+        };
+        if let Some(locked) = lock.for_agent(agent) {
+            // Der Ausweg: die Wahl neu speichern, ohne den gesperrten
+            // Schlüssel. Der Erststart-Bildschirm und die Einstellungen
+            // schreiben ihn unter der Sperre gar nicht erst.
+            return Err(Diagnostic::builder(CONFIG_024, Severity::Error)
+                .why(format!(
+                    "the project choice sets {key} = {value:?}, and the company policy {} fixes \
+                     the source of the agent {agent} to {}; a locked key is read only and stays \
+                     out of the choice",
+                    locked.by,
+                    Locked::SOURCE.as_str()
+                ))
+                .fix(FixAction::CopyCommand("humanitl settings".to_owned()))
+                .build());
+        }
+    }
+    Ok(())
+}
+
 /// `CONFIG_024` für einen Schlüssel außerhalb der Liste.
 #[must_use]
 pub fn foreign_key(key: &str) -> Diagnostic {
@@ -229,6 +290,49 @@ mod tests {
             ProjectChoice::from_json(stored).unwrap_err().code.as_str(),
             "CONFIG_024"
         );
+    }
+
+    /// Die Quelle jedes bekannten Agenten steht auf der Liste, und eine
+    /// Sperre der Quelle hält sie aus der Wahl, auch mit dem Wert der
+    /// Vorgabe (GitHub #15).
+    ///
+    /// Mutationsbeweis: Ließe [`super::check_source_lock`] den gesperrten
+    /// Wert `depot` durch, ginge die zweite Wahl durch, und der Test wird rot.
+    #[test]
+    fn the_source_of_every_agent_is_a_choice_key_and_a_source_lock_keeps_it_out() {
+        use crate::agents::{AgentSource, KNOWN_AGENTS, LockScope, SourceLock};
+
+        for agent in KNOWN_AGENTS {
+            assert!(super::is_choice_key(&format!("agents.{agent}.source")));
+        }
+        assert!(!super::is_choice_key("agents.source"));
+        assert!(!super::is_choice_key("agents.claude.credential_writeback"));
+
+        let lock = SourceLock::none()
+            .lock(
+                LockScope::Agent("claude".to_owned()),
+                AgentSource::Depot,
+                "/etc/humanitl/policy.toml",
+            )
+            .unwrap();
+        for value in ["host", "depot"] {
+            let choice = ProjectChoice::from_pairs([("agents.claude.source", value)]).unwrap();
+            let refused = super::check_source_lock(&choice, &lock).unwrap_err();
+            assert_eq!(refused.code.as_str(), "CONFIG_024");
+            assert!(refused.fix.is_some(), "a way out: {refused:?}");
+            assert!(
+                refused.why.contains("/etc/humanitl/policy.toml"),
+                "{}",
+                refused.why
+            );
+        }
+        let other = ProjectChoice::from_pairs([("agents.codex.source", "host")]).unwrap();
+        super::check_source_lock(&other, &lock).unwrap();
+        super::check_source_lock(
+            &ProjectChoice::from_pairs([("agents.claude.source", "host")]).unwrap(),
+            &SourceLock::none(),
+        )
+        .unwrap();
     }
 
     #[test]

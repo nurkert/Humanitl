@@ -780,8 +780,14 @@ humanitl go [AGENT] [--dir PATH] [--disposable|--rw|--ro] [--kernel] [--yes]
 One command from the shell to the agent's prompt (HUM-496, #8). The ordinary
 start is `humanitl go claude`: the agent is a word, an adapter id as
 `humanitl agents status` lists them (`opencode`, `pi`, `claude`, `codex`,
-`agy`), and its program comes from the host or the agent depot as
-`agents.source` says. An unknown word is `CLI_004` with the list. A folder of
+`agy`), and its program comes from the host or the agent depot as the
+project choice says (`agents.<id>.source`, #15), otherwise as
+`agents.<id>.source` and `agents.source` in the configuration say; a start
+never falls back to the other source. The first-start screen offers the
+source as its own field. A source set anywhere (configuration, environment,
+project choice) stays as it is; only an unset one is preselected where the
+agent is ready, the depot for an agent that lies only there. A company lock
+of the source shows it read-only. An unknown word is `CLI_004` with the list. A folder of
 the same name is never the agent's folder; the project folder is the current
 directory or `--dir PATH` (`SANDBOX_006` if it is not a folder, `CLI_004`
 beside `--work`). The folder stored in `config.toml` does not apply to `go`.

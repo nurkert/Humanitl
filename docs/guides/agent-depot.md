@@ -68,6 +68,13 @@ set agents.claude.source depot`). `humanitl agents source claude host` switches 
 the depot until `humanitl agents remove claude`. `agents.source` sets the default for every
 agent. None of these keys can be set by a project profile.
 
+For a single project, the first-start screen (`humanitl go`, or "New" in the start window of the
+app) has a field "Source" beside the agent: it stores the source in the project choice, above
+`config.toml`. When you have not set a source, it preselects the depot for an agent installed only
+there; a source you set stays as it is. A start of that
+project then takes the stored source, and never the other one. Without a project choice the
+setting above applies.
+
 ### 2. Install
 
 ```sh

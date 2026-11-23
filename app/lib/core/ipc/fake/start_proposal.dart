@@ -41,6 +41,10 @@ mixin FakeStartProposal on FakeProjects {
   /// The notice on cloud inference of the agent `claude`, when set.
   CloudInference? proposalCloud;
 
+  /// Whether `proposal` sends the field `agent_source` (#15); false plays a
+  /// daemon before it, which names the sources only on the agent option.
+  bool proposalSourceField = true;
+
   /// When set, `proposal` answers only once it completes.
   Completer<void>? proposalHold;
 
@@ -86,6 +90,11 @@ mixin FakeStartProposal on FakeProjects {
         _field(id, fallback, options, chosen),
     ];
     final ProposalOption? agent = fields.first.chosen;
+    // The source of the chosen agent as its own field, after the agent
+    // (#15), as the daemon sends it.
+    if (proposalSourceField) {
+      fields.insert(1, _sourceField(fields.first.value, agent, chosen));
+    }
     return StartProposal(
       path: entry?.path ?? path ?? '',
       displayName:
@@ -103,7 +112,8 @@ mixin FakeStartProposal on FakeProjects {
         for (final ProposalField field in fields) ...?field.chosen?.choice,
       ]),
       defaultsLine:
-          'Defaults: ${<String>[for (final ProposalField field in fields) _shown(field)].join(' · ')}',
+          'Defaults: ${<String>[for (final ProposalField field in fields)
+            if (field.id != 'agent_source') _shown(field)].join(' · ')}',
       cloudInference: agent?.cloudInference,
     );
   }
@@ -447,6 +457,66 @@ mixin FakeStartProposal on FakeProjects {
             ]
           : const <AgentSourceOption>[],
       cloudInference: claude ? proposalCloud : null,
+    );
+  }
+
+  /// The field `agent_source` of [agentId]: `host` with the agent's own
+  /// reasons, and `depot`, which the fake never holds. A lock under the id
+  /// `agent_source` in [proposalLocks] fixes it to the depot, read-only,
+  /// with the policy named and `host` not available.
+  ProposalField _sourceField(
+    String agentId,
+    ProposalOption? agent,
+    Map<String, String> chosen,
+  ) {
+    final String key = 'agents.$agentId.source';
+    final String? lockedBy = proposalLocks['agent_source'];
+    final String value = lockedBy != null ? 'depot' : (chosen[key] ?? 'host');
+    final List<Diagnostic> hostReasons = <Diagnostic>[
+      ...?agent?.reasons,
+      if (lockedBy != null)
+        _blocking(
+          'AGENT_010',
+          'the company policy $lockedBy fixes the source of the agent '
+              '$agentId to the depot; the source host is refused',
+        ),
+    ];
+    final List<Diagnostic> depotReasons = <Diagnostic>[
+      _blocking('AGENT_013', '$agentId is not installed in the agent depot'),
+    ];
+    ProposalOption option(
+      String source,
+      String label,
+      List<Diagnostic> reasons,
+    ) => ProposalOption(
+      value: source,
+      label: label,
+      available: reasons.every(
+        (Diagnostic d) =>
+            d.severity != Severity.error && d.severity != Severity.blocking,
+      ),
+      reasons: List<Diagnostic>.unmodifiable(reasons),
+      choice: lockedBy == null
+          ? <ChoiceValue>[ChoiceValue(key, source)]
+          : const <ChoiceValue>[],
+    );
+    return ProposalField(
+      id: 'agent_source',
+      keys: <String>[key],
+      value: value,
+      origin: lockedBy != null
+          ? 'policy'
+          : (chosen.containsKey(key) ? 'project-choice' : 'default'),
+      lock: lockedBy == null
+          ? null
+          : SettingsLock(
+              lockedBy: lockedBy,
+              reason: 'the company policy fixes $key to depot',
+            ),
+      options: <ProposalOption>[
+        option('host', 'host', hostReasons),
+        option('depot', 'agent depot', depotReasons),
+      ],
     );
   }
 
