@@ -17,6 +17,103 @@ section here and list their commits instead.
 
 ## [Unreleased]
 
+## [0.6.0] - 2026-11-23
+
+A start window in the app and `humanitl go` as the one command to start an
+agent in a folder: a first-start screen proposes agent, source, folder mode
+and network, a closed terminal leaves the session running, and a second
+`go` attaches to it. In the session's terminal a prefix key (`Ctrl+B`) opens
+the settings or the held requests over the running agent and brings the
+agent back afterwards. A fix makes the isolation verdict independent of the
+client that started a sandbox. The protocol (1.62) and the configuration
+gain fields, and the prefix key changes its default, so this is a minor
+version; read the upgrade notes.
+
+### Added
+
+- A start window in the app with the running sessions, recent projects, a
+  new project, cleanup and settings, and a first-start screen fed by the
+  daemon's proposal for a folder without a stored choice.
+- `humanitl go [AGENT]` starts an agent in the current folder. In a new
+  folder it shows a first-start screen (Enter or Space starts with the
+  defaults, `a` customizes, Esc cancels); the choice is stored per project.
+- The agent's source (host or agent depot) is part of the project choice.
+  Only a source that is set nowhere is preselected, to the one place where
+  the agent is ready (the host when it is ready in neither); a source from
+  the configuration, the environment or a stored choice is kept.
+- `humanitl app [PATH]` opens the app with that project preselected.
+- `humanitl settings`, a settings TUI in the terminal with the same catalog,
+  origins and locks as the app. API keys and proxy credentials are entered
+  hidden and go to the daemon through their own requests, never through
+  the configuration file or the command line.
+- A prefix key in the session's terminal, `ctrl-b` by default
+  (`terminal.prefix`), with a fixed table: `d` detaches, `,` opens the
+  settings, `i` the held requests, `?` the table. Under the kitty keyboard
+  protocol `Ctrl+,` opens the settings directly (`terminal.direct_keys`).
+  Pasted text is never read as a key.
+- Settings and interceptor views over the running agent. The agent keeps
+  running; its output is held as whole filtered chunks up to 4 MiB and the
+  agent redraws on return. The interceptor decides only the selected request
+  after an explicit key, never selects by itself and refuses decisions while
+  the view does not fit the terminal.
+- A bell on a new held request (`terminal.bell_on_hold`, default on), at
+  most once per second and never inside the agent's output.
+- `terminal.on_close`: closing the terminal of `go` detaches (`detach`,
+  default) or stops (`stop`) the session this `go` started. `humanitl
+  sessions` and the start window show a session without an attached
+  terminal.
+- A getting-started guide (`docs/guides/getting-started.md`).
+
+### Changed
+
+- The prefix key's default is `ctrl-b` instead of `ctrl-a`, like tmux; the
+  old name `terminal.detach_prefix` still works. Whoever never set the key
+  sees a one-time note.
+- `humanitl run` keeps stopping its session when its terminal closes;
+  `humanitl go` detaches. A `go` that only attached never stops a session.
+- A second start in another folder (`CLI_005`) names `humanitl go --dir` or
+  `humanitl sandbox attach` as the way to the running session.
+- Notices of the daemon are no longer written into the agent's terminal
+  when it is a terminal; recordings to a file or pipe keep them.
+- The rule targets of `humanitl moderate` and the terminal views state
+  their real scope (any query, any method, http/https/ws/wss, any port, no
+  WebSocket upgrade).
+
+### Fixed
+
+- After a hangup nothing is written to the closed terminal any more; a
+  `run` whose terminal closed could panic on `EIO` before it stopped its
+  session.
+
+### Security
+
+- The isolation verdict of a starting sandbox no longer depends on the
+  client that started it. Before, a client that closed its start stream
+  after the start and before the three guarantees were reported could leave
+  a sandbox with a red or missing isolation result running unproven. The
+  daemon now evaluates the verdict and stops the sandbox on red before it
+  sends anything; the finding is kept in the session summary. A second
+  kill attempt never signals a process that was already reaped, so a
+  reused process id on the host is never hit. The kill
+  budgets per backend are in `docs/SECURITY.md` and the threat model
+  (K-15).
+- `docs/SECURITY.md` and the threat model (K-39) state that the held
+  requests of a detached session wait for a decision or their deadline;
+  an expired request is blocked, never allowed.
+- `url` 2.5.9 (RUSTSEC-2026-0592).
+
+### Upgrade notes
+
+- Restart the daemon after upgrading:
+  `systemctl --user restart humanitld.service`, `humanitl daemon install`
+  for archive and AppImage installs, or `humanitl daemon restart` after
+  replacing the macOS app. A CLI that needs a newer daemon names
+  the restart (`CLI_004`).
+- The prefix key is now `Ctrl+B`. To keep `Ctrl+A`, run
+  `humanitl config set terminal.prefix ctrl-a`.
+- Closing the terminal of `humanitl go` no longer stops the agent. To get
+  the old behavior, run `humanitl config set terminal.on_close stop`.
+
 ## [0.5.0] - 2026-11-21
 
 Claude Code, Codex and the Antigravity CLI as agents, an agent depot that
