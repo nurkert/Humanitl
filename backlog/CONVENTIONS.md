@@ -3411,13 +3411,36 @@ Units des Pakets aktiviert wurden.
 den ARB-Schlüssel, der den Begriff trägt; `app/tool/l10n_lint.dart`
 (`make l10n-lint`, CI-Schritt „Localizations") verlangt, dass der Schlüssel in
 beiden Dateien steht und den Begriff der Sprache als ganzes Wort enthält, und
-dass kein deutscher Text ein Wort der Tabelle „Verbotene Wörter" benutzt
-(„abgefangen", „Treffer", „anonymisier…", „ablehn…"). Wer einen Begriff ändert,
+dass kein deutscher Text ein Wort der Tabelle „Forbidden words" benutzt
+(„abgefangen", „Treffer", „anonymisier…", „ablehn…"); die Tabellen heißen seit
+HUM-086 „UI terms" und „Forbidden words". Wer einen Begriff ändert,
 ändert zuerst diese Datei. Mit dem Glossar sind im Deutschen nachgezogen:
 „Nachfragen" statt „Fragen", „Pseudonymisieren" statt „Schwärzen", „Zeit
 abgelaufen", „LLM-Durchleitung", „Editiert", „Anhalten" als Rail-Label, „Fund"
 statt „Finding", „Secret" statt „Geheimnis", „Session" statt „Sitzung" und die
 Du-Form in den sieben Texten, die noch siezten.
+
+**Ein Wort je Begriff, seit Sprint 9 (#79).** Das Glossar legt in den
+Abschnitten „Concepts", „Isolation levels" und „Setting levels" für jeden
+Begriff, dem ein Nutzer begegnet, genau ein englisches und ein deutsches Wort
+fest, gleich in Kommandozeile, Terminal-Ansichten, App, Dokumentation und
+Diagnosen; eine zweite, einfachere Sprache für Einsteiger gibt es nicht. Neue
+Texte nehmen nur diese Wörter: „wartet auf Entscheidung" statt „angehalten" als
+Zustand, „Arbeitskopie" statt „Wegwerf", „Agenten (isoliert installiert)" statt
+„Depot", „im Hintergrund weiterlaufen lassen" und „wieder öffnen" statt
+Abhängen und Anhängen, „Hintergrunddienst" statt „Daemon",
+„manipulationserkennbares Protokoll" statt „Audit-Kette", „Session" statt
+„Sitzung", „Projektordner" statt
+„Arbeitsverzeichnis", die drei Isolationsstufen mit ihren technischen Namen und
+dem Sandbox-Backend als zweiter Angabe, eine sichtbare Projekt-Ebene „Dieses
+Projekt" mit der Marke „aus dem Repository". Bezeichner, Konfigurationsschlüssel,
+Protokollfelder, Befehlsnamen und Diagnose-Codes bleiben, wie sie sind (`held`,
+`disposable`, `depot`, `daemon`). Kein Wort verspricht mehr, als das Werkzeug
+tut („sicher", „manipulationssicher"). Die Tabelle „Replacement table" im
+Glossar ist die Arbeitsliste der Bereinigung, die als eigenes Issue folgt; bis
+dahin beschreibt „UI terms" die ARB-Dateien, wie sie sind, und eine Zeile dort
+ändert sich im selben Commit wie ihr ARB-Text. ADRs und die Sprint-Dateien
+bleiben in den Wörtern ihrer Zeit.
 
 **Englisch „Allow" auf dem Knopf, nicht „Send".** Die Spezifikation von HUM-052
 nannte „Send"; `docs/UX.md` 4.6 legt die drei Orte mit Begründung fest, und
