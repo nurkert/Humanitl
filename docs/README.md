@@ -46,6 +46,7 @@ fails when they are stale.
 | [`ARCHITECTURE.md`](ARCHITECTURE.md) | layers, crates and the dependency rules CI enforces |
 | [`DESIGN.md`](DESIGN.md) | the "Airlock" design system: tokens, components, motion |
 | [`UX.md`](UX.md) | screens and flows |
+| [`UX-BASELINE.md`](UX-BASELINE.md) | the present state before sprint 9: every setting with its levels and surfaces, every command and screen, the twelve workflows with step counts, defaults that are not sealed, gaps (German) |
 | [`INSTALL.md`](INSTALL.md) | maintainer notes: APT repository, unit hardening, packaging, test matrix |
 | [`guides/release-process.md`](guides/release-process.md) | cutting a release with `tools/release.sh`, the changelog, what to do on red |
 | [`guides/maintaining.md`](guides/maintaining.md) | issue forms, labels as code, landing through a pull request with auto-merge, the repository settings behind it |
