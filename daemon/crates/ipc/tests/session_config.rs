@@ -948,15 +948,22 @@ work_dir = {:?}
     assert_eq!(choice.source, v1::llm_server_choice::Source::Default as i32);
 }
 
-/// Der Mensch ordnet einem mitgelieferten Profil einen Server zu; ein
-/// Projekt, das dieses Profil mit `name` wählt, bringt den Server damit
-/// nicht unbestätigt in seine Sitzung (HUM-405, Review).
+/// Der Mensch ordnet einem mitgelieferten Profil einen Server zu; die
+/// Zuordnung steht in seiner eigenen Datei des Profils (HUM-405).
 ///
-/// Mutationsbeweis: Ohne `project_owns_profile_choice` im Laden steht die
-/// Wahl als die des Profils da, `unconfirmed` fragt nicht, und die Sitzung
-/// bekommt die Durchreiche zu `work.lan`.
+/// Ein Profil, das das Projekt-Profil wählt, lädt seinen eingebetteten Text:
+/// Der zugeordnete Server erreicht die Sitzung des Projekts dann nicht, sie
+/// nimmt den Standard. Wählt der Mensch das Profil selbst, gilt seine Datei;
+/// nennt das Projekt dasselbe Profil, ist die Wahl die des Projekts und
+/// gilt erst nach der Bestätigung (HUM-405, Review).
+///
+/// Mutationsbeweise: Bekommt die Wahl des Projekts in
+/// `humanitl_config::sources_with_global` wieder die eigene Datei, fragt der
+/// erste Start mit `CONFIG_022`. Ohne `project_owns_profile_choice` im Laden
+/// steht die Wahl des zweiten Starts als die des Profils da, `unconfirmed`
+/// fragt nicht, und die Sitzung bekommt die Durchreiche zu `work.lan`.
 #[tokio::test(flavor = "multi_thread")]
-async fn a_bundled_profile_the_project_names_needs_the_confirmation_too() {
+async fn a_bundled_profile_the_project_names_brings_no_assigned_server() {
     use v1::llm_servers_request::{Assign, Op, assign::Target};
 
     let fixture = Fixture::new();
@@ -969,13 +976,17 @@ async fn a_bundled_profile_the_project_names_needs_the_confirmation_too() {
 
     let seen = fixture.run(v1::sandbox_request::Start::default()).await;
     assert!(
-        codes(&seen).contains(&"CONFIG_022".to_owned()),
-        "the profile the project chose brings its server only after the confirmation: {seen:?}"
+        !codes(&seen).contains(&"CONFIG_022".to_owned()),
+        "the profile the project chose loads its embedded text: {seen:?}"
     );
-    assert!(!fixture.has_passthrough(), "{:#?}", fixture.rules.list());
+    assert_eq!(
+        fixture.passthrough_target().as_deref(),
+        Some("home.lan:11434"),
+        "{:#?}",
+        fixture.rules.list()
+    );
 
-    // „Wer nutzt welchen Server" zeigt dieselbe Wahl, über das Profil und
-    // unbestätigt; die eigene Zeile des Projekts bleibt leer.
+    // „Wer nutzt welchen Server" zeigt für das Projekt keine Wahl.
     fixture.user_config(&format!(
         "{TWO_SERVERS}\n[sandbox]\nwork_dir = {:?}\n",
         fixture.work
@@ -983,12 +994,29 @@ async fn a_bundled_profile_the_project_names_needs_the_confirmation_too() {
     let listed = fixture.servers(Op::List(v1::llm_servers_request::List {}));
     let project = listed.project.expect("the configured project is listed");
     assert_eq!(project.server, "", "{project:?}");
-    assert_eq!(project.effective_server, "work", "{project:?}");
-    assert_eq!(project.via_profile, "llm-only", "{project:?}");
-    assert!(!project.confirmed, "{project:?}");
-    fixture.confirm("work");
-    let listed = fixture.servers(Op::List(v1::llm_servers_request::List {}));
-    assert!(listed.project.expect("listed").confirmed);
+    assert_eq!(project.effective_server, "", "{project:?}");
+    assert_eq!(project.via_profile, "", "{project:?}");
+
+    // Der Mensch wählt dasselbe Profil, das auch das Projekt nennt: Seine
+    // Datei gilt, und die Wahl des Servers fragt wie die des Projekts.
+    let both = Fixture::new();
+    both.user_config(TWO_SERVERS);
+    both.servers(Op::Assign(Assign {
+        server: "work".to_owned(),
+        target: Some(Target::Profile("llm-only".to_owned())),
+    }));
+    both.project_profile("name = \"llm-only\"\n");
+    let seen = both
+        .run(v1::sandbox_request::Start {
+            session_profile: "llm-only".to_owned(),
+            ..v1::sandbox_request::Start::default()
+        })
+        .await;
+    assert!(
+        codes(&seen).contains(&"CONFIG_022".to_owned()),
+        "a server of a profile the project names asks first: {seen:?}"
+    );
+    assert!(!both.has_passthrough(), "{:#?}", both.rules.list());
 
     // Wer das Profil selbst wählt, bekommt den Server ohne Rückfrage, solange
     // das Projekt es nicht ebenfalls nennt.
@@ -1006,6 +1034,51 @@ async fn a_bundled_profile_the_project_names_needs_the_confirmation_too() {
         .await;
     assert!(!codes(&seen).contains(&"CONFIG_022".to_owned()), "{seen:?}");
     assert_eq!(own.passthrough_target().as_deref(), Some("work.lan:8080"));
+}
+
+/// Ein Profil, das das Projekt-Profil wählt, bringt die Regeln und den
+/// Frage-Modus seines eingebetteten Texts in den Regelspeicher, nicht die
+/// einer eigenen Datei gleichen Namens.
+///
+/// Mutationsbeweis: Bekommt die Wahl des Projekts in
+/// `humanitl_config::sources_with_global` wieder die eigene Datei, steht
+/// ihre Regel für `own.example` im Speicher, und der Frage-Modus ist `ui`.
+#[tokio::test(flavor = "multi_thread")]
+async fn a_profile_the_project_names_brings_its_embedded_rules() {
+    let fixture = Fixture::new();
+    let profiles = fixture.config_home.join("humanitl/profiles");
+    std::fs::create_dir_all(&profiles).expect("the profile directory");
+    std::fs::write(
+        profiles.join("llm-only.toml"),
+        "name = \"llm-only\"\n\n\
+         [config.hold]\nask_mode = \"ui\"\n\n\
+         [rules]\n\
+         inline = [{ action = \"allow\", match = { host = \"own.example\" } }]\n",
+    )
+    .expect("the own profile");
+    fixture.project_profile("name = \"llm-only\"\n");
+
+    let seen = fixture.run(v1::sandbox_request::Start::default()).await;
+
+    let hosts: Vec<String> = fixture
+        .rules
+        .list()
+        .iter()
+        .map(|stored| stored.rule.matcher.host.to_string())
+        .collect();
+    assert!(
+        fixture.blocks_everything(),
+        "the block rule of the bundled llm-only is in the store: {hosts:?}"
+    );
+    assert!(
+        !hosts.iter().any(|host| host == "own.example"),
+        "the rule of the own file stays out: {hosts:?}"
+    );
+    assert_eq!(
+        fixture.settings.get().ask_mode,
+        AskMode::None,
+        "the bundled llm-only does not ask: {seen:?}"
+    );
 }
 
 /// Eine Bestätigung gilt dem Server, den der Mensch unter dem Namen sah:

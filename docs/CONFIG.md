@@ -73,7 +73,9 @@ Wer mit `--work` aus einem fremden Verzeichnis heraus arbeitet, bekommt das Prof
 Projekts, an dem er arbeitet. Der Schlüssel ist auf der Projekt-Ebene gesperrt, deshalb
 kann das Projekt-Profil nicht bestimmen, wo nach ihm gesucht wird. Sein `name` wählt nur
 unter den mitgelieferten Profilen; jeder andere Wunsch wird übergangen und mit
-`CONFIG_009` gemeldet (`docs/profiles.md`).
+`CONFIG_009` gemeldet (`docs/profiles.md`). Ein Profil, das das Projekt-Profil wählt,
+lädt seinen eingebetteten Text, Schlüssel und Regeln; eine eigene Datei gleichen Namens
+unter `profiles/` gilt nur, wenn der Mensch das Profil selbst wählt (`--profile`).
 
 Eine Umgebungsvariable heißt wie ihr Pfad in Großbuchstaben, mit `__` zwischen den
 Ebenen: `hold.timeout_secs` wird zu `HUMANITL_HOLD__TIMEOUT_SECS`. Der Wert wird nach dem

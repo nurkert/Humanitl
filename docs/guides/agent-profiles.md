@@ -129,7 +129,10 @@ limits:
 
 1. **No other profile.** Its `name` chooses only among the bundled profiles.
    Any other wish is skipped and reported as `CONFIG_009`; whoever means a
-   profile of their own names it with `--profile`.
+   profile of their own names it with `--profile`. A bundled profile the
+   project profile chooses loads its embedded text, keys and rules: your own
+   file of the same name under `profiles/` applies only when you choose that
+   profile yourself.
 2. **Only allowed keys.** Every key in the schema carries
    `x-project-scope: allowed | denied` (column "Project" in
    [CONFIG.md](../CONFIG.md)). A denied key at this layer is `CONFIG_003`.

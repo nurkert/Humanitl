@@ -58,7 +58,7 @@
 "daemon/crates/config/src/model.rs" = 32
 "daemon/crates/config/src/validate.rs" = 52
 "daemon/crates/config/tests/config_readers.rs" = 12
-"daemon/crates/config/tests/profiles.rs" = 4
+"daemon/crates/config/tests/profiles.rs" = 3
 "daemon/crates/config/tests/project_scope.rs" = 10
 "daemon/crates/core-types/src/diagnostics/codes.rs" = 19
 "daemon/crates/ipc/src/server.rs" = 27

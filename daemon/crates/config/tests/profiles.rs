@@ -791,11 +791,16 @@ fn a_profile_cannot_declare_its_own_rule_bundled() {
 }
 
 /// Ein Projekt wählt das Backend auch nicht über ein Profil, das es nennt
-/// (HUM-431): Die eigene Datei `llm-only.toml` verdeckt das mitgelieferte
-/// Profil, und setzt sie `sandbox.backend` oder einen Schlüssel unter
-/// `sandbox.podman`, lehnt das Laden ab, sobald das Projekt diesen Namen
-/// nennt. Ohne den Namen im Projekt gilt die Datei wie bisher, und die
-/// Untergrenze darf sie ohnehin nur heben.
+/// (HUM-431). Ein Profil, das das Projekt-Profil wählt, lädt seinen
+/// eingebetteten Text; eine eigene Datei `llm-only.toml`, die
+/// `sandbox.backend` oder einen Schlüssel der Container-Engine oder der
+/// Kernel-Stufe setzt, gilt dann nicht. Wählt der Mensch dasselbe Profil
+/// selbst, gilt seine Datei; nennt das Projekt den Namen zugleich, lehnt das
+/// Laden ab. Die Untergrenze darf ohnehin keine Ebene senken.
+///
+/// Mutationsbeweis: Bekommt die Wahl des Projekts in `sources_with_global`
+/// wieder `layers_or_refuse` statt `embedded_layers`, lädt die eigene Datei,
+/// und der erste Fall endet mit `CONFIG_003` statt mit dem Backend `auto`.
 #[test]
 fn a_project_cannot_choose_the_backend_through_a_shadowing_profile() {
     for body in [
@@ -806,7 +811,23 @@ fn a_project_cannot_choose_the_backend_through_a_shadowing_profile() {
         let home = Home::new();
         home.write_profile("llm-only", body);
         home.write_project_profile("name = \"llm-only\"\n");
-        let diagnostic = home.resolve_err(&ProfileSelection::any(), &[]);
+        let resolved = home.resolve(&ProfileSelection::any(), &[]);
+        assert_eq!(
+            resolved.config.sandbox.backend,
+            humanitl_config::SandboxBackendName::Auto,
+            "{body}"
+        );
+        assert!(
+            resolved
+                .origins
+                .iter()
+                .all(|(_, origin)| !matches!(origin, Origin::ProfileGlobal(_))),
+            "{body}: {:?}",
+            resolved.origins
+        );
+
+        // Der Mensch nennt dasselbe Profil, das auch das Projekt nennt.
+        let diagnostic = home.resolve_err(&ProfileSelection::named("llm-only"), &[]);
         assert_eq!(diagnostic.code.as_str(), "CONFIG_003", "{}", diagnostic.why);
         assert!(
             diagnostic
@@ -821,7 +842,7 @@ fn a_project_cannot_choose_the_backend_through_a_shadowing_profile() {
         home.resolve(&ProfileSelection::named("llm-only"), &[]);
     }
 
-    // Eine verdeckende Datei, die die Untergrenze senken will, senkt sie nicht.
+    // Eine Datei, die die Untergrenze senken will, senkt sie nicht.
     let home = Home::new();
     home.write_profile("llm-only", "[config.sandbox]\nmin_isolation = \"policy\"\n");
     home.write_project_profile("name = \"llm-only\"\n");
@@ -830,10 +851,214 @@ fn a_project_cannot_choose_the_backend_through_a_shadowing_profile() {
         "[sandbox]\nmin_isolation = \"namespaces\"\n",
     )
     .expect("config.toml");
+    for selection in [ProfileSelection::any(), ProfileSelection::named("llm-only")] {
+        let resolved = home.resolve(&selection, &[]);
+        assert_eq!(
+            resolved.config.sandbox.min_isolation,
+            humanitl_config::MinIsolation::Namespaces
+        );
+    }
+}
+
+/// Ein Profil, das das Projekt-Profil wählt, lädt seinen eingebetteten Text,
+/// Schlüssel und Regeln. Eine eigene Datei gleichen Namens gilt nur, wenn der
+/// Mensch das Profil selbst wählt.
+///
+/// Mutationsbeweis: Bekommt die Wahl des Projekts in `sources_with_global`
+/// wieder `layers_or_refuse` statt `embedded_layers`, steht die Datei in der
+/// Kette, `hold.ask_mode` ist `ui`, und ihre Regel steht im Dokument.
+#[test]
+fn a_profile_the_project_profile_names_loads_its_embedded_text() {
+    let home = Home::new();
+    let own = home.write_profile(
+        "llm-only",
+        "name = \"llm-only\"\n\n\
+         [config.hold]\nask_mode = \"ui\"\n\n\
+         [config.agent]\ncommand = [\"/bin/true\"]\n\n\
+         [rules]\n\
+         inline = [{ action = \"allow\", match = { host = \"own.example\" } }]\n",
+    );
+    home.write_project_profile("name = \"llm-only\"\n");
+
     let resolved = home.resolve(&ProfileSelection::any(), &[]);
     assert_eq!(
-        resolved.config.sandbox.min_isolation,
-        humanitl_config::MinIsolation::Namespaces
+        resolved.profile_chain(),
+        vec![
+            Origin::ProfileBuiltin("default".to_owned()),
+            Origin::ProfileBuiltin("llm-only".to_owned()),
+            Origin::ProfileProject(home.project().join(".humanitl/profile.toml")),
+        ]
+    );
+    assert_eq!(resolved.config.hold.ask_mode, AskMode::None);
+    assert_eq!(
+        resolved.origin("hold.ask_mode"),
+        Some(&Origin::ProfileBuiltin("llm-only".to_owned()))
+    );
+    assert_eq!(resolved.config.agent.command, None);
+    let profile = resolved.profile("llm-only").expect("in the chain");
+    assert!(matches!(profile.source, ProfileSource::Builtin("llm-only")));
+    let document = profile.rules_document().expect("llm-only brings rules");
+    assert!(!document.contains("own.example"), "{document}");
+    let bundled = ProfileSource::Builtin("llm-only")
+        .load()
+        .expect("the bundled profile")
+        .rules_document();
+    assert_eq!(Some(document), bundled);
+    assert!(
+        resolved
+            .diagnostics
+            .iter()
+            .all(|diagnostic| diagnostic.code.as_str() != "CONFIG_009"),
+        "the wish of the project applies: {:?}",
+        resolved.diagnostics
+    );
+
+    // Wählt der Mensch das Profil selbst, gilt seine Datei.
+    let home_own = Home::new();
+    home_own.write_profile(
+        "llm-only",
+        &std::fs::read_to_string(&own).expect("the own file"),
+    );
+    let resolved = home_own.resolve(&ProfileSelection::named("llm-only"), &[]);
+    assert_eq!(resolved.config.hold.ask_mode, AskMode::Ui);
+    assert_eq!(
+        resolved.config.agent.command,
+        Some(vec!["/bin/true".to_owned()])
+    );
+    let document = resolved
+        .profile("llm-only")
+        .and_then(humanitl_config::Profile::rules_document)
+        .expect("the own file brings its rule");
+    assert!(document.contains("own.example"), "{document}");
+}
+
+/// Jedes mitgelieferte Profil außer `default`, vom Projekt-Profil gewählt,
+/// lädt seinen eingebetteten Text, auch wenn eine eigene Datei gleichen
+/// Namens einen weiteren Schlüssel und eine weitere Erlaubnisregel trägt.
+///
+/// Mutationsbeweis: Bekommt die Wahl des Projekts in `sources_with_global`
+/// wieder `layers_or_refuse` statt `embedded_layers`, steht für jedes Profil
+/// die Datei in der Kette, mit ihrem Schlüssel und ihrer Regel.
+#[test]
+fn every_bundled_profile_a_project_profile_names_loads_its_embedded_text() {
+    let names: Vec<&str> = BUILTIN_PROFILES
+        .iter()
+        .map(|(name, _)| *name)
+        .filter(|name| *name != "default")
+        .collect();
+    assert!(
+        !names.is_empty(),
+        "there is a bundled profile besides default"
+    );
+    for name in names {
+        let home = Home::new();
+        home.write_profile(
+            name,
+            &format!(
+                "name = \"{name}\"\n\n\
+                 [config.hold]\ntimeout_secs = 4242\n\n\
+                 [rules]\n\
+                 inline = [{{ action = \"allow\", match = {{ host = \"own.example\" }} }}]\n"
+            ),
+        );
+        let project = home.write_project_profile(&format!("name = \"{name}\"\n"));
+
+        let resolved = home.resolve(&ProfileSelection::any(), &[]);
+        assert_eq!(
+            resolved.profile_chain(),
+            vec![
+                Origin::ProfileBuiltin("default".to_owned()),
+                Origin::ProfileBuiltin(name.to_owned()),
+                Origin::ProfileProject(project),
+            ],
+            "{name}"
+        );
+        let profile = resolved.profile(name).expect("in the chain");
+        assert_eq!(profile.source, ProfileSource::Builtin(name), "{name}");
+        let embedded = ProfileSource::Builtin(name)
+            .load()
+            .expect("the bundled profile");
+        assert_eq!(
+            profile.rules_document(),
+            embedded.rules_document(),
+            "{name}"
+        );
+        assert!(
+            !profile
+                .rules_document()
+                .is_some_and(|document| document.contains("own.example")),
+            "{name}: the rule of the own file stays out"
+        );
+        assert_ne!(resolved.config.hold.timeout_secs, 4242, "{name}");
+        assert!(
+            resolved
+                .origins
+                .values()
+                .all(|origin| !matches!(origin, Origin::ProfileGlobal(_))),
+            "{name}: {:?}",
+            resolved.origins
+        );
+    }
+}
+
+/// Nennt das Projekt-Profil `default`, kommt keine Ebene dazu: Kette und
+/// Herkunft jedes Schlüssels sind dieselben wie ohne den Namen, auch mit einer
+/// eigenen Datei `default.toml`, die in jeder Sitzung gilt.
+///
+/// Mutationsbeweis: Setzt `project_wish` für `default` eine eigene Ebene ein
+/// (ohne den Filter auf `DEFAULT_PROFILE`, über `embedded_layers`), steht der
+/// eingebettete Text von `default` über der Datei, und Kette und Herkunft
+/// weichen ab.
+#[test]
+fn a_project_profile_naming_default_adds_no_layer() {
+    let resolve_with = |project: &str| {
+        let home = Home::new();
+        home.write_profile("default", "[config.ui]\ntheme = \"light\"\n");
+        home.write_project_profile(project);
+        let resolved = home.resolve(&ProfileSelection::any(), &[]);
+        let sources: Vec<ProfileSource> = resolved
+            .profiles
+            .iter()
+            .filter(|profile| !matches!(profile.source, ProfileSource::Project(_)))
+            .map(|profile| profile.source.clone())
+            .collect();
+        let codes: Vec<String> = resolved
+            .diagnostics
+            .iter()
+            .map(|diagnostic| diagnostic.code.as_str().to_owned())
+            .collect();
+        (
+            resolved.profile_chain().len(),
+            sources
+                .into_iter()
+                .map(|source| source.name())
+                .collect::<Vec<_>>(),
+            resolved
+                .origins
+                .into_iter()
+                .map(|(path, origin)| {
+                    // Der Pfad der Projektdatei liegt in einem anderen
+                    // Verzeichnis auf Zeit; verglichen wird die Ebene.
+                    let origin = match origin {
+                        Origin::ProfileProject(_) => "project".to_owned(),
+                        other => format!("{other:?}"),
+                    };
+                    (path, origin)
+                })
+                .collect::<Vec<_>>(),
+            codes,
+        )
+    };
+    let without = resolve_with("[config.hold]\ntimeout_secs = 7\n");
+    let named = resolve_with("name = \"default\"\n\n[config.hold]\ntimeout_secs = 7\n");
+    assert_eq!(named, without);
+    assert_eq!(named.0, 2, "default and the project profile: {named:?}");
+    assert!(
+        named
+            .2
+            .iter()
+            .any(|(path, origin)| path == "ui.theme" && origin.starts_with("ProfileGlobal")),
+        "the own default.toml applies as in every session: {named:?}"
     );
 }
 
