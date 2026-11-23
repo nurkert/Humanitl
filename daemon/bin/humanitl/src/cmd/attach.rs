@@ -735,14 +735,24 @@ impl Ending {
     /// mehr geht, vor dem Signal ankommen. Danach schreibt niemand mehr
     /// hinein, und das Signal entscheidet, ob die Sitzung stoppt.
     ///
+    /// Das gilt auch für einen Befund: Ein `TERM_001`, das erst ankommt,
+    /// wenn das Terminal schon zu ist, führte sonst in den lesenden
+    /// Anschluss, und dessen Hinweis an ein Terminal, das es nicht mehr gibt,
+    /// bekäme `EIO` (GitHub #73).
+    ///
     /// Für `humanitl run` und `humanitl go`, deren Sitzung am Signal hängt;
     /// `sandbox attach` endet an einem verschwundenen Terminal weiter mit 0,
     /// schreibt aber auch nichts mehr ([`finish_with`]).
-    pub(crate) fn or_hung_up(self) -> Self {
-        match self {
-            Self::Detached | Self::Stream(Ok(_)) if crate::tty::terminal_gone() => {
-                Self::Signal(crate::cmd::run::SIGHUP)
-            }
+    pub(crate) fn or_hung_up(ended: Result<Self, Failure>) -> Result<Self, Failure> {
+        Self::hung_up_when(ended, crate::tty::terminal_gone())
+    }
+
+    /// [`Ending::or_hung_up`] mit der Antwort auf die Frage, ob das Terminal
+    /// weg ist (`gone`). Ein Signal bleibt, was es ist.
+    fn hung_up_when(ended: Result<Self, Failure>, gone: bool) -> Result<Self, Failure> {
+        match ended {
+            Ok(Self::Signal(number)) => Ok(Self::Signal(number)),
+            _ if gone => Ok(Self::Signal(crate::cmd::run::SIGHUP)),
             other => other,
         }
     }
@@ -911,7 +921,56 @@ fn closed_input() -> Failure {
 
 #[cfg(test)]
 mod tests {
-    use super::settings_allowed;
+    #![allow(clippy::unwrap_used, clippy::expect_used, clippy::panic)]
+
+    use humanitl_core::diagnostics::codes;
+    use humanitl_core::{Diagnostic, Severity};
+
+    use super::{Ending, settings_allowed};
+    use crate::cmd::Failure;
+    use crate::cmd::run::SIGHUP;
+
+    fn taken() -> Failure {
+        Failure::new(
+            Diagnostic::builder(codes::TERM_001, Severity::Error)
+                .why("another client writes".to_owned())
+                .build(),
+        )
+    }
+
+    fn signal(ended: &Result<Ending, Failure>) -> Option<u8> {
+        match ended {
+            Ok(Ending::Signal(number)) => Some(*number),
+            _ => None,
+        }
+    }
+
+    /// Ist das Terminal weg, ist jedes Ende `SIGHUP`, auch ein Befund wie
+    /// `TERM_001`; sonst führte er in den lesenden Anschluss und dessen
+    /// Hinweis an ein Terminal, das es nicht mehr gibt (GitHub #73). Ein
+    /// Signal bleibt, und bei stehendem Terminal bleibt jedes Ende.
+    ///
+    /// Mutation proof: leaving `Err` and `Stream(Err)` out of the gone arm of
+    /// `hung_up_when` keeps the findings and fails the first two asserts.
+    #[test]
+    fn every_ending_at_a_gone_terminal_is_a_hangup() {
+        let gone = |ended| signal(&Ending::hung_up_when(ended, true));
+        assert_eq!(gone(Err(taken())), Some(SIGHUP));
+        assert_eq!(gone(Ok(Ending::Stream(Err(taken())))), Some(SIGHUP));
+        assert_eq!(gone(Ok(Ending::Stream(Ok(0)))), Some(SIGHUP));
+        assert_eq!(gone(Ok(Ending::Detached)), Some(SIGHUP));
+        assert_eq!(gone(Ok(Ending::Signal(15))), Some(15));
+
+        let kept = |ended| Ending::hung_up_when(ended, false);
+        assert!(
+            matches!(kept(Err(taken())), Err(found) if found.diagnostic.code == codes::TERM_001)
+        );
+        assert!(matches!(kept(Ok(Ending::Detached)), Ok(Ending::Detached)));
+        assert!(matches!(
+            kept(Ok(Ending::Stream(Ok(3)))),
+            Ok(Ending::Stream(Ok(3)))
+        ));
+    }
 
     /// Ein schreibender Anschluss öffnet die Einstellungen immer, ein
     /// lesender nur über einem Agenten auf dem gewöhnlichen Schirm (Review

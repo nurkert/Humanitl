@@ -242,6 +242,9 @@ pub struct Tracking {
     /// `Projects.get` nennt eine Sandbox, die nicht (mehr) läuft: Ein
     /// `Open` mit ihrer Kennung bekommt `IPC_006`.
     pub stale_sandbox: bool,
+    /// Eine Ablehnung des `Open` geht erst nach dieser Zeit hinaus: So kommt
+    /// `TERM_001` an, wenn das Terminal schon zu ist (GitHub #73).
+    pub refused_after: Option<Duration>,
 }
 
 /// Wie der Fake den Erststart von `go` behandelt (#9).
@@ -998,7 +1001,7 @@ impl DaemonApi for SilentExport {
         )));
         let record = Arc::clone(&self.record);
         let tracking = self.tracking;
-        gated_terminal(input, feed, inner, move |open| {
+        gated_terminal(input, feed, inner, tracking.refused_after, move |open| {
             refusal(&record, tracking, open)
         })
     }
@@ -1448,6 +1451,7 @@ fn gated_terminal(
     mut input: BoxStream<v1::TerminalInput>,
     feed: tokio::sync::mpsc::Sender<v1::TerminalInput>,
     mut inner: BoxStream<v1::TerminalOutput>,
+    refused_after: Option<Duration>,
     refuse: impl Fn(&v1::terminal_input::Open) -> Option<Diagnostic> + Send + 'static,
 ) -> BoxStream<v1::TerminalOutput> {
     use tokio_stream::StreamExt as _;
@@ -1460,6 +1464,9 @@ fn gated_terminal(
         if let Some(v1::terminal_input::Input::Open(open)) = &first.input
             && let Some(found) = refuse(open)
         {
+            if let Some(pause) = refused_after {
+                tokio::time::sleep(pause).await;
+            }
             let refused = v1::TerminalOutput {
                 output: Some(v1::terminal_output::Output::Diagnostic(
                     humanitl_ipc::diagnostic_to_proto(&found),

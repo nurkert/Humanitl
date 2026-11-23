@@ -79,7 +79,7 @@ impl Renderer {
     /// sind es nicht.
     pub fn note(self, text: &str) {
         if !self.json && !self.quiet {
-            eprintln!("{text}");
+            to_stderr(format_args!("{text}\n"));
         }
     }
 
@@ -102,9 +102,35 @@ impl Renderer {
         if self.json {
             println!("{}", diagnostic_json(diagnostic));
         } else {
-            eprint!("{}", diagnostic_block(diagnostic));
+            to_stderr(format_args!("{}", diagnostic_block(diagnostic)));
         }
     }
+}
+
+/// Schreibt auf `stderr` und übergeht einen Fehler dabei.
+///
+/// `eprintln!` macht aus einem Fehler eine Panik. Ist das Terminal weg --
+/// ein geschlossenes Fenster, `SIGHUP` --, bekommt jedes Schreiben `EIO`,
+/// und ein Hinweis, der in diesem Augenblick hinausgeht, beendete den Befehl
+/// mit 101, bevor er seine Sitzung stoppte (GitHub #73). Einen Hinweis, den
+/// niemand mehr lesen kann, gibt es dann nicht zu retten.
+pub(crate) fn to_stderr(text: std::fmt::Arguments<'_>) {
+    use std::io::Write as _;
+
+    let _ = std::io::stderr().lock().write_fmt(text);
+}
+
+/// Wie [`to_stderr`], für `stdout`: nur für das, was ein Mensch an einer
+/// Frage sieht, etwa die Diffs und das Ergebnis der Frage nach den
+/// Änderungen von `humanitl go`. Ein Ergebnis für eine Pipe geht weiter über
+/// `println!`, denn dessen Panik an einer geschlossenen Pipe beendet den
+/// Befehl still mit 141 (HUM-285).
+pub(crate) fn to_stdout(text: std::fmt::Arguments<'_>) {
+    use std::io::Write as _;
+
+    let mut out = std::io::stdout().lock();
+    let _ = out.write_fmt(text);
+    let _ = out.flush();
 }
 
 /// Der Befund als Block, wie ihn ein Mensch liest. Endet mit einem Zeilenumbruch.

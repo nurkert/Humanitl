@@ -629,7 +629,7 @@ async fn drive(
             // Der Anschluss an das Terminal ist zu Ende (HUM-280).
             ended = next_attached(&mut attached), if attached.is_some() => {
                 attached = None;
-                let ended = ended.map(crate::cmd::attach::Ending::or_hung_up);
+                let ended = crate::cmd::attach::Ending::or_hung_up(ended);
                 match ended {
                     // Abgehängt: Die Sitzung läuft weiter, und dieser Befehl
                     // endet, ohne sie zu stoppen.
