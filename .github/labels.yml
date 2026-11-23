@@ -83,3 +83,6 @@
 - name: "sprint:8"
   color: "ededed"
   description: "Planned for sprint 8"
+- name: "sprint:9"
+  color: "ededed"
+  description: "Planned for sprint 9"
