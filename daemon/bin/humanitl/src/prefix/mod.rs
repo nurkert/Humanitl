@@ -19,6 +19,8 @@
 //!   (kitty-Protokoll, Alternativschirm, Klammern, Cursor).
 //! - [`view`]: das Bild des Agenten und die Ansicht darüber.
 //! - [`settings`]: die Einstellungen über dem Agenten (GitHub #11).
+//! - [`interceptor`]: die gehaltenen Anfragen über dem Agenten (GitHub #12).
+//! - [`bell`]: die Glocke bei einer neu gehaltenen Anfrage (GitHub #12).
 //! - [`redraw`]: den Agenten danach neu zeichnen lassen.
 //!
 //! # Was die Taste nie tut
@@ -30,7 +32,9 @@
 //! in denen kein Byte des Agenten steht. Das kitty-Protokoll schaltet sie
 //! nie ein, sie liest nur, ob der Agent es eingeschaltet hat.
 
+pub mod bell;
 pub mod input;
+pub mod interceptor;
 pub mod keys;
 pub mod redraw;
 pub mod settings;
@@ -40,7 +44,7 @@ pub mod view;
 use humanitl_config::DetachKeys;
 
 /// Die Präfixtaste eines Anschlusses, wie Schalter und Konfiguration sie
-/// ergeben.
+/// ergeben, und was der Anschluss sonst aus `terminal.*` liest.
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
 pub struct Keys {
     /// Das Präfix, oder keines.
@@ -51,6 +55,9 @@ pub struct Keys {
     /// Ob die Zeile zur neuen Vorgabe beim Anhängen fällig sein kann:
     /// `terminal.prefix` ist aus keiner Ebene gesetzt.
     pub migration: bool,
+    /// Ob eine neu gehaltene Anfrage klingelt (`terminal.bell_on_hold`,
+    /// GitHub #12).
+    pub bell: bool,
 }
 
 impl Keys {

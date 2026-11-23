@@ -1086,7 +1086,7 @@ pub struct UiConfig {
     /// Meldung des Systems, wenn eine Anfrage wartet und das Fenster nicht vorn ist.
     #[schemars(extend("x-tier" = "advanced", "x-project-scope" = "allowed"))]
     pub notifications: bool,
-    /// Hinweiszeile des Daemons, wenn eine Anfrage des Agenten auf eine Entscheidung wartet oder entschieden ist. Sie geht als eigener Rahmen an jeden Client, nie in den Bytestrom des Agenten: Wer am Terminal sitzt, bekommt sie zwischen die Bytes geschrieben, und die Oberfläche zeigt sie im Streifen über dem Terminal. Der Streifen bleibt in jedem Fall, weil er aus dem Ereignisstrom kommt; dieser Schalter betrifft nur den Rahmen.
+    /// Hinweiszeile des Daemons, wenn eine Anfrage des Agenten auf eine Entscheidung wartet oder entschieden ist. Sie geht als eigener Rahmen an jeden Client, nie in den Bytestrom des Agenten: Wer am Terminal sitzt, sieht sie in der Fußzeile der Einstellungen über dem Agenten; in das Terminal des Agenten schreibt die Kommandozeile sie nicht (GitHub #12), dort klingelt statt dessen `terminal.bell_on_hold`; nur wenn ihre Ausgabe in eine Datei oder Pipe geht, steht sie dort zwischen den Bytes. Die Oberfläche zeigt sie im Streifen über dem Terminal. Der Streifen bleibt in jedem Fall, weil er aus dem Ereignisstrom kommt; dieser Schalter betrifft nur den Rahmen.
     #[schemars(extend("x-tier" = "advanced", "x-project-scope" = "allowed"))]
     pub terminal_notices: bool,
 }
@@ -1147,6 +1147,9 @@ pub struct TerminalConfig {
     /// Die Ladeanimation von `humanitl go`: eine sich drehende Faust aus dem Logo, solange die Wegwerf-Sitzung startet, mindestens eine Sekunde lang und nie länger als der Start. Sie erscheint nur, wenn Ausgabe und Fehlerausgabe ein Terminal sind und `--json` fehlt, mit `NO_COLOR` ohne Farbe. `false` schaltet sie ab.
     #[schemars(extend("x-tier" = "advanced", "x-project-scope" = "denied"))]
     pub splash: bool,
+    /// Eine neu gehaltene Anfrage klingelt im Terminal der Sitzung (`humanitl sandbox attach`, `humanitl run -- CMD` an einem Terminal, `humanitl go`): ein `BEL`-Byte zwischen zwei ganzen Stücken der Ausgabe des Agenten, nie mitten in einer Steuerfolge, höchstens eines je Sekunde. Text schreibt die Kommandozeile dafür nie in das Terminal des Agenten. Solange eine Ansicht über dem Agenten steht (Einstellungen, Interceptor, Hilfe), klingelt nichts; der Interceptor zeigt die neue Anfrage selbst. `false` schaltet die Glocke ab; die Oberfläche und die Benachrichtigung des Systems melden die Anfrage weiter.
+    #[schemars(extend("x-tier" = "advanced", "x-project-scope" = "denied"))]
+    pub bell_on_hold: bool,
 }
 
 impl Default for TerminalConfig {
@@ -1155,6 +1158,7 @@ impl Default for TerminalConfig {
             prefix: DetachKeys::DEFAULT_SPEC.to_owned(),
             direct_keys: true,
             splash: true,
+            bell_on_hold: true,
         }
     }
 }

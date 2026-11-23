@@ -15,6 +15,10 @@
 //! - [`settings`]: der Bildschirm `humanitl settings` (GitHub #7).
 //! - [`first_start`]: der Erststart-Bildschirm von `humanitl go` (GitHub #9).
 //!
+//! Der Interceptor im Terminal der Sitzung (GitHub #12) steht in
+//! `prefix::interceptor`: Es gibt ihn nur über einem Agenten, und er
+//! braucht den Säuberer aus `ask_terminal`, den dieses Fundament nicht kennt.
+//!
 //! # Ohne Terminal
 //!
 //! Ohne Terminal auf `stdin` und `stdout` gibt es keinen Bildschirm

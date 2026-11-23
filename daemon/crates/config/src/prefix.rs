@@ -2,7 +2,7 @@
 //!
 //! Nach dem Präfix (`terminal.prefix`, Vorgabe `ctrl-b` wie in tmux) gilt
 //! eine feste Tabelle: `d` hängt ab, `,` öffnet die Einstellungen, `i` den
-//! Interceptor, `?` die Hilfe. Das Präfix zweimal oder sein Buchstabe
+//! Interceptor (GitHub #12), `?` die Hilfe. Das Präfix zweimal oder sein Buchstabe
 //! schickt es einmal an den Agenten, jede andere Taste geht mit dem Präfix
 //! davor unverändert weiter.
 //!
@@ -66,8 +66,8 @@ pub static TABLE: &[Binding] = &[
     Binding {
         key: b'i',
         action: PrefixAction::Interceptor,
-        en: "interceptor (here soon; meanwhile humanitl intercept)",
-        de: "Interceptor (im Terminal der Sitzung bald; bis dahin `humanitl intercept`)",
+        en: "interceptor over the agent: decide held requests; Esc returns",
+        de: "Interceptor über dem Agenten, gehaltene Anfragen entscheiden, `Esc` kehrt zurück",
     },
     Binding {
         key: b'?',
@@ -81,21 +81,6 @@ pub static TABLE: &[Binding] = &[
 #[must_use]
 pub fn binding(key: u8) -> Option<&'static Binding> {
     TABLE.iter().find(|binding| binding.key == key)
-}
-
-/// Was eine Ansicht anstelle des Interceptors zeigt, solange es ihn im
-/// Terminal der Sitzung nicht gibt (#12): ein Satz, auf zwei kurze Zeilen
-/// verteilt, damit er auch in 80 Spalten ganz steht. Die Einstellungen gibt
-/// es dort seit GitHub #11.
-#[must_use]
-pub const fn coming(action: PrefixAction) -> Option<[&'static str; 2]> {
-    match action {
-        PrefixAction::Interceptor => Some([
-            "The interceptor view in this terminal is coming;",
-            "meanwhile run humanitl intercept in another terminal.",
-        ]),
-        PrefixAction::Detach | PrefixAction::Settings | PrefixAction::Help => None,
-    }
 }
 
 /// Die Hilfe zur Präfixtaste, Englisch, eine Zeile je Taste: für `?` und
@@ -275,13 +260,6 @@ mod tests {
         for line in help_lines("Ctrl+B", 'b') {
             assert!(line.len() <= 76, "{line:?} is {} long", line.len());
         }
-        for line in super::coming(PrefixAction::Interceptor).expect("a sentence") {
-            assert!(line.len() <= 76, "{line:?}");
-        }
-        assert!(
-            super::coming(PrefixAction::Settings).is_none(),
-            "the settings view exists in the session terminal (#11)"
-        );
         assert!(help.contains("Ctrl+L"), "{help}");
     }
 

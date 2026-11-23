@@ -1,14 +1,26 @@
 //! Das Bild des Agenten und die kleine Ansicht darüber (GitHub #10).
 //!
 //! Die Bytes des Agenten gehen unverändert auf das eigene Terminal, wie vor
-//! diesem Issue. Steht eine Ansicht (die Hilfe hinter `?`, die Zeile für den
-//! Interceptor, bis #12 ihn baut, und die Einstellungen aus GitHub #11), hält
-//! die Kommandozeile die Bytes des Agenten zurück, bis zu [`HELD_LIMIT`], und
-//! gibt sie danach in ihrer Reihenfolge aus. Einen Kasten zeichnet diese
-//! Datei mit ratatui in einen Puffer, der nur ihn abdeckt; die Einstellungen
-//! zeichnet ihr eigener Bildschirm (`prefix::settings`), und diese Datei
-//! setzt nur den Schirm dafür auf und wieder zurück
-//! ([`AgentView::open_screen`]).
+//! diesem Issue. Steht eine Ansicht (die Hilfe hinter `?`, die Einstellungen
+//! aus GitHub #11 und der Interceptor aus GitHub #12), hält die
+//! Kommandozeile die Bytes des Agenten zurück, bis zu [`HELD_LIMIT`], und
+//! gibt sie danach in ihrer Reihenfolge aus. Den Kasten der Hilfe zeichnet
+//! diese Datei mit ratatui in einen Puffer, der nur ihn abdeckt;
+//! Einstellungen und Interceptor zeichnet ihr eigener Bildschirm
+//! (`prefix::settings`, `prefix::interceptor`), und diese Datei setzt nur den
+//! Schirm dafür auf und wieder zurück ([`AgentView::open_screen`]).
+//!
+//! # Die Glocke bei einer gehaltenen Anfrage (GitHub #12)
+//!
+//! [`AgentView::hold_bell`] schreibt ein `BEL` über denselben Schreiber wie
+//! die Ausgabe des Agenten und nur zwischen zwei ganzen Stücken: Jedes Stück
+//! geht in [`AgentView::agent`] mit einem `write_all` hinaus, und die Glocke
+//! kommt aus derselben Schleife des Anschlusses erst danach. Ein Stück des
+//! Daemons endet nie in einer halben Folge, also steht das `BEL` nie in einem
+//! `ESC [ …` des Agenten. Steht eine Ansicht, klingelt nichts: Ein `BEL` in
+//! der zurückgehaltenen Ausgabe käme erst nach der Rückkehr, und eines direkt
+//! auf das Terminal träfe den Bildschirm der Ansicht, der gerade auf einem
+//! anderen Faden zeichnet.
 //!
 //! Wie die Ansicht wieder verschwindet, hängt vom Schirm des Agenten ab
 //! ([`super::stream::StreamState::alt_screen`]):
@@ -27,7 +39,7 @@
 use std::io::{self, Write};
 
 use humanitl_config::DetachKeys;
-use humanitl_config::prefix::{PrefixAction, coming, help_lines};
+use humanitl_config::prefix::help_lines;
 use ratatui::backend::{Backend, CrosstermBackend};
 use ratatui::buffer::Buffer;
 use ratatui::layout::Rect;
@@ -89,6 +101,12 @@ pub struct AgentView<W: Write> {
     /// Wahr, sobald ein Stück nicht mehr passte: Ab da fällt jedes weitere
     /// weg, bis die Ansicht schließt.
     overflowed: bool,
+    /// Eine Glocke, die wartet, bis die Ausgabe an einer Grenze zwischen
+    /// zwei UTF-8-Zeichen steht ([`AgentView::hold_bell`]).
+    bell_due: bool,
+    /// Wahr, sobald eine aufgeschobene Glocke geschrieben wurde; die Drossel
+    /// holt es ab ([`AgentView::take_bell_written`]).
+    bell_written: bool,
     /// Der Name des Präfixes (`Ctrl+B`) und sein Buchstabe.
     prefix: (String, char),
     /// Mit oder ohne Farbe.
@@ -106,6 +124,8 @@ impl<W: Write> AgentView<W> {
             shown: None,
             held: Vec::new(),
             overflowed: false,
+            bell_due: false,
+            bell_written: false,
             prefix: (label, letter),
             theme,
         }
@@ -130,24 +150,31 @@ impl<W: Write> AgentView<W> {
         self.out.write_all(bytes)?;
         self.out.flush()?;
         self.stream.observe(bytes);
+        if self.bell_due && self.stream.on_char_boundary() {
+            self.bell_due = false;
+            self.bell_written = true;
+            self.bell()?;
+        }
         Ok(())
     }
 
-    /// Öffnet die Ansicht für `action` in einem Terminal der Größe `size`.
-    /// Steht schon eine, bleibt sie.
+    /// Öffnet die Hilfe hinter `?` als Kasten in einem Terminal der Größe
+    /// `size`; die nächste Taste schließt ihn. Steht schon eine Ansicht,
+    /// bleibt sie.
     ///
     /// # Errors
     ///
     /// Wenn das Terminal nicht mehr schreibt.
-    pub fn open(&mut self, action: PrefixAction, size: (u32, u32)) -> io::Result<()> {
+    pub fn open_help(&mut self, size: (u32, u32)) -> io::Result<()> {
         if self.shown.is_some() {
             return Ok(());
         }
+        // Unter einer Ansicht klingelt nichts, auch keine aufgeschobene
+        // Glocke.
+        self.bell_due = false;
         let (label, letter) = &self.prefix;
-        let (title, mut lines) = match coming(action) {
-            Some(sentence) => (" humanitl ", sentence.map(str::to_owned).to_vec()),
-            None => (" Prefix keys ", help_lines(label, *letter)),
-        };
+        let title = " Prefix keys ";
+        let mut lines = help_lines(label, *letter);
         lines.push("Any key closes this.".to_owned());
         let switched = !self.stream.alt_screen();
         let mut bytes = if switched {
@@ -191,6 +218,7 @@ impl<W: Write> AgentView<W> {
         if self.shown.is_some() {
             return Ok(());
         }
+        self.bell_due = false;
         let switched = !self.stream.alt_screen();
         let mut bytes = if switched {
             b"\x1b[?1049h".to_vec()
@@ -246,6 +274,45 @@ impl<W: Write> AgentView<W> {
     /// Ob der Agent gerade auf dem Alternativschirm zeichnet.
     pub const fn agent_alt_screen(&self) -> bool {
         self.stream.alt_screen()
+    }
+
+    /// Die Glocke für eine neu gehaltene Anfrage (GitHub #12): ein `BEL`
+    /// zwischen zwei ganzen Stücken der Ausgabe des Agenten, über denselben
+    /// Schreiber. Wahr nur, wenn das `BEL` jetzt geschrieben wurde. Steht eine
+    /// Ansicht, klingelt nichts; endete das letzte Stück mitten in einem
+    /// UTF-8-Zeichen, wartet die Glocke ([`AgentView::bell_pending`]) und
+    /// geht hinter dem Stück hinaus, das es vollendet. In beiden Fällen ist
+    /// das Ergebnis `false`: Die Drossel zählt eine Glocke ab dem Augenblick,
+    /// in dem sie wirklich klang (`prefix::bell`).
+    ///
+    /// # Errors
+    ///
+    /// Wenn das Terminal nicht mehr schreibt.
+    pub fn hold_bell(&mut self) -> io::Result<bool> {
+        if self.shown.is_some() {
+            return Ok(false);
+        }
+        // Endete das letzte Stück mitten in einem UTF-8-Zeichen, wartet die
+        // Glocke hinter das Stück, das es vollendet (Review zu GitHub #12).
+        if !self.stream.on_char_boundary() {
+            self.bell_due = true;
+            return Ok(false);
+        }
+        self.bell()?;
+        Ok(true)
+    }
+
+    /// Ob eine aufgeschobene Glocke auf das Ende eines UTF-8-Zeichens wartet.
+    pub const fn bell_pending(&self) -> bool {
+        self.bell_due
+    }
+
+    /// Ob seit dem letzten Fragen eine aufgeschobene Glocke geschrieben
+    /// wurde; danach falsch, bis die nächste geht.
+    pub const fn take_bell_written(&mut self) -> bool {
+        let written = self.bell_written;
+        self.bell_written = false;
+        written
     }
 
     /// Ein kurzes Zeichen (`BEL`), dass eine Taste hier nichts öffnen kann.
@@ -353,7 +420,6 @@ mod tests {
     use std::sync::atomic::AtomicBool;
 
     use humanitl_config::DetachKeys;
-    use humanitl_config::prefix::PrefixAction;
 
     use super::{AgentView, HELD_LIMIT};
     use crate::prefix::stream::StreamState;
@@ -379,7 +445,7 @@ mod tests {
     fn the_help_over_a_shell_uses_the_alternate_screen() {
         let mut view = view();
         view.agent(b"$ ").unwrap();
-        view.open(PrefixAction::Help, (80, 24)).unwrap();
+        view.open_help((80, 24)).unwrap();
         let shown = text(&view);
         assert!(shown.contains("\x1b[?1049h"), "{shown:?}");
         assert!(shown.contains("Ctrl+B d"), "{shown:?}");
@@ -398,9 +464,9 @@ mod tests {
     fn a_view_over_a_full_screen_agent_asks_for_a_redraw() {
         let mut view = view();
         view.agent(b"\x1b[?1049h").unwrap();
-        view.open(PrefixAction::Interceptor, (80, 24)).unwrap();
+        view.open_help((80, 24)).unwrap();
         let shown = text(&view);
-        assert!(shown.contains("humanitl intercept"), "{shown:?}");
+        assert!(shown.contains("Ctrl+B d"), "{shown:?}");
         assert!(shown.contains("\x1b7"), "{shown:?}");
         assert_eq!(shown.matches("\x1b[?1049h").count(), 1, "{shown:?}");
         let before = view.out().len();
@@ -427,7 +493,7 @@ mod tests {
     #[test]
     fn an_overflow_never_cuts_a_chunk() {
         let mut view = view();
-        view.open(PrefixAction::Help, (80, 24)).unwrap();
+        view.open_help((80, 24)).unwrap();
         view.agent(&vec![b'x'; HELD_LIMIT - 1]).unwrap();
         view.agent(b"\x1b[?25l").unwrap();
         view.agent(b"]52;c;aGk=\x07").unwrap();
@@ -525,7 +591,7 @@ mod tests {
     #[test]
     fn leaving_with_an_open_view_releases_what_waited() {
         let mut view = view();
-        view.open(PrefixAction::Help, (80, 24)).unwrap();
+        view.open_help((80, 24)).unwrap();
         view.agent(b"bye").unwrap();
         view.leave(true);
         let out = text(&view);
@@ -539,7 +605,7 @@ mod tests {
     #[test]
     fn leaving_without_a_terminal_still_releases_what_waited() {
         let mut view = view();
-        view.open(PrefixAction::Help, (80, 24)).unwrap();
+        view.open_help((80, 24)).unwrap();
         view.agent(b"bye").unwrap();
         view.leave(false);
         let out = text(&view);

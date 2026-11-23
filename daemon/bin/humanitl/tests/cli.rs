@@ -2628,11 +2628,12 @@ fn sandbox_attach_speaks_the_terminal_rpc() {
         "the bytes of the daemon reach the terminal unchanged: {:?}",
         stdout(&output)
     );
-    // Und die Hinweiszeile, die neben den Bytes ankommt: Wer am Terminal
-    // sitzt, hat keine zweite Fläche dafür, also schreibt dieser Befehl sie
-    // selbst dazwischen -- in ihre eigene Zeile, mit `\r\n` davor und danach
-    // (HUM-042). Ohne diese Messung wäre der Rahmen ein Feld, das niemand
-    // anzeigt.
+    // Und die Hinweiszeile, die neben den Bytes ankommt: Die Ausgabe ist hier
+    // kein Terminal, sondern ein Mitschnitt ohne zweite Fläche, also schreibt
+    // dieser Befehl sie selbst dazwischen -- in ihre eigene Zeile, mit `\r\n`
+    // davor und danach (HUM-042). An einem Terminal bleibt sie seit GitHub #12
+    // aus dem Bild des Agenten (`tests/tty.rs`). Ohne diese Messung wäre der
+    // Rahmen ein Feld, das niemand anzeigt.
     assert!(
         stdout(&output)
             .contains("\r\n[humanitl] fake daemon: a request would wait for you here\r\n"),

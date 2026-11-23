@@ -99,11 +99,11 @@ pub enum KeyEvent {
 }
 
 /// Ob eine Taste der Tabelle einen eigenen Bildschirm mit eigener Tastatur
-/// öffnet: die Einstellungen (GitHub #11). Hilfe und Interceptor sind bis
-/// #12 Kästen, die die nächste Taste schließt.
+/// öffnet: die Einstellungen (GitHub #11) und der Interceptor (GitHub #12).
+/// Die Hilfe ist ein Kasten, den die nächste Taste schließt.
 #[must_use]
 pub const fn takes_screen(action: PrefixAction) -> bool {
-    matches!(action, PrefixAction::Settings)
+    matches!(action, PrefixAction::Settings | PrefixAction::Interceptor)
 }
 
 /// Was von einem Lesevorgang hinaufgeht, und was der Anschluss tut.
@@ -592,18 +592,35 @@ mod tests {
         );
         // Was nach `d` im selben Stück steht, ist verworfen.
         assert_eq!(ctrl_b().feed(b"\x02dxyz", false), event(KeyEvent::Detach));
-        for (key, action) in [
-            (b'i', PrefixAction::Interceptor),
-            (b'?', PrefixAction::Help),
-        ] {
-            let mut filter = ctrl_b();
-            assert_eq!(
-                filter.feed(&[CTRL_B, key], false),
-                event(KeyEvent::Open(action))
-            );
-            assert_eq!(filter.feed(b"q", false), event(KeyEvent::Close));
-            assert_eq!(filter.feed(b"q", false), forwarded(b"q"), "closed");
-        }
+        let mut filter = ctrl_b();
+        assert_eq!(
+            filter.feed(b"\x02?", false),
+            event(KeyEvent::Open(PrefixAction::Help))
+        );
+        assert_eq!(filter.feed(b"q", false), event(KeyEvent::Close));
+        assert_eq!(filter.feed(b"q", false), forwarded(b"q"), "closed");
+    }
+
+    /// `i` öffnet den Interceptor als eigenen Bildschirm wie `,` die
+    /// Einstellungen (GitHub #12): Das Stück endet mit dem Ereignis, und was
+    /// danach im selben Lesevorgang stand, erreicht weder den Agenten noch
+    /// die Ansicht: Ein `a` dort hieße im Interceptor erlauben, ohne dass der
+    /// Mensch die Liste gesehen hat. Mutationsbeweis: der Interceptor als
+    /// Kasten liest den Rest weiter (`a` schließt ihn, `Ctrl+B d` danach
+    /// hängt ab), und der Test wird rot.
+    #[test]
+    fn the_interceptor_takes_the_rest_of_the_read() {
+        let mut filter = ctrl_b();
+        let filtered = filter.feed(b"ls\x02ia\x02d", false);
+        assert!(filtered.hands_over());
+        assert_eq!(
+            filtered,
+            Filtered {
+                forward: b"ls".to_vec(),
+                events: vec![KeyEvent::Open(PrefixAction::Interceptor)],
+            }
+        );
+        assert_eq!(filter.feed(b"q", false), forwarded(b"q"), "no box to close");
     }
 
     /// `,` öffnet die Einstellungen als eigenen Bildschirm: Das Stück endet

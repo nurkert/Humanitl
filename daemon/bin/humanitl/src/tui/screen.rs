@@ -74,6 +74,13 @@ pub trait Screen {
     fn changed(&mut self) -> bool {
         false
     }
+
+    /// Wird nach jedem Bild gefragt: `true`, wenn der Bildschirm selbst
+    /// gezeichnet wurde, `false`, wenn unter der Mindestgröße nur der Hinweis
+    /// „Terminal too small" stand. Ein Bildschirm, der entscheidet (der
+    /// Interceptor, GitHub #12), nimmt danach keine Taste an, deren Folgen
+    /// niemand sehen konnte.
+    fn drawn(&mut self, _visible: bool) {}
 }
 
 /// Was die Schleife mit einer Eingabe tut, bevor der Bildschirm sie sieht.
@@ -114,21 +121,30 @@ fn needs_drawing(dirty: bool, screen: &mut impl Screen) -> bool {
     dirty || changed
 }
 
-/// Zeichnet ein Bild: den Bildschirm oder, unter dem Minimum, den Hinweis.
-fn draw(
-    terminal: &mut ratatui::Terminal<TtyBackend>,
+/// Zeichnet ein Bild: den Bildschirm oder, unter dem Minimum, den Hinweis,
+/// und sagt dem Bildschirm danach, welches von beiden ([`Screen::drawn`]).
+fn draw<B: ratatui::backend::Backend>(
+    terminal: &mut ratatui::Terminal<B>,
     screen: &mut impl Screen,
     theme: Theme,
     min: Cells,
-) -> io::Result<()> {
-    terminal.draw(|frame| {
-        let area = frame.area();
-        if Cells::new(area.width, area.height).holds(min) {
-            screen.draw(frame, theme);
-        } else {
-            too_small(frame, min, theme);
-        }
-    })?;
+) -> io::Result<()>
+where
+    B::Error: Into<Box<dyn std::error::Error + Send + Sync>>,
+{
+    let mut visible = false;
+    terminal
+        .draw(|frame| {
+            let area = frame.area();
+            visible = Cells::new(area.width, area.height).holds(min);
+            if visible {
+                screen.draw(frame, theme);
+            } else {
+                too_small(frame, min, theme);
+            }
+        })
+        .map_err(io::Error::other)?;
+    screen.drawn(visible);
     Ok(())
 }
 
@@ -376,6 +392,41 @@ mod tests {
             .recv_timeout(std::time::Duration::from_secs(5))
             .expect("discarding ended within the deadline");
         assert_eq!(taken, super::DISCARD_LIMIT);
+    }
+
+    /// Ein Bildschirm, der sich merkt, ob er zu sehen war.
+    struct Seen(Option<bool>);
+
+    impl Screen for Seen {
+        fn draw(&mut self, _frame: &mut ratatui::Frame<'_>, _theme: super::Theme) {}
+
+        fn on_event(&mut self, _event: &Event) -> Flow {
+            Flow::Continue
+        }
+
+        fn drawn(&mut self, visible: bool) {
+            self.0 = Some(visible);
+        }
+    }
+
+    /// Unter der Mindestgröße erfährt der Bildschirm, dass er nicht zu sehen
+    /// war, darüber, dass er es war (GitHub #12, Review: Tasten im
+    /// unsichtbaren Interceptor). Mutationsbeweis: `drawn` nie zu rufen
+    /// macht ihn rot.
+    #[test]
+    #[allow(clippy::expect_used)]
+    fn the_screen_learns_whether_it_was_visible() {
+        let theme = super::Theme::from_no_color(Some(std::ffi::OsStr::new("1")));
+        let min = super::Cells::new(60, 12);
+        let mut screen = Seen(None);
+        let mut small =
+            ratatui::Terminal::new(ratatui::backend::TestBackend::new(59, 30)).expect("a terminal");
+        super::draw(&mut small, &mut screen, theme, min).expect("drawn");
+        assert_eq!(screen.0, Some(false));
+        let mut large =
+            ratatui::Terminal::new(ratatui::backend::TestBackend::new(60, 12)).expect("a terminal");
+        super::draw(&mut large, &mut screen, theme, min).expect("drawn");
+        assert_eq!(screen.0, Some(true));
     }
 
     /// Der Text eines Einfügens ist danach überschrieben und leer; andere

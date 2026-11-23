@@ -221,6 +221,7 @@ struct Tweaks {
     cleanups: Option<Cleanups>,
     known_project: Option<PathBuf>,
     first_start: FirstStartTweaks,
+    held_after: Option<Duration>,
 }
 
 /// Wie der Fake den Erststart von `go` behandelt (#9).
@@ -356,6 +357,20 @@ impl FakeServer {
         )
     }
 
+    /// Wie [`FakeServer::start_with_winch_agent`], und jeder Strom von
+    /// `Subscribe` meldet nach einer halben Sekunde genau eine gehaltene
+    /// Anfrage (GitHub #12).
+    pub fn start_with_winch_agent_and_a_hold(harness: &Harness) -> Self {
+        Self::start_with(
+            harness,
+            Tweaks {
+                terminal: TerminalKind::WinchAgent,
+                held_after: Some(Duration::from_millis(500)),
+                ..Tweaks::default()
+            },
+        )
+    }
+
     /// Wie [`FakeServer::start`], aber hinter `Terminal` steht ein
     /// Vollbild-Agent, der sein Bild nur bei einer echten Größenänderung neu
     /// zeichnet, wie ein Programm auf `SIGWINCH` (GitHub #11,
@@ -415,6 +430,7 @@ impl FakeServer {
                             record: record_of_service,
                             known_project: tweaks.known_project,
                             first_start: tweaks.first_start,
+                            held_after: tweaks.held_after,
                         }),
                         token,
                     ));
@@ -602,6 +618,9 @@ struct SilentExport {
     known_project: Option<PathBuf>,
     /// Abweichungen beim Erststart (#9).
     first_start: FirstStartTweaks,
+    /// Jeder Strom von `Subscribe` meldet nach dieser Zeit genau ein
+    /// `FlowEvent.held` (GitHub #12): die Glocke eines Anschlusses.
+    held_after: Option<Duration>,
 }
 
 impl SilentExport {
@@ -719,7 +738,28 @@ impl DaemonApi for SilentExport {
         info
     }
     fn subscribe(&self, request: v1::SubscribeRequest) -> BoxStream<v1::FlowEvent> {
-        self.inner.subscribe(request)
+        use tokio_stream::StreamExt as _;
+
+        let inner = self.inner.subscribe(request);
+        let Some(after) = self.held_after else {
+            return inner;
+        };
+        let (tx, rx) = tokio::sync::mpsc::channel(1);
+        tokio::spawn(async move {
+            tokio::time::sleep(after).await;
+            let held = v1::FlowEvent {
+                event: Some(v1::flow_event::Event::Held(v1::flow_event::Held {
+                    flow_id: "held-by-the-fake".to_owned(),
+                    ..v1::flow_event::Held::default()
+                })),
+                ..v1::FlowEvent::default()
+            };
+            let _ = tx.send(held).await;
+            // Offen halten, bis der Client geht: Ein Ende hieße für ihn das
+            // Ende des Abonnements.
+            tx.closed().await;
+        });
+        Box::pin(inner.merge(tokio_stream::wrappers::ReceiverStream::new(rx)))
     }
     async fn list_flows(&self, request: v1::ListFlowsRequest) -> Result<v1::FlowPage, Diagnostic> {
         self.inner.list_flows(request).await

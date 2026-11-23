@@ -202,6 +202,7 @@ below lists the flag names and their short aliases.
 | `--sandbox-qemu-virtiofsd` | - | `STRING,_OPTIONAL` | `sandbox.qemu.virtiofsd` |
 | `--sandbox-work-dir` | `--work` | `STRING,_OPTIONAL` | `sandbox.work_dir` |
 | `--sandbox-work-mode` | `--work-mode` | `ro`, `rw` | `sandbox.work_mode` |
+| `--terminal-bell-on-hold` | - | `true`, `false` | `terminal.bell_on_hold` |
 | `--terminal-direct-keys` | - | `true`, `false` | `terminal.direct_keys` |
 | `--terminal-prefix` | - | `STRING` | `terminal.prefix` |
 | `--terminal-splash` | - | `true`, `false` | `terminal.splash` |
@@ -585,7 +586,7 @@ The prefix key (terminal.prefix, default Ctrl+B as in tmux, --prefix for one cal
 
   Ctrl+B d  detach; the session keeps running
   Ctrl+B ,  settings over the agent; Esc returns to it
-  Ctrl+B i  interceptor (here soon; meanwhile humanitl intercept)
+  Ctrl+B i  interceptor over the agent: decide held requests; Esc returns
   Ctrl+B ?  this help
   Ctrl+B Ctrl+B or Ctrl+B b  send Ctrl+B once to the agent
             (a tmux in the sandbox, readline's one character back)

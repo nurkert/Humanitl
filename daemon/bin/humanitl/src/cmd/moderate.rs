@@ -362,15 +362,8 @@ impl Moderation {
         }
         let host = held.host.clone();
         self.erase();
-        let Some(target) = self
-            .choose(&[
-                "[1] this exact URL",
-                "[2] this host",
-                "[3] this apex and every host under it",
-                "[4] this host and this method",
-            ])
-            .await
-        else {
+        self.tell(&format!("[humanitl] {RULE_SCOPE}\r\n"));
+        let Some(target) = self.choose(&RULE_TARGETS).await else {
             self.draw();
             return;
         };
@@ -840,7 +833,7 @@ fn seconds_left(deadline: Option<&prost_types::Timestamp>) -> u64 {
 /// # Errors
 ///
 /// [`codes::CLI_004`] mit dem Grund.
-fn rule_for(
+pub(crate) fn rule_for(
     held: &Held,
     host: &str,
     target: usize,
@@ -924,8 +917,32 @@ fn action_word(action: v1::RuleAction) -> &'static str {
     }
 }
 
-/// Der Matcher in einer Zeile.
-fn describe_matcher(matcher: Option<&v1::RuleMatcher>) -> String {
+/// Die Ziele einer Regel aus [`rule_for`], wie `--ask terminal` und der
+/// Interceptor im Terminal der Sitzung (GitHub #12) sie anbieten.
+///
+/// Jede Zeile sagt, was der Matcher wirklich trifft, nicht mehr und nicht
+/// weniger (Review zu GitHub #12): [`rule_for`] setzt weder Schema noch Port
+/// noch Upgrade, also gilt jede Regel für `http`, `https`, `ws` und `wss` und
+/// jeden Port, aber nie für ein WebSocket-Upgrade (eine Regel ohne `upgrade`
+/// trifft keines, `daemon/crates/rules/src/eval.rs`); das sagt die Zeile
+/// [`RULE_SCOPE`] unter dem Menü einmal für alle Ziele. Der Pfad wird
+/// ohne Abfrage verglichen (`daemon/crates/rules/src/path.rs`), also trifft
+/// `[1]` jede Abfrage; ohne Methode gilt jede Methode; und `**.apex` trifft
+/// den Apex selbst mit (`daemon/crates/rules/src/host.rs`). Bis dahin hieß
+/// `[1]` „this exact URL" und versprach, was die Regel nicht hielt.
+pub(crate) const RULE_TARGETS: [&str; 4] = [
+    "[1] this path on this host, any query and method",
+    "[2] this host, any path and method",
+    "[3] this apex and all hosts under it, any path and method",
+    "[4] this host and this method, any path",
+];
+
+/// Was für jedes Ziel aus [`RULE_TARGETS`] gilt; steht unter dem Menü.
+pub(crate) const RULE_SCOPE: &str = "Each: http/https/ws/wss, any port, no WebSocket upgrade";
+
+/// Der Matcher in einer Zeile, mit allem, was er offen lässt: Wer die Regel
+/// bestätigt, soll ihre ganze Reichweite lesen (Review zu GitHub #12).
+pub(crate) fn describe_matcher(matcher: Option<&v1::RuleMatcher>) -> String {
     let Some(matcher) = matcher else {
         return "host: ?".to_owned();
     };
@@ -933,17 +950,34 @@ fn describe_matcher(matcher: Option<&v1::RuleMatcher>) -> String {
     // geht in ein Terminal im Rohmodus, und eine Zusicherung, die woanders
     // gilt, ist keine Sperre hier.
     let mut out = format!("host: {}", crate::render::plain(&matcher.host));
-    if !matcher.path.is_empty() {
-        let _ = write!(out, " path: {}", crate::render::plain(&matcher.path));
+    if matcher.path.is_empty() {
+        out.push_str(", any path");
+    } else {
+        let _ = write!(
+            out,
+            ", path: {} with any query",
+            crate::render::plain(&matcher.path)
+        );
     }
-    if !matcher.methods.is_empty() {
-        out.push_str(" (this method)");
+    out.push_str(if matcher.methods.is_empty() {
+        ", any method"
+    } else {
+        ", this method only"
+    });
+    if matcher.scheme == 0 {
+        out.push_str(", http, https, ws or wss");
+    }
+    if matcher.port == 0 {
+        out.push_str(", any port");
+    }
+    if matcher.upgrade != v1::Upgrade::Websocket as i32 {
+        out.push_str(", not a WebSocket upgrade");
     }
     out
 }
 
 /// Die Dauer in einem Wort.
-fn describe_expiry(expiry: Option<&v1::RuleExpiry>) -> &'static str {
+pub(crate) fn describe_expiry(expiry: Option<&v1::RuleExpiry>) -> &'static str {
     match expiry.and_then(|expiry| expiry.expiry.as_ref()) {
         None | Some(v1::rule_expiry::Expiry::Never(())) => "forever",
         Some(v1::rule_expiry::Expiry::At(_)) => "until a time",
@@ -1607,5 +1641,32 @@ mod tests {
         assert!(!text.contains('\u{1b}'), "{text:?}");
         assert!(!text.contains('\u{7}'), "{text:?}");
         assert!(text.contains("1b"), "the byte is shown as hex: {text:?}");
+    }
+
+    /// Der Satz vor der Bestätigung nennt, was die Regel offen lässt: Das
+    /// Ziel `[1]` gilt für jede Abfrage, jede Methode, beide Schemata und
+    /// jeden Port, auch wenn der Kasten eine Adresse mit `?dry_run=1` zeigte
+    /// (Review zu GitHub #12). Mutationsbeweis: der alte Satz ohne diese
+    /// Angaben macht ihn rot.
+    #[test]
+    fn the_rule_sentence_names_what_the_matcher_leaves_open() {
+        let mut shown = held();
+        shown.path = "/pay".to_owned();
+        let rule = rule_for(&shown, &shown.host, 1, 2).expect("a rule");
+        let sentence = describe_matcher(rule.matcher.as_ref());
+        assert_eq!(
+            sentence,
+            "host: api.github.com, path: /pay with any query, any method, http, https, ws or wss, any port, not a WebSocket upgrade"
+        );
+        assert!(RULE_TARGETS[0].contains("any query"));
+        let method = rule_for(&shown, &shown.host, 4, 2).expect("a rule");
+        assert!(
+            describe_matcher(method.matcher.as_ref()).contains("any path, this method only"),
+            "{}",
+            describe_matcher(method.matcher.as_ref())
+        );
+        for target in RULE_TARGETS {
+            assert!(target.len() <= 76, "{target}");
+        }
     }
 }

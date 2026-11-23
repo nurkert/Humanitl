@@ -82,6 +82,9 @@ pub struct StreamState {
     paste: bool,
     /// Ob der Agent den Cursor versteckt hat (`CSI ? 25 l`).
     cursor_hidden: bool,
+    /// Wie viele Folgebytes des laufenden UTF-8-Zeichens noch fehlen: Ein
+    /// `BEL` dazwischen zerrisse das Zeichen (GitHub #12, Review).
+    utf8_left: u8,
 }
 
 impl StreamState {
@@ -98,6 +101,7 @@ impl StreamState {
             kitty,
             paste: false,
             cursor_hidden: false,
+            utf8_left: 0,
         }
     }
 
@@ -165,8 +169,28 @@ impl StreamState {
         bytes
     }
 
+    /// Ob die Ausgabe gerade an einer Grenze zwischen zwei UTF-8-Zeichen
+    /// steht, also kein Zeichen halb geschrieben ist. Ein Byte, das keine
+    /// gültige Folge fortsetzt, beendet das Zeichen; so hängt die Grenze
+    /// nie länger als drei Bytes.
+    pub const fn on_char_boundary(&self) -> bool {
+        self.utf8_left == 0
+    }
+
+    /// Zählt die fehlenden Folgebytes des laufenden UTF-8-Zeichens.
+    const fn utf8(&mut self, byte: u8) {
+        self.utf8_left = match byte {
+            0x80..=0xbf => self.utf8_left.saturating_sub(1),
+            0xc0..=0xdf => 1,
+            0xe0..=0xef => 2,
+            0xf0..=0xf7 => 3,
+            _ => 0,
+        };
+    }
+
     /// Ein Byte.
     fn byte(&mut self, byte: u8) {
+        self.utf8(byte);
         self.parse = match (self.parse, byte) {
             // `BEL` oder `ST` (`ESC \`) beenden die Zeichenkette.
             (Parse::Text, BEL) | (Parse::TextEscape, b'\\') => Parse::Ground,

@@ -445,8 +445,9 @@ fn a_cloned_project_cannot_lift_the_hard_block_of_the_user() {
 /// Ein geklontes Projekt nimmt dem Menschen die Präfixtaste nicht weg und
 /// legt sie nicht um (HUM-279, GitHub #10): `none` und ein anderes Präfix
 /// sind aus dem Projekt-Profil `CONFIG_003`, unter dem neuen wie unter dem
-/// alten Namen, und ebenso das Abschalten von `Ctrl+,`; aus dem globalen
-/// Profil ist alles erlaubt.
+/// alten Namen, und ebenso das Abschalten von `Ctrl+,` und der Glocke bei
+/// einer gehaltenen Anfrage (GitHub #12); aus dem globalen Profil ist alles
+/// erlaubt.
 #[test]
 fn a_cloned_project_cannot_take_the_prefix_key() {
     let scratch = Scratch::new();
@@ -455,6 +456,7 @@ fn a_cloned_project_cannot_take_the_prefix_key() {
         ("terminal.prefix", "\"ctrl-a\""),
         ("terminal.detach_prefix", "\"none\""),
         ("terminal.direct_keys", "false"),
+        ("terminal.bell_on_hold", "false"),
     ] {
         let profile = scratch.project_profile(&format!("{key} = {value}"));
         let diagnostic = expect_err(&Sources {
