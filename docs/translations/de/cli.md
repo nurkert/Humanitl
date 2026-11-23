@@ -12,8 +12,10 @@ ein RPC; die Kommandozeile ruft ihn auf und formatiert die Antwort. Sie enthält
 keine Fachlogik, und sie erfindet nichts.
 
 Dieses Dokument beschreibt `humanitl run`, `humanitl go`, `humanitl doctor`, `humanitl config`,
-`humanitl audit` und die drei `humanitl daemon`-Befehle vollständig, die übrigen
-Unterkommandos nur, soweit sie `run` betreffen. Die kanonische Liste aller
+`humanitl audit` und die drei `humanitl daemon`-Befehle vollständig, `humanitl projects`,
+`humanitl app` und `humanitl settings` kurz, die übrigen
+Unterkommandos nur, soweit sie `run` betreffen. Jedes Flag jedes Befehls steht
+in der [CLI-Referenz](reference/cli.md). Die kanonische Liste aller
 Unterkommandos steht in `backlog/CONVENTIONS.md` 3.8, das Schema aller
 Konfigurations-Flags in `docs/CONFIG.md`.
 
@@ -838,6 +840,50 @@ Mit `--ask terminal`, vom Schalter oder aus `hold.ask_mode`, lehnt
 dieses Terminal dem Agenten. Entschieden wird dann in der App mit `--ask ui`,
 oder im Terminal mit `humanitl run --ask terminal`. `Ctrl+C` an der Frage am
 Ende lässt die Änderungen warten und endet mit dem üblichen Signal-Code.
+
+### Der erste Start in einem neuen Ordner
+
+In einem Ordner, den das Projektregister des Daemons nicht kennt, zeigt
+`humanitl go` einen Bildschirm, bevor irgendetwas startet (GitHub #9,
+ADR-0024 Punkt 3). Der Bildschirm ist der Startvorschlag des Daemons
+(`Projects.proposal`), derselbe, den die App unter „New project…" zeigt: der
+Name des Ordners, eine Zeile mit den Vorgaben und der Fokus auf „Start".
+Gewählt werden muss nichts.
+
+| Taste | Wirkung |
+|---|---|
+| `Enter`, `Leertaste` | Auf „Start": die gezeigte Wahl für diesen Ordner speichern und starten. Auf einem Feld: die Option wählen, sonst nichts. |
+| `a` | „Customize…" mit jedem Feld des Vorschlags öffnen oder wieder schließen. |
+| `↑`/`↓` (`k`/`j`, `Tab`) | Zwischen „Start" und den Feldern wechseln. |
+| `←`/`→` (`h`/`l`) | Zwischen den Optionen eines Felds wechseln. |
+| `r` | Den Daemon neu fragen, nachdem eine Aktualisierung gescheitert ist. |
+| `Esc`, `q`, `Ctrl+C` | Abbrechen: nichts gespeichert, nichts gestartet, Exit 130. |
+
+Die Felder sind der Agent mit der Quelle seines Programms (Host oder Depot),
+der Ordnermodus, die Isolation, der Frage-Modus („Questions"), der
+Modellserver und das Profil. Eine Option, die der Daemon nicht verfügbar
+nennt, bleibt mit ihrem Grund sichtbar; einen Wert, den eine Firmenvorgabe
+sperrt, zeigt der Bildschirm nur lesbar mit der Vorgabe. Jede Änderung fragt
+den Daemon neu, und nur seine letzte Antwort zählt: „Start" wartet auf sie.
+Eine gescheiterte Aktualisierung zeigt den Befund und wartet auf `r`.
+
+„Start" speichert die Wahl über `Projects.save_choice` als Projektwahl
+dieses Ordners, eine Ebene auf dem Host, die weder ein Klon noch der Agent
+schreiben kann (`docs/SECURITY.md`, „Die Projektwahl"). Der nächste `go` hier
+zeigt keinen Bildschirm und startet mit ihr; `humanitl settings --project .`
+ändert sie, `humanitl projects forget .` verwirft sie. Tasten, die während
+des Speicherns kamen, werden vor dem Start verworfen, so dass ein zweites
+`Enter` weder die Frage zur Cloud-Inferenz beantwortet noch den Agenten
+erreicht.
+
+Ohne Terminal auf `stdin` und `stdout`, mit `--yes` oder `--json`, oder wenn
+der Bildschirm nicht gezeichnet werden kann (`TERM_003`, ein zu kleines
+Terminal oder eines ohne `TERM`), gibt es keinen Bildschirm: Die Vorgaben
+werden gespeichert, und eine Zeile auf `stderr` nennt sie, etwa
+`[humanitl] first start in shop, defaults saved: …. Change them with humanitl
+settings --project /home/u/shop`. Einen Vorschlag, den der Daemon nicht
+machen kann, beendet den Befehl mit seinem Befund; nur ein Daemon vor
+Vertrag 1.59 startet wie zuvor, ohne etwas zu speichern.
 
 ## `humanitl doctor`
 
@@ -2063,6 +2109,80 @@ antwortet mit `AGENT_014`, ein Konfigurationslauf mit `AGENT_015`, weil keine Va
 Antigravity CLI hat kein Installationsrezept: Ihr Anbieter bietet keinen Abruf einer gewählten
 Version und signiert nichts, und `install` antwortet mit `AGENT_015` und diesem Grund. OpenCode und
 pi haben kein Rezept fürs Depot; auch für sie antwortet `install` mit `AGENT_015`.
+
+## `humanitl projects`
+
+Das Projektregister des Daemons (HUM-532, HUM-533, ADR-0024 Punkte 1, 2 und 14): jeder Ordner, in
+dem eine Sitzung gestartet ist, mit seinem letzten Start, seinem Agenten, der Zahl seiner Läufe und
+seiner Projektwahl. Der Befehl hält keine eigene Liste; jedes Unterkommando ist ein Aufruf der RPC
+`Projects`.
+
+| Unterkommando | Was es tut |
+|---|---|
+| `projects ls` | Die bekannten Projekte, der jüngste Start zuerst: Name, Ordner, Agent, letzter Start, Läufe, und ob eine Sitzung läuft oder Änderungen warten. |
+| `projects show PATH` | Ein Projekt: sein Eintrag und jeder Schlüssel seiner Projektwahl mit dem gewählten Wert, dem Wert, der gilt, und seiner Herkunft. |
+| `projects proposal [PATH]` | Der Startvorschlag für einen Ordner, der Inhalt des Erststart-Bildschirms: jedes Feld mit seinen Optionen, der Vorgabe und dem Grund, warum eine Option nicht verfügbar ist. Gespeichert wird nichts. |
+| `projects clean [PATHS...]` | Aufräumen: aufgezeichnete Anfragen mit ihren Bodies, auf Wunsch wartende Änderungen eines Wegwerf-Laufs, Projektwahlen und Registereinträge. |
+| `projects forget PATH` | Projektwahl und Registereintrag eines Ordners; aufgezeichnete Anfragen bleiben. |
+
+`clean` und `forget` löschen nur, was der Daemon vorher aufgelistet hat. Der Befehl zeigt den Plan
+des Daemons, wie er kommt, jeden Eintrag mit seiner Größe und die Zeile, was bleibt, und fragt
+`Delete these N items? [y/N]`; ein Ja schickt den Digest genau dieses Plans zurück, und der Daemon
+löscht nur, wenn der Plan noch derselbe ist (sonst `SANDBOX_054`, ebenso für einen Eintrag in
+Gebrauch wie die laufende Sitzung). Ohne Ordner nimmt `clean` jedes Projekt außer dem, was in
+Gebrauch ist; `--older-than DAYS` beschränkt es auf ältere Anfragen und auf Projekte, die so lange
+nicht gestartet wurden, `--unassigned` auf Sitzungen ohne Projekt (nicht zusammen mit Ordnern oder
+`--include-waiting-changes`). Wartende Änderungen gehen nur mit
+`--include-waiting-changes`, und nicht übernommene Änderungen sind dann endgültig verloren. Ohne
+Terminal löscht `clean` nur mit `--yes` und endet sonst mit Exit 1 und dem Plan. **Projektordner
+und Audit-Kette sind nie Teil eines Plans**; siehe `docs/SECURITY.md`, „Aufräumen und Vergessen".
+Das Startfenster der App hat dasselbe Aufräumen unter „Clean up".
+
+## `humanitl app`
+
+```sh
+humanitl app [PATH]
+```
+
+Öffnet das Startfenster der Desktop-App mit dem Ordner `PATH` vorgewählt (GitHub #5, ADR-0024
+Punkt 5); `humanitl app .` wählt den aktuellen Ordner vor. Hängt eine App am Daemon, reicht der
+Daemon ihr den Ordner weiter (`Projects.OpenInApp`, Vertrag 1.60), und die App holt ihr Fenster
+nach vorn; eine stehende Sitzungsansicht hängt dafür ab, die Sitzung läuft weiter. Sonst startet
+der Befehl die App mit `--project PATH`: unter Linux `humanitl-app` neben diesem Programm, dann im
+`PATH`; unter macOS `open -a Humanitl`. Keine App gefunden ist `CLI_007`.
+
+Die App wählt nur vor. Ein bekanntes Projekt ist unter „Recent" als „Preselected" markiert, ein
+neuer Ordner bekommt den Erststart-Bildschirm, und ein Pfad, der kein Ordner ist, zeigt den Befund
+des Daemons. Nichts startet vor „Start" im Fenster. Unter macOS kommt eine App, die ohne Verbindung
+zum Daemon läuft, nur nach vorn, ohne den Ordner; unter Linux wird eine solche App nicht gesehen,
+und eine zweite startet.
+
+## `humanitl settings`
+
+```sh
+humanitl settings [--project PATH]
+```
+
+Jede Einstellung als Vollbildansicht im Terminal (GitHub #7, ADR-0024 Punkte 2 und 6), gezeichnet
+aus dem Einstellungskatalog des Daemons (`GetConfig` mit Katalog): Kategorien, Zeilen, Hilfe,
+Herkunft jedes Werts und die Sperren einer Firmenvorgabe kommen alle vom Daemon, die Ansicht
+listet also genau, was die Einstellungen der App listen. `/` sucht in Titeln, Hilfe, Stichwörtern
+und Schlüsseln. Schalter, Auswahlen, Text, Zahlen und Pfade werden über `SetConfig` geschrieben;
+einen Wert, den eine Firmenvorgabe sperrt, zeigt sie nur lesbar mit der Vorgabe. Modellserver,
+Sandbox-Backend, Verbindungsprüfung, Update-Prüfung, Quelle des Agenten, Neustart des Daemons und
+`config.toml` in `$EDITOR` haben eigene Zeilen. Zugangsschlüssel und Zugangsdaten des Proxys werden
+ohne Echo getippt und einmal über `LlmKey` und `Egress` geschickt, nie über `SetConfig`
+(`docs/SECURITY.md`).
+
+Mit `--project PATH` zeigt die Ansicht die Werte, die ein Start in diesem Ordner bekäme, und nur
+die Schlüssel der Projektwahl lassen sich dort ändern, über `Projects.save_choice`; einen Ordner,
+den das Register noch nicht kennt, speichert sie über seinen Pfad. Ohne Terminal oder mit `--json`
+gibt es keine Ansicht (`CLI_004`): dann `humanitl config get` und `humanitl config set`. Ein zu
+kleines Terminal oder eines ohne brauchbares `TERM` ist `TERM_003`.
+
+In einer laufenden Sitzung öffnet dieselbe Ansicht über dem Agenten mit der Präfixtaste und `,`
+([oben](#eine-session-pro-daemon)). Dort zeigt sie die globalen Einstellungen, und Editor und
+Neustart werden nicht angeboten.
 
 ## Die globalen Schalter
 

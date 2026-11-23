@@ -459,7 +459,7 @@ Einrichten ist ein kurzes Onboarding und keine Liste von Karten (HUM-287). Der E
 
 **Der erste Schritt, der nicht grün ist, ist offen.** Allein die Reihenfolge entscheidet, welcher Schritt das ist; der Bildschirm bewertet keinen Schritt. Der offene Schritt ist ein erhabenes Feld mit einer Überschrift in Alltagssprache („Der Modellserver verlangt einen gültigen Zugangsschlüssel", „Den Ordner wählen, in dem der Agent arbeitet"), den eigenen Bedienelementen des Schritts und seinem Befund innerhalb des Schritts mit Code, Ursache, Detail und Abhilfe (4.4), gezeichnet als Zustandsleiste und nicht als Karte. Seine Aktion ist der einzige Primärknopf auf dem Bildschirm und nimmt den Fokus: die Abhilfe, wo sie einen eigenen Knopf hat („Einstellungen öffnen" über HUM-275, „Ordner wählen", „Dienst installieren"), sonst „Ansprechen", „Erneut verbinden" oder „Erneut prüfen". Daneben steht der Schritt danach („Danach: Projektordner") oder „Danach: Session starten".
 
-**Ein Ordner, einmal gewählt (HUM-293).** Einen Ordner in Einrichten, auf dem Sandbox-Bildschirm oder in den Einstellungen zu wählen, schreibt `sandbox.work_dir` über `SetConfig` in die `config.toml` des Nutzers; der Daemon prüft den Ordner vor dem Schreiben mit denselben Regeln wie bei einem Start und schreibt ihn mit aufgelösten Links, sodass ein Link, der später woandershin zeigt, das Projekt nicht verschiebt. Ein abgewiesener Ordner wird nicht gespeichert, sein `SANDBOX_006` steht im Projektschritt, und der vorher gespeicherte Ordner bleibt. Die App, der Desktop-Starter und `humanitl sandbox run`/`humanitl run` nehmen alle den gespeicherten Ordner; `--work` überschreibt ihn für einen Aufruf, und das aktuelle Verzeichnis zählt nur, solange nichts gespeichert ist. Kein Ordner lebt nur im Speicher des Daemons, sodass App und Kommandozeile nie in zwei verschiedenen Ordnern starten. Eine laufende Session behält ihren Ordner; der neue gilt für den nächsten Start.
+**Ein Ordner, einmal gewählt (HUM-293).** Einen Ordner in Einrichten, auf dem Sandbox-Bildschirm oder in den Einstellungen zu wählen, schreibt `sandbox.work_dir` über `SetConfig` in die `config.toml` des Nutzers; der Daemon prüft den Ordner vor dem Schreiben mit denselben Regeln wie bei einem Start und schreibt ihn mit aufgelösten Links, sodass ein Link, der später woandershin zeigt, das Projekt nicht verschiebt. Ein abgewiesener Ordner wird nicht gespeichert, sein `SANDBOX_006` steht im Projektschritt, und der vorher gespeicherte Ordner bleibt. Die App, der Desktop-Starter und `humanitl sandbox run`/`humanitl run` nehmen alle den gespeicherten Ordner; `--work` überschreibt ihn für einen Aufruf, und das aktuelle Verzeichnis zählt nur, solange nichts gespeichert ist. Kein Ordner lebt nur im Speicher des Daemons, sodass App und Kommandozeile nie in zwei verschiedenen Ordnern starten. Eine laufende Session behält ihren Ordner; der neue gilt für den nächsten Start. Seit HUM-537 nimmt die App diesen Ordner nicht mehr als stilles aktuelles Projekt: Jeder Start aus dem Startfenster nennt sein Projekt und schickt es mit dem Start (4.13); `humanitl run` und `humanitl sandbox run` nehmen weiter den gespeicherten Ordner, und `humanitl go` nimmt das aktuelle Verzeichnis.
 
 **Eine Wahl, ein Knopf.** Solange der Projektschritt nach einem Ordner fragt (kein Ordner oder einer, den der Daemon abweist), ist sein einziges Bedienelement dafür das „Ordner wählen" des Befunds als Primärknopf; die Ordnerauswahl mit ihrem eigenen „Ordner wählen…" erscheint erst, wenn ein Ordner gilt, um ihn oder seinen Modus zu ändern.
 
@@ -469,11 +469,27 @@ Einrichten ist ein kurzes Onboarding und keine Liste von Karten (HUM-287). Der E
 
 **Nichts muss scrollen.** Bei 1280×800 stehen der offene Schritt, seine Aktion und die Zeilen darunter im Zustand des Eigentümers vom 2026-10-23 (Schlüssel abgewiesen, kein Ordner) über der Statusleiste. Bei Textskalierung 2 scrollt der Bildschirm weiterhin.
 
-**Wo die App öffnet.** Die App öffnet Einrichten, wenn die erste feststehende Antwort einen Schritt hat, der den Start blockiert oder noch erfragt wird (`SetupState.needsSetup`), und sonst Anhalten. Ein erster Start hat keinen Projektordner, und ein fehlender Ordner blockiert (`CONFIG_013`). Der erste Start ist deshalb der erste Fall des zweiten, und der Client hält kein eigenes „erster Start"-Flag. Ein Modellserver, den niemand anzusprechen gebeten hat, blockiert nicht, sodass ein gewöhnlicher zweiter Start die Warteschlange öffnet.
+**Wo die App öffnet.** Seit HUM-537 öffnet die App das Startfenster (4.13), sobald ein Daemon antwortet und keine Sitzungsansicht hängt, auch wenn `sandbox.work_dir` gesetzt ist und wenn schon eine Sitzung läuft; die Ansicht einer Sitzung ohne Projekt öffnet sie nie. Ohne Daemon öffnet sie Einrichten, dessen erste Zeile den Befund trägt. In einer Sitzungsansicht öffnet Einrichten einmal, wenn die erste feststehende Antwort einen Schritt hat, der den Start blockiert oder noch erfragt wird (`SetupState.needsSetup`), und sonst Anhalten; der Client hält kein eigenes „erster Start"-Flag. Ein Modellserver, den niemand anzusprechen gebeten hat, blockiert nicht, sodass eine gewöhnliche Sitzung die Warteschlange öffnet.
 
 **Geprüft durch** `app/test/features/setup/setup_onboarding_test.dart` und die Goldens `setup_firstrun`, `setup_partial` und `setup_ready_*`.
 
 ---
+
+### 4.13 Startfenster und erster Start
+
+Der Eigentümer wünschte sich am 2026-11-17 einen Start wie den Willkommensbildschirm einer IDE (ADR-0024 Punkte 1, 3 und 5). Am 2026-11-17 endete eine App, die aus einem Starter ohne Arbeitsverzeichnis kam, in `SANDBOX_049`; seit HUM-537 öffnet die App nie eine Sitzung ohne Projekt.
+
+**Der erste Bildschirm ohne Sitzung.** Sobald ein Daemon antwortet und keine Sitzungsansicht hängt, ist das Fenster das Startfenster: links eine Leiste mit drei Reitern, Projects, Clean up und Settings. Aus einer Sitzung führt die Befehlspalette zurück („Go to the start window"); die Sitzung läuft weiter und steht unter „Running". Auch das Schließen des Fensters oder des Terminalbereichs hängt nur ab und stoppt nie (GitHub #13); gestoppt wird mit der bestätigten Handlung der Sandbox-Seite.
+
+**Projekte.** Eine Karte je Gruppe, eine Zeile je Projekt, jede Zeile mit denselben Spalten: eine Kachel mit dem Anfangsbuchstaben, Name über Pfad, Agent, Zeit, „Start choice…" und ein Knopf am rechten Rand. „Running" listet die Sitzung, die der Daemon führt, mit „Attach", und „No terminal attached", wenn kein Client an ihrem Terminal hängt (der Daemon zählt sie, Vertrag 1.62). „Recent" listet das Register, das jüngste zuerst, mit „Start", das mit der gespeicherten Projektwahl startet; ein Ordner, den es nicht mehr gibt, steht ausgegraut mit „Folder not found" und dem Grund und lässt sich nicht starten, und „Changes waiting" markiert wartende Änderungen eines Wegwerf-Laufs. Solange eine Sitzung läuft, ist ein Start in einem anderen Projekt `CLI_005` des Daemons (eine Sitzung je Daemon, ADR-0024 Punkt 12). „New project…" öffnet die Ordnerauswahl; ein Ordner, den das Register kennt, startet ohne Frage, ein neuer bekommt den Erststart-Bildschirm. `humanitl app PATH` holt das Fenster nach vorn, mit dem Ordner als „Preselected" markiert oder mit dem Erststart-Bildschirm; nichts startet vor „Start".
+
+**Erster Start.** Eine Karte an Stelle der Listen, derselbe Bildschirm wie in `humanitl go` und aus derselben Antwort des Daemons gezeichnet (`Projects.proposal`): der Einleitungssatz, die Zeile der Vorgaben, „Start" mit dem Fokus und „Customize…". `Enter` startet mit den Vorgaben; gewählt werden muss nichts. „Customize…" klappt die Felder auf, eines je Zeile mit einer Beschriftungsspalte fester Breite und den Optionen als eine segmentierte Reihe: Agent mit der Quelle seines Programms, Ordner, Isolation, Fragen, Modellserver, Profil. Eine Option, die der Daemon nicht verfügbar nennt, bleibt sichtbar und gesperrt, mit ihrem Grund unter der Zeile; ein Feld, das eine Firmenvorgabe sperrt, ist nur lesbar, mit der Vorgabe genannt. Jedes Wort, das ein Wert ist, kommt vom Daemon. `Enter` auf einer Option wählt sie, und „Start" wartet, bis der Daemon den neuen Vorschlag beantwortet hat, so dass `Enter` nie eine Wahl startet, die noch nicht übernommen ist. „Start" speichert die Wahl (`Projects.save_choice`) und startet; ein Anbieter außerhalb dieses Rechners stellt vorher die Frage zur Cloud-Inferenz (`cloud_confirm_dialog.dart`). „Start choice…" an einem zuletzt genutzten Projekt öffnet denselben Bildschirm, um seine Wahl zu ändern.
+
+**Aufräumen.** Der Reiter listet die Projekte zur Auswahl, „Sessions without a project" und den Schalter „Include waiting changes of disposable runs". „Review cleanup…" fragt den Daemon nach dem Plan (`Projects.cleanup_plan`), und der Dialog „Delete these items?" listet jeden Eintrag mit seiner Größe und unter „Stays", was nie gelöscht wird: den Projektordner und die Audit-Kette. Abbrechen hält den Fokus; der Knopf nennt Anzahl und Größe („Delete 3 items, 412 MB") und schickt den Digest genau des gezeigten Plans. Danach sagt der Reiter, was frei wurde, und lädt die Listen neu.
+
+**Einstellungen.** Der Reiter ist die Einstellungskomponente des Sitzungs-Sheets (`SettingsPanel`, HUM-535), mit dem Neustart des Daemons, den die Shell hineinreicht. Ihre Kategorien, Texte, Herkünfte und Sperren kommen aus dem Einstellungskatalog des Daemons (HUM-534); die App hält keine eigene Liste.
+
+**Geprüft durch** `app/test/features/start/start_window_test.dart`, `first_start_test.dart`, `app_request_test.dart` und `close_keeps_running_test.dart`.
 
 ## 5. Tastatur und Maus
 
@@ -675,6 +691,35 @@ einmaligen Hinweis mit: Dort keine Secrets eintippen, der Agent kann diese Shell
 (`docs/SECURITY.md` 4). Die Tab-Kombinationen wirken nur, solange sie können: Ohne
 die Fähigkeit tut `Ctrl+Shift+T` nichts, und mit dem Tab des Agenten allein
 bleiben `Ctrl+PageUp` und `Ctrl+PageDown` beim Agenten.
+
+**Im Terminal der Kommandozeile ist eine Präfixtaste die einzige Ausnahme (GitHub
+#10).** `humanitl sandbox attach`, `humanitl run -- CMD` an einem Terminal und
+`humanitl go` geben jede Taste an den Agenten außer dem Präfix (`terminal.prefix`,
+Vorgabe `Ctrl+B` wie in tmux), gefolgt von einer festen Tabelle: `d` abhängen, `,`
+Einstellungen, `i` Interceptor, `?` Hilfe, die Tabelle selbst in einem kleinen Kasten. Das
+Präfix zweimal oder gefolgt von seinem Buchstaben schickt es einmal, so geht dem
+Agenten keine Taste verloren. Das zählt bei `Ctrl+B` doppelt: Ein tmux in der
+Sandbox hat dasselbe Präfix, und in Shells und readline heißt `Ctrl+B` „ein
+Zeichen zurück"; beide bekommen es, wenn man `Ctrl+B` zweimal drückt. `Ctrl+,` öffnet
+die Einstellungen ohne Präfix nur, solange der Agent das kitty-Tastaturprotokoll
+eingeschaltet hat, weil nur dann das Terminal für diese Taste eine eigene Folge
+schickt (`terminal.direct_keys`); der Befehl schaltet das Protokoll nie selbst ein.
+Das Terminal der App liest die Präfixtaste nicht.
+
+**Ansichten über dem Agenten im Terminal der Kommandozeile (GitHub #11, #12).**
+`,` öffnet die Einstellungen von `humanitl settings` und `i` den Interceptor über
+dem laufenden Agenten; `Esc` oder `q` kehrt zurück. Solange eine Ansicht steht,
+erreicht keine Taste den Agenten, und seine Ausgabe wartet in ganzen gefilterten
+Stücken (höchstens 4 MiB); bei der Rückkehr schreibt der Befehl sie und bittet den
+Agenten mit einer Größenänderung um eine Zeile weniger und zurück, neu zu zeichnen.
+Der Interceptor listet die gehaltenen Anfragen, wählt nichts von selbst und
+entscheidet nur die gewählte nach einer ausdrücklichen Taste (`a` erlauben, `b`
+sperren, `r` Regel, die Regel erst nach `Enter`). Ein neuer Halt lässt die Glocke
+des Terminals einmal klingeln, zwischen ganzen Stücken, höchstens einmal je
+Sekunde und nie, solange eine Ansicht steht (`terminal.bell_on_hold`); kein
+Hinweistext wird in den Bildschirm des Agenten geschrieben. Das Schließen des
+Terminals von `humanitl go` hängt ab (`terminal.on_close`, GitHub #13). Die
+vollständigen Regeln stehen in `docs/cli.md`, „Eine Session pro Daemon".
 
 ### 5.3 Jede gebundene Taste tut etwas
 

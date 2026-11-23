@@ -253,6 +253,9 @@ humanitl sessions summary ID [--json]
 humanitl audit verify|export [--format jsonl|csv] [--out FILE]
 humanitl config get KEY | set KEY VALUE | schema | edit
 humanitl daemon install|status|logs
+humanitl projects ls | show PATH | proposal [PATH] | clean [PATHS...] [--older-than DAYS] [--include-waiting-changes] [--unassigned] [--yes] | forget PATH [--yes]
+humanitl app [PATH]
+humanitl settings [--project PATH]
 ```
 
 `humanitl sessions summary ID` nennt die Sandbox-Kennung eines Laufs, nicht die Sitzung des Daemons: Ein Daemon-Prozess hat genau eine `SessionId`, startet darin aber beliebig viele Sandboxen, und die Zusammenfassung gehört dem Lauf (HUM-043). `ID` ist die Kennung aus der Log-Zeile des Laufs.

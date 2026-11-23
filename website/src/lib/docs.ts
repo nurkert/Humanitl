@@ -36,6 +36,7 @@ const groupSpecs: GroupSpec[] = [
     key: 'using',
     items: [
       ['guides/install', { en: 'Install', de: 'Installation' }],
+      ['guides/getting-started', { en: 'Getting started', de: 'Loslegen' }],
       ['guides/first-session', { en: 'First session', de: 'Erste Session' }],
       ['guides/agent-profiles', { en: 'Agent profiles', de: 'Agentenprofile' }],
       ['profiles', { en: 'Profiles (stub)', de: 'Profile (Platzhalter)' }],
