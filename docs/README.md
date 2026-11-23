@@ -10,6 +10,7 @@ fails when they are stale.
 | Page | What it answers |
 |---|---|
 | [`guides/install.md`](guides/install.md) | prerequisites, `.deb`, AppImage, the user service, checks, removal |
+| [`guides/getting-started.md`](guides/getting-started.md) | from the terminal: `humanitl go claude`, the first-start screen, the prefix key, detach, attach in the app, clean up |
 | [`guides/first-session.md`](guides/first-session.md) | from the setup screen to the first held request, a rule and the audit check |
 | [`guides/agent-profiles.md`](guides/agent-profiles.md) | session profiles, the OpenCode adapter, writing an adapter, phone-home hosts |
 | [`guides/agent-depot.md`](guides/agent-depot.md) | the agent depot: when to use it, Claude Code from the depot step by step, what it protects and what not, the company lock, current limits |

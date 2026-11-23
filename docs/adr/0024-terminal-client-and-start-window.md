@@ -347,6 +347,95 @@ None. Questions 1 to 9 were answered on 2026-11-17 and 2026-11-18 and stand
 in the Decision section with their date (3 and 4 decided by the lead, the
 owner did not object).
 
+## Addendum 2026-11-23: What was built (GitHub #14, HUM-548)
+
+Sprint 8 built the decision as written, with the deviations and additions
+below. Each names the point of the Decision it changes and the issue that
+did it. Where nothing is listed, the build follows the text above.
+
+**Point 1 and 2, register and RPC.** A start from the app names its project
+by the register id (`SandboxRequest.Start.project_id`, contract 1.58), not
+by a path; the daemon takes the stored folder of that row and refuses an
+unknown or replaced row and a folder swapped at the same path (HUM-537).
+`GetConfig` selects the project with its existing `project_id` field, which
+takes an id or an absolute folder, instead of a new `project` field
+(HUM-534). A locked key in a project choice is `CONFIG_024`. `Projects`
+has one operation more than listed, `OpenInApp` (contract 1.60, GitHub #5),
+for point 5.
+
+**Point 3, first-start screen.** In `humanitl go` "Customize…" is the key
+`a`, `Space` works like `Enter`, `Esc`, `q` and `Ctrl+C` cancel with exit 130 and save nothing, and a
+screen that cannot be drawn (`TERM_003`) takes the way without a screen. A
+proposal the daemon cannot make stops the command; only a daemon before
+contract 1.59 starts as before (GitHub #9). `--yes` also skips the question
+on cloud inference (HUM-516), as it did for `run`.
+
+**Point 5, `humanitl app`.** Without a connected app the CLI starts
+`humanitl-app --project PATH` itself (on macOS `open -a Humanitl`); no app
+is `CLI_007`. An app that runs without a daemon connection is not reached:
+on macOS it only comes forward without the folder, on Linux a second app
+starts (GitHub #5, follow-up #52). A request that arrives during a session
+detaches the session view; the session keeps running.
+
+**Point 8, prefix key.** The table, the default `ctrl-b` and `Ctrl+,` only
+under the kitty keyboard protocol are built as decided (GitHub #10). Added:
+`terminal.direct_keys` (default `true`) turns the direct `Ctrl+,` off; under
+the protocol the prefix and the table are also read as CSI-u sequences;
+pasted text is never read as keys. The migration note cannot know who had
+the old default, so it goes once to every user who never set the key,
+under either name. Its marker (`prefix-notice-shown` in the data folder) is
+written by the CLI, not through a daemon RPC. That is a deliberate exception
+to ADR-0018 for a pure display hint whose loss or repetition is harmless;
+moving it behind an RPC is a follow-up.
+
+**Point 9, views.** The redraw after a view is a resize to one row less and,
+100 ms later, back to the real size, not a resize to the same size: the
+kernel raises `SIGWINCH` only on a real change, and the daemon passes on at
+most one size per 50 ms (GitHub #11, #63). The buffer bound is 4 MiB of
+whole filtered chunks; above it everything held is dropped and the agent is
+asked to redraw. A `--read-only` attach may not resize the session, so over
+an agent on the alternate screen it does not open a view and rings `BEL`
+instead. The settings view inside a session uses the global scope and
+offers neither the editor nor the daemon restart. That the shipped agents
+redraw on the resize is still unmeasured; only a fake agent was tested, and
+the check per agent is on the owner's walkthrough list. The interceptor view
+(GitHub #12) decides only the selected flow after an explicit key, selects
+nothing by itself, and passes every field the agent controls through one
+sanitiser shared with `--ask terminal`.
+
+**Point 10, detach on close.** Built as decided (GitHub #13), more precisely:
+`terminal.on_close` governs only a session this `go` started; `SIGTERM`
+still stops such a session; a terminal that is gone (`tcgetattr` fails with
+`EIO`) counts as a hangup, and nothing is written after one. A `go` that
+attached to a running session never stops it, whatever signal arrives,
+because it did not start it, so an app session still ends only through the
+confirmed stop. The rejoin is pinned to the sandbox id the daemon names for
+the folder (contract 1.62); before 1.62, without a terminal or with `--json`
+`go` starts and the daemon answers `CLI_005`, whose fix now names
+`humanitl go --dir FOLDER`.
+
+**Point 11, bell.** The bell is one `BEL` between two whole filtered chunks
+of the agent's output, never inside a UTF-8 character split across chunks,
+at most once per second, never while a view stands, and only when the output
+is a terminal (GitHub #12). In the same issue the daemon's notice line
+stopped being written into a terminal's output: the terminal belongs to the
+agent, so the notice stands only in the footer of an open view, and a
+recording to a file or pipe keeps it.
+
+**Consequences.** A detached session is shown by `humanitl sessions` ("no
+terminal attached") and by the start window ("No terminal attached"), from
+a count of terminal clients the daemon keeps (contract 1.62), not by a
+status line of `go`. There is no live event yet when that count changes.
+
+**Unverified assumptions.** crossterm and the raw mode of `tty.rs` share the
+terminal through one guard that enters raw mode via `tty::RawMode`
+(GitHub #6). The binary grew by 15,720 B with the TUI foundation (#6) and by
+1,027,952 B with the settings TUI (#7), below the assumed 1.5 MB together;
+the later views were not measured one by one. The redraw per agent is open,
+as said under point 9.
+
 ## Affected issues
 
 `HUM-530` to `HUM-548`, candidate `HUM-549`, in [`backlog/sprint-8.md`](../../backlog/sprint-8.md).
+From HUM-539 on the issues live on GitHub: #5 to #14 (HUM-539 to HUM-548),
+#15 (HUM-554, the agent source in the project choice) and #16 (HUM-549).

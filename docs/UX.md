@@ -468,7 +468,7 @@ Setup is a short onboarding and not a list of cards (HUM-287). The owner picked 
 
 **The first step that is not green is open.** The order alone decides which step that is; the screen judges no step. The open step is a raised panel with a headline in plain words ("Your model server wants a valid access key", "Choose the folder the agent works in"), the step's own controls, and its finding inside the step with code, cause, detail and fix (4.4), drawn as a state rail and not as a card. Its action is the only primary button on the screen and takes the focus: the fix where it has a button of its own (Open settings through HUM-275, Choose folder, Install service), otherwise Contact it, Reconnect or Check again. Beside it stands the step after it ("Next: Project folder"), or "Next: start a session".
 
-**One folder, chosen once (HUM-293).** Choosing a folder in Setup, on the sandbox screen or in Settings writes `sandbox.work_dir` into the user's `config.toml` through `SetConfig`; the daemon checks the folder with the same rules as a start before it writes, and writes it with its links resolved, so a link that later points elsewhere does not move the project. A refused folder is not stored, its `SANDBOX_006` stands in the project step, and the folder stored before stays. The app, the desktop launcher and `humanitl sandbox run`/`humanitl run` all take the stored folder; `--work` overrides it for one call, and the current directory counts only while nothing is stored. No folder lives only in the daemon's memory, so the app and the command line never start in two different folders. A running session keeps its folder; the new one applies to the next start.
+**One folder, chosen once (HUM-293).** Choosing a folder in Setup, on the sandbox screen or in Settings writes `sandbox.work_dir` into the user's `config.toml` through `SetConfig`; the daemon checks the folder with the same rules as a start before it writes, and writes it with its links resolved, so a link that later points elsewhere does not move the project. A refused folder is not stored, its `SANDBOX_006` stands in the project step, and the folder stored before stays. The app, the desktop launcher and `humanitl sandbox run`/`humanitl run` all take the stored folder; `--work` overrides it for one call, and the current directory counts only while nothing is stored. No folder lives only in the daemon's memory, so the app and the command line never start in two different folders. A running session keeps its folder; the new one applies to the next start. Since HUM-537 the app no longer treats this folder as a silent current project: every start from the start window names its project and sends it with the start (4.13); `humanitl run` and `humanitl sandbox run` still take the stored folder, and `humanitl go` takes the current directory.
 
 **Disposable where the system allows it (HUM-357).** A start without a choice is a disposable sandbox when the daemon can run one; the switch "Disposable" on the Sandbox page and the checkbox in Setup start at the mode the daemon names for the next start (`SandboxEvent.Status.sandbox_mode`), not at a guess of the app. An explicit `sandbox.mode` in the configuration comes first, so a change in Settings shows at once. The start sends `Start.sandbox_mode` only when the person changed the switch away from that default; a switch turned back sends nothing, so the default can still fall back. When the default fell back to direct, the hint of the switch names the reason the daemon gave (`SANDBOX_033`); once the person chose, the hint is the plain description again. Settings shows `sandbox.mode` as a row with three segments, Automatic, Direct and Disposable, and below it what the next start is on this system and, after a fallback or before a refusal, the daemon's reason. The row and the switch exist only for a daemon that names `sandbox.disposable`.
 
@@ -480,7 +480,7 @@ Setup is a short onboarding and not a list of cards (HUM-287). The owner picked 
 
 **Nothing needs scrolling.** At 1280×800 the open step, its action and the lines under it stand above the status bar in the owner's state of 2026-10-23 (key refused, no folder). The screen still scrolls at text scale 2.
 
-**Where the app opens.** The app opens Setup when the first settled answer has a step that blocks the start or one that is still being asked (`SetupState.needsSetup`), and Intercept otherwise. A first start has no project folder, and a missing folder blocks (`CONFIG_013`). The first start is therefore the first case of the second, and the client keeps no "first start" flag of its own. A model server nobody asked to contact does not block, so an ordinary second start opens the queue.
+**Where the app opens.** Since HUM-537 the app opens the start window (4.13) whenever a daemon answers and no session view is attached, also when `sandbox.work_dir` is set and when a session already runs; it never opens the view of a session without a project. Without a daemon it opens Setup, whose first line carries the finding. Inside a session view, Setup opens once when the first settled answer has a step that blocks the start or one that is still being asked (`SetupState.needsSetup`), and Intercept otherwise; the client keeps no "first start" flag of its own. A model server nobody asked to contact does not block, so an ordinary session opens the queue.
 
 **Checked by** `app/test/features/setup/setup_onboarding_test.dart` and the goldens `setup_firstrun`, `setup_partial` and `setup_ready_*`.
 
@@ -504,9 +504,9 @@ The owner asked on 2026-11-01 for a way to stop intercepting for a while without
 
 ### 4.12 Settings
 
-The settings are one overlay that comes up from below over three quarters of the window, the application dimmed behind it (HUM-404). It opens from the gear in the header and with `Ctrl+,`, and a diagnostic's `ChangeSetting` fix opens it at its setting. The look is in `docs/DESIGN.md`, "Settings overlay".
+The settings are one overlay that comes up from below over three quarters of the window, the application dimmed behind it (HUM-404). It opens from the gear in the header and with `Ctrl+,`, and a diagnostic's `ChangeSetting` fix opens it at its setting. The look is in `docs/DESIGN.md`, "Settings overlay". Outside a session the same component (`SettingsPanel`, HUM-535) is the tab "Settings" of the start window (4.13), so a change shows in both hosts; the terminal has the same rows in `humanitl settings` (5.2).
 
-**Order before quantity.** The settings stand in categories in a column on the left (Models, Agent, Sandbox, Requests, Interface, Keyboard shortcuts, Network, Daemon), so no page becomes a list without end as settings are added. One register (`app/lib/features/settings/registry/settings_registry.dart`) names for every setting its category, its key, its name, its help, its longer explanation, its search words in both languages and the widget that draws it; the column, the search and the jump of a fix all read it.
+**Order before quantity.** The settings stand in categories in a column on the left (Models, Agent, Agents, Sandbox, Requests, Interface, Keyboard shortcuts, Network, Decision proxy, Daemon), so no page becomes a list without end as settings are added. Since HUM-534 the daemon's settings catalog (`GetConfig` with `include_catalog`, from `daemon/crates/config/src/catalog.rs`) names for every setting its category, its order, its name, its help, its longer explanation, its search words in both languages, its kind of control, its origin and a lock of the company policy; the column, the search and the jump of a fix all read it, and the app keeps no list of its own. The register in `app/lib/features/settings/registry/settings_registry.dart` holds only the rows that need a control of their own (model servers, backends, update), found by their catalog id; every other row is drawn generically.
 
 **One row, one setting.** Name and a short help on the left, the control on the right, every control of a page on one edge. Longer explanations stand behind the info button and open in place; nothing above the rows explains the page. "Applies from the next session" stands only under the rows a running session does not pick up: the endpoint, the model, the access key, the agent, the project folder and where the agent writes. Language, appearance, scale, notifications, the hold timeout and where a request is asked apply at once.
 
@@ -525,6 +525,22 @@ The settings are one overlay that comes up from below over three quarters of the
 **Narrow and large.** The overlay works in a window of 960 x 600 and at every step of the scale. Below 760 px of panel width the column of categories narrows from 200 to 160 px and stays a column: eight names fit, and a menu in its place would hide where one is. A row whose control does not fit beside its text puts the control under it.
 
 **Checked by** `app/test/features/settings/settings_overlay_test.dart` (register against the rows of the old sheet, search in German and English, every setting found and reached, grouping and the empty state, the keys, the gear, "Saved", info and the next-session note, no overflow at 960 x 600 and at every step of the scale) and the goldens `settings_*` in `app/test/goldens/settings_golden_test.dart`.
+
+### 4.13 Start window and first start
+
+The owner asked on 2026-11-17 for a start like the welcome screen of an IDE (ADR-0024 points 1, 3 and 5). On 2026-11-17 an app started from a launcher without a working directory ended in `SANDBOX_049`; since HUM-537 the app never opens a session without a project.
+
+**The first screen without a session.** Whenever a daemon answers and no session view is attached, the window is the start window: a rail on the left with three tabs, Projects, Clean up and Settings. From a session the command palette leads back ("Go to the start window"); the session keeps running and stands under "Running". Closing the window or the terminal pane detaches as well and never stops (GitHub #13); stopping stays the confirmed action of the Sandbox page.
+
+**Projects.** One card per group, one row per project, every row the same columns: a tile with the initial, name over path, agent, time, "Start choice…" and one button at the right edge. "Running" lists the session the daemon runs with "Attach", and "No terminal attached" when no client hangs on its terminal (the daemon counts them, contract 1.62). "Recent" lists the register newest first with "Start", which starts with the stored project choice; a folder that is gone stands greyed with "Folder not found" and its reason and cannot be started, and "Changes waiting" marks waiting changes of a disposable run. While a session runs, a start in another project is the daemon's `CLI_005` (one session per daemon, ADR-0024 point 12). "New project…" opens the folder picker; a folder the register knows starts without a question, a new one gets the first-start screen. `humanitl app PATH` brings the window forward with that folder marked "Preselected" or with the first-start screen; nothing starts before "Start".
+
+**First start.** One card in place of the lists, the same screen as in `humanitl go` and drawn from the same answer of the daemon (`Projects.proposal`): the intro sentence, the line of defaults, "Start" with the focus and "Customize…". `Enter` starts with the defaults; nothing has to be chosen. "Customize…" unfolds the fields, one row each with a label column of fixed width and the options as one segmented row: agent with the source of its program, folder, isolation, questions, model server, profile. An option the daemon calls unavailable stays visible and disabled with its reason under the row; a field a company policy locks is read-only with the policy named. Every word that is a value comes from the daemon. `Enter` on an option chooses it, and "Start" waits until the daemon answered the new proposal, so `Enter` never starts a choice that is not taken yet. "Start" saves the choice (`Projects.save_choice`) and starts; a provider outside this machine first asks the question on cloud inference (`cloud_confirm_dialog.dart`). "Start choice…" on a recent project opens the same screen to change its choice.
+
+**Clean up.** The tab lists the projects to choose, "Sessions without a project" and the switch "Include waiting changes of disposable runs". "Review cleanup…" asks the daemon for the plan (`Projects.cleanup_plan`), and the dialog "Delete these items?" lists every item with its size and, under "Stays", what is never deleted: the project folder and the audit chain. Cancel holds the focus; the button names count and size ("Delete 3 items, 412 MB") and sends the digest of exactly the plan shown. The tab then says what was freed and reloads the lists.
+
+**Settings.** The tab is the settings component of the session sheet (`SettingsPanel`, HUM-535, 4.12), with the restart of the daemon handed in by the shell. Its categories, texts, origins and locks come from the daemon's settings catalog (HUM-534); the app keeps no list of its own.
+
+**Checked by** `app/test/features/start/start_window_test.dart`, `first_start_test.dart`, `app_request_test.dart` and `close_keeps_running_test.dart`.
 
 ## 5. Keyboard and mouse
 
@@ -741,6 +757,20 @@ settings without the prefix only while the agent has switched on the kitty
 keyboard protocol, because only then does the terminal send a sequence of its
 own for it (`terminal.direct_keys`); the command never switches the protocol
 on itself. The application's terminal does not read the prefix key.
+
+**Views over the agent in the command-line terminal (GitHub #11, #12).**
+`,` opens the settings of `humanitl settings` and `i` the interceptor over
+the running agent; `Esc` or `q` returns. While a view stands, no key reaches
+the agent and its output waits in whole filtered chunks (at most 4 MiB); on
+return the command writes it and asks the agent to redraw with a resize to
+one row less and back. The interceptor lists the held requests, selects
+nothing by itself, and decides only the selected one after an explicit key
+(`a` allow, `b` block, `r` rule, the rule only after `Enter`). A new hold
+rings the terminal bell once, between whole chunks, at most once per second
+and never while a view stands (`terminal.bell_on_hold`); no notice text is
+written into the agent's screen. Closing the terminal of `humanitl go`
+detaches (`terminal.on_close`, GitHub #13). The full rules are in
+`docs/cli.md`, "One session per daemon".
 
 ### 5.3 Every bound key does something
 

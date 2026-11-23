@@ -7,8 +7,10 @@ first; the command line calls it and formats the answer. It contains no
 domain logic, and it makes nothing up.
 
 This document describes `humanitl run`, `humanitl go`, `humanitl doctor`, `humanitl config`,
-`humanitl audit` and the three `humanitl daemon` commands in full, and the
-remaining subcommands only as far as they concern `run`. The canonical list of
+`humanitl audit` and the three `humanitl daemon` commands in full, `humanitl projects`,
+`humanitl app` and `humanitl settings` in short, and the
+remaining subcommands only as far as they concern `run`. Every flag of every
+command is in the [CLI reference](reference/cli.md). The canonical list of
 all subcommands is in `backlog/CONVENTIONS.md` 3.8, the schema of all
 configuration flags in `docs/CONFIG.md`.
 
@@ -793,9 +795,11 @@ directory or `--dir PATH` (`SANDBOX_006` if it is not a folder, `CLI_004`
 beside `--work`). The folder stored in `config.toml` does not apply to `go`.
 
 A known project starts with its project choice (`humanitl projects show`), a
-new one with the defaults of the start proposal (`humanitl projects
-proposal`) and one line that says so. Everything else is a switch for this
-start only; none of them changes the stored project choice:
+new one first shows the first-start screen with the start proposal
+(`humanitl projects proposal`; see
+[The first start in a new folder](#the-first-start-in-a-new-folder)).
+Everything else is a switch for this start only; none of them changes the
+stored project choice:
 
 | Switch | For this start |
 |---|---|
@@ -895,6 +899,47 @@ refuses with `CLI_002` before it starts anything: in `go` this terminal
 belongs to the agent. Decide in the app with `--ask ui`, or answer in the
 terminal with `humanitl run --ask terminal`. Ctrl+C at the closing question
 keeps the changes waiting and ends with the usual signal code.
+
+### The first start in a new folder
+
+In a folder the daemon's project register does not know, `humanitl go`
+shows one screen before anything starts (GitHub #9, ADR-0024 point 3). The
+screen is the daemon's start proposal (`Projects.proposal`), the same one
+the app shows under "New project…": the folder's name, one line with the
+defaults, and the focus on "Start". Nothing has to be chosen.
+
+| Key | Effect |
+|---|---|
+| `Enter`, `Space` | On "Start": save the shown choice for this folder and start. On a field: choose the option, nothing more. |
+| `a` | Open "Customize…" with every field of the proposal, or close it again. |
+| `↑`/`↓` (`k`/`j`, `Tab`) | Move between "Start" and the fields. |
+| `←`/`→` (`h`/`l`) | Move between the options of a field. |
+| `r` | Ask the daemon again after a refresh failed. |
+| `Esc`, `q`, `Ctrl+C` | Cancel: nothing is saved, nothing starts, exit 130. |
+
+The fields are the agent with the source of its program (host or depot),
+the folder mode, the isolation, the ask mode ("Questions"), the model
+server and the profile. An option the daemon calls unavailable stays
+visible with its reason; a value a company policy locks is read-only with
+the policy named. Every change asks the daemon again, and only its latest
+answer counts: "Start" waits for it. A failed refresh shows the finding and
+waits for `r`.
+
+"Start" saves the choice through `Projects.save_choice` as the project
+choice of this folder, a layer on the host that neither a clone nor the
+agent can write (`docs/SECURITY.md`, "The project choice"). The next `go`
+here shows no screen and starts with it; `humanitl settings --project .`
+changes it, and `humanitl projects forget .` drops it. Keys typed while it
+was being saved are discarded before the start, so a second `Enter` neither
+answers the question about cloud inference nor reaches the agent.
+
+Without a terminal on `stdin` and `stdout`, with `--yes` or `--json`, or
+when the screen cannot be drawn (`TERM_003`, a terminal too small or
+without `TERM`), there is no screen: the defaults are saved, and one line on
+`stderr` names them, for example `[humanitl] first start in shop, defaults
+saved: …. Change them with humanitl settings --project /home/u/shop`. A
+proposal the daemon cannot make stops the command with its finding; only a
+daemon before contract 1.59 starts as before, without saving anything.
 
 ## `humanitl doctor`
 
@@ -2169,6 +2214,77 @@ answers `AGENT_015`, because no variable moves its `~/.gemini`. Codex installs i
 from `releases.openai.com` (HUM-566). The Antigravity CLI has no install recipe: its vendor offers
 no way to fetch a chosen version and signs nothing, and `install` answers `AGENT_015` with that
 reason. OpenCode and pi have no depot recipe; for them `install` answers `AGENT_015` as well.
+
+## `humanitl projects`
+
+The daemon's project register (HUM-532, HUM-533, ADR-0024 points 1, 2 and 14): every folder a
+session started in, with its last start, its agent, its number of runs and its project choice.
+The command keeps no list of its own; every subcommand is one call of the RPC `Projects`.
+
+| Subcommand | What it does |
+|---|---|
+| `projects ls` | The known projects, the latest start first: name, folder, agent, last start, runs, and whether a session runs or changes wait. |
+| `projects show PATH` | One project: its entry and every key of its project choice with the chosen value, the value that applies and its origin. |
+| `projects proposal [PATH]` | The start proposal for a folder, the content of the first-start screen: every field with its options, the default and why an option is not available. Nothing is saved. |
+| `projects clean [PATHS...]` | Cleanup: recorded requests with their bodies, on request waiting changes of a disposable run, project choices and register entries. |
+| `projects forget PATH` | The project choice and the register entry of one folder; recorded requests stay. |
+
+`clean` and `forget` delete only what the daemon listed first. The command shows the daemon's
+plan as it comes, every item with its size and the line of what stays, and asks
+`Delete these N items? [y/N]`; a yes sends the digest of exactly that plan back, and the daemon
+deletes only if the plan is still the same (`SANDBOX_054` otherwise, also for an item in use such
+as the running session). Without a folder `clean` takes every project except what is in use;
+`--older-than DAYS` limits it to requests older than that and to projects not started for that
+long, `--unassigned` to sessions that belong to no project (not together with folders or
+`--include-waiting-changes`). Waiting changes go only with
+`--include-waiting-changes`, and changes that were not applied are then lost for good. Without a
+terminal `clean` deletes only with `--yes` and otherwise ends with exit 1 and the plan. **The
+project folder and the audit chain are never part of a plan**; see `docs/SECURITY.md`, "Cleanup
+and forgetting". The start window of the app has the same cleanup under "Clean up".
+
+## `humanitl app`
+
+```sh
+humanitl app [PATH]
+```
+
+Opens the start window of the desktop app, with the folder `PATH` preselected (GitHub #5,
+ADR-0024 point 5); `humanitl app .` preselects the current directory. When an app is connected to
+the daemon, the daemon hands it the folder (`Projects.OpenInApp`, contract 1.60) and the app
+brings its window forward; a session view that stands is detached for it, and the session keeps
+running. Otherwise the command starts the app with `--project PATH`: on Linux `humanitl-app` next
+to this program, then on `PATH`; on macOS `open -a Humanitl`. No app found is `CLI_007`.
+
+The app only preselects. A known project is marked "Preselected" under "Recent", a new folder gets
+the first-start screen, and a path that is not a folder shows the daemon's finding. Nothing starts
+before "Start" in the window. On macOS an app that runs without a daemon connection only comes
+forward, without the folder; on Linux such an app is not seen, and a second one starts.
+
+## `humanitl settings`
+
+```sh
+humanitl settings [--project PATH]
+```
+
+Every setting as a full-screen view in the terminal (GitHub #7, ADR-0024 points 2 and 6), drawn
+from the daemon's settings catalog (`GetConfig` with the catalog): categories, rows, help, origin
+of each value and the locks of a company policy all come from the daemon, so the view lists
+exactly what the app's settings list. `/` searches titles, help, keywords and keys. Switches,
+choices, text, numbers and paths are written through `SetConfig`; a value a company policy locks is
+read-only with the policy named. Model servers, the sandbox backend, the connection check, the
+update check, the agent source, a restart of the daemon and `config.toml` in `$EDITOR` have rows of
+their own. An access key and the proxy credentials are typed without echo and sent once through
+`LlmKey` and `Egress`, never through `SetConfig` (`docs/SECURITY.md`).
+
+With `--project PATH` the view shows the values a start in that folder would get, and only the keys
+of the project choice can be changed there, through `Projects.save_choice`; a folder the register
+does not know yet is saved by its path. Without a terminal, or with `--json`, there is no view
+(`CLI_004`): use `humanitl config get` and `humanitl config set`. A terminal that is too small or
+has no usable `TERM` is `TERM_003`.
+
+Inside a running session the same view opens over the agent with the prefix key and `,`
+([above](#one-session-per-daemon)). There it shows the global settings, and the editor and the
+restart are not offered.
 
 ## `humanitl sessions`
 
