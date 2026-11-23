@@ -197,8 +197,12 @@ async fn attach_running(
                  --kernel of this call do not apply to a session that already runs",
             );
         }
-        let mut ending =
-            crate::cmd::attach::attach_pinned(ctx, false, keys, pinned, &mut signals).await;
+        // Ist das Terminal schon weg, ist jedes Ende `SIGHUP`, auch ein
+        // `TERM_001`: Der Hinweis darunter ginge an ein Terminal, das es
+        // nicht mehr gibt (GitHub #73).
+        let mut ending = Ending::or_hung_up(
+            crate::cmd::attach::attach_pinned(ctx, false, keys, pinned, &mut signals).await,
+        );
         // Schon jemand schreibt (die Oberfläche, ein anderes Terminal): Dieser
         // Aufruf sieht zu, wie `sandbox attach --read-only`.
         if let Ok(Ending::Stream(Err(found))) | Err(found) = &ending
@@ -209,9 +213,11 @@ async fn attach_running(
             ctx.render.note(
                 "[humanitl] another client writes to this session; this terminal only watches",
             );
-            ending = crate::cmd::attach::attach_pinned(ctx, true, keys, pinned, &mut signals).await;
+            ending = Ending::or_hung_up(
+                crate::cmd::attach::attach_pinned(ctx, true, keys, pinned, &mut signals).await,
+            );
         }
-        ending?.or_hung_up()
+        ending?
     };
     match ending {
         Ending::Detached => crate::cmd::attach::finish(ctx, Ending::Detached),

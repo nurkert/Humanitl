@@ -139,7 +139,9 @@ pub(crate) async fn first_start(
             Shown::Ended(code) => {
                 // Nach `SIGHUP` ist das Terminal weg (GitHub #13).
                 if code != HANGUP_EXIT {
-                    eprintln!("[humanitl] not started; nothing was saved");
+                    crate::render::to_stderr(format_args!(
+                        "[humanitl] not started; nothing was saved\n"
+                    ));
                 }
                 return Ok(Next::Stop(code));
             }
@@ -154,7 +156,12 @@ pub(crate) async fn first_start(
     save(client, &path, proposal.choice.clone()).await?;
     // Auch mit `--json` und `-q`: Die Zeile sagt, welche Wahl dieser Aufruf
     // für das Projekt gespeichert hat, wie der Hinweis zur Cloud-Inferenz.
-    eprintln!("{}", line(&proposal, work_dir));
+    // Ging das Terminal während des Speicherns zu, schreibt sie nichts mehr
+    // hinein, und ein Schreiben, das trotzdem an `EIO` scheitert, ist keine
+    // Panik (GitHub #73); das Signal kommt gleich darunter.
+    if !crate::tty::terminal_gone() {
+        crate::render::to_stderr(format_args!("{}\n", line(&proposal, work_dir)));
+    }
     if let Some(code) = signalled(signals::take()) {
         return Ok(Next::Stop(code));
     }

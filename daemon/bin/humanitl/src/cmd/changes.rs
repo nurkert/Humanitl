@@ -75,7 +75,7 @@ pub async fn apply(
         let shown: Vec<String> = chosen.iter().map(|change| row(change)).collect();
         confirm(ctx, &question, &shown, "apply")?;
     }
-    send_apply(ctx, &changes.sandbox_id, ids, overwrite).await?;
+    send_apply(ctx, &changes.sandbox_id, ids, overwrite, Out::Result).await?;
     Ok(EXIT_OK)
 }
 
@@ -85,6 +85,7 @@ async fn send_apply(
     sandbox_id: &str,
     ids: &[String],
     overwrite: bool,
+    out: Out,
 ) -> Result<(), Failure> {
     let request = v1::sandbox_request::ApplyChanges {
         sandbox_id: sandbox_id.to_owned(),
@@ -95,7 +96,7 @@ async fn send_apply(
         overwrite_ids: Vec::new(),
     };
     let outcome = outcome_of(ask(ctx, v1::sandbox_request::Op::ApplyChanges(request)).await?)?;
-    report(ctx, &outcome);
+    report(ctx, &outcome, out);
     Ok(())
 }
 
@@ -115,17 +116,17 @@ pub async fn discard(ctx: &Context, yes: bool) -> Result<u8, Failure> {
         let shown: Vec<String> = changes.changes.iter().map(row).collect();
         confirm(ctx, &question, &shown, "discard")?;
     }
-    send_discard(ctx, &changes.sandbox_id).await?;
+    send_discard(ctx, &changes.sandbox_id, Out::Result).await?;
     Ok(EXIT_OK)
 }
 
 /// Schickt `DiscardChanges` und zeigt das Ergebnis.
-async fn send_discard(ctx: &Context, sandbox_id: &str) -> Result<(), Failure> {
+async fn send_discard(ctx: &Context, sandbox_id: &str, out: Out) -> Result<(), Failure> {
     let request = v1::sandbox_request::DiscardChanges {
         sandbox_id: sandbox_id.to_owned(),
     };
     let outcome = outcome_of(ask(ctx, v1::sandbox_request::Op::DiscardChanges(request)).await?)?;
-    report(ctx, &outcome);
+    report(ctx, &outcome, out);
     Ok(())
 }
 
@@ -158,9 +159,35 @@ pub fn choice(answer: &str) -> Choice {
 
 /// Die Text-Diffs aller Änderungen auf `stdout`.
 fn print_diffs(changes: &v1::DisposableChanges) {
+    write_diffs(changes, Out::Result);
+}
+
+/// Die Text-Diffs aller Änderungen auf `stdout`, auf dem Weg von `out`.
+fn write_diffs(changes: &v1::DisposableChanges, out: Out) {
     for change in &changes.changes {
         if !change.diff.is_empty() {
-            print!("\n{}", change.diff);
+            out.write(format_args!("\n{}", change.diff));
+        }
+    }
+}
+
+/// Wie ein Ergebnis auf `stdout` geht.
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+enum Out {
+    /// Das Ergebnis eines Befehls wie `sandbox changes`: über `print!`,
+    /// damit eine geschlossene Pipe ihn still mit 141 beendet (HUM-285).
+    Result,
+    /// Die Antwort an der Frage nach den Änderungen von `humanitl go`:
+    /// ohne Panik, wenn das Terminal inzwischen weg ist (GitHub #73).
+    Review,
+}
+
+impl Out {
+    /// Schreibt `text` auf `stdout`, wie es zu diesem Weg gehört.
+    fn write(self, text: std::fmt::Arguments<'_>) {
+        match self {
+            Self::Result => print!("{text}"),
+            Self::Review => crate::render::to_stdout(text),
         }
     }
 }
@@ -303,16 +330,22 @@ pub async fn review(ctx: &Context) -> Result<Option<u8>, Failure> {
         };
         match choice(&answer) {
             Choice::Apply => {
-                send_apply(ctx, &changes.sandbox_id, &[], false).await?;
+                send_apply(ctx, &changes.sandbox_id, &[], false, Out::Review).await?;
                 return Ok(None);
             }
             Choice::Discard => {
-                send_discard(ctx, &changes.sandbox_id).await?;
+                send_discard(ctx, &changes.sandbox_id, Out::Review).await?;
                 return Ok(None);
             }
             Choice::View => {
-                print_diffs(&changes);
-                println!();
+                // Ging das Terminal mit der Antwort zu, geht nichts mehr
+                // hinein, und die Änderungen warten wie nach `SIGHUP`
+                // (GitHub #73).
+                if crate::tty::terminal_gone() {
+                    return Ok(Some(crate::cmd::run::SIGHUP));
+                }
+                write_diffs(&changes, Out::Review);
+                Out::Review.write(format_args!("\n"));
             }
             Choice::Keep => {
                 ctx.render.note(KEPT);
@@ -503,7 +536,7 @@ fn row(change: &v1::DisposableChange) -> String {
     line
 }
 
-fn report(ctx: &Context, outcome: &v1::DisposableOutcome) {
+fn report(ctx: &Context, outcome: &v1::DisposableOutcome, out: Out) {
     if ctx.render.is_json() {
         ctx.render.value(&json!({
             "sandbox_id": outcome.sandbox_id,
@@ -513,12 +546,15 @@ fn report(ctx: &Context, outcome: &v1::DisposableOutcome) {
         }));
         return;
     }
-    println!("{}: sandbox {}", outcome.outcome, outcome.sandbox_id);
+    out.write(format_args!(
+        "{}: sandbox {}\n",
+        outcome.outcome, outcome.sandbox_id
+    ));
     for path in &outcome.applied {
-        println!("  applied    {path}");
+        out.write(format_args!("  applied    {path}\n"));
     }
     for path in &outcome.discarded {
-        println!("  discarded  {path}");
+        out.write(format_args!("  discarded  {path}\n"));
     }
 }
 

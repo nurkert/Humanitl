@@ -1782,6 +1782,64 @@ fn a_run_that_only_watches_still_stops_its_own_session() {
     }
 }
 
+/// `TERM_001` kommt erst, als das Terminal schon zu ist: Der Lauf hängt sich
+/// nicht lesend an und schreibt keinen Hinweis mehr, sondern behandelt das
+/// wie `SIGHUP`, stoppt seine Sitzung und endet mit 129 statt mit einer
+/// Panik (101) an `EIO` (GitHub #73). Ohne Signal, nur mit geschlossenem
+/// Master, denn sonst käme ihm das Signal zuvor.
+///
+/// Mutation proof: narrowing the `gone` arm of `Ending::hung_up_when` to
+/// `Detached` and `Stream(Ok)` lets the late `TERM_001` reach the reader
+/// attach and fails the `open` assert; restoring `eprintln!` in
+/// `Renderer::note` on top of that ends with 101.
+#[cfg(target_os = "linux")]
+#[test]
+fn a_late_refusal_at_a_closed_terminal_still_stops_the_session() {
+    for (extra, sub) in [
+        (&[][..], &["run", "--", "bash"][..]),
+        (
+            &["--terminal-on-close", "stop"][..],
+            &["go", "--", "bash"][..],
+        ),
+    ] {
+        let harness = Harness::new();
+        let server = FakeServer::start_tracking(
+            &harness,
+            &work(&harness),
+            Tracking {
+                writer_taken: true,
+                refused_after: Some(Duration::from_millis(500)),
+                ..Tracking::default()
+            },
+        );
+        let mut pty = Pty::open();
+        let mut child = harness
+            .command()
+            .args(extra)
+            .args(sub)
+            .stdin(pty.stdio())
+            .stdout(pty.stdio())
+            .stderr(pty.stdio())
+            .spawn()
+            .expect("the binary starts");
+        wait_for_raw(&mut child, &pty);
+        pty.close_master();
+        assert_eq!(
+            exit_within(&mut child, &pty, Duration::from_secs(3)),
+            Some(129),
+            "{sub:?}: the run did not end with 129 at a closed terminal"
+        );
+        assert_eq!(server.stops(), 1, "{sub:?}: the run left its session");
+        // Der abgelehnte Schreiber kommt beim Fake nicht an; ein `open` wäre
+        // der lesende Anschluss an ein Terminal, das es nicht mehr gibt.
+        assert!(
+            !server.terminal_inputs().contains(&"open"),
+            "{sub:?}: a reader attached to a closed terminal: {:?}",
+            server.terminal_inputs()
+        );
+    }
+}
+
 /// Ein zweites `go` hängt sich nur an die Sitzung, die der Daemon für den
 /// Ordner genannt hat: Ist sie inzwischen eine andere, lehnt der Anschluss
 /// mit `IPC_006` ab, und nichts startet oder stoppt (GitHub #13, Review).

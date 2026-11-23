@@ -88,7 +88,9 @@ pub(crate) fn print_short_line(cloud: &v1::CloudInference) {
         std::env::var_os("NO_COLOR").as_deref(),
         std::io::stderr().is_terminal(),
     );
-    eprintln!("{}", short_line(cloud, colour));
+    // Ohne Panik bei `EIO`: Die Zeile kommt mit dem Zustand der Sitzung, und
+    // der kann eintreffen, wenn das Terminal schon weg ist (GitHub #73).
+    let _ = writeln!(std::io::stderr().lock(), "{}", short_line(cloud, colour));
 }
 
 /// Der ganze Text des Hinweises, aus dem Befund des Daemons, sonst aus der
