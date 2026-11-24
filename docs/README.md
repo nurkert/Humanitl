@@ -51,3 +51,4 @@ fails when they are stale.
 | [`guides/release-process.md`](guides/release-process.md) | cutting a release with `tools/release.sh`, the changelog, what to do on red |
 | [`guides/maintaining.md`](guides/maintaining.md) | issue forms, labels as code, landing through a pull request with auto-merge, the repository settings behind it |
 | [`adr/README.md`](adr/README.md) | architecture decision records |
+| [`design/tools-on-request.md`](design/tools-on-request.md) | design behind ADR-0029: tools for the agent on request, off by default; catalog format, request path, sealing rules, card, contract and threat table (not built yet) |

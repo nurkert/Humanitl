@@ -95,7 +95,8 @@ as in ADR-0025; "#N" is a GitHub issue.
 
 Hard constraints: the three sandbox guarantees, `tests/escape/` and the
 terminal output filter stay as they are. No new door out of the sandbox and
-no new path on `humanitl.internal`. Every capability is an RPC first
+no new path on `humanitl.internal` (amended on 2026-11-24 by ADR-0029, which
+adds the paths under `/tools` and their four states). Every capability is an RPC first
 (ADR-0018); app, terminal views and CLI render what the daemon says and
 decide nothing. No new port (ADR-0015). One session per daemon stays for now
 (ADR-0024 point 12), but nothing here may need reshaping when several come
@@ -780,7 +781,9 @@ the kinds, locations and number of findings, and the hard block with
 `HOLD_004`; the resolved addresses and whether a name resolved to a private
 address; the address of the decision proxy and its diagnostics; every
 `Diagnostic` code, `why` and `fix`; the suggested rule and its preview; the
-session status of point 1. `humanitl.internal` gets no new path.
+session status of point 1. `humanitl.internal` gets no new path for any of
+this; ADR-0029 later added the paths under `/tools` with the four tool states
+`pending`, `ready`, `denied` and `unavailable`, which name no person.
 
 ### 6. Thin clients
 
@@ -878,7 +881,8 @@ three levels of ADR-0025 point 8; a support bundle; any new path on
   helps an honest agent explain the failure, and it helps an injected agent
   get around the block; the human has the exact cause anyway. HUM-364 rules
   out naming a person.
-- **A new path `humanitl.internal/status` or `/why-chain`.** Every new path
+- **A new path `humanitl.internal/status` or `/why-chain`** (amended by
+  ADR-0029, which adds the paths under `/tools`). Every new path
   is new information inside the sandbox; the agent's view of a block is
   complete with the body and `/why/<id>`.
 - **Suggest an allow rule for every failure.** It would invite undoing
