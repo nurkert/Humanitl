@@ -115,14 +115,11 @@ impl DetectorRegistry {
 
     /// Legt einen Detektor dazu, dessen Funde kein anderer verdrängt.
     ///
-    /// Das Aufräumen behält an einer Stelle nur den stärksten Fund, und ein
-    /// Begriff des Nutzers (`findings.user_terms`, Stufe `user_term`) ist
-    /// stärker als jede Prüfsumme. Ein Begriff `sk` aus einem Projekt-Profil
-    /// verdrängte so den Fund des Zugangsschlüssels `sk-…`, und mit ihm die
-    /// harte Sperre (HUM-140, Review). Die Funde eines solchen Detektors
-    /// laufen deshalb am Aufräumen vorbei: Sie fallen weder einem anderen Fund
-    /// noch `findings.ignored_hashes` zum Opfer, und von gleichen Stellen
-    /// bleibt eine.
+    /// Die Funde eines solchen Detektors laufen am Aufräumen vorbei: Sie
+    /// fallen weder einem anderen Fund noch `findings.ignored_hashes` zum
+    /// Opfer, und von gleichen Stellen bleibt eine. Umgekehrt verdrängen sie
+    /// jeden Fund, der sie überlappt, außer einem durch Prüfsumme bestätigten
+    /// (HUM-140, Review).
     pub fn register_protected(&mut self, detector: Box<dyn Detector>) {
         self.protected.push(detector);
     }
@@ -142,7 +139,9 @@ impl DetectorRegistry {
     /// Aufgeräumt heißt: Bereiche der dekodierten Query zeigen wieder auf den
     /// Rohtext, Funde aus `findings.ignored_hashes` fallen weg, gleiche Stelle
     /// plus gleicher Bereich behält den höchsten Tier, und die Liste ist nach
-    /// Ort und Bereichsanfang sortiert.
+    /// Ort und Bereichsanfang sortiert. Ausgenommen ist ein durch Prüfsumme
+    /// bestätigter Fund: Kein überlappender Fund entfernt ihn, er fällt nur
+    /// als Doppel seiner selbst weg.
     #[must_use]
     pub fn scan(&self, request: &HttpRequest, body: &[u8]) -> ScanReport {
         let targets =
@@ -232,6 +231,12 @@ impl DetectorRegistry {
 /// Ein eigener Begriff des Nutzers schlägt alles: er hat ihn hinterlegt, weil
 /// genau dieser Wert nie nach außen soll. Danach kommt die Prüfsumme, die den
 /// Fund bestätigt, und zuletzt das bloße Muster.
+///
+/// Die Rangfolge entscheidet nur, welcher Fund oben steht und welche Muster
+/// wegfallen. Einen durch Prüfsumme bestätigten Fund entfernt sie nie: An ihm
+/// hängt die harte Sperre `hold.hard_block_checksum_secrets`, und ein
+/// überlappender Begriff des Nutzers steht deshalb neben ihm, nicht an seiner
+/// Stelle.
 const fn tier_priority(tier: Tier) -> u8 {
     match tier {
         Tier::Regex => 0,
@@ -254,17 +259,20 @@ fn location_key(location: &FindingLocation) -> (u8, &str) {
 /// Ein geschützter Fund verdrängt jeden anderen, der ihn am selben Ort
 /// überlappt, so wie es das Aufräumen mit einem stärkeren tut: Sonst stünde
 /// `sk-proj-…` einmal als Muster und einmal als bekannter Schlüssel da.
-/// Selbst verdrängt wird er nie (HUM-140, Review).
+/// Selbst verdrängt wird er nie (HUM-140, Review). Ausgenommen ist ein durch
+/// Prüfsumme bestätigter Fund: Er bleibt neben dem geschützten stehen
+/// ([`is_confirmed`]).
 fn with_protected(findings: Vec<Finding>, protected: Vec<Finding>) -> Vec<Finding> {
     let protected = distinct(protected);
     let mut merged: Vec<Finding> = findings
         .into_iter()
         .filter(|found| {
-            !protected.iter().any(|guard| {
-                guard.location == found.location
-                    && guard.span.start < found.span.end
-                    && found.span.start < guard.span.end
-            })
+            is_confirmed(found)
+                || !protected.iter().any(|guard| {
+                    guard.location == found.location
+                        && guard.span.start < found.span.end
+                        && found.span.start < guard.span.end
+                })
         })
         .collect();
     merged.extend(protected);
@@ -292,13 +300,35 @@ fn distinct(mut findings: Vec<Finding>) -> Vec<Finding> {
     findings
 }
 
+/// Ob ein Fund durch Prüfsumme bestätigt ist.
+///
+/// Ein solcher Fund übersteht jedes Aufräumen, gleich was ihn überlappt: Die
+/// harte Sperre `hold.hard_block_checksum_secrets` sucht genau ihn, und ein
+/// anderer Fund an derselben Stelle darf ihn nicht ersetzen. Wegfallen kann er
+/// nur als Doppel seiner selbst (gleicher Ort, Bereich, Art und Tier).
+fn is_confirmed(found: &Finding) -> bool {
+    found.tier == Tier::Checksum
+}
+
+/// Ob `later` beim Deduplizieren gleicher Bereiche hinter `kept` wegfällt.
+///
+/// Die Liste ist so sortiert, dass an gleichem Bereich der höchste Tier vorn
+/// steht. Ein bestätigter Fund fällt nur weg, wenn `kept` dasselbe meldet.
+fn duplicates(later: &Finding, kept: &Finding) -> bool {
+    if later.location != kept.location || later.span != kept.span {
+        return false;
+    }
+    !is_confirmed(later) || (later.tier == kept.tier && later.kind == kept.kind)
+}
+
 /// Sortiert, dedupliziert und behält je Stelle den stärksten Fund.
 ///
 /// Zwei Schritte: Bei gleichem Bereich bleibt der höchste Tier stehen, bei
 /// überlappenden Bereichen ebenfalls. Der zweite Schritt ist der Grund, warum
 /// eine Kreditkartennummer in einer Rufnummer nicht doppelt gemeldet wird: Ein
 /// Fund, den der Mensch nicht auseinanderhalten kann, ist Lärm, und Lärm führt
-/// dazu, dass er ohne Lesen freigibt.
+/// dazu, dass er ohne Lesen freigibt. Ein durch Prüfsumme bestätigter Fund
+/// fällt in keinem der beiden Schritte weg ([`is_confirmed`]).
 fn tidy(mut findings: Vec<Finding>) -> Vec<Finding> {
     findings.sort_by(|left, right| {
         location_key(&left.location)
@@ -308,12 +338,15 @@ fn tidy(mut findings: Vec<Finding>) -> Vec<Finding> {
             .then(tier_priority(right.tier).cmp(&tier_priority(left.tier)))
             .then(left.kind.cmp(&right.kind))
     });
-    findings.dedup_by(|later, kept| later.location == kept.location && later.span == kept.span);
+    findings.dedup_by(|later, kept| duplicates(later, kept));
     suppress_overlapped(&mut findings);
     findings
 }
 
 /// Entfernt jeden Fund, den ein stärkerer am selben Ort überdeckt.
+///
+/// Durch Prüfsumme bestätigte Funde und Begriffe des Nutzers bleiben immer
+/// stehen; wegfallen kann nur ein bloßes Muster.
 ///
 /// Die Liste ist nach Ort und Bereichsanfang sortiert, deshalb reicht ein
 /// Durchlauf je Ort: Aus den Funden höheren Tiers entsteht eine Liste
@@ -330,15 +363,12 @@ fn suppress_overlapped(findings: &mut Vec<Finding>) {
             end += 1;
         }
         let group = &findings[start..end];
-        let strongest = merged_spans(group, 2);
         let stronger = merged_spans(group, 1);
         for (offset, found) in group.iter().enumerate() {
-            let dominant = match tier_priority(found.tier) {
-                2 => continue,
-                1 => &strongest,
-                _ => &stronger,
-            };
-            if overlaps_any(dominant, &found.span) {
+            if tier_priority(found.tier) > 0 {
+                continue;
+            }
+            if overlaps_any(&stronger, &found.span) {
                 keep[start + offset] = false;
             }
         }
@@ -384,7 +414,7 @@ mod tests {
     use humanitl_core::http::HeaderName;
     use humanitl_core::{Finding, FindingKind, FindingLocation, Tier};
 
-    use super::{location_key, tidy};
+    use super::{location_key, tidy, with_protected};
 
     fn finding(location: FindingLocation, start: usize, tier: Tier, kind: FindingKind) -> Finding {
         Finding::new(kind, start..start + 4, location, tier, "wert")
@@ -429,6 +459,70 @@ mod tests {
         ]);
         assert_eq!(findings.len(), 1);
         assert_eq!(findings[0].kind, FindingKind::Iban);
+    }
+
+    /// Ein Begriff des Nutzers über einer IBAN, auf genau demselben Bereich
+    /// und teilweise überlappend: Die IBAN bleibt jedes Mal stehen, neben dem
+    /// Begriff. An ihr hängt `hold.hard_block_checksum_secrets`.
+    #[test]
+    fn a_user_term_over_a_checksum_finding_keeps_both() {
+        let term = || FindingKind::UserTerm("wert".to_owned());
+        let same_span = tidy(vec![
+            finding(FindingLocation::Body, 0, Tier::Checksum, FindingKind::Iban),
+            finding(FindingLocation::Body, 0, Tier::UserTerm, term()),
+        ]);
+        let kinds: Vec<FindingKind> = same_span.iter().map(|f| f.kind.clone()).collect();
+        assert_eq!(kinds, vec![term(), FindingKind::Iban], "{same_span:?}");
+
+        let overlapping = tidy(vec![
+            finding(FindingLocation::Body, 0, Tier::Checksum, FindingKind::Iban),
+            finding(FindingLocation::Body, 2, Tier::UserTerm, term()),
+        ]);
+        assert_eq!(overlapping.len(), 2, "{overlapping:?}");
+        assert!(
+            overlapping
+                .iter()
+                .any(|f| f.kind == FindingKind::Iban && f.tier == Tier::Checksum),
+            "{overlapping:?}"
+        );
+    }
+
+    /// Dieselbe IBAN zweimal an derselben Stelle (rohe und dekodierte Query)
+    /// bleibt ein Fund; ein Muster über ihr fällt weiter weg.
+    #[test]
+    fn a_checksum_finding_falls_away_only_as_its_own_duplicate() {
+        let findings = tidy(vec![
+            finding(FindingLocation::Query, 0, Tier::Checksum, FindingKind::Iban),
+            finding(FindingLocation::Query, 0, Tier::Checksum, FindingKind::Iban),
+            finding(FindingLocation::Query, 1, Tier::Regex, FindingKind::Phone),
+        ]);
+        assert_eq!(findings.len(), 1, "{findings:?}");
+        assert_eq!(findings[0].kind, FindingKind::Iban);
+    }
+
+    /// Ein geschützter Fund verdrängt ein Muster an seiner Stelle, einen
+    /// durch Prüfsumme bestätigten Fund nicht.
+    #[test]
+    fn a_protected_finding_leaves_a_checksum_finding_in_place() {
+        let merged = with_protected(
+            vec![
+                finding(FindingLocation::Body, 0, Tier::Checksum, FindingKind::Iban),
+                finding(FindingLocation::Body, 8, Tier::Regex, FindingKind::Phone),
+            ],
+            vec![Finding::new(
+                FindingKind::ApiKey("llm".to_owned()),
+                2..10,
+                FindingLocation::Body,
+                Tier::Checksum,
+                "geheimni",
+            )],
+        );
+        let kinds: Vec<FindingKind> = merged.iter().map(|f| f.kind.clone()).collect();
+        assert_eq!(
+            kinds,
+            vec![FindingKind::Iban, FindingKind::ApiKey("llm".to_owned())],
+            "{merged:?}"
+        );
     }
 
     #[test]

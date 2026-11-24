@@ -1926,7 +1926,14 @@ Die Fallen sind alle bekannt und alle getestet (ESC-4):
   System (`BlockReason::Secret`, `403`); ohne Regel wird sie angehalten, und `Decide(Allow)` endet
   mit `HOLD_004`. Sie geht nur bearbeitet hinaus, und nur, wenn ein zweiter Scan der bearbeiteten
   Fassung kein solches Secret mehr findet (HUM-049, HUM-159). Die Prüfung sitzt im Daemon, nicht
-  im Fenster.
+  im Fenster. Ein überlappender Fund entfernt nie einen durch Prüfsumme bestätigten Fund: Ein
+  eigener Begriff (`findings.user_terms`) oder ein bekanntes Secret über denselben Bytes steht
+  neben ihm, nie an seiner Stelle (#96). Zwei Ausnahmen gehören dem Nutzer selbst: Ein Wert,
+  dessen Hash der Nutzer in `findings.ignored_hashes` eingetragen hat, ist kein Fund, auch ein
+  durch Prüfsumme bestätigter, und dieser Schlüssel ist Projekt-Profilen verwehrt; und der eigene
+  Zugangsschlüssel des Nutzers zum Modell ist kein Fund in der Kopfzeile, die seine Maske nennt,
+  in einer Anfrage an seinen eigenen Inferenz-Endpunkt
+  ([Abschnitt 5.1](#51-the-llm-passthrough)).
 
 **DNS nach dem Erlauben (ADR-006).** Ein Host-Name trägt bis zu 63 Byte pro Label und 253
 insgesamt. Wer `ZGllcyBpc3QgZWluIGdlaGVpbW5pcw.attacker.example` auflösen lässt, hat die Daten
@@ -2122,6 +2129,7 @@ der Durchleitung oder an der Audit-Kette bekommt hier eine Zeile und in der Änd
 | 0.1.x | Die Projektwahl: eine Ebene der Konfiguration je Projekt, die der Daemon auf dem Host in seinem Register hält, nur über `Projects.save_choice` geschrieben, nie aus dem Projektordner gelesen; eine feste Erlaubnisliste von Schlüsseln, die Untergrenze der Isolation steigt nur, Sperren einer Firmenvorgabe gewinnen, sonst `CONFIG_024`; ein Start ohne Projektordner wird mit `SANDBOX_053` abgelehnt, statt das Arbeitsverzeichnis des Daemons zu nehmen (HUM-532, [Abschnitt 5.2](#die-projektwahl-hum-532), K-37). |
 | 0.1.x | Eine Regel der `rules.yaml`, die sich nicht lesen lässt, kostet nur sich selbst statt aller Regeln der Datei; an ihrem Platz steht die Regel selbst (Aktion und Bedingung lesbar) oder `ask` für ihren Host oder für jeden Host und jede Adresse, nie nichts, außer bei einem `allow`; der Eintrag wird an seinem Platz zurückgeschrieben, und eine Datei, die sich als Ganzes nicht lesen lässt, wird nie überschrieben (HUM-561, [Abschnitt 7](#7-die-regel-engine)). |
 | 0.1.x | Die Zugangsdateien des Agent-Depots wahlweise verschlüsselt auf der Platte (`agents.encrypt_credentials`, Vorgabe aus, im Projekt-Profil gesperrt): ChaCha20-Poly1305 aus `ring` mit einer frischen zufälligen Nonce je Schreiben, der Schlüssel nur im Schlüsselbund des Systems und nie in einer Datei neben den Daten, ohne Schlüsselbund, der antwortet, wird die Einstellung abgelehnt (`AGENT_020`); das Umschalten wandelt jede Datei atomar unter den Sperren der Depots um, alles oder nichts; der Daemon entschlüsselt trotzdem für jede Sitzung (HUM-523, [Abschnitt 5.7](#57-die-zugangsdatei-des-depots), K-36). |
+| 0.1.x | Ein überlappender Fund entfernt nie einen durch Prüfsumme bestätigten Fund; ein eigener Begriff (`findings.user_terms`) oder ein bekanntes Secret über denselben Bytes steht neben ihm, so dass die harte Sperre (`hold.hard_block_checksum_secrets`) ihn immer sieht (#96, [Abschnitt 7](#7-die-regel-engine)). |
 
 ## 12. macOS: Seatbelt statt bubblewrap
 
