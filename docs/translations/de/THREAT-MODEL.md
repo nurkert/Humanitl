@@ -244,8 +244,11 @@ Server für diesen Projektordner einmal bestätigt hat (`CONFIG_022`, HUM-405); 
 im Datenverzeichnis des Daemons, außerhalb jedes Projekts, sodass der Agent, der das
 Projekt-Profil umschreiben kann, sie nicht ausstellen kann. Ein mitgeliefertes Profil, das das
 Projekt mit `name` nennt, lädt seinen eingebetteten Text; nennt der Mensch dasselbe Profil
-zugleich, gilt dessen Server als Wahl des Projekts und fragt ebenso. Speichere keinen Server, den
-kein Repository erreichen darf.
+zugleich, gilt dessen Server als Wahl des Projekts und fragt ebenso. Für ein Profil, das das
+Projekt-Profil nennt, gelten die Grenzen des Projekt-Profils: Ein Schlüssel, den das
+Projekt-Profil nicht setzen darf, und jede Regel außer `block` und `ask` werden mit einer Warnung
+übergangen (`CONFIG_003`), sodass kein solches Profil eine erlaubende Regel beiträgt; wählt der
+Mensch es selbst, gilt es ganz. Speichere keinen Server, den kein Repository erreichen darf.
 
 Mit einem Modell in der Cloud endet der zweite Kanal bei einem Anbieter außerhalb dieses Rechners
 (HUM-516): Die Dateien, die der Agent liest, und die Ausgaben seiner Werkzeuge reisen als Teil der
@@ -1365,6 +1368,7 @@ Gegen diese Angreifer gibt es keine Abwehr, und Humanitl behauptet das auch nich
 | 2026-11-22 | K-02: Ein dritter Weg für den Zugangsschlüssel des Anbieters und die Zugangsdaten des Proxys: die Einstellungsansicht `humanitl settings`, ohne Echo getippt, einmal über `LlmKey` oder `Egress(SetAuth)` geschickt, nie über `SetConfig`, nie gezeigt; der Eingabepuffer wird bei jedem Löschen, Abbrechen, Wachsen und Fallenlassen überschrieben, ein eingefügter Text, sobald er übernommen ist, und das Geheimnis bleibt bis zum Bau der Anfrage unter `Zeroizing`; nicht überschrieben: das Feld der Anfrage, die tonic übergeben wird, die Kodierpuffer von prost/tonic und die Lesepuffer von crossterm | GitHub #7 |
 | 2026-11-23 | K-37: Die Projektwahl trägt auch die Quelle des Agenten (`agents.<id>.source`, Host oder Depot); eine Sperre der Quelle durch die Firmenvorgabe hält sie aus der Wahl (`CONFIG_024`), und ein Start fällt nie auf die andere Quelle zurück | #15 |
 | 2026-11-23 | K-02: Ein mitgeliefertes Profil, das das Projekt-Profil mit `name` wählt, lädt seinen eingebetteten Text, Schlüssel und Regeln; die eigene Datei des Nutzers gleichen Namens gilt nur, wenn der Mensch das Profil wählt (`--profile`, das Profil der Session) | #90 |
+| 2026-11-23 | K-02: Für ein Profil, das das Projekt-Profil mit `name` wählt, gelten die Grenzen des Projekt-Profils: Schlüssel mit `x-project-scope = "denied"` und jede Regel außer `block` und `ask` werden übergangen, je mit einer Warnung (`CONFIG_003`); dasselbe Profil, vom Menschen gewählt, gilt ganz | #95 |
 
 Jede sicherheitsrelevante Änderung am Shim, an der Mount-Erlaubnisliste, am Filter oder an der
 Durchleitung bekommt hier eine Zeile. Schwachstellen werden gemeldet, wie in

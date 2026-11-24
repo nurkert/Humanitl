@@ -272,7 +272,10 @@ nie einen Endpunkt, ein Modell oder einen Schlüssel festlegen (Abschnitt 5.1). 
 nur unter den mitgelieferten Profilen (`CONFIG_009` für jedes andere), und ein Profil, das es
 wählt, lädt seinen eingebetteten Text, Schlüssel und Regeln: Die eigene Datei des Nutzers gleichen
 Namens unter `profiles/` gilt nur, wenn der Mensch das Profil wählt (`--profile`, das Profil der
-Session).
+Session). Für ein Profil, das das Projekt-Profil wählt, gelten die Grenzen des Projekt-Profils:
+Ein Schlüssel, den das Projekt-Profil nicht setzen darf, und jede Regel außer `block` und `ask`
+werden übergangen, je mit einer Warnung (`CONFIG_003`), und der Start läuft weiter. Wählt der
+Mensch dasselbe Profil, gilt es ganz.
 
 Toolchain für reproduzierbare Builds: Rust 1.95.0 (festgelegt in `daemon/rust-toolchain.toml`,
 mindestens 1.89), Flutter 3.47.2 (festgelegt in `app/.fvmrc`), `bubblewrap` 0.8 oder neuer.

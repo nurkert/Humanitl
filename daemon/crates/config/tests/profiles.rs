@@ -245,22 +245,29 @@ fn the_profile_chain_names_every_layer_that_spoke() {
     );
 }
 
+/// Das Projekt-Profil erbt vom Profil, das es nennt, nur, was es selbst
+/// setzen dürfte: `hold.ask_mode` ist auf der Projekt-Ebene gesperrt und
+/// bleibt deshalb auch aus `llm-only` draußen, mit einer Warnung.
 #[test]
 fn project_profile_inherits_named() {
     let home = Home::new();
     home.write_project_profile("name = \"llm-only\"\n\n[config.hold]\ntimeout_secs = 7\n");
 
     let resolved = home.resolve(&ProfileSelection::any(), &[]);
-    assert_eq!(resolved.config.hold.ask_mode, AskMode::None);
+    assert_eq!(resolved.config.hold.ask_mode, AskMode::Ui);
     assert_eq!(resolved.config.hold.timeout_secs, 7);
-    assert_eq!(
-        resolved.origin("hold.ask_mode"),
-        Some(&Origin::ProfileBuiltin("llm-only".to_owned()))
-    );
+    assert_eq!(resolved.origin("hold.ask_mode"), Some(&Origin::Default));
     assert!(matches!(
         resolved.origin("hold.timeout_secs"),
         Some(Origin::ProfileProject(_))
     ));
+    assert!(
+        resolved.diagnostics.iter().any(|diagnostic| {
+            diagnostic.code.as_str() == "CONFIG_003" && diagnostic.why.starts_with("hold.ask_mode")
+        }),
+        "{:?}",
+        resolved.diagnostics
+    );
 }
 
 /// Ein Projekt-Profil darf mit `name` nur ein mitgeliefertes Profil wählen.
@@ -399,12 +406,13 @@ fn a_name_on_the_command_line_beats_the_name_of_the_project() {
 #[test]
 fn a_field_of_a_group_does_not_reset_its_siblings() {
     // Der Fallstrick des Issues: `[config.hold]` mit nur `timeout_secs` im
-    // Projekt darf `ask_mode` aus dem benannten Profil nicht auf die Vorgabe
-    // zurückwerfen.
+    // Projekt darf `ask_mode` aus dem gewählten Profil nicht auf die Vorgabe
+    // zurückwerfen. Gewählt vom Menschen: Aus einem Profil, das das Projekt
+    // nennt, gilt `ask_mode` ohnehin nicht.
     let home = Home::new();
-    home.write_project_profile("name = \"llm-only\"\n\n[config.hold]\ntimeout_secs = 9\n");
+    home.write_project_profile("[config.hold]\ntimeout_secs = 9\n");
 
-    let resolved = home.resolve(&ProfileSelection::any(), &[]);
+    let resolved = home.resolve(&ProfileSelection::named("llm-only"), &[]);
     assert_eq!(resolved.config.hold.ask_mode, AskMode::None);
     assert_eq!(resolved.config.hold.timeout_secs, 9);
 }
@@ -795,8 +803,8 @@ fn a_profile_cannot_declare_its_own_rule_bundled() {
 /// eingebetteten Text; eine eigene Datei `llm-only.toml`, die
 /// `sandbox.backend` oder einen Schlüssel der Container-Engine oder der
 /// Kernel-Stufe setzt, gilt dann nicht. Wählt der Mensch dasselbe Profil
-/// selbst, gilt seine Datei; nennt das Projekt den Namen zugleich, lehnt das
-/// Laden ab. Die Untergrenze darf ohnehin keine Ebene senken.
+/// selbst, gilt seine Datei ganz, auch wenn das Projekt den Namen zugleich
+/// nennt: Die Wahl ist seine. Die Untergrenze darf ohnehin keine Ebene senken.
 ///
 /// Mutationsbeweis: Bekommt die Wahl des Projekts in `sources_with_global`
 /// wieder `layers_or_refuse` statt `embedded_layers`, lädt die eigene Datei,
@@ -826,15 +834,16 @@ fn a_project_cannot_choose_the_backend_through_a_shadowing_profile() {
             resolved.origins
         );
 
-        // Der Mensch nennt dasselbe Profil, das auch das Projekt nennt.
-        let diagnostic = home.resolve_err(&ProfileSelection::named("llm-only"), &[]);
-        assert_eq!(diagnostic.code.as_str(), "CONFIG_003", "{}", diagnostic.why);
+        // Der Mensch nennt dasselbe Profil, das auch das Projekt nennt: Seine
+        // Datei gilt ganz, samt dem Schlüssel des Backends.
+        let resolved = home.resolve(&ProfileSelection::named("llm-only"), &[]);
         assert!(
-            diagnostic
-                .why
-                .contains("does not choose the sandbox backend"),
-            "{}",
-            diagnostic.why
+            resolved
+                .origins
+                .values()
+                .any(|origin| *origin == Origin::ProfileGlobal("llm-only".to_owned())),
+            "{body}: {:?}",
+            resolved.origins
         );
         // Dieselbe Datei, vom Menschen gewählt und ohne Wunsch des Projekts.
         let home = Home::new();
@@ -866,7 +875,8 @@ fn a_project_cannot_choose_the_backend_through_a_shadowing_profile() {
 ///
 /// Mutationsbeweis: Bekommt die Wahl des Projekts in `sources_with_global`
 /// wieder `layers_or_refuse` statt `embedded_layers`, steht die Datei in der
-/// Kette, `hold.ask_mode` ist `ui`, und ihre Regel steht im Dokument.
+/// Kette, `hold.timeout_secs` kommt nicht aus `llm-only`, und ihre Regel steht
+/// im Dokument.
 #[test]
 fn a_profile_the_project_profile_names_loads_its_embedded_text() {
     let home = Home::new();
@@ -889,9 +899,9 @@ fn a_profile_the_project_profile_names_loads_its_embedded_text() {
             Origin::ProfileProject(home.project().join(".humanitl/profile.toml")),
         ]
     );
-    assert_eq!(resolved.config.hold.ask_mode, AskMode::None);
+    assert_eq!(resolved.config.hold.timeout_secs, 1);
     assert_eq!(
-        resolved.origin("hold.ask_mode"),
+        resolved.origin("hold.timeout_secs"),
         Some(&Origin::ProfileBuiltin("llm-only".to_owned()))
     );
     assert_eq!(resolved.config.agent.command, None);

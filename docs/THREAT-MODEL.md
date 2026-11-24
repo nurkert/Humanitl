@@ -229,7 +229,10 @@ directory, outside every project, so the agent, which can rewrite the project pr
 issue it. A bundled profile the project names with `name` loads its embedded text, so a server
 the human assigned to that profile in their own copy does not reach the project's session; when
 the human names the same profile at the same time, its server counts as the project's choice and
-asks the same question. The confirmation names a folder
+asks the same question. A profile the project profile names is held to the limits of the project
+profile: a key the project profile may not set and every rule other than `block` and `ask` are
+skipped with a warning (`CONFIG_003`), so no such profile adds an allowing rule; chosen by the
+human, it applies in full. The confirmation names a folder
 and a server, not the content of the repository: a repository that changes under a confirmed folder
 keeps the confirmation for the same name; removing, renaming or re-adding a server, or a new origin
 of its endpoint, drops it. An edit that moves a server to another origin drops its key, so a stored
@@ -1374,6 +1377,7 @@ These attackers are not defended against, and Humanitl does not claim to:
 | 2026-11-23 | K-39: closing the terminal of `humanitl go` detaches it (`terminal.on_close`, default `detach`, closed to project profiles); held requests wait for a person or their deadline, which blocks; the daemon counts the clients of the agent's terminal and `humanitl sessions` and the start window show a session without one; `humanitl run` and `SIGTERM` still stop | GitHub #13 |
 | 2026-11-23 | K-37: the project choice also carries the source of the agent (`agents.<id>.source`, host or depot); a company lock of the source keeps it out of the choice (`CONFIG_024`), and a start never falls back to the other source | #15 |
 | 2026-11-23 | K-02: a bundled profile the project profile chooses with `name` loads its embedded text, keys and rules; the user's own file of the same name applies only when the human chooses that profile (`--profile`, the profile of the session) | #90 |
+| 2026-11-23 | K-02: a profile the project profile chooses with `name` is held to the limits of the project profile: keys with `x-project-scope = "denied"` and every rule other than `block` and `ask` are skipped, each with a warning (`CONFIG_003`); the same profile chosen by the human applies in full | #95 |
 
 Every security-relevant change to the shim, the mount allowlist, the filter or the passthrough gets
 a line here. Vulnerabilities are reported as described in

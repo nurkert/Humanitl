@@ -78,7 +78,11 @@ profile cannot decide where it is looked for. Its `name` only chooses
 among the bundled profiles; any other wish is skipped and reported with
 `CONFIG_009` (`docs/profiles.md`). A profile the project profile chooses loads its
 embedded text, keys and rules; an own file of the same name under `profiles/` applies
-only when the human chooses that profile themselves (`--profile`).
+only when the human chooses that profile themselves (`--profile`). A profile the project
+profile chooses is held to the limits of the project profile: a key that is `denied` in
+the column "Project" and every rule other than `block` and `ask` are skipped, each with a
+warning `CONFIG_003`, and the start goes on. When the human chooses the same profile
+themselves, it applies in full.
 
 An environment variable is named like its path in upper case, with `__` between the
 levels: `hold.timeout_secs` becomes `HUMANITL_HOLD__TIMEOUT_SECS`. The value is read according

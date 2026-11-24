@@ -75,7 +75,11 @@ kann das Projekt-Profil nicht bestimmen, wo nach ihm gesucht wird. Sein `name` w
 unter den mitgelieferten Profilen; jeder andere Wunsch wird übergangen und mit
 `CONFIG_009` gemeldet (`docs/profiles.md`). Ein Profil, das das Projekt-Profil wählt,
 lädt seinen eingebetteten Text, Schlüssel und Regeln; eine eigene Datei gleichen Namens
-unter `profiles/` gilt nur, wenn der Mensch das Profil selbst wählt (`--profile`).
+unter `profiles/` gilt nur, wenn der Mensch das Profil selbst wählt (`--profile`). Für
+ein Profil, das das Projekt-Profil wählt, gilt die Grenze des Projekt-Profils: Ein
+Schlüssel, der in der Spalte „Projekt" `denied` hat, und jede Regel außer `block` und
+`ask` werden übergangen, je mit einer Warnung `CONFIG_003`, und der Start läuft weiter.
+Wählt der Mensch dasselbe Profil selbst, gilt es ganz.
 
 Eine Umgebungsvariable heißt wie ihr Pfad in Großbuchstaben, mit `__` zwischen den
 Ebenen: `hold.timeout_secs` wird zu `HUMANITL_HOLD__TIMEOUT_SECS`. Der Wert wird nach dem

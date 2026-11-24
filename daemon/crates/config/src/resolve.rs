@@ -37,6 +37,13 @@
 //! Profilverzeichnis des Nutzers gilt nur, wenn der Mensch das Profil selbst
 //! wählt (`--profile`, das Profil der Sitzung). Die Ebene 3, `default`,
 //! bleibt davon unberührt: Sie gilt in jeder Sitzung, mit oder ohne Projekt.
+//!
+//! **Ein Profil, das das Projekt-Profil wählt, steht unter der Grenze des
+//! Projekt-Profils.** Die Wahl kommt aus dem Projektordner; [`Sources::project_named`]
+//! trägt sie zum Laden, und dort bleibt jeder Schlüssel, den das Projekt-Profil
+//! nicht setzen dürfte, und jede Regel außer `block` und `ask` draußen
+//! (`named_profile.rs`). Wählt der Mensch das Profil selbst, gilt es
+//! ganz.
 
 use std::path::{Path, PathBuf};
 
@@ -202,6 +209,7 @@ pub fn sources_with_global(
         global_toml: global.clone(),
         profiles: layers_or_refuse(&paths, requested)?,
         profile_project: None,
+        project_named: None,
         project_choice: None,
         policy: crate::PolicyLocks::of_policy(&paths),
         env_prefix: DEFAULT_ENV_PREFIX,
@@ -217,7 +225,8 @@ pub fn sources_with_global(
     let project = work_dir
         .map(|dir| paths.project_profile_path(&dir))
         .filter(|path| path.is_file());
-    let profiles = match project_wish(selection.name.as_deref(), project.as_deref()) {
+    let wish = project_wish(selection.name.as_deref(), project.as_deref());
+    let profiles = match wish {
         Some(name) => embedded_layers(&paths, name),
         None => layers_or_refuse(&paths, requested)?,
     };
@@ -226,6 +235,7 @@ pub fn sources_with_global(
         global_toml: global,
         profiles,
         profile_project: project,
+        project_named: wish.map(str::to_owned),
         project_choice: None,
         policy: crate::PolicyLocks::of_policy(&paths),
         env_prefix: DEFAULT_ENV_PREFIX,

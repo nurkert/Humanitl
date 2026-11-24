@@ -63,6 +63,7 @@ pub mod inference;
 pub mod llm_endpoint;
 pub mod load;
 pub mod model;
+mod named_profile;
 pub mod origin;
 pub mod pasted;
 pub mod paths;
