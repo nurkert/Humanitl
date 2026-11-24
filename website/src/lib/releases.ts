@@ -2,6 +2,8 @@
 // Die Seite wird bei jedem veröffentlichten Release und täglich neu gebaut
 // (.github/workflows/website.yml); so bleiben Dateien und Download-Zahlen aktuell.
 
+import { dampCounts } from './download-counts.mjs';
+
 export type Platform = 'macos' | 'linux';
 
 export interface Asset {
@@ -11,8 +13,10 @@ export interface Asset {
   name: string;
   url: string;
   sizeMb: number;
-  /** Wie oft GitHub die Datei ausgeliefert hat. */
+  /** Wie oft die Datei zählt: ausgeliefert, aber auf die gemeinsame Obergrenze gekappt (#104). */
   count: number;
+  /** Wie oft GitHub die Datei ausgeliefert hat, ungekappt. */
+  served: number;
 }
 
 export interface Release {
@@ -66,14 +70,15 @@ async function fetchReleases(): Promise<Release[]> {
     const response = await fetch(api, { headers, signal: AbortSignal.timeout(10_000) });
     if (!response.ok) return [];
     const data = (await response.json()) as ApiRelease[];
-    return data
+    return damp(data
       .filter((release) => !release.draft)
       .map((release) => ({
         version: release.tag_name.replace(/^v/, ''),
         url: release.html_url,
         publishedAt: new Date(release.published_at),
         prerelease: release.prerelease,
-        totalDownloads: release.assets.reduce((sum, asset) => sum + (asset.download_count ?? 0), 0),
+        // Wird in `damp` aus den gekappten Zahlen der Installationsdateien berechnet.
+        totalDownloads: 0,
         checksumsUrl: release.assets.find((asset) => /^SHA256SUMS$/i.test(asset.name))?.browser_download_url,
         assets: release.assets.flatMap((asset) => {
           const match = kinds.find(([, , pattern]) => pattern.test(asset.name));
@@ -86,6 +91,7 @@ async function fetchReleases(): Promise<Release[]> {
                   url: asset.browser_download_url,
                   sizeMb: Math.round((asset.size / 1_048_576) * 10) / 10,
                   count: asset.download_count ?? 0,
+                  served: asset.download_count ?? 0,
                 },
               ]
             : [];
@@ -94,9 +100,24 @@ async function fetchReleases(): Promise<Release[]> {
         // und das Debian-Paket, unabhängig von der Reihenfolge des Hochladens.
         .sort((a, b) => kinds.findIndex(([kind]) => kind === a.kind) - kinds.findIndex(([kind]) => kind === b.kind)),
       }))
-      .sort((a, b) => b.publishedAt.getTime() - a.publishedAt.getTime());
+      .sort((a, b) => b.publishedAt.getTime() - a.publishedAt.getTime()));
   } catch {
     // Offline gebaut oder die API hakt: Die Seite zeigt dann den Verweis auf GitHub.
     return [];
   }
+}
+
+// Kappt die Zahl jeder Installationsdatei auf die gemeinsame Obergrenze aller Versionen und
+// rechnet die Summe je Version daraus neu; so ergeben Datei, Version, System und Gesamtzahl
+// dieselbe Rechnung. Prüfsummen und Update-Dateien zählen nie mit.
+function damp(releases: Release[]): Release[] {
+  const assets = releases.flatMap((release) => release.assets);
+  const damped = dampCounts(assets.map((asset) => asset.served));
+  assets.forEach((asset, index) => {
+    asset.count = damped[index];
+  });
+  for (const release of releases) {
+    release.totalDownloads = release.assets.reduce((sum, asset) => sum + asset.count, 0);
+  }
+  return releases;
 }
