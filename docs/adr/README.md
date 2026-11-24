@@ -67,6 +67,7 @@ Rules:
 | [0022](0022-decision-proxy-behind-humanitl.md) | A decision proxy of the user's choice can stand behind Humanitl | Accepted | Egress adapter `HttpProxy` (ADR-0017) with `CONNECT` to the address Humanitl resolved and checked, TLS opened in Humanitl and again in that proxy; `hold.ask_mode = "upstream"` forwards requests without a rule instead of holding them. |
 | [0023](0023-agent-depot.md) | Agent depot: an agent installed and logged in once, inside Humanitl only | Proposed | Optional store per agent under the daemon's data directory (`agents.source = "depot"`, default `"host"`); program read-only and configuration as a discarded copy in every session, only the checked credential file flows back into the depot; install and login run in a sandbox. |
 | [0024](0024-terminal-client-and-start-window.md) | A start window, a terminal client for settings and views, and sessions that outlive their terminal | Accepted | Project register and settings catalog in the daemon, rendered by the app's start window, the session sheet and a ratatui TUI in `humanitl`; `humanitl go [AGENT]` with a first-start screen, a prefix key table for views, detach on close. Addendum 2026-11-23 (#14): what the build changed, among others the redraw by a resize to one row less and back, `terminal.direct_keys`, the migration marker written by the CLI, a rejoined `go` that never stops. |
+| [0025](0025-settings-model-levels-presets-sections.md) | Settings show five levels, a narrow session level and three presets, in nine sections | Accepted | Default, Mine, This project, Only this session, Company as a mapping of the existing origins plus a preset layer; every project command writes the project choice; session level for model server, isolation (stricter only), folder mode and network mode; presets Strict (factory, `sandbox.min_isolation = "highest"`), Balanced, Open; nine catalog sections with a simple and an expert view; `config set` requires its level. |
 
 ## Cross-references
 
@@ -87,6 +88,7 @@ Where one decision refines or corrects another:
 | ADR-0021 | ADR-0020, ADR-0002, ADR-0010, ADR-0015 | Replaces the kernel level of ADR-0020 (Podman with `krun`) by an adapter of its own; the plain level stays as it is. Amends ADR-0002, ADR-0010 and ADR-0015 once the level is admitted (addenda of HUM-447). |
 | ADR-0023 | ADR-0018, ADR-0015 | The depot is controlled only through RPCs (ADR-0018) and mounted through the neutral `LaunchPlan`; no new port (ADR-0015). |
 | ADR-0011 | ADR-0007 | Governs the two storage locations for rules (saved and session). |
+| ADR-0025 | ADR-0011, ADR-0020, ADR-0024 | Makes the tiers of ADR-0011 drive a simple and an expert view, keeps the raise-only floor of ADR-0020 with a preset as its bottom, and extends the project choice and the catalog of ADR-0024. |
 | ADR-0012 | ADR-0010 | `FixAction::InstallService` is the mechanism behind the one-click installation. |
 
 The largest correction within a decision stands in ADR-0009, and it went back
