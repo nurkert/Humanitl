@@ -249,7 +249,10 @@ while an approval sent the whole body. The full list is the column "Projekt" in
 a model or a key (section 5.1). Its `name` chooses only among the bundled profiles
 (`CONFIG_009` for any other), and a profile it chooses loads its embedded text, keys and rules:
 the user's own file of the same name under `profiles/` applies only when the human chooses that
-profile (`--profile`, the profile of the session).
+profile (`--profile`, the profile of the session). A profile the project profile chooses is held
+to the limits of the project profile: a key the project profile may not set and every rule other
+than `block` and `ask` are skipped, each with a warning (`CONFIG_003`), and the start goes on. The
+same profile chosen by the human applies in full.
 
 Toolchain for reproducible builds: Rust 1.95.0 (pinned in `daemon/rust-toolchain.toml`,
 minimum 1.89), Flutter 3.47.2 (pinned in `app/.fvmrc`), `bubblewrap` 0.8 or newer. `socat` is

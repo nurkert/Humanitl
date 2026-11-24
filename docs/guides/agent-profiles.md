@@ -132,7 +132,11 @@ limits:
    profile of their own names it with `--profile`. A bundled profile the
    project profile chooses loads its embedded text, keys and rules: your own
    file of the same name under `profiles/` applies only when you choose that
-   profile yourself.
+   profile yourself. The chosen profile is held to the limits below: a key the
+   project profile may not set and every rule other than `block` and `ask` are
+   skipped, each with a warning (`CONFIG_003`), and the start goes on. For
+   `llm-only` that leaves its block rule and `hold.timeout_secs`; for the whole
+   profile, choose it with `--profile llm-only`.
 2. **Only allowed keys.** Every key in the schema carries
    `x-project-scope: allowed | denied` (column "Project" in
    [CONFIG.md](../CONFIG.md)). A denied key at this layer is `CONFIG_003`.

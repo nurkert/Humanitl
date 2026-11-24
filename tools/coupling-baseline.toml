@@ -54,7 +54,7 @@
 "daemon/bin/humanitl/src/cmd/sandbox.rs" = 3
 "daemon/bin/humanitl/tests/cli.rs" = 8
 "daemon/crates/config/src/lib.rs" = 3
-"daemon/crates/config/src/load.rs" = 6
+"daemon/crates/config/src/load.rs" = 5
 "daemon/crates/config/src/model.rs" = 32
 "daemon/crates/config/src/validate.rs" = 52
 "daemon/crates/config/tests/config_readers.rs" = 12

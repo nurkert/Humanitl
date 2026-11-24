@@ -45,7 +45,11 @@
 //! Angreifer-beeinflusst. Ein Schlüssel, den das Schema mit
 //! `x-project-scope = "denied"` führt (siehe [`crate::scope`]), ist aus dieser
 //! Ebene ein Fehler (`CONFIG_003`), auch unter seinem alten Namen; aus jeder
-//! anderen Ebene gilt er wie bisher.
+//! anderen Ebene gilt er wie bisher. Ein Profil, das das Projekt-Profil mit
+//! `name` wählt ([`Sources::project_named`]), steht unter derselben Grenze:
+//! Was das Projekt-Profil nicht setzen dürfte, wird aus ihm übergangen und
+//! gemeldet (`CONFIG_003`, Warning), samt jeder Regel außer `block` und `ask`
+//! (`named_profile.rs`).
 
 use std::collections::{BTreeMap, BTreeSet};
 use std::path::{Path, PathBuf};
@@ -92,6 +96,16 @@ pub struct Sources {
     pub profiles: Vec<ProfileSource>,
     /// Das Profil des Projekts, `<projekt>/.humanitl/profile.toml`.
     pub profile_project: Option<PathBuf>,
+    /// Der Name des Profils unter [`Sources::profiles`], das das Projekt-Profil
+    /// mit `name` gewählt hat; `None`, wenn der Mensch das Profil gewählt hat
+    /// oder das Projekt keines.
+    ///
+    /// Für dieses Profil gilt die Grenze des Projekt-Profils: Ein Schlüssel,
+    /// den das Projekt-Profil nicht setzen darf, und jede Regel außer `block`
+    /// und `ask` werden übergangen und gemeldet
+    /// (`named_profile.rs`). [`crate::resolve::sources_for`] setzt
+    /// den Namen.
+    pub project_named: Option<String>,
     /// Die Projektwahl aus dem Register des Daemons (HUM-532); nur Schlüssel
     /// aus [`crate::PROJECT_CHOICE_KEYS`].
     pub project_choice: Option<ProjectChoice>,
@@ -113,6 +127,7 @@ impl Default for Sources {
             global_toml: None,
             profiles: Vec::new(),
             profile_project: None,
+            project_named: None,
             project_choice: None,
             policy: PolicyLocks::none(),
             env_prefix: DEFAULT_ENV_PREFIX,
@@ -234,7 +249,23 @@ pub fn load(sources: &Sources) -> Result<Resolved, Diagnostic> {
         }
         profiles.push(project);
     }
-    project_cannot_choose_the_backend_through_a_profile(&profiles)?;
+    // Die Grenze des Projekt-Profils an dem Profil, das es mit `name` wählt.
+    // Sie deckt auch das Backend (HUM-431): `sandbox.backend` und jeder
+    // Schlüssel der Container-Engine und der Kernel-Stufe sind auf der
+    // Projekt-Ebene gesperrt und bleiben deshalb auch aus diesem Profil
+    // draußen. Wählt der Mensch das Profil selbst, gilt es ganz, auch wenn das
+    // Projekt-Profil denselben Namen trägt.
+    if let (Some(name), Some(project)) = (&sources.project_named, &sources.profile_project) {
+        for profile in &mut profiles {
+            if !matches!(profile.source, ProfileSource::Project(_))
+                && profile.source.name() == *name
+            {
+                notes.extend(crate::named_profile::hold_to_project_scope(
+                    profile, project,
+                ));
+            }
+        }
+    }
     for profile in &profiles {
         layers.push((
             entries_from_overlay(&profile.overlay, &profile.source.origin()),
@@ -859,58 +890,6 @@ pub(crate) fn retired_value(path: &str, value: Option<&str>, shown: &str) -> Opt
     )
 }
 
-/// Ein Projekt wählt das Backend auch nicht über ein Profil (HUM-431).
-///
-/// Das Projekt-Profil darf mit `name` ein mitgeliefertes Profil als Basis
-/// nennen (`crate::resolve`); dieses lädt dann seinen eingebetteten Text, nie
-/// eine eigene Datei gleichen Namens. Die Datei gilt nur, wenn der Mensch das
-/// Profil selbst wählt. Nennt er dasselbe Profil, das auch das Projekt-Profil
-/// nennt, darf dessen Datei weder `sandbox.backend` noch einen Schlüssel der
-/// Container-Engine oder der Kernel-Stufe setzen, wie bei der Wahl des
-/// Servers ([`project_owns_profile_choice`]): lieber einmal zu streng als
-/// einmal zu nachgiebig. Die Untergrenze braucht diese Prüfung nicht: Über
-/// alle Ebenen gilt dort ohnehin der strengste Wert.
-fn project_cannot_choose_the_backend_through_a_profile(
-    profiles: &[Profile],
-) -> Result<(), Diagnostic> {
-    let Some((project, wish)) = profiles.iter().find_map(|profile| match &profile.source {
-        ProfileSource::Project(path) => profile
-            .declared_name
-            .as_deref()
-            .map(|wish| (path.clone(), wish.to_owned())),
-        _ => None,
-    }) else {
-        return Ok(());
-    };
-    if wish == DEFAULT_PROFILE {
-        return Ok(());
-    }
-    for profile in profiles {
-        if matches!(profile.source, ProfileSource::Project(_)) || profile.source.name() != wish {
-            continue;
-        }
-        for (written_as, _) in profile.overlay.iter() {
-            let path = alias::canonical(written_as).unwrap_or(written_as);
-            if path == BACKEND
-                || path.starts_with(PODMAN_PREFIX)
-                || path.starts_with(KERNEL_LEVEL_PREFIX)
-            {
-                return Err(Diagnostic::builder(CONFIG_003, Severity::Error)
-                    .why(format!(
-                        "the project profile {} names the profile {wish}, and that profile \
-                         ({}) sets {path}; a project does not choose the sandbox backend, \
-                         neither itself nor through a profile it names. Remove {path} from \
-                         the profile, or remove the name from the project profile.",
-                        project.display(),
-                        profile.source.origin()
-                    ))
-                    .build());
-            }
-        }
-    }
-    Ok(())
-}
-
 /// Schlüssel, deren ungültiger Wert das Laden aus jeder Ebene abbricht, statt
 /// als Warnung übergangen zu werden (HUM-431): Ein übergangener Wert fiele auf
 /// die Ebene darunter zurück, und ein gewähltes Backend oder eine Untergrenze
@@ -1069,7 +1048,7 @@ fn foreign_owner(path: &Path, uid: u32) -> Option<Diagnostic> {
 const MOUNT_PREFIX: &str = "sandbox.mounts";
 
 /// Ob ein Pfad eine Einhängung meint.
-fn is_mount_key(path: &str) -> bool {
+pub(crate) fn is_mount_key(path: &str) -> bool {
     path == MOUNT_PREFIX || path.starts_with(&format!("{MOUNT_PREFIX}."))
 }
 

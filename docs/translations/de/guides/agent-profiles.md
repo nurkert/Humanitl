@@ -135,7 +135,11 @@ dem Einfluss dessen, der dieses Repository geschrieben hat. Es unterliegt vier G
    andere Wunsch wird übersprungen und als `CONFIG_009` gemeldet; wer ein eigenes Profil meint,
    nennt es mit `--profile`. Ein mitgeliefertes Profil, das das Projekt-Profil wählt, lädt
    seinen eingebetteten Text, Schlüssel und Regeln: Deine eigene Datei gleichen Namens unter
-   `profiles/` gilt nur, wenn du das Profil selbst wählst.
+   `profiles/` gilt nur, wenn du das Profil selbst wählst. Für das gewählte Profil gelten die
+   Grenzen unten: Ein Schlüssel, den das Projekt-Profil nicht setzen darf, und jede Regel außer
+   `block` und `ask` werden übergangen, je mit einer Warnung (`CONFIG_003`), und der Start läuft
+   weiter. Von `llm-only` bleiben so seine Blockregel und `hold.timeout_secs`; das ganze Profil
+   wählst du mit `--profile llm-only`.
 2. **Nur erlaubte Schlüssel.** Jeder Schlüssel im Schema trägt
    `x-project-scope: allowed | denied` (Spalte „Projekt" in
    [CONFIG.md](../CONFIG.md)). Ein gesperrter Schlüssel auf dieser Schicht ist `CONFIG_003`.

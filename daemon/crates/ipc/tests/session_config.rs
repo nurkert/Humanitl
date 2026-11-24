@@ -1036,13 +1036,15 @@ async fn a_bundled_profile_the_project_names_brings_no_assigned_server() {
     assert_eq!(own.passthrough_target().as_deref(), Some("work.lan:8080"));
 }
 
-/// Ein Profil, das das Projekt-Profil wählt, bringt die Regeln und den
-/// Frage-Modus seines eingebetteten Texts in den Regelspeicher, nicht die
-/// einer eigenen Datei gleichen Namens.
+/// Ein Profil, das das Projekt-Profil wählt, bringt die Regeln seines
+/// eingebetteten Texts in den Regelspeicher, nicht die einer eigenen Datei
+/// gleichen Namens. Den Frage-Modus bringt es nicht: `hold.ask_mode` darf
+/// das Projekt-Profil nicht setzen, also auch kein Profil, das es nennt; die
+/// Warnung dazu erreicht den Client.
 ///
 /// Mutationsbeweis: Bekommt die Wahl des Projekts in
 /// `humanitl_config::sources_with_global` wieder die eigene Datei, steht
-/// ihre Regel für `own.example` im Speicher, und der Frage-Modus ist `ui`.
+/// ihre Regel für `own.example` im Speicher und die Blockregel fehlt.
 #[tokio::test(flavor = "multi_thread")]
 async fn a_profile_the_project_names_brings_its_embedded_rules() {
     let fixture = Fixture::new();
@@ -1076,9 +1078,10 @@ async fn a_profile_the_project_names_brings_its_embedded_rules() {
     );
     assert_eq!(
         fixture.settings.get().ask_mode,
-        AskMode::None,
-        "the bundled llm-only does not ask: {seen:?}"
+        AskMode::Ui,
+        "a profile the project names does not set the ask mode: {seen:?}"
     );
+    assert!(codes(&seen).contains(&"CONFIG_003".to_owned()), "{seen:?}");
 }
 
 /// Eine Bestätigung gilt dem Server, den der Mensch unter dem Namen sah:
