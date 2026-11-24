@@ -179,7 +179,7 @@ abstract class Flow with _$Flow {
 
   const Flow._();
 
-  /// The full URL of the request, as the card shows it.
+  /// The full URL of the request, as the card shows it: with the A-label.
   String get url => '${scheme.name}://${authority.display(scheme)}$path';
 
   /// Time left until [deadline] at [now], never negative; zero without a
@@ -220,8 +220,12 @@ abstract class Flow with _$Flow {
   /// The method token to show.
   String get methodLabel => method.display(methodRaw);
 
-  /// The host to show.
-  String get host => authority.shownHost;
+  /// The host to show: the A-label, the form rules compare.
+  ///
+  /// Die Unicode-Form steht in [Authority.unicodeHost] und erscheint nur
+  /// neben diesem Wert, nie an seiner Stelle (`docs/SECURITY.md`,
+  /// Normalisierung der Hostnamen).
+  String get host => authority.host;
 
   /// True while the flow waits for a decision.
   bool get isHeld => state.isHeld;

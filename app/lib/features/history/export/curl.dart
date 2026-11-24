@@ -26,7 +26,7 @@ String encodeCurl(
       entry.detail.editedRequest ?? entry.detail.request;
   final String pathAndQuery = request?.pathAndQuery ?? flow.path;
   final String url =
-      '${flow.scheme.name}://${flow.authority.display(flow.scheme)}$pathAndQuery';
+      '${flow.scheme.name}://${flow.authority.shownDisplay(flow.scheme)}$pathAndQuery';
   final StringBuffer out = StringBuffer()
     ..write('curl -X ')
     ..write(flow.methodLabel)

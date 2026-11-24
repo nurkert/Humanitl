@@ -91,13 +91,30 @@ abstract class Authority with _$Authority {
 
   const Authority._();
 
-  /// The host as the human should read it: the U-label when the daemon
-  /// supplied one, otherwise [host].
+  /// The U-label when the daemon supplied one, otherwise [host].
+  ///
+  /// Nur für Exporte und Regelmuster, nie als Host einer Anfrage, über die
+  /// ein Mensch entscheidet: Dort steht [host], das A-Label, und die
+  /// Unicode-Form höchstens daneben ([unicodeHost], `docs/SECURITY.md`,
+  /// Normalisierung der Hostnamen).
   String get shownHost => displayHost.isEmpty ? host : displayHost;
 
-  /// `host:port`, with the port left out when it is the default of [scheme].
-  String display(Scheme scheme) =>
-      port == scheme.defaultPort ? shownHost : '$shownHost:$port';
+  /// The U-label, empty when the daemon supplied none or it equals [host].
+  ///
+  /// Eine Oberfläche zeigt sie nur neben dem A-Label und als Unicode-Form
+  /// gekennzeichnet, nie allein oder an seiner Stelle.
+  String get unicodeHost => displayHost == host ? '' : displayHost;
+
+  /// `host:port` with the A-label, the port left out when it is the default
+  /// of [scheme].
+  String display(Scheme scheme) => _withPort(host, scheme);
+
+  /// Like [display], with [shownHost]; for the exports that always carried
+  /// the U-label in their URL.
+  String shownDisplay(Scheme scheme) => _withPort(shownHost, scheme);
+
+  String _withPort(String name, Scheme scheme) =>
+      port == scheme.defaultPort ? name : '$name:$port';
 }
 
 /// One HTTP header. The value is bytes because headers are not guaranteed to

@@ -167,13 +167,30 @@ class _CardHeader extends ConsumerWidget {
         HMethodBadge(method: flow.methodLabel),
         SizedBox(width: tokens.spacing.x2),
         Expanded(
-          child: SelectableMonoText(
-            key: const Key('intercept-card-url'),
-            text: flow.url,
-            maxLines: 2,
-            // The largest type of the screen belongs to what the screen is
-            // about: the URL that is being decided (`docs/UX.md` 3.1).
-            style: tokens.typography.mono14.tinted(tokens.colors.fg0),
+          child: Column(
+            crossAxisAlignment: CrossAxisAlignment.stretch,
+            mainAxisSize: MainAxisSize.min,
+            children: <Widget>[
+              SelectableMonoText(
+                key: const Key('intercept-card-url'),
+                text: flow.url,
+                maxLines: 2,
+                // The largest type of the screen belongs to what the screen
+                // is about: the URL that is being decided (`docs/UX.md` 3.1).
+                style: tokens.typography.mono14.tinted(tokens.colors.fg0),
+              ),
+              // Die URL trägt das A-Label; die Unicode-Form steht nur hier
+              // darunter, klein und als solche benannt, nie an seiner Stelle
+              // (`docs/SECURITY.md`, Normalisierung der Hostnamen).
+              if (flow.authority.unicodeHost.isNotEmpty)
+                Text(
+                  context.l10n.interceptUnicodeHost(flow.authority.unicodeHost),
+                  key: const Key('intercept-card-unicode-host'),
+                  maxLines: 1,
+                  overflow: TextOverflow.ellipsis,
+                  style: tokens.typography.ui12.tinted(tokens.colors.fg2),
+                ),
+            ],
           ),
         ),
         SizedBox(width: tokens.spacing.x3),
@@ -408,7 +425,7 @@ class _WebSocketNotice extends StatelessWidget {
         tokens.spacing.x3,
         tokens.spacing.x3,
       ),
-      child: WebSocketNotice(host: flow.authority.shownHost),
+      child: WebSocketNotice(host: flow.host),
     );
   }
 }

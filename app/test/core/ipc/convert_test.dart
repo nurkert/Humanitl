@@ -366,8 +366,11 @@ void main() {
     expect(flow.id, const FlowId('018f0000-0000-7000-8000-000000000002'));
     expect(flow.method, Method.post);
     expect(flow.methodLabel, 'POST');
-    expect(flow.host, 'münchen.example');
-    expect(flow.authority.display(Scheme.https), 'münchen.example');
+    // Angezeigt wird das A-Label; die Unicode-Form bleibt am Authority-Wert
+    // erhalten (GitHub #103).
+    expect(flow.host, 'xn--mnchen-3ya.example');
+    expect(flow.authority.display(Scheme.https), 'xn--mnchen-3ya.example');
+    expect(flow.authority.unicodeHost, 'münchen.example');
     expect(flow.state, FlowState.held);
     expect(flow.isHeld, isTrue);
     expect(flow.decision, isNull);

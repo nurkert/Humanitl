@@ -1060,6 +1060,33 @@ mod tests {
         assert!(held.apex.is_empty(), "an address has no apex");
     }
 
+    /// Der Kasten nennt den Host als A-Label, auch wenn der Daemon eine
+    /// Unicode-Form mitschickt; diese steht nirgends an seiner Stelle.
+    /// Mutationsbeweis: `authority_text` aus `display_host` bauen macht den
+    /// Test rot.
+    #[test]
+    fn the_box_shows_the_a_label() {
+        let detail = v1::FlowDetail {
+            summary: Some(v1::FlowSummary {
+                flow_id: "f1".to_owned(),
+                method: v1::Method::Get as i32,
+                scheme: v1::Scheme::Https as i32,
+                authority: Some(v1::Authority {
+                    host: "xn--mnchen-3ya.de".to_owned(),
+                    port: 443,
+                    is_ip_literal: false,
+                    display_host: "münchen.de".to_owned(),
+                }),
+                path: "/v1".to_owned(),
+                ..v1::FlowSummary::default()
+            }),
+            ..v1::FlowDetail::default()
+        };
+        let held = from_detail(&detail);
+        assert_eq!(held.request, "GET https://xn--mnchen-3ya.de/v1");
+        assert_eq!(held.host, "xn--mnchen-3ya.de");
+    }
+
     /// Eine Taste ohne Kasten tut nichts.
     ///
     /// Ohne diesen Riegel entschiede ein `a`, das jemand tippt, während gerade

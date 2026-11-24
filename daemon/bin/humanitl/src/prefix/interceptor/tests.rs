@@ -570,3 +570,20 @@ fn a_refused_decision_says_why() {
     let text = shot(&mut screen, (120, 20)).join("\n");
     assert!(text.contains("not decided: already decided[2J"), "{text}");
 }
+
+/// Die Liste nennt den Host als A-Label, auch wenn der Daemon eine
+/// Unicode-Form mitschickt; diese steht nirgends an seiner Stelle.
+/// Mutationsbeweis: `row_text` den Host aus `display_host` nehmen lassen
+/// macht den Test rot.
+#[test]
+fn the_list_shows_the_a_label() {
+    let (mut screen, far) = screen(false);
+    let mut flow = held("f1", "xn--mnchen-3ya.de", "/one", 30, 240);
+    if let Some(authority) = flow.authority.as_mut() {
+        authority.display_host = "münchen.de".to_owned();
+    }
+    answer(&mut screen, &far, Answer::Listed(vec![flow]));
+    let text = shot(&mut screen, SIZE).join("\n");
+    assert!(text.contains("xn--mnchen-3ya.de/one"), "{text}");
+    assert!(!text.contains("münchen"), "{text}");
+}

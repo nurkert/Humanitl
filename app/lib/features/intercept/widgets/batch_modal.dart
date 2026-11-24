@@ -151,8 +151,15 @@ class _BatchModalState extends ConsumerState<BatchModal>
   /// Eine Regel für eine Stunde läuft ab dem Öffnen des Modals; der Satz
   /// nennt deshalb die genaue Uhrzeit ihres Endes und nicht nur „1 Stunde",
   /// die beim Bestätigen schon weniger wäre (Review Runde 6).
-  String _shownSentence(Rule rule, AppLocalizations l10n) {
-    final String text = sentence.ruleSentence(rule, l10n, now: DateTime.now());
+  String _shownSentence(ShownRule shown, AppLocalizations l10n) {
+    final Rule rule = shown.rule;
+    final Flow? source = widget.request.flows
+        .where((Flow flow) => flow.id == shown.source)
+        .firstOrNull;
+    final DateTime now = DateTime.now();
+    final String text = source == null
+        ? sentence.ruleSentence(rule, l10n, now: now)
+        : requestRuleSentence(rule, source, l10n, now: now);
     final String exact = sentence.ruleExpiryExact(rule.expires, l10n);
     return exact.isEmpty ? text : '$text ($exact)';
   }
@@ -182,7 +189,7 @@ class _BatchModalState extends ConsumerState<BatchModal>
     // wird hier noch aus dem Entwurf gelesen.
     final ShownRule? shown = request.shownRule;
     final String rule = shown != null
-        ? _shownSentence(shown.rule, l10n)
+        ? _shownSentence(shown, l10n)
         : request.ruleOnly
         ? _ruleSentence(request)
         : '';
