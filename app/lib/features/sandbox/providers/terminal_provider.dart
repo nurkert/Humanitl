@@ -613,9 +613,7 @@ class HeldNotice extends _$HeldNotice {
           method: flow.methodRaw.isEmpty
               ? flow.method.name.toUpperCase()
               : flow.methodRaw,
-          host: flow.authority.displayHost.isEmpty
-              ? flow.authority.host
-              : flow.authority.displayHost,
+          host: flow.host,
           path: flow.path,
         );
       case FlowEventHeld(flowId: final FlowId id):

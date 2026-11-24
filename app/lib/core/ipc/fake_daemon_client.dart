@@ -4029,7 +4029,11 @@ bool ruleMatchesFlow(Rule rule, Flow flow, {required DateTime now}) {
   if (flowUpgrades != (matcher.upgrade == Upgrade.websocket)) {
     return false;
   }
-  if (!hostPatternMatches(matcher.host, flow.host)) {
+  // The engine converts pattern and host to A-labels before it compares. The
+  // fake carries no IDNA, so it compares the pattern with both forms of the
+  // host it has: the A-label and the Unicode form the daemon sent with it.
+  if (!hostPatternMatches(matcher.host, flow.host) &&
+      !hostPatternMatches(matcher.host, flow.authority.shownHost)) {
     return false;
   }
   if (matcher.methods.isNotEmpty && !matcher.methods.contains(flow.method)) {

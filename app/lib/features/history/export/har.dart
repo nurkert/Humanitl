@@ -139,7 +139,7 @@ Map<String, Object?> _request(HistoryExportEntry entry) {
   final ExportedBytes body = ExportedBytes.of(entry.requestBody);
   final String pathAndQuery = request?.pathAndQuery ?? flow.path;
   final String url =
-      '${flow.scheme.name}://${flow.authority.display(flow.scheme)}$pathAndQuery';
+      '${flow.scheme.name}://${flow.authority.shownDisplay(flow.scheme)}$pathAndQuery';
   final String contentType = request?.body.contentType ?? '';
   return <String, Object?>{
     'method': flow.methodLabel,

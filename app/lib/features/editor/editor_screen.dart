@@ -847,7 +847,7 @@ class _ActionBar extends StatelessWidget {
               Align(
                 key: const Key('editor-websocket'),
                 alignment: AlignmentDirectional.centerStart,
-                child: WebSocketNotice(host: draft.authority.shownHost),
+                child: WebSocketNotice(host: draft.authority.host),
               ),
               SizedBox(height: tokens.spacing.x2),
             ],

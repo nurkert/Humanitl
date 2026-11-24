@@ -266,15 +266,16 @@ class _QuickRules extends ConsumerWidget {
 
 /// Die Aufschrift eines Schnellregel-Knopfes: was die Regel treffen wird.
 ///
-/// Das Muster kommt aus [hostPattern], also aus derselben Funktion, aus der die
-/// Regel es nimmt; die Aufschrift kann deshalb nichts anderes versprechen als
-/// die Regel hält.
+/// Das Muster kommt aus [shownHostPattern], also aus derselben Funktion, aus
+/// der die Regel es nimmt ([hostPattern]); die Aufschrift kann deshalb nichts
+/// anderes versprechen als die Regel hält. Einen Host mit Unicode-Form nennt
+/// sie beim A-Label, die Unicode-Form daneben.
 String quickRuleLabel(
   RuleDraft draft,
   AppLocalizations l10n,
   String Function(String host) apexOf,
 ) {
-  final String pattern = hostPattern(draft, apexOf);
+  final String pattern = shownHostPattern(draft, apexOf, l10n);
   return draft.action == RuleAction.block
       ? l10n.domainQuickBlock(pattern)
       : l10n.domainQuickAllow(pattern);

@@ -118,8 +118,9 @@ Rule? buildRule(
   );
 }
 
-/// The host pattern the rule matches on, as it appears in the rule and in the
-/// sentence. Both read the same string, so they cannot drift apart.
+/// The host pattern the rule matches on, as it appears in the rule. The
+/// sentence and the button label read [shownHostPattern], which differs only
+/// for a host with a Unicode form.
 ///
 /// Empty when the scope is the registrable domain and [apexOf] does not know
 /// one: the public suffix list lives in the daemon's catalog, and a guessed
@@ -130,10 +131,60 @@ Rule? buildRule(
 /// sentence.
 String hostPattern(RuleDraft draft, String Function(String host) apexOf) {
   if (draft.target != RememberTarget.apex) {
-    return draft.flow.host;
+    // Das Muster nennt den Namen selbst, nicht das A-Label: Der Daemon
+    // normalisiert es vor jedem Vergleich und warnt vor einem Punycode-Label
+    // im Muster (`RULES_002`).
+    return draft.flow.authority.shownHost;
   }
   final String apex = apexOf(draft.flow.host);
   return apex.isEmpty ? '' : '**.$apex';
+}
+
+/// The host pattern as a person reads it next to a request: [hostPattern],
+/// except that an exact host is named by its A-label, with the Unicode form
+/// beside it (see [hostWithUnicode]).
+///
+/// Die Regel selbst trägt weiter den Namen ([hostPattern]); nur die Anzeige
+/// folgt `docs/SECURITY.md` (Normalisierung der Hostnamen) wie die Karte.
+String shownHostPattern(
+  RuleDraft draft,
+  String Function(String host) apexOf,
+  AppLocalizations l10n,
+) => draft.target == RememberTarget.apex
+    ? hostPattern(draft, apexOf)
+    : hostWithUnicode(draft.flow.authority, l10n);
+
+/// The A-label of [authority], followed by its marked Unicode form when it
+/// has one: `xn--mnchen-3ya.de (Unicode form: münchen.de)`.
+String hostWithUnicode(Authority authority, AppLocalizations l10n) =>
+    authority.unicodeHost.isEmpty
+    ? authority.host
+    : '${authority.host} (${l10n.interceptUnicodeHost(authority.unicodeHost)})';
+
+/// The sentence of [rule], built from a request to [flow], as a surface about
+/// requests shows it.
+///
+/// Trägt die Regel den Namen von [flow] als Muster, steht im Satz an seiner
+/// Stelle [hostWithUnicode]: das A-Label und die Unicode-Form daneben. Jedes
+/// andere Muster bleibt, wie es ist; der Regel-Bildschirm liest
+/// `core/text/rule_sentence.dart` ohne diesen Schritt.
+String requestRuleSentence(
+  Rule rule,
+  Flow flow,
+  AppLocalizations l10n, {
+  required DateTime now,
+}) {
+  final Authority authority = flow.authority;
+  final Rule shown =
+      authority.unicodeHost.isNotEmpty &&
+          rule.matcher.host == authority.shownHost
+      ? rule.copyWith(
+          matcher: rule.matcher.copyWith(
+            host: hostWithUnicode(authority, l10n),
+          ),
+        )
+      : rule;
+  return sentence.ruleSentence(shown, l10n, now: now);
 }
 
 /// The path a `url` rule matches on: everything before the query.
@@ -190,7 +241,9 @@ String ruleSentence(
 }) {
   final DateTime clock = now ?? DateTime.now();
   final Rule? rule = buildRule(draft, now: clock, apexOf: apexOf);
-  return rule == null ? '' : sentence.ruleSentence(rule, l10n, now: clock);
+  return rule == null
+      ? ''
+      : requestRuleSentence(rule, draft.flow, l10n, now: clock);
 }
 
 /// The label of [duration] on its segment.

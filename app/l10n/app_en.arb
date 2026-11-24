@@ -4786,5 +4786,7 @@
   "startNoTerminal": "No terminal attached",
   "@startNoTerminal": {"description": "Start window (#13): badge on a running session that no terminal hangs on, for example after the terminal of humanitl go closed; attach brings it back. The count comes from the daemon."},
   "firstStartFieldSource": "Source",
-  "@firstStartFieldSource": {"description": "First-start screen (#15): label of the field that chooses where the program of the chosen agent comes from, the host or the agent depot."}
+  "@firstStartFieldSource": {"description": "First-start screen (#15): label of the field that chooses where the program of the chosen agent comes from, the host or the agent depot."},
+  "interceptUnicodeHost": "Unicode form: {host}",
+  "@interceptUnicodeHost": {"description": "Decisions view (#103): small line under the URL of the request card when the host has an internationalised name. The URL above always shows the A-label (Punycode); this line names the Unicode form beside it and never replaces it.", "placeholders": {"host": {"type": "String", "example": "münchen.de"}}}
 }

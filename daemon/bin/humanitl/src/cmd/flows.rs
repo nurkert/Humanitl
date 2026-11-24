@@ -860,9 +860,9 @@ fn detail_rows(summary: &v1::FlowSummary) -> Vec<Vec<String>> {
 
 /// Ein Flow als JSON, mit denselben Feldern wie die Tabelle plus den Zahlen.
 ///
-/// `host` bleibt die Anzeigeform mit Port, wie sie in der Tabelle steht;
-/// darunter steht `authority` mit dem Namen, über den entschieden wurde: dem
-/// A-Label, dem Port und der Anzeigeform daneben. Bei einem
+/// `host` ist der Host mit Port, wie er in der Tabelle steht, also das
+/// A-Label; darunter steht `authority` mit dem Namen, über den entschieden
+/// wurde: dem A-Label, dem Port und der Unicode-Form daneben. Bei einem
 /// internationalisierten Namen sind die beiden nicht dasselbe, und ein Skript
 /// muss den vergleichen können, den der Daemon kennt.
 pub fn summary_json(summary: &v1::FlowSummary) -> Value {
@@ -1012,18 +1012,19 @@ fn decision_name(decision: i32) -> &'static str {
 }
 
 /// Host und Port, wie sie in einer URL stünden.
+///
+/// Der Host ist das A-Label (`Authority.host`), über das der Daemon
+/// entscheidet, nie die Unicode-Form aus `display_host`: Wo ein Mensch
+/// Anfragen liest, steht der Name in der Form, die Regeln vergleichen
+/// (`docs/SECURITY.md`, Normalisierung der Hostnamen). Die Unicode-Form steht
+/// in der JSON-Ausgabe unter `authority.display_host`.
 fn authority(authority: Option<&v1::Authority>) -> String {
     let Some(authority) = authority else {
         return "-".to_owned();
     };
-    let host = if authority.display_host.is_empty() {
-        authority.host.clone()
-    } else {
-        authority.display_host.clone()
-    };
     match authority.port {
-        0 | 80 | 443 => host,
-        port => format!("{host}:{port}"),
+        0 | 80 | 443 => authority.host.clone(),
+        port => format!("{}:{port}", authority.host),
     }
 }
 
@@ -1257,6 +1258,40 @@ mod tests {
         };
         assert_eq!(authority(Some(&with_port)), "localhost:1234");
         assert_eq!(authority(None), "-");
+    }
+
+    /// Tabelle und Einzelansicht zeigen das A-Label, nie die Unicode-Form an
+    /// seiner Stelle; die JSON-Ausgabe behält beide Felder unter `authority`.
+    /// Mutationsbeweis: `authority` aus `display_host` bauen macht den Test
+    /// rot.
+    #[test]
+    fn the_a_label_is_the_host_that_is_shown() {
+        let mut idn = summary();
+        idn.authority = Some(v1::Authority {
+            host: "xn--mnchen-3ya.de".to_owned(),
+            port: 443,
+            is_ip_literal: false,
+            display_host: "münchen.de".to_owned(),
+        });
+        let row = summary_row(&idn, MIN_ID_TAIL);
+        assert!(row.contains(&"xn--mnchen-3ya.de".to_owned()), "{row:?}");
+        assert!(!row.iter().any(|cell| cell.contains("münchen")), "{row:?}");
+        let url = detail_rows(&idn)
+            .into_iter()
+            .find(|row| row[0] == "url")
+            .expect("the detail names the url");
+        assert_eq!(url[1], "xn--mnchen-3ya.de/api/v3");
+        let json = summary_json(&idn);
+        assert_eq!(json["host"], "xn--mnchen-3ya.de");
+        assert_eq!(json["authority"]["host"], "xn--mnchen-3ya.de");
+        assert_eq!(json["authority"]["display_host"], "münchen.de");
+    }
+
+    /// Ein Host ohne Unicode-Form bleibt, wie er ist.
+    #[test]
+    fn a_host_without_a_unicode_form_is_unchanged() {
+        let row = summary_row(&summary(), MIN_ID_TAIL);
+        assert!(row.contains(&"github.com".to_owned()), "{row:?}");
     }
 
     #[test]
