@@ -64,7 +64,8 @@ const older = releases.filter((release) => release !== current).slice(0, 6);
               {installs > 0 && (
                 <div class="plate__cell">
                   <dt>{d.downloads}</dt>
-                  <dd class="plate__big">{number(installs)}</dd>
+                  {/* Eine Schätzung, keine exakte Zahl (#104): ≈ sichtbar, „rund“ für Screenreader. */}
+                  <dd class="plate__big"><span aria-hidden="true">≈ </span><span class="visually-hidden">{d.about} </span>{number(installs)}</dd>
                   <dd class="split" aria-hidden="true">
                     {shares.map((p) => (
                       <span class={`split__bar split__bar--${p.id}`} style={`--share: ${p.share}`} />
