@@ -200,7 +200,8 @@ eine Regel (HUM-568); ein Pfad mit `..`-Segmenten wird angehalten (HUM-204). Der
 jeder Fund bleibt an seiner Anfrage, die Warnung wiederholt sich nur für Funde, die im Lauf neu
 sind oder vor 15 Minuten oder mehr zuletzt gewarnt wurden; ein abgelaufener oder verdrängter
 Fingerabdruck warnt erneut, HUM-354), und mit `hold.hard_block_checksum_secrets` wird ein durch
-Prüfsumme bestätigtes Secret blockiert (`HOLD_004`). Der Zugangsschlüssel eines Anbieters
+Prüfsumme bestätigtes Secret blockiert (`HOLD_004`); ein überlappender Fund entfernt nie einen
+durch Prüfsumme bestätigten Fund (#96). Der Zugangsschlüssel eines Anbieters
 (HUM-140) wird nur über den RPC `LlmKey` eingegeben (das Formular der App,
 `humanitl llm key set` von `stdin` oder die Einstellungsansicht `humanitl settings` ohne Echo, einmal
 geschickt; nie `SetConfig`), liegt im Schlüsselbund des Systems (unter macOS im Anmelde-Schlüsselbund, HUM-349; das
@@ -1369,6 +1370,7 @@ Gegen diese Angreifer gibt es keine Abwehr, und Humanitl behauptet das auch nich
 | 2026-11-23 | K-37: Die Projektwahl trägt auch die Quelle des Agenten (`agents.<id>.source`, Host oder Depot); eine Sperre der Quelle durch die Firmenvorgabe hält sie aus der Wahl (`CONFIG_024`), und ein Start fällt nie auf die andere Quelle zurück | #15 |
 | 2026-11-23 | K-02: Ein mitgeliefertes Profil, das das Projekt-Profil mit `name` wählt, lädt seinen eingebetteten Text, Schlüssel und Regeln; die eigene Datei des Nutzers gleichen Namens gilt nur, wenn der Mensch das Profil wählt (`--profile`, das Profil der Session) | #90 |
 | 2026-11-23 | K-02: Für ein Profil, das das Projekt-Profil mit `name` wählt, gelten die Grenzen des Projekt-Profils: Schlüssel mit `x-project-scope = "denied"` und jede Regel außer `block` und `ask` werden übergangen, je mit einer Warnung (`CONFIG_003`); dasselbe Profil, vom Menschen gewählt, gilt ganz | #95 |
+| 2026-11-23 | Harte Sperre: Ein überlappender Fund entfernt nie einen durch Prüfsumme bestätigten Fund; ein eigener Begriff (`findings.user_terms`) oder ein bekanntes Secret über denselben Bytes steht neben ihm | #96 |
 
 Jede sicherheitsrelevante Änderung am Shim, an der Mount-Erlaubnisliste, am Filter oder an der
 Durchleitung bekommt hier eine Zeile. Schwachstellen werden gemeldet, wie in

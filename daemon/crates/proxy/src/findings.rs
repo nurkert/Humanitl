@@ -628,10 +628,9 @@ mod tests {
         );
     }
 
-    /// Ein Begriff des Nutzers ist stärker als jede Prüfsumme und verdrängt
-    /// beim Aufräumen schwächere Funde an derselben Stelle. Den Fund des
-    /// Zugangsschlüssels darf er nicht verdrängen: `sk` aus einem
-    /// Projekt-Profil hebelte sonst die harte Sperre für `sk-…` aus (HUM-140,
+    /// Ein Begriff des Nutzers verdrängt beim Aufräumen bloße Muster an
+    /// derselben Stelle, den Fund des Zugangsschlüssels nie: Mit `sk` aus
+    /// einem Projekt-Profil hält die harte Sperre für `sk-…` weiter (HUM-140,
     /// Review).
     #[test]
     fn a_user_term_does_not_push_the_known_key_out_of_the_hard_block() {

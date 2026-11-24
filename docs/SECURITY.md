@@ -2068,6 +2068,13 @@ tested (ESC-4):
   it as the system (`BlockReason::Secret`, `403`); without a rule it is held, and `Decide(Allow)`
   ends with `HOLD_004`. It leaves only edited, and only when a second scan of the edited version
   finds no such secret any more (HUM-049, HUM-159). The check sits in the daemon, not in the window.
+  An overlapping finding never removes a checksum-confirmed finding: a user term
+  (`findings.user_terms`) or a known secret over the same bytes is reported next to it, never in
+  its place (#96). Two exceptions are the user's own: a value whose hash the user has put on
+  `findings.ignored_hashes` is no finding, a checksum-confirmed value included, and that key is
+  denied to project profiles; and the user's own model access key is no finding in the header
+  its mask names on a request to its own inference endpoint
+  ([section 5.1](#51-the-llm-passthrough)).
 
 **DNS after allow (ADR-006).** A host name carries up to 63 bytes per label and 253 in total.
 Whoever has `ZGllcyBpc3QgZWluIGdlaGVpbW5pcw.attacker.example` resolved has transmitted the data as
@@ -2259,6 +2266,7 @@ passthrough or the audit chain gets a line here and in the change history of
 | 0.1.x | A rule of `rules.yaml` that cannot be read costs only itself instead of every rule of the file; in its place stands the rule itself (action and match readable) or `ask` for its host or for every host and address, never nothing unless it is an `allow`; the entry is written back in its place, and a file that cannot be read as a whole is never overwritten (HUM-561, [section 7](#7-the-rules-engine)). |
 | 0.1.x | The credential files of the agent depot optionally encrypted at rest (`agents.encrypt_credentials`, off by default, closed to project profiles): ChaCha20-Poly1305 from `ring` with a fresh random nonce per write, the key only in the system keyring and never in a file next to the data, the setting refused without a keyring that answers (`AGENT_020`); the switch converts every file atomically under the depots' locks, all or nothing; the daemon still decrypts for every session (HUM-523, [section 5.7](#57-the-credential-file-of-the-depot), K-36). |
 | 0.1.x | Closing the terminal of `humanitl go` detaches it (`terminal.on_close`, default `detach`, closed to project profiles): the session keeps running in the daemon, held requests wait for a person or their deadline (expiry blocks), `humanitl sessions` and the start window show the session without a terminal; `SIGTERM` stops, `humanitl run` stops on `SIGHUP` as before; no guarantee depends on a client (GitHub #13, [section 6](#a-session-without-a-terminal-github-13), K-39). |
+| 0.1.x | An overlapping finding never removes a checksum-confirmed finding; a user term (`findings.user_terms`) or a known secret over the same bytes is reported next to it, so the hard block (`hold.hard_block_checksum_secrets`) always sees it (#96, [section 7](#7-the-rules-engine)). |
 
 ## 12. macOS: Seatbelt instead of bubblewrap
 

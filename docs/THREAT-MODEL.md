@@ -186,7 +186,7 @@ with `..` segments is held (HUM-204).
 Traffic is recorded and scanned (`LLM_005`; every finding stays on its request, the warning
 repeats only for findings new in the run or last warned about 15 minutes or more ago; an expired
 or evicted fingerprint warns again, HUM-354), and with
-`hold.hard_block_checksum_secrets` a checksum-confirmed secret is blocked (`HOLD_004`). The access key of a provider (HUM-140) is entered only through the RPC
+`hold.hard_block_checksum_secrets` a checksum-confirmed secret is blocked (`HOLD_004`); an overlapping finding never removes a checksum-confirmed finding (#96). The access key of a provider (HUM-140) is entered only through the RPC
 `LlmKey` (the form of the app, `humanitl llm key set` from `stdin`, or the settings view
 `humanitl settings` without echo, sent once; never `SetConfig`), lives in
 the system keyring (on macOS the login Keychain, HUM-349; the Seatbelt profile reaches no
@@ -1378,6 +1378,7 @@ These attackers are not defended against, and Humanitl does not claim to:
 | 2026-11-23 | K-37: the project choice also carries the source of the agent (`agents.<id>.source`, host or depot); a company lock of the source keeps it out of the choice (`CONFIG_024`), and a start never falls back to the other source | #15 |
 | 2026-11-23 | K-02: a bundled profile the project profile chooses with `name` loads its embedded text, keys and rules; the user's own file of the same name applies only when the human chooses that profile (`--profile`, the profile of the session) | #90 |
 | 2026-11-23 | K-02: a profile the project profile chooses with `name` is held to the limits of the project profile: keys with `x-project-scope = "denied"` and every rule other than `block` and `ask` are skipped, each with a warning (`CONFIG_003`); the same profile chosen by the human applies in full | #95 |
+| 2026-11-23 | Hard block: an overlapping finding never removes a checksum-confirmed finding; a user term (`findings.user_terms`) or a known secret over the same bytes is reported next to it | #96 |
 
 Every security-relevant change to the shim, the mount allowlist, the filter or the passthrough gets
 a line here. Vulnerabilities are reported as described in

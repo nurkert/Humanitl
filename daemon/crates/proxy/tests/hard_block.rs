@@ -381,6 +381,40 @@ async fn rule_allow_still_blocks_a_checksum_secret() {
     assert_eq!(upstream.hits(), 1);
 }
 
+/// Ein Begriff des Nutzers über einer bestätigten IBAN nimmt der harten Sperre
+/// nicht den Fund: Mit den echten Detektoren, dem Begriff `WEST` mitten in der
+/// IBAN und einer Regel `allow` blockt das System weiter mit `HOLD_004`.
+#[tokio::test(flavor = "multi_thread")]
+async fn a_user_term_over_an_iban_keeps_the_hard_block() {
+    let settings = humanitl_findings::FindingsSettings::default().with_user_terms(["WEST"]);
+    let scanner = humanitl_proxy::Tier1Scanner::new(&settings).unwrap();
+    let request = HttpRequest::new(
+        Method::POST,
+        Scheme::Http,
+        Authority::new(HostName::parse("127.0.0.1").unwrap(), 80),
+        "/sink",
+    );
+    let found = scanner.scan(&request, IBAN_BODY.as_bytes()).findings;
+    assert!(
+        found
+            .iter()
+            .any(|f| f.kind == FindingKind::UserTerm("WEST".to_owned())),
+        "the term overlaps the IBAN: {found:?}"
+    );
+
+    let upstream = FakeUpstream::plain().await;
+    let url = format!("http://127.0.0.1:{}/sink", upstream.port());
+    let proxy = ProxyBuilder::new()
+        .scanner(Arc::new(scanner))
+        .hard_block_checksum_secrets(true)
+        .rules(allow_rule())
+        .start()
+        .await;
+    let (status, body, seen) = send_iban(&proxy, &url).await;
+    assert_system_block(status, &body, &seen, "user term over an IBAN");
+    assert_eq!(upstream.hits(), 0, "nothing reached the target");
+}
+
 /// Die Durchreiche zum Sprachmodell, wie der Adapter sie baut.
 fn llm_passthrough(port: u16) -> String {
     format!(
