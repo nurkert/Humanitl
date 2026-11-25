@@ -62,7 +62,8 @@ use humanitl_core::diagnostics::codes;
 use humanitl_core::{Diagnostic, FixAction, Severity};
 use humanitl_ipc::client::Client;
 use humanitl_ipc::session::{
-    AGENT_ADAPTER_KEY, SANDBOX_MIN_ISOLATION_KEY, SESSION_OVERRIDE_KEYS, ask_mode_name,
+    AGENT_ADAPTER_KEY, LLM_CLOUD_KEY, SANDBOX_MIN_ISOLATION_KEY, SESSION_OVERRIDE_KEYS,
+    ask_mode_name,
 };
 use humanitl_ipc::v1;
 use humanitl_sandbox::agent::{AdapterRegistry, AgentAdapter};
@@ -394,10 +395,9 @@ async fn rejoin(
         wishes: !args.cmd.is_empty()
             || args.disposable
             || args.direct
-            || ctx
-                .cli_config
-                .iter()
-                .any(|(key, _)| key == AGENT_ADAPTER_KEY || key == SANDBOX_MIN_ISOLATION_KEY),
+            || ctx.cli_config.iter().any(|(key, _)| {
+                key == AGENT_ADAPTER_KEY || key == SANDBOX_MIN_ISOLATION_KEY || key == LLM_CLOUD_KEY
+            }),
     };
     Box::pin(crate::cmd::go::rejoin(ctx, client, launch, here)).await
 }
@@ -1553,7 +1553,24 @@ fn start_overrides(
             value: level.to_owned(),
         });
     }
+    if let Some(lock) = client_cloud_lock(resolved, named_config) {
+        overrides.push(v1::sandbox_request::CliOverride {
+            path: LLM_CLOUD_KEY.to_owned(),
+            value: lock.to_owned(),
+        });
+    }
     overrides
+}
+
+/// Die Sperre der Cloud-Inferenz, die dieser Aufruf dem Daemon schickt
+/// (GitHub #113): `block`, wenn der aufgelöste Wert gesperrt ist und eine
+/// Quelle ihn gesetzt hat, die nur der Client sieht (`--llm-cloud`,
+/// `HUMANITL_LLM__CLOUD`, eine Datei aus `--config`), wie bei
+/// [`client_floor`]. Ein `allow` reist nie: Es könnte ohnehin keine Ebene
+/// des Daemons lockern.
+fn client_cloud_lock(resolved: &Resolved, named_config: bool) -> Option<&'static str> {
+    (resolved.config.llm.cloud.is_block() && wish::per_run(resolved, LLM_CLOUD_KEY, named_config))
+        .then(|| resolved.config.llm.cloud.as_str())
 }
 
 /// Die Untergrenze, die dieser Aufruf dem Daemon schickt (HUM-489): der
@@ -1582,7 +1599,9 @@ fn merge_overrides(
     let mut pairs: Vec<(String, String)> = cli_pairs
         .into_iter()
         .filter(|(path, _)| {
-            SESSION_OVERRIDE_KEYS.contains(&path.as_str()) && path != SANDBOX_MIN_ISOLATION_KEY
+            SESSION_OVERRIDE_KEYS.contains(&path.as_str())
+                && path != SANDBOX_MIN_ISOLATION_KEY
+                && path != LLM_CLOUD_KEY
         })
         .collect();
     for (path, value) in environment_backend_choice(resolved) {
@@ -2588,6 +2607,50 @@ mod tests {
             floor_started(home, lowered),
             humanitl_config::MinIsolation::Namespaces
         );
+    }
+
+    /// `humanitl run --llm-cloud block` and `HUMANITL_LLM__CLOUD=block`
+    /// switch the cloud lock on for the session (GitHub #113): `block`
+    /// travels in `cli_overrides`, an `allow` never does.
+    ///
+    /// Mutation proof: without `client_cloud_lock` in `start_overrides`
+    /// nothing travels, the daemon never sees the lock of the variable, and
+    /// the test turns red.
+    #[test]
+    fn the_cloud_lock_of_the_command_line_reaches_the_daemon() {
+        let home = tempfile::tempdir().expect("tempdir");
+        let home = home.path();
+        let locks = |overrides: &[v1::sandbox_request::CliOverride]| -> Vec<String> {
+            overrides
+                .iter()
+                .filter(|o| o.path == "llm.cloud")
+                .map(|o| o.value.clone())
+                .collect()
+        };
+        assert_eq!(
+            locks(&floor_sent(home, &["--llm-cloud", "block"], &[], None)),
+            ["block"]
+        );
+        assert_eq!(
+            locks(&floor_sent(
+                home,
+                &[],
+                &[("HUMANITL_LLM__CLOUD", "block")],
+                None
+            )),
+            ["block"]
+        );
+        // Ein `allow` des Flags verdrängt die gesperrte Variable nicht.
+        assert_eq!(
+            locks(&floor_sent(
+                home,
+                &["--llm-cloud", "allow"],
+                &[("HUMANITL_LLM__CLOUD", "block")],
+                None
+            )),
+            ["block"]
+        );
+        assert!(locks(&floor_sent(home, &["--llm-cloud", "allow"], &[], None)).is_empty());
     }
 
     /// A daemon before contract 1.49 would refuse the floor with a

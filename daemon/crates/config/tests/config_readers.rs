@@ -152,6 +152,10 @@ const REGISTER: &[(&str, &str)] = &[
     // flachen Schlüssel darunter (`servers::project`, HUM-289).
     ("llm.active", "effective"),
     ("llm.api_key_ref", "effective"),
+    // Gelesen vom Tor des Starts (`humanitl_ipc::cloud::gate`), von der
+    // Durchreiche (`inference::session_passthrough`), von `LlmServers` und
+    // vom Doctor (GitHub #113).
+    ("llm.cloud", "effective"),
     ("llm.endpoint", "effective"),
     ("llm.models", "effective"),
     ("llm.passthrough_paths", "effective"),

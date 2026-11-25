@@ -20,14 +20,20 @@
 //!   [`finding`] `own` mit `LLM_013` ab; es gibt keinen stillen Rückfall auf
 //!   den Modellserver und keine Durchreiche auf einen ganzen Host.
 //!
+//! Mit `llm.cloud = "block"` (GitHub #113) lässt [`session_passthrough`]
+//! keine Regel zu einem Host außerhalb stehen; den Start lehnt das Tor des
+//! Daemons ab (`LLM_014`, `humanitl_ipc::cloud::gate`).
+//!
 //! Was der Adapter in `own` weglässt (Provider, Modell, Katalog), entscheidet
 //! er selbst an [`AgentContext::model_server`]; dieses Modul schreibt keine
 //! Datei.
 
-use humanitl_config::{AgentInference, Config};
+use std::net::IpAddr;
+
+use humanitl_config::{AgentInference, Config, LlmConfig};
 use humanitl_core::diagnostics::codes::{LLM_012, LLM_013};
-use humanitl_core::rule::Rule;
-use humanitl_core::{Diagnostic, Severity};
+use humanitl_core::rule::{HostPattern, Rule};
+use humanitl_core::{Diagnostic, HostName, Scheme, Severity};
 use url::Url;
 
 use crate::agent::opencode::EXAMPLE_ENDPOINT;
@@ -61,15 +67,54 @@ fn mode(adapter: &dyn AgentAdapter, config: &Config) -> AgentInference {
 /// der eigenen Provider und sonst nichts, auch nicht `llm.endpoint`. Ein
 /// Adapter ohne eigene Provider bekommt mit `own` keine Regel; sein Start
 /// scheitert an `LLM_013`.
+///
+/// Mit `llm.cloud = "block"` (GitHub #113) bleibt jede Regel draußen, deren
+/// Ziel nicht lokal ist ([`stays_local`]): die zweite Sperre neben der
+/// Ablehnung des Starts (`LLM_014`), damit auch ein Weg am Tor vorbei keine
+/// Durchreiche hinaus findet. Keine Regel heißt: jede Anfrage dorthin wird
+/// gehalten.
 #[must_use]
 pub fn session_passthrough(adapter: &dyn AgentAdapter, config: &Config) -> Vec<Rule> {
-    match mode(adapter, config) {
+    let mut rules = match mode(adapter, config) {
         AgentInference::ModelServer => adapter.llm_passthrough(&config.llm),
         AgentInference::Own => adapter
             .own_inference()
             .map(|own| passthrough::rules(&own.target, own.routes))
             .unwrap_or_default(),
+    };
+    if config.llm.cloud.is_block() {
+        rules.retain(|rule| stays_local(&config.llm, rule));
     }
+    rules
+}
+
+/// Ob das Ziel einer Regel lokal ist, mit derselben Lesart wie der Hinweis
+/// auf Cloud-Inferenz ([`humanitl_config::inference::provider_outside`]):
+/// Schema, Host und Port der Regel als Adresse; eine Regel ohne Schema muss
+/// mit beiden lokal sein. Ein Muster statt eines Hosts (Glob, Netz) ist nie
+/// lokal; eine Durchreiche nennt immer genau einen Host.
+#[must_use]
+pub fn stays_local(llm: &LlmConfig, rule: &Rule) -> bool {
+    let host = match &rule.matcher.host {
+        HostPattern::Exact(HostName::Ip(IpAddr::V6(ip))) | HostPattern::Ip(IpAddr::V6(ip)) => {
+            format!("[{ip}]")
+        }
+        HostPattern::Exact(host) => host.to_string(),
+        HostPattern::Ip(ip) => ip.to_string(),
+        HostPattern::Glob(_) | HostPattern::Cidr { .. } => return false,
+    };
+    let port = rule
+        .matcher
+        .port
+        .map_or_else(String::new, |port| format!(":{port}"));
+    let schemes = rule
+        .matcher
+        .scheme
+        .map_or_else(|| vec![Scheme::Http, Scheme::Https], |scheme| vec![scheme]);
+    schemes.into_iter().all(|scheme| {
+        Url::parse(&format!("{}://{host}{port}/", scheme.as_str()))
+            .is_ok_and(|url| humanitl_config::inference::provider_outside(llm, &url).is_none())
+    })
 }
 
 /// Der Endpunkt der Inferenz einer Sitzung mit dieser Konfiguration, aus
@@ -362,5 +407,57 @@ mod tests {
             passthrough.iter().all(|rule| rule.allow_private),
             "the model server's own passthrough"
         );
+    }
+
+    /// Die zweite Sperre (GitHub #113): Mit `llm.cloud = "block"` enthält
+    /// die Durchreiche keine Regel zu einem Host außerhalb, weder zu einem
+    /// Modellserver in der Cloud noch zu den eigenen Providern; ein lokaler
+    /// Modellserver behält seine Durchreiche unverändert.
+    ///
+    /// Mutationsbeweis: Ohne `retain` in [`session_passthrough`] stünden
+    /// die Regeln zu `api.openai.com` und `provider.test` da, und der Test
+    /// wird rot.
+    #[test]
+    fn the_cloud_lock_leaves_no_passthrough_outside() {
+        let probe = Probe {
+            model_server: true,
+            own: true,
+        };
+        let locked = |endpoint: &str, mode| {
+            let mut config = config(Some(endpoint), mode);
+            config.llm.cloud = humanitl_config::LlmCloud::Block;
+            config
+        };
+        let cloud = config(
+            Some("https://api.openai.com/v1"),
+            AgentInference::ModelServer,
+        );
+        assert!(!session_passthrough(&probe, &cloud).is_empty(), "allow");
+        assert_eq!(
+            session_passthrough(
+                &probe,
+                &locked("https://api.openai.com/v1", AgentInference::ModelServer)
+            ),
+            Vec::<Rule>::new()
+        );
+        assert_eq!(
+            session_passthrough(&probe, &locked("http://10.0.0.2:8080", AgentInference::Own)),
+            Vec::<Rule>::new()
+        );
+        let local = config(Some("http://10.0.0.2:8080"), AgentInference::ModelServer);
+        let kept = session_passthrough(
+            &probe,
+            &locked("http://10.0.0.2:8080", AgentInference::ModelServer),
+        );
+        assert!(!kept.is_empty());
+        assert_eq!(kept, session_passthrough(&probe, &local), "unchanged");
+        for loopback in [
+            "http://127.0.0.1:11434",
+            "http://[::1]:11434",
+            "http://ollama.lan:11434",
+        ] {
+            let rules = session_passthrough(&probe, &locked(loopback, AgentInference::ModelServer));
+            assert!(!rules.is_empty(), "{loopback} is local");
+        }
     }
 }

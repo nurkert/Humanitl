@@ -656,6 +656,65 @@ pub fn require_saved(table: &toml::Table, name: &str) -> Result<(), Diagnostic> 
     }
 }
 
+/// Der Anbieter außerhalb dieses Rechners, an den die Inferenz über den
+/// Endpunkt `endpoint` ginge, oder `None`, wenn er lokal ist (GitHub #113).
+///
+/// Dieselbe Lesart wie beim Start ([`crate::inference::provider_outside`]),
+/// für einen Server, als wäre er gewählt: `local` ist seine Markierung
+/// ([`LOCAL`]). Ein Text, der keine Adresse ist, hat keinen Anbieter; das
+/// Anlegen lehnt ihn selbst ab.
+#[must_use]
+pub fn endpoint_outside(endpoint: &str, local: bool) -> Option<String> {
+    const PROBE: &str = "probe";
+    let url = url::Url::parse(endpoint).ok()?;
+    let mut llm = crate::model::LlmConfig::default();
+    if local {
+        llm.servers.insert(
+            PROBE.to_owned(),
+            crate::model::LlmServer {
+                endpoint: Some(endpoint.to_owned()),
+                local: true,
+                ..crate::model::LlmServer::default()
+            },
+        );
+        llm.active = Some(PROBE.to_owned());
+    }
+    crate::inference::provider_outside(&llm, &url)
+}
+
+/// [`endpoint_outside`] für den gespeicherten Server `name`; `None` auch,
+/// wenn es ihn nicht gibt oder er keinen Endpunkt hat.
+#[must_use]
+pub fn saved_outside(table: &toml::Table, name: &str) -> Option<String> {
+    let state = State::read(table);
+    let entry = state.servers.get(name)?;
+    let endpoint = entry.get("endpoint").and_then(TomlValue::as_str)?;
+    let local = entry
+        .get(LOCAL)
+        .and_then(TomlValue::as_bool)
+        .unwrap_or(false);
+    endpoint_outside(endpoint, local)
+}
+
+/// [`endpoint_outside`] für den Server `name` mit dem neuen Endpunkt
+/// `endpoint`, wie [`edit`] ihn schriebe: Die Markierung [`LOCAL`] bleibt nur
+/// bei derselben Herkunft.
+#[must_use]
+pub fn edited_outside(table: &toml::Table, name: &str, endpoint: &str) -> Option<String> {
+    let state = State::read(table);
+    let entry = state.servers.get(name);
+    let old = entry
+        .and_then(|entry| entry.get("endpoint"))
+        .and_then(TomlValue::as_str)
+        .unwrap_or_default();
+    let local = entry
+        .and_then(|entry| entry.get(LOCAL))
+        .and_then(TomlValue::as_bool)
+        .unwrap_or(false)
+        && same_origin(old, endpoint);
+    endpoint_outside(endpoint, local)
+}
+
 /// Der Name, unter dem der Schlüssel eines Eintrags im Speicher liegt.
 ///
 /// Trägt der Eintrag schon einen Verweis, bleibt dessen Name: Ein neues
@@ -1576,6 +1635,43 @@ mod tests {
     /// Wendet die Änderungen an, wie `edit_with` es tut, ohne Datei.
     fn apply(table: &toml::Table, edits: &[Edit]) -> toml::Table {
         crate::edit::apply_edits(table, edits).unwrap()
+    }
+
+    /// Dieselbe Lesart wie beim Start (GitHub #113): privat, Name des
+    /// eigenen Netzes oder `local = true` ist lokal; eine neue Herkunft
+    /// verliert die Markierung.
+    #[test]
+    fn a_server_outside_is_named_like_at_the_start() {
+        assert_eq!(endpoint_outside("http://192.168.1.20:11434", false), None);
+        assert_eq!(endpoint_outside("http://ollama.lan:11434", false), None);
+        assert_eq!(
+            endpoint_outside("https://api.openai.com/v1", false).as_deref(),
+            Some("api.openai.com")
+        );
+        assert_eq!(
+            endpoint_outside("https://models.example.com/v1", true),
+            None
+        );
+        let saved = table(
+            "[llm.servers.vpn]\nendpoint = \"https://models.example.com/v1\"\nlocal = true\n\n\
+             [llm.servers.cloud]\nendpoint = \"https://api.example.com/v1\"\n",
+        );
+        assert_eq!(saved_outside(&saved, "vpn"), None);
+        assert_eq!(
+            saved_outside(&saved, "cloud").as_deref(),
+            Some("api.example.com")
+        );
+        assert_eq!(saved_outside(&saved, "missing"), None);
+        assert_eq!(
+            edited_outside(&saved, "vpn", "https://models.example.com/v2"),
+            None,
+            "same origin keeps the mark"
+        );
+        assert_eq!(
+            edited_outside(&saved, "vpn", "https://other.example.com/v1").as_deref(),
+            Some("other.example.com"),
+            "a new origin loses it"
+        );
     }
 
     const FLAT: &str = r#"

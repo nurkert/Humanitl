@@ -22,14 +22,21 @@
 //!
 //! Der Hinweis blockiert nichts. Die Bestätigung entscheidet nur, ob ein
 //! Client beim Start noch einmal fragt.
+//!
+//! Anders die **Sperre** `llm.cloud = "block"` (GitHub #113, [`lock_of`],
+//! [`locked`]): Mit ihr ist jeder Anbieter, den [`provider_outside`] nennt,
+//! ein Grund, nicht zu starten (`LLM_014`), und keine Bestätigung hebt das
+//! auf. „Lokal" heißt dabei genau, dass [`provider_outside`] `None` gibt; es
+//! gibt keine zweite Lesart.
 
-use humanitl_core::diagnostics::codes::{CONFIG_003, LLM_010};
+use humanitl_core::diagnostics::codes::{CONFIG_003, LLM_010, LLM_014};
 use humanitl_core::{Diagnostic, FixAction, HostName, Severity};
 use toml::Value as TomlValue;
 use url::Url;
 
 use crate::edit::Edit;
-use crate::model::LlmConfig;
+use crate::model::{LlmCloud, LlmConfig};
+use crate::origin::{Origin, Resolved};
 use crate::paths::Paths;
 
 /// Die Seite in `docs/SECURITY.md`, die den Fall beschreibt.
@@ -78,6 +85,49 @@ fn marked_local(llm: &LlmConfig, endpoint: &Url) -> bool {
                 let origin = saved.origin();
                 origin.is_tuple() && origin == endpoint.origin()
             })
+}
+
+/// Die Seite in `docs/SECURITY.md`, die die Sperre der Cloud-Inferenz
+/// beschreibt (GitHub #113).
+pub const LOCK_DOCS_URL: &str =
+    "https://github.com/nurkert/Humanitl/blob/main/docs/SECURITY.md#cloud-lock-github-113";
+
+/// Die Ebene, die `llm.cloud = "block"` gesetzt hat, wenn die Sperre gilt;
+/// `None` mit `allow` (GitHub #113).
+///
+/// Über alle Ebenen gilt der strengste Wert ([`mod@crate::load`]), und die
+/// Herkunft nennt die unterste Ebene, die `block` verlangt hat. Fehlt die
+/// Herkunft, etwa bei einer Konfiguration ohne Auflösung, ist sie
+/// [`Origin::Default`].
+#[must_use]
+pub fn lock_of(resolved: &Resolved) -> Option<Origin> {
+    resolved.config.llm.cloud.is_block().then(|| {
+        resolved
+            .origin(LlmCloud::KEY)
+            .cloned()
+            .unwrap_or(Origin::Default)
+    })
+}
+
+/// Der Befund, wenn `llm.cloud = "block"` gilt und Inferenz an `provider`
+/// außerhalb dieses Rechners ginge (`LLM_014`, GitHub #113).
+///
+/// `subject` sagt, was hinaus wollte, als Anfang eines Satzes, der mit dem
+/// Anbieter endet, etwa `"opencode would send its inference to"`; `by` ist
+/// die Ebene, die die Sperre gesetzt hat. Keine Bestätigung und keine
+/// lockerere Ebene hebt die Sperre auf; der Befund sagt es, damit niemand
+/// es mit einer Bestätigung versucht.
+#[must_use]
+pub fn locked(subject: &str, provider: &str, by: &Origin) -> Diagnostic {
+    Diagnostic::builder(LLM_014, Severity::Blocking)
+        .why(format!(
+            "llm.cloud is block, set in {by}: inference stays on this machine or in your \
+             network. {subject} {provider}, outside of it, so nothing was done. No confirmation \
+             of the cloud inference notice lifts the lock, and no other level switches it off; \
+             choose a model server on this machine or in your network."
+        ))
+        .fix(FixAction::OpenUrl(LOCK_DOCS_URL.to_owned()))
+        .build()
 }
 
 /// Der Hinweis als Befund, für die Kommandozeile und jeden Client, der keinen

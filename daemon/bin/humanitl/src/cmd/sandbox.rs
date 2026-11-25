@@ -347,7 +347,10 @@ async fn start(
     }
     // Derselbe Hinweis auf Cloud-Inferenz wie bei `humanitl run` (HUM-516):
     // Dieser Befehl startet im eigenen Prozess, am Tor des Daemons vorbei,
-    // und fragt deshalb selbst; die Bestätigung merkt der Daemon.
+    // und fragt deshalb selbst; die Bestätigung merkt der Daemon. Vorher die
+    // Sperre `llm.cloud = "block"` (GitHub #113): Unter ihr gibt es nichts
+    // zu bestätigen, nur `LLM_014`.
+    humanitl_ipc::cloud::lock(&resolved).map_err(Failure::new)?;
     let on_terminal = std::io::IsTerminal::is_terminal(&std::io::stdin())
         && std::io::IsTerminal::is_terminal(&std::io::stderr());
     let mode = crate::cmd::cloud::mode(flags.yes, ctx.render.is_json(), on_terminal);

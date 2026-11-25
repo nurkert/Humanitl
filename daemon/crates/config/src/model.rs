@@ -16,7 +16,8 @@
 //!
 //! `x-project-scope = "denied"` steht an jedem Schlüssel, den das Projekt-Profil
 //! nicht setzen darf (`backlog/CONVENTIONS.md` 4.11): `llm.*` außer
-//! `llm.server`, `sandbox.*` außer `sandbox.min_isolation` (die ein Projekt
+//! `llm.server` und `llm.cloud` (die Sperre, die ein Projekt nur einschalten
+//! kann), `sandbox.*` außer `sandbox.min_isolation` (die ein Projekt
 //! nur heben kann, siehe [`mod@crate::load`]), `agent.adapter`, `agent.command`, `hold.ask_mode`,
 //! `hold.hard_block_checksum_secrets`, `findings.enabled`,
 //! `findings.ignored_hashes`, `findings.email_allow_domains`, `pseudonyms.*`,
@@ -132,6 +133,12 @@ pub struct LlmConfig {
     // Endpunkt, Modelle und Schlüssel bleiben gesperrt.
     #[schemars(extend("x-tier" = "advanced", "x-project-scope" = "allowed"))]
     pub server: Option<String>,
+    /// Ob Inferenz diesen Rechner oder das eigene Netz verlassen darf (GitHub #113). `allow` (Vorgabe) lässt einen Modellserver außerhalb und die eigenen Provider eines Agenten (`agents.<id>.inference = "own"`) zu, hinter dem Hinweis auf Cloud-Inferenz (`LLM_010`, `LLM_011`). `block` hält die Inferenz lokal: Ein Start, dessen Agent sie an einen Anbieter außerhalb schicken würde, wird mit `LLM_014` abgelehnt, auch mit Bestätigung; es entsteht keine Durchreiche zu einem Host außerhalb, und `humanitl llm server add` und `use` sowie die Wahl eines Servers in der App lehnen einen Server außerhalb ab. Lokal ist, was auch keinen Hinweis auf Cloud-Inferenz auslöst: Loopback, private Adressen, Namen des eigenen Netzes und ein gespeicherter Server mit `local = true`. Über alle Ebenen gilt der strengste Wert: Projekt-Profil, Projektwahl, Profil, Umgebung und Sitzung können die Sperre einschalten, nie ausschalten, wenn eine andere Ebene sie gesetzt hat. Die eigene Update-Prüfung von Humanitl ist ein eigener Schalter (`update.check`), den die Sperre nicht berührt.
+    // Erlaubt im Projekt-Profil (GitHub #113): Wie bei
+    // `sandbox.min_isolation` gewinnt über alle Ebenen der strengste Wert
+    // (`crate::load`); ein Projekt kann die Sperre nur einschalten.
+    #[schemars(extend("x-tier" = "basic", "x-project-scope" = "allowed"))]
+    pub cloud: LlmCloud,
     /// Der Server, den die Auflösung gewählt hat, und woher die Wahl kommt
     /// (HUM-400). Kein Schlüssel der Datei: Das Laden setzt ihn nach dem
     /// Mischen aller Ebenen ([`crate::servers::ServerChoice`]).
@@ -150,8 +157,57 @@ impl Default for LlmConfig {
             servers: BTreeMap::new(),
             active: None,
             server: None,
+            cloud: LlmCloud::Allow,
             choice: None,
         }
+    }
+}
+
+/// Ob Inferenz diesen Rechner oder das eigene Netz verlassen darf
+/// (`llm.cloud`, GitHub #113), geordnet von offen nach streng: Beim Mischen
+/// der Ebenen gewinnt das Maximum (`crate::load`), wie bei
+/// [`MinIsolation`].
+#[derive(
+    Debug, Clone, Copy, Default, PartialEq, Eq, PartialOrd, Ord, Serialize, Deserialize, JsonSchema,
+)]
+#[serde(rename_all = "snake_case")]
+pub enum LlmCloud {
+    /// Ein Anbieter außerhalb ist erlaubt, hinter dem Hinweis auf
+    /// Cloud-Inferenz.
+    #[default]
+    Allow,
+    /// Nur lokal: Die Inferenz verlässt diesen Rechner und das eigene Netz
+    /// nie.
+    Block,
+}
+
+impl LlmCloud {
+    /// Der Schlüssel in `config.toml`.
+    pub const KEY: &'static str = "llm.cloud";
+
+    /// Die beiden, von offen nach streng.
+    pub const ALL: [Self; 2] = [Self::Allow, Self::Block];
+
+    /// Der Name, wie er in `config.toml` steht.
+    #[must_use]
+    pub const fn as_str(self) -> &'static str {
+        match self {
+            Self::Allow => "allow",
+            Self::Block => "block",
+        }
+    }
+
+    /// Liest `allow` oder `block`, genau so geschrieben; alles andere ist
+    /// `None`.
+    #[must_use]
+    pub fn parse(text: &str) -> Option<Self> {
+        Self::ALL.into_iter().find(|value| value.as_str() == text)
+    }
+
+    /// Ob die Sperre gilt.
+    #[must_use]
+    pub const fn is_block(self) -> bool {
+        matches!(self, Self::Block)
     }
 }
 

@@ -245,6 +245,11 @@ pub fn answer(
 
     // Entschieden wird unter der Sperre, am Stand, den der Auftrag ändert.
     let _order = servers::lock(paths)?;
+    // Mit `llm.cloud = "block"` kein Server außerhalb (GitHub #113), vor
+    // jedem anderen Weg, auch vor Zuordnung und Bestätigung.
+    if let Some(by) = cloud_lock(paths) {
+        refuse_outside(&read_table(paths)?, request, &by)?;
+    }
     let (gate, why): (Option<IdleGate<'_>>, &str) = match &request.op {
         Some(Op::Remove(remove))
             if servers::active_name(&read_table(paths)?).as_deref() == Some(remove.name.trim()) =>
@@ -287,6 +292,94 @@ pub fn answer(
             .fix(FixAction::CopyCommand("humanitl llm server ls".to_owned()))
             .build()),
     }
+}
+
+/// Die Ebene, die `llm.cloud = "block"` gesetzt hat, wie der Daemon die
+/// Konfiguration ohne Projekt jetzt liest (GitHub #113); `None` ohne Sperre.
+///
+/// Lässt sich die Konfiguration nicht laden, gilt, was `config.toml` selbst
+/// sagt: Eine Datei, die gerade nicht lädt, hebt die Sperre nicht auf.
+///
+/// Ohne Projekt: Eine Sperre, die nur ein Projekt setzt, sieht diese Prüfung
+/// nicht. Das öffnet nichts, denn der Start im Projekt verweigert einen
+/// Server außerhalb dann mit `LLM_014`.
+fn cloud_lock(paths: &Paths) -> Option<humanitl_config::Origin> {
+    match humanitl_config::resolve(
+        &humanitl_config::ProfileSelection::default(),
+        None,
+        paths.env(),
+        &[],
+    ) {
+        Ok(resolved) => humanitl_config::inference::lock_of(&resolved),
+        Err(_) => read_table(paths)
+            .ok()
+            .and_then(|table| {
+                table
+                    .get("llm")
+                    .and_then(toml::Value::as_table)
+                    .and_then(|llm| llm.get("cloud"))
+                    .and_then(toml::Value::as_str)
+                    .map(ToOwned::to_owned)
+            })
+            .filter(|value| value == humanitl_config::LlmCloud::Block.as_str())
+            .map(|_| humanitl_config::Origin::Global),
+    }
+}
+
+/// `LLM_014`, wenn der Auftrag einen Server außerhalb dieses Rechners
+/// anlegen, auf einen solchen Endpunkt ändern oder einen solchen wählen
+/// würde (GitHub #113): anlegen (`humanitl llm server add`), zum Standard
+/// machen (`use`), einem Projekt oder Profil zuordnen, eine Wahl bestätigen.
+/// Umbenennen, Entfernen und Auflisten bringen keine Inferenz hinaus.
+///
+/// Lokal ist, was auch beim Start lokal ist
+/// ([`humanitl_config::servers::endpoint_outside`]).
+///
+/// # Errors
+///
+/// `LLM_014` mit dem Server, seinem Anbieter und der Ebene der Sperre.
+pub fn refuse_outside(
+    table: &toml::Table,
+    request: &v1::LlmServersRequest,
+    by: &humanitl_config::Origin,
+) -> Result<(), Diagnostic> {
+    use v1::llm_servers_request::Op;
+
+    let (name, provider) = match &request.op {
+        Some(Op::Add(add)) => (
+            add.name.trim(),
+            servers::endpoint_outside(add.endpoint.trim(), false),
+        ),
+        Some(Op::Edit(edit)) => (
+            edit.name.trim(),
+            edit.endpoint
+                .as_deref()
+                .and_then(|endpoint| servers::edited_outside(table, edit.name.trim(), endpoint)),
+        ),
+        Some(Op::Activate(activate)) => (
+            activate.name.trim(),
+            servers::saved_outside(table, activate.name.trim()),
+        ),
+        Some(Op::Assign(assign)) => (
+            assign.server.trim(),
+            servers::saved_outside(table, assign.server.trim()),
+        ),
+        Some(Op::ConfirmProject(confirm)) => (
+            confirm.server.trim(),
+            servers::saved_outside(table, confirm.server.trim()),
+        ),
+        Some(Op::List(_) | Op::Rename(_) | Op::Remove(_)) | None => return Ok(()),
+    };
+    let Some(provider) = provider else {
+        return Ok(());
+    };
+    let mut refused = humanitl_config::inference::locked(
+        &format!("The model server {name} would send the inference to"),
+        &provider,
+        by,
+    );
+    refused.fix = Some(FixAction::CopyCommand("humanitl llm server ls".to_owned()));
+    Err(refused)
 }
 
 /// Schreibt einen Auftrag und löscht danach, wenn verlangt, den Schlüssel
@@ -520,6 +613,78 @@ mod tests {
     fn write_config(paths: &Paths, text: &str) {
         std::fs::create_dir_all(paths.config_dir()).unwrap();
         std::fs::write(paths.config_path(), text).unwrap();
+    }
+
+    /// Mit `llm.cloud = "block"` (GitHub #113) lehnen Anlegen, Bearbeiten,
+    /// Wählen, Zuordnen und Bestätigen einen Server außerhalb mit `LLM_014`
+    /// ab, und `config.toml` bleibt, wie sie war; ein lokaler Server und
+    /// Umbenennen gehen wie ohne Sperre.
+    ///
+    /// Mutationsbeweis: Ohne den Aufruf von `refuse_outside` in [`answer`]
+    /// legte das erste `add` den Server an, und der Test wird rot.
+    #[test]
+    fn the_cloud_lock_refuses_a_server_outside() {
+        use v1::llm_servers_request::{Activate, Assign, ConfirmProject, Edit, Rename, assign};
+
+        let dir = tempfile::tempdir().unwrap();
+        let paths = paths_in(dir.path());
+        let keys = KeyStore::for_paths(&paths).with_secret_tool(None);
+        let config = "[llm]\ncloud = \"block\"\nactive = \"home\"\n\n\
+                      [llm.servers.home]\nendpoint = \"http://192.168.1.20:11434\"\n\n\
+                      [llm.servers.lan]\nendpoint = \"http://models.home.arpa:11434\"\n\n\
+                      [llm.servers.cloud]\nendpoint = \"https://api.example.com/v1\"\n";
+        write_config(&paths, config);
+        let refused = |request: &v1::LlmServersRequest| {
+            let found = answer(&paths, &keys, &OPEN, request).unwrap_err();
+            assert_eq!(found.code.as_str(), "LLM_014", "{request:?}: {found:?}");
+            assert!(found.why.contains("config.toml"), "{}", found.why);
+            assert_eq!(
+                std::fs::read_to_string(paths.config_path()).unwrap(),
+                config,
+                "nothing written"
+            );
+        };
+        refused(&add("openai", "https://api.openai.com/v1"));
+        refused(&op(v1::llm_servers_request::Op::Activate(Activate {
+            name: "cloud".to_owned(),
+        })));
+        refused(&op(v1::llm_servers_request::Op::Edit(Edit {
+            name: "home".to_owned(),
+            endpoint: Some("https://api.openai.com/v1".to_owned()),
+            models: None,
+        })));
+        refused(&op(v1::llm_servers_request::Op::Assign(Assign {
+            server: "cloud".to_owned(),
+            target: Some(assign::Target::Profile("work".to_owned())),
+        })));
+        refused(&op(v1::llm_servers_request::Op::ConfirmProject(
+            ConfirmProject {
+                server: "cloud".to_owned(),
+                ..ConfirmProject::default()
+            },
+        )));
+
+        // Lokal geht es wie ohne Sperre.
+        answer(&paths, &keys, &OPEN, &add("lab", "http://lab.lan:11434")).expect("local");
+        answer(
+            &paths,
+            &keys,
+            &OPEN,
+            &op(v1::llm_servers_request::Op::Activate(Activate {
+                name: "lan".to_owned(),
+            })),
+        )
+        .expect("a name of the own network");
+        answer(
+            &paths,
+            &keys,
+            &OPEN,
+            &op(v1::llm_servers_request::Op::Rename(Rename {
+                name: "cloud".to_owned(),
+                new_name: "remote".to_owned(),
+            })),
+        )
+        .expect("a rename sends nothing anywhere");
     }
 
     /// Anlegen, aktivieren, umbenennen, entfernen: jede Antwort ist die Liste

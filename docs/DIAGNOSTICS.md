@@ -1108,6 +1108,14 @@ Agent has no own-provider mode
 
 **Fix.** `ChangeSetting` on `agents.<id>.inference` with `model-server`, and a model server in `llm.endpoint`.
 
+#### LLM_014
+
+Cloud inference locked
+
+**Auslöser.** `llm.cloud` is `block` on some level (global, project, profile, session or a company policy; the strictest level wins, so no other level switches it off), and the inference would leave this machine or network: the model server is not local, or the agent uses its own providers. Nothing was done; a confirmation of the cloud inference notice does not lift the lock. The sentence names the level that set the lock.
+
+**Fix.** Choose a model server on this machine or in your network (`humanitl llm server use NAME`, or a saved server marked `local = true`), or `agents.<id>.inference = "model-server"`. Only the level that set the lock can switch it off.
+
 ### Bereich rules
 
 #### RULES_001

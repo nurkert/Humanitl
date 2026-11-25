@@ -2646,8 +2646,10 @@ impl Inner {
         // hat niemand diese Kombination bestätigt, startet nichts, bis der
         // Client den Hinweis gezeigt oder bestätigt hat (HUM-516). Entschieden
         // an der ganz aufgelösten Konfiguration, `--llm URL` eingeschlossen,
-        // und vor allem, was die Sitzung gelten lässt.
-        crate::cloud::gate(&self.paths, &resolved.config, start)?;
+        // und vor allem, was die Sitzung gelten lässt. Mit `llm.cloud =
+        // "block"` startet eine Inferenz hinaus gar nicht, auch nicht
+        // bestätigt (`LLM_014`, GitHub #113).
+        crate::cloud::gate(&self.paths, &resolved, start)?;
         self.apply_resolved(resolved)
     }
 
@@ -2674,6 +2676,10 @@ impl Inner {
         let mut request = session_request(start, work_dir)?;
         request.project_choice = choice;
         let resolved = self.resolver.resolve(&request)?;
+        // Unter der Sperre gibt es nichts zu bestätigen (GitHub #113): Der
+        // Client bekommt `LLM_014` statt einer Frage, deren Antwort nichts
+        // ändert.
+        crate::cloud::lock(&resolved)?;
         Ok(crate::cloud::status(&self.paths, &resolved.config))
     }
 
@@ -9413,6 +9419,118 @@ mod tests {
             .inner
             .apply_session(&shown, Some(home.path().join("project")))
             .expect("the notice was shown");
+    }
+
+    /// The cloud lock in the start path (GitHub #113): `llm.cloud = "block"`
+    /// set globally, in the project profile, in the project choice or for the
+    /// session refuses a confirmed start with a model server outside with
+    /// `LLM_014`, naming the level; a session's `allow` does not lift a
+    /// global `block`; a local model server starts unchanged under the lock.
+    ///
+    /// Mutation proof: without the lock check in `cloud::gate`, the
+    /// confirmed start passes and the test turns red.
+    #[tokio::test]
+    async fn the_cloud_lock_refuses_a_confirmed_start_on_every_level() {
+        let confirmed = |cli: &[(&str, &str)]| v1::sandbox_request::Start {
+            cli_overrides: cli
+                .iter()
+                .map(|(path, value)| v1::sandbox_request::CliOverride {
+                    path: (*path).to_owned(),
+                    value: (*value).to_owned(),
+                })
+                .collect(),
+            acknowledge_cloud_inference: Some(v1::CloudNoticeFor {
+                agent: "opencode".to_owned(),
+                provider: "api.openai.com".to_owned(),
+            }),
+            ..v1::sandbox_request::Start::default()
+        };
+        let locked = |refused: Diagnostic, level: &str| {
+            assert_eq!(refused.code, humanitl_core::diagnostics::codes::LLM_014);
+            assert!(refused.why.contains("api.openai.com"), "{}", refused.why);
+            assert!(refused.why.contains(level), "{level}: {}", refused.why);
+            assert!(refused.why.contains("was ignored"), "{}", refused.why);
+        };
+        let cloud = "https://api.openai.com/v1";
+
+        // Global, and a session's `allow` does not lift it.
+        let home = tempfile::TempDir::new().unwrap();
+        let (service, paths) = live_service(&home, SandboxPorts::none());
+        crate::config_rpc::set(&paths, "llm.endpoint", cloud).expect("SetConfig writes");
+        crate::config_rpc::set(&paths, "llm.cloud", "block").expect("SetConfig writes");
+        let project = home.path().join("project");
+        for start in [confirmed(&[]), confirmed(&[("llm.cloud", "allow")])] {
+            locked(
+                service
+                    .inner
+                    .apply_session(&start, Some(project.clone()))
+                    .expect_err("locked globally"),
+                "config.toml",
+            );
+        }
+        let checked = service
+            .inner
+            .check_cloud_inference(&confirmed(&[]))
+            .expect_err("nothing to confirm under the lock");
+        assert_eq!(checked.code, humanitl_core::diagnostics::codes::LLM_014);
+        assert!(checked.why.contains("config.toml"), "{}", checked.why);
+        assert!(
+            !humanitl_config::inference::is_acknowledged(&paths, "opencode", "api.openai.com"),
+            "a confirmation under the lock is not stored"
+        );
+        // A local model server starts unchanged under the lock.
+        service
+            .inner
+            .apply_session(
+                &confirmed(&[("llm.endpoint", "http://192.168.1.20:11434/")]),
+                Some(project.clone()),
+            )
+            .expect("a local model server is not locked");
+
+        // The session alone, the project choice alone, the project profile
+        // alone.
+        let home = tempfile::TempDir::new().unwrap();
+        let (service, paths) = live_service(&home, SandboxPorts::none());
+        crate::config_rpc::set(&paths, "llm.endpoint", cloud).expect("SetConfig writes");
+        let project = home.path().join("project");
+        locked(
+            service
+                .inner
+                .apply_session(&confirmed(&[("llm.cloud", "block")]), Some(project.clone()))
+                .expect_err("locked for the session"),
+            "command line",
+        );
+        let choice = humanitl_config::ProjectChoice::from_pairs([("llm.cloud", "block")]).unwrap();
+        locked(
+            service
+                .inner
+                .apply_session_with_choice(&confirmed(&[]), Some(project.clone()), Some(choice))
+                .expect_err("locked by the project choice"),
+            "project choice",
+        );
+        std::fs::create_dir_all(project.join(".humanitl")).unwrap();
+        std::fs::write(
+            project.join(".humanitl/profile.toml"),
+            "[config.llm]\ncloud = \"block\"\n",
+        )
+        .unwrap();
+        let start = v1::sandbox_request::Start {
+            work_dir: project.display().to_string(),
+            ..confirmed(&[])
+        };
+        locked(
+            service
+                .inner
+                .apply_session(&start, Some(project.clone()))
+                .expect_err("locked by the project profile"),
+            "project profile",
+        );
+        // Without any lock the same confirmed start passes the gate.
+        std::fs::remove_file(project.join(".humanitl/profile.toml")).unwrap();
+        service
+            .inner
+            .apply_session(&confirmed(&[]), Some(project))
+            .expect("confirmed and not locked");
     }
 
     /// The interleaving of the review (HUM-277): endpoint B is saved, a start

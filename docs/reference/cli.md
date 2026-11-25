@@ -173,6 +173,7 @@ below lists the flag names and their short aliases.
 | `--limits-registry-max-finished-flows` | - | `INTEGER` | `limits.registry_max_finished_flows` |
 | `--llm-active` | - | `STRING,_OPTIONAL` | `llm.active` |
 | `--llm-api-key-ref` | - | `STRING,_OPTIONAL` | `llm.api_key_ref` |
+| `--llm-cloud` | - | `allow`, `block` | `llm.cloud` |
 | `--llm-endpoint` | `--llm` | `STRING,_OPTIONAL` | `llm.endpoint` |
 | `--llm-models` | - | `LIST_OF_STRING` | `llm.models` |
 | `--llm-passthrough-paths` | - | `LIST_OF_STRING` | `llm.passthrough_paths` |

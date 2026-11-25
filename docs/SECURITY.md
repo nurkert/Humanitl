@@ -939,6 +939,45 @@ connects itself (OpenCode's `/connect`) has no passthrough, and its requests are
 other. The agent gets no key of Humanitl in this mode, so that key stays a finding at every
 target. An adapter without declared own providers refuses `own` with `LLM_013`.
 
+#### Cloud lock (GitHub #113)
+
+`llm.cloud = "block"` turns the notice above into a refusal: inference stays on this machine or in
+the own network. "Local" is exactly what raises no cloud notice (loopback, private addresses,
+`.local`, `.lan`, `.home.arpa`, `.internal`, a saved server marked `local = true`); there is no
+second definition. With the lock:
+
+- A start whose agent would send its inference outside (a model server that is not local, or
+  `agents.<id>.inference = "own"`) is refused with `LLM_014`, which names the level that set the
+  lock. No confirmation lifts it: `Start.acknowledge_cloud_inference` and a shown notice are
+  ignored, the refusal says so, and nothing is stored. `humanitl sandbox run`, which starts past the
+  daemon's gate, checks the lock itself, and the question before a start
+  (`check_cloud_inference`) answers with `LLM_014` instead of asking.
+- As a second lock, the passthrough of a session holds no rule to a host that is not local: even a
+  path around the gate finds no unheld way out, and every request there is held like any other.
+- `humanitl llm server add`, `use`, `edit`, an assignment to a project or profile and the server
+  choice of the app refuse a server outside with the same code (`LlmServers`), and `config.toml`
+  stays as it was. There is never a fallback from a local server to one outside.
+
+The value is the strictest of all levels that set it: `config.toml`, a profile, the project
+profile, the project choice, the environment and the session (`humanitl run --llm-cloud block`),
+and a company policy. Each of them can switch the lock on; none switches off a `block` another
+level set. That matters most for the project profile, which the agent can write in a session with
+a writable folder: a repository's `allow` never weakens the person's `block`, and an `allow` in the
+project choice under a `block` below it is `CONFIG_024`. `humanitl doctor` shows the effective
+value and its level in the line `inference`, and fails that line with `LLM_014` while the
+configured inference would go outside.
+
+**Connections Humanitl makes itself.** The lock covers the agent's inference. Humanitl's own
+connections carry no prompt and no file of the agent, and they are listed here so that a person
+who locks inference knows what else leaves:
+
+- the update check, at most once a day, to GitHub ([Updates from inside the app](#updates-from-inside-the-app));
+  its own switch is `update.check`, which the lock does not change (ADR-0025);
+- only on request: the probe of a model server (`humanitl llm test`, the check in the settings),
+  the search for model servers in the own network (`humanitl llm discover`), the check of a
+  decision proxy (`egress.check`), installing an update, and pulling a sandbox image
+  (`humanitl sandbox image pull`).
+
 #### The reserved name `llm.humanitl.internal` (HUM-387)
 
 *Why it exists.* OpenCode 2.2.5 sends its model requests to a loopback `baseURL`
@@ -1865,7 +1904,8 @@ it, `terminal.on_close = "stop"` restores the old behaviour, and `humanitl run` 
 
 Since HUM-382 the daemon asks GitHub at most once a day whether a newer release exists, and
 installs one when a person clicks "Update" (or runs `humanitl update apply`). This is the one
-connection the daemon makes for itself. It is not part of the sandbox's door: it uses its own
+connection the daemon makes for itself unprompted (the others, each on request, are listed
+under "Cloud lock"). It is not part of the sandbox's door: it uses its own
 connection stack with the egress `Direct` (the same construction as the endpoint probe), never the
 proxy the agent talks to, and no request of the agent can trigger it.
 
@@ -2285,6 +2325,7 @@ passthrough or the audit chain gets a line here and in the change history of
 | 0.1.x | The credential files of the agent depot optionally encrypted at rest (`agents.encrypt_credentials`, off by default, closed to project profiles): ChaCha20-Poly1305 from `ring` with a fresh random nonce per write, the key only in the system keyring and never in a file next to the data, the setting refused without a keyring that answers (`AGENT_020`); the switch converts every file atomically under the depots' locks, all or nothing; the daemon still decrypts for every session (HUM-523, [section 5.7](#57-the-credential-file-of-the-depot), K-36). |
 | 0.1.x | Closing the terminal of `humanitl go` detaches it (`terminal.on_close`, default `detach`, closed to project profiles): the session keeps running in the daemon, held requests wait for a person or their deadline (expiry blocks), `humanitl sessions` and the start window show the session without a terminal; `SIGTERM` stops, `humanitl run` stops on `SIGHUP` as before; no guarantee depends on a client (GitHub #13, [section 6](#a-session-without-a-terminal-github-13), K-39). |
 | 0.1.x | An overlapping finding never removes a checksum-confirmed finding; a user term (`findings.user_terms`) or a known secret over the same bytes is reported next to it, so the hard block (`hold.hard_block_checksum_secrets`) always sees it (#96, [section 7](#7-the-rules-engine)). |
+| 0.1.x | The cloud lock `llm.cloud = "block"`: a start whose inference would leave this machine or network is refused with `LLM_014`, whatever was confirmed; no passthrough to a host that is not local; no model server outside can be added or chosen; the strictest value of all levels applies, so no project, profile or session switches off a `block` another level set (GitHub #113, [section 5.1](#cloud-lock-github-113), K-02). |
 
 ## 12. macOS: Seatbelt instead of bubblewrap
 

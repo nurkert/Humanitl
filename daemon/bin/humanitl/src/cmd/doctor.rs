@@ -156,6 +156,12 @@ pub async fn run(ctx: &Context, args: &DoctorArgs) -> Result<u8, Failure> {
     let resolved = ctx.config()?;
     // Was die Ladung beiseitegelegt hat, gehört in die Zeile `llm` (HUM-283).
     let load_diagnostics = resolved.diagnostics;
+    // Die Ebene der Sperre der Cloud-Inferenz für die Zeile `inference`
+    // (GitHub #113).
+    let cloud_from = resolved
+        .origins
+        .get(humanitl_config::LlmCloud::KEY)
+        .cloned();
     let config = resolved.config;
     let socket = ctx.paths.daemon_socket();
 
@@ -184,7 +190,14 @@ pub async fn run(ctx: &Context, args: &DoctorArgs) -> Result<u8, Failure> {
                     status.code().description()
                 ));
                 (
-                    local(ctx, &config, &load_diagnostics, args.probe).await,
+                    local(
+                        ctx,
+                        &config,
+                        cloud_from.as_ref(),
+                        &load_diagnostics,
+                        args.probe,
+                    )
+                    .await,
                     Source::Local,
                 )
             }
@@ -195,13 +208,27 @@ pub async fn run(ctx: &Context, args: &DoctorArgs) -> Result<u8, Failure> {
                     wait.as_millis()
                 ));
                 (
-                    local(ctx, &config, &load_diagnostics, args.probe).await,
+                    local(
+                        ctx,
+                        &config,
+                        cloud_from.as_ref(),
+                        &load_diagnostics,
+                        args.probe,
+                    )
+                    .await,
                     Source::Local,
                 )
             }
         },
         None => (
-            local(ctx, &config, &load_diagnostics, args.probe).await,
+            local(
+                ctx,
+                &config,
+                cloud_from.as_ref(),
+                &load_diagnostics,
+                args.probe,
+            )
+            .await,
             Source::Local,
         ),
     };
@@ -294,10 +321,12 @@ async fn daemon_facts(
 
 /// Die Prüfungen in diesem Prozess, weil kein Daemon antwortet; mit `probe`
 /// samt Probestart je zugelassenem Backend, mit dem Shim neben diesem
-/// Programm oder aus der Installation.
+/// Programm oder aus der Installation. `cloud_from` ist die Ebene von
+/// `llm.cloud` (GitHub #113).
 async fn local(
     ctx: &Context,
     config: &humanitl_config::Config,
+    cloud_from: Option<&humanitl_config::Origin>,
     load_diagnostics: &[Diagnostic],
     probe: bool,
 ) -> v1::DoctorReport {
@@ -339,7 +368,7 @@ async fn local(
     // Konfiguration.
     humanitl_ipc::egress::insert_doctor_line(&mut report, &config.egress);
     // Ebenso die Zeile der Inferenz (HUM-516).
-    humanitl_ipc::cloud::insert_doctor_line(&mut report, config);
+    humanitl_ipc::cloud::insert_doctor_line(&mut report, config, cloud_from);
     // Und die Zeile der Regel-Datei (HUM-561).
     humanitl_ipc::rules_doctor::insert_doctor_line(&mut report, &ctx.paths.rules_path());
     report.backends = local_backends(ctx, config, probe).await;

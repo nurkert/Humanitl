@@ -2123,6 +2123,15 @@ registry! {
     LLM_013 => "llm", "Agent has no own-provider mode", "#llm_013",
         "`agents.<id>.inference` is `own`, and Humanitl knows no own providers for this agent yet: it cannot name the hosts and paths a passthrough would need, so it would hold every request to the model. Nothing started.",
         "`ChangeSetting` on `agents.<id>.inference` with `model-server`, and a model server in `llm.endpoint`.";
+    // GitHub #113: the cloud lock.
+    /// `llm.cloud = "block"` applies, and inference would go to a provider
+    /// outside this machine or network: a start whose agent would send it
+    /// there (a model server that is not local, or `agents.<id>.inference =
+    /// "own"`), or a saved model server that is not local being added or
+    /// chosen. Blocking; no confirmation of the cloud notice lifts it.
+    LLM_014 => "llm", "Cloud inference locked", "#llm_014",
+        "`llm.cloud` is `block` on some level (global, project, profile, session or a company policy; the strictest level wins, so no other level switches it off), and the inference would leave this machine or network: the model server is not local, or the agent uses its own providers. Nothing was done; a confirmation of the cloud inference notice does not lift the lock. The sentence names the level that set the lock.",
+        "Choose a model server on this machine or in your network (`humanitl llm server use NAME`, or a saved server marked `local = true`), or `agents.<id>.inference = \"model-server\"`. Only the level that set the lock can switch it off.";
 }
 
 /// Sucht einen Code im Register.

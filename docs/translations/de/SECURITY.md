@@ -995,6 +995,49 @@ angehalten. Der Agent bekommt in diesem Modus keinen Schlüssel von Humanitl; di
 bleibt an jedem Ziel ein Fund. Ein Adapter ohne erklärte eigene Provider lehnt `own` mit `LLM_013`
 ab.
 
+#### Sperre der Cloud-Inferenz (GitHub #113)
+
+`llm.cloud = "block"` macht aus dem Hinweis oben eine Ablehnung: Die Inferenz bleibt auf diesem
+Rechner oder im eigenen Netz. „Lokal" ist genau, was keinen Hinweis auf Cloud-Inferenz auslöst
+(Loopback, private Adressen, `.local`, `.lan`, `.home.arpa`, `.internal`, ein gespeicherter Server
+mit `local = true`); eine zweite Lesart gibt es nicht. Mit der Sperre:
+
+- Ein Start, dessen Agent seine Inferenz nach außen schicken würde (ein Modellserver, der nicht
+  lokal ist, oder `agents.<id>.inference = "own"`), wird mit `LLM_014` abgelehnt, und der Befund
+  nennt die Ebene, die gesperrt hat. Keine Bestätigung hebt das auf:
+  `Start.acknowledge_cloud_inference` und ein gezeigter Hinweis werden übergangen, der Befund sagt
+  es, und nichts wird gemerkt. `humanitl sandbox run`, das am Tor des Daemons vorbei startet, prüft
+  die Sperre selbst, und die Frage vor einem Start (`check_cloud_inference`) antwortet mit
+  `LLM_014`, statt zu fragen.
+- Als zweite Sperre enthält die Durchreiche einer Sitzung keine Regel zu einem Host, der nicht
+  lokal ist: Auch ein Weg am Tor vorbei findet keinen ungehaltenen Weg hinaus, und jede Anfrage
+  dorthin wird wie jede andere angehalten.
+- `humanitl llm server add`, `use`, `edit`, eine Zuordnung zu Projekt oder Profil und die Wahl des
+  Servers in der App lehnen einen Server außerhalb mit demselben Code ab (`LlmServers`), und
+  `config.toml` bleibt, wie sie war. Es gibt nie einen Rückfall von einem lokalen Server auf einen
+  außerhalb.
+
+Es gilt der strengste Wert aller Ebenen, die ihn setzen: `config.toml`, ein Profil, das
+Projekt-Profil, die Projektwahl, die Umgebung, die Sitzung (`humanitl run --llm-cloud block`) und
+eine Firmenvorgabe. Jede davon kann die Sperre einschalten; keine schaltet ein `block` einer anderen
+Ebene aus. Das zählt vor allem für das Projekt-Profil, das der Agent in einer Sitzung mit
+beschreibbarem Ordner schreiben kann: Das `allow` eines Repositorys lockert nie das `block` des
+Menschen, und ein `allow` in der Projektwahl über einem `block` darunter ist `CONFIG_024`.
+`humanitl doctor` zeigt den wirksamen Wert und seine Ebene in der Zeile `inference` und lässt diese
+Zeile mit `LLM_014` scheitern, solange die eingestellte Inferenz nach außen ginge.
+
+**Verbindungen, die Humanitl selbst aufbaut.** Die Sperre gilt der Inferenz des Agenten. Die
+eigenen Verbindungen von Humanitl tragen keinen Prompt und keine Datei des Agenten; sie stehen hier,
+damit jeder, der die Inferenz sperrt, weiß, was sonst hinausgeht:
+
+- die Update-Prüfung, höchstens einmal am Tag, bei GitHub
+  ([Updates from inside the app](../../SECURITY.md#updates-from-inside-the-app)); ihr eigener
+  Schalter ist `update.check`, den die Sperre nicht ändert (ADR-0025);
+- nur auf Wunsch: die Probe eines Modellservers (`humanitl llm test`, die Prüfung in den
+  Einstellungen), die Suche nach Modellservern im eigenen Netz (`humanitl llm discover`), die
+  Prüfung eines Entscheidungs-Proxys (`egress.check`), das Installieren eines Updates und das
+  Ziehen eines Sandbox-Abbilds (`humanitl sandbox image pull`).
+
 #### Der Zugangsschlüssel des Modells (HUM-140)
 
 *Wo er liegt.* Im Schlüsselbund des Systems über den Secret Service (`gnome-keyring`, `kwallet`),
@@ -2150,6 +2193,7 @@ der Durchleitung oder an der Audit-Kette bekommt hier eine Zeile und in der Änd
 | 0.1.x | Eine Regel der `rules.yaml`, die sich nicht lesen lässt, kostet nur sich selbst statt aller Regeln der Datei; an ihrem Platz steht die Regel selbst (Aktion und Bedingung lesbar) oder `ask` für ihren Host oder für jeden Host und jede Adresse, nie nichts, außer bei einem `allow`; der Eintrag wird an seinem Platz zurückgeschrieben, und eine Datei, die sich als Ganzes nicht lesen lässt, wird nie überschrieben (HUM-561, [Abschnitt 7](#7-die-regel-engine)). |
 | 0.1.x | Die Zugangsdateien des Agent-Depots wahlweise verschlüsselt auf der Platte (`agents.encrypt_credentials`, Vorgabe aus, im Projekt-Profil gesperrt): ChaCha20-Poly1305 aus `ring` mit einer frischen zufälligen Nonce je Schreiben, der Schlüssel nur im Schlüsselbund des Systems und nie in einer Datei neben den Daten, ohne Schlüsselbund, der antwortet, wird die Einstellung abgelehnt (`AGENT_020`); das Umschalten wandelt jede Datei atomar unter den Sperren der Depots um, alles oder nichts; der Daemon entschlüsselt trotzdem für jede Sitzung (HUM-523, [Abschnitt 5.7](#57-die-zugangsdatei-des-depots), K-36). |
 | 0.1.x | Ein überlappender Fund entfernt nie einen durch Prüfsumme bestätigten Fund; ein eigener Begriff (`findings.user_terms`) oder ein bekanntes Secret über denselben Bytes steht neben ihm, so dass die harte Sperre (`hold.hard_block_checksum_secrets`) ihn immer sieht (#96, [Abschnitt 7](#7-die-regel-engine)). |
+| 0.1.x | Die Sperre der Cloud-Inferenz `llm.cloud = "block"`: Ein Start, dessen Inferenz diesen Rechner oder das eigene Netz verließe, wird mit `LLM_014` abgelehnt, gleich was bestätigt ist; keine Durchreiche zu einem Host, der nicht lokal ist; kein Modellserver außerhalb lässt sich anlegen oder wählen; es gilt der strengste Wert aller Ebenen, so dass kein Projekt, Profil und keine Sitzung ein `block` einer anderen Ebene ausschaltet (GitHub #113, [Abschnitt 5.1](#sperre-der-cloud-inferenz-github-113), K-02). |
 
 ## 12. macOS: Seatbelt statt bubblewrap
 

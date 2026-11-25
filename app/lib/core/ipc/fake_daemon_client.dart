@@ -2834,6 +2834,8 @@ class FakeDaemonClient
       FormKeys.uiTheme: <String>['dark', 'light', 'system'],
       // The ids of the registry, as the daemon checks them (HUM-274).
       FormKeys.agentAdapter: FormKeys.agentAdapters,
+      // The cloud lock (GitHub #113).
+      FormKeys.llmCloud: FormKeys.llmCloudValues,
     };
     final Object? value;
     if (text == '-') {

@@ -26,7 +26,8 @@ use serde_json::Value;
 /// meint jedes Blatt der Gruppe.
 const DENIED_BY_CONVENTION: &[&str] = &[
     // `llm.*` außer `llm.server` (HUM-400): Der Name wählt nur unter den
-    // gespeicherten Servern des Nutzers.
+    // gespeicherten Servern des Nutzers. `llm.cloud` bleibt erlaubt, weil
+    // dort der strengste Wert aller Ebenen gilt (GitHub #113).
     "llm.endpoint",
     "llm.passthrough_paths",
     "llm.models",
@@ -754,6 +755,109 @@ fn a_project_alone_may_raise_the_floor_over_the_default() {
         Some(&Origin::ProfileProject(profile))
     );
     let err = expect_err(&Sources::empty().with_cli([("sandbox.min_isolation", "none")]));
+    assert_eq!(err.code.as_str(), "CONFIG_003", "{}", err.why);
+}
+
+/// `llm.cloud` (GitHub #113): Über alle Ebenen gilt der strengste Wert wie
+/// bei der Untergrenze der Isolation. Jede Ebene kann die Sperre einschalten,
+/// keine schaltet ein `block` einer anderen aus, und die Herkunft nennt die
+/// Ebene, die gesperrt hat.
+///
+/// Mutationsbeweis: Nähme `crate::floor::is_floor` `llm.cloud` heraus,
+/// gewönne wieder die oberste Ebene, das `allow` des Projekts höbe das
+/// `block` von `config.toml` auf, und der Test wird rot.
+#[test]
+fn the_cloud_lock_takes_the_strictest_layer_and_no_level_lifts_it() {
+    struct Case {
+        user: Option<&'static str>,
+        project: Option<&'static str>,
+        env: Option<&'static str>,
+        cli: Option<&'static str>,
+        expected: &'static str,
+        from: &'static str,
+    }
+    let case = |user, project, env, cli, expected, from| Case {
+        user,
+        project,
+        env,
+        cli,
+        expected,
+        from,
+    };
+    let cases = [
+        // Ein Projekt, die Umgebung und die Sitzung lockern ein `block` der
+        // globalen Datei nicht.
+        case(Some("block"), Some("allow"), None, None, "block", "global"),
+        case(Some("block"), None, Some("allow"), None, "block", "global"),
+        case(Some("block"), None, None, Some("allow"), "block", "global"),
+        case(
+            Some("block"),
+            Some("allow"),
+            Some("allow"),
+            Some("allow"),
+            "block",
+            "global",
+        ),
+        // Jede Ebene kann die Sperre einschalten.
+        case(Some("allow"), Some("block"), None, None, "block", "project"),
+        case(None, Some("block"), None, Some("allow"), "block", "project"),
+        case(Some("allow"), None, Some("block"), None, "block", "env"),
+        case(None, None, None, Some("block"), "block", "cli"),
+        // Ohne `block` bleibt es offen.
+        case(Some("allow"), Some("allow"), None, None, "allow", "global"),
+    ];
+    for case in cases {
+        let scratch = Scratch::new();
+        let global = case
+            .user
+            .map(|value| scratch.write("config.toml", &format!("[llm]\ncloud = \"{value}\"\n")));
+        let project = case
+            .project
+            .map(|value| scratch.project_profile(&format!("llm.cloud = \"{value}\"")));
+        let env = case.env.map_or_else(Env::default, |value| {
+            Env::from_pairs([("HUMANITL_LLM__CLOUD", value)])
+        });
+        let cli: Vec<(&str, &str)> = case
+            .cli
+            .map(|value| vec![("llm.cloud", value)])
+            .unwrap_or_default();
+        let resolved = load(&Sources {
+            global_toml: global,
+            profile_project: project.clone(),
+            ..Sources::empty().with_env(env).with_cli(cli)
+        })
+        .expect("every layer may name the lock");
+        let label = format!(
+            "user {:?}, project {:?}, env {:?}, cli {:?}",
+            case.user, case.project, case.env, case.cli
+        );
+        assert_eq!(resolved.config.llm.cloud.as_str(), case.expected, "{label}");
+        let expected_origin = match case.from {
+            "global" => Origin::Global,
+            "project" => Origin::ProfileProject(project.clone().expect("a project")),
+            "env" => Origin::Env("HUMANITL_LLM__CLOUD".to_owned()),
+            "cli" => Origin::Cli,
+            other => panic!("unknown origin {other}"),
+        };
+        assert_eq!(
+            resolved.origin("llm.cloud").cloned(),
+            Some(expected_origin.clone()),
+            "{label}"
+        );
+        if case.expected == "block" {
+            assert_eq!(
+                humanitl_config::inference::lock_of(&resolved),
+                Some(expected_origin),
+                "{label}"
+            );
+        } else {
+            assert_eq!(humanitl_config::inference::lock_of(&resolved), None);
+        }
+    }
+    // Ein Wert, den es nicht gibt, fällt nie still auf die Ebene darunter
+    // zurück, auch nicht aus der Umgebung.
+    let err =
+        expect_err(&Sources::empty().with_env(Env::from_pairs([("HUMANITL_LLM__CLOUD", "deny")])));
     assert_eq!(err.code.as_str(), "CONFIG_003", "{}", err.why);
 }
 

@@ -81,6 +81,10 @@ pub const FORM_KEYS: &[&str] = &[
     "egress.proxy",
     "egress.proxy_ca",
     "egress.proxy_resolve",
+    // The cloud lock (GitHub #113): `allow` or `block`. Written here into
+    // `config.toml`; over all levels the strictest value applies, so a
+    // global `block` stays whatever another level says.
+    "llm.cloud",
 ];
 
 /// The key of the agent choice in the form (HUM-274).
