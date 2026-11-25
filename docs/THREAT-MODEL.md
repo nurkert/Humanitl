@@ -250,6 +250,19 @@ server marked `local = true` counts as local only for its own origin. *Residual 
 informs and blocks nothing; whoever confirms it accepts that the provider sees what the agent reads.
 A public name that points into the own network counts as outside until it is marked.
 
+An agent's own providers (`agents.<id>.inference = "own"`, GitHub #112) are an opt-in of the user,
+locked in the project profile, and exist only for an adapter that declares them (today OpenCode with
+OpenCode Zen on `opencode.ai`). The passthrough then covers only the declared inference paths with
+`POST`, never the host; `opencode.ai/share/**` and `models.opencode.ai` stay blocked, and OpenCode
+falls back to the model catalog built into its binary instead of fetching one (read from the source
+of OpenCode 1.18.25, not yet observed in a run; without that catalog the model list is empty and
+nothing is passed through). The cloud notice and
+the confirmation apply unchanged. *Residual risk:* whoever chooses `own` accepts that OpenCode Zen
+sees what the agent reads; a cloned repository's `opencode.json` may then set `model` and `provider`
+for the session (only the managed configuration's `permission` and `share` still win), but every
+target outside the declared paths goes through the proxy and is held. Without a model server and
+without `own`, OpenCode and pi do not start (`LLM_012`).
+
 ### K-03 The socket directory of the proxy
 
 If Humanitl bound the directory holding the socket, every file created there later would be visible
@@ -1379,6 +1392,7 @@ These attackers are not defended against, and Humanitl does not claim to:
 | 2026-11-23 | K-02: a bundled profile the project profile chooses with `name` loads its embedded text, keys and rules; the user's own file of the same name applies only when the human chooses that profile (`--profile`, the profile of the session) | #90 |
 | 2026-11-23 | K-02: a profile the project profile chooses with `name` is held to the limits of the project profile: keys with `x-project-scope = "denied"` and every rule other than `block` and `ask` are skipped, each with a warning (`CONFIG_003`); the same profile chosen by the human applies in full | #95 |
 | 2026-11-23 | Hard block: an overlapping finding never removes a checksum-confirmed finding; a user term (`findings.user_terms`) or a known secret over the same bytes is reported next to it | #96 |
+| 2026-11-25 | K-02: `agents.<id>.inference`; without a model server OpenCode and pi do not start (`LLM_012`); `own` (opt-in, locked in the project profile, only for an adapter that declares its own providers, else `LLM_013`) lets OpenCode use OpenCode Zen with a passthrough on its inference paths only, behind the cloud notice and the confirmation | GitHub #112 |
 
 Every security-relevant change to the shim, the mount allowlist, the filter or the passthrough gets
 a line here. Vulnerabilities are reported as described in

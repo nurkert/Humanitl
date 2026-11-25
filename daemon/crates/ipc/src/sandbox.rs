@@ -3703,6 +3703,10 @@ impl Inner {
             &options,
         ))?;
         drop(options);
+        // No start against a missing model server (GitHub #112): after the
+        // backend's plan, so its own refusals come first, and before the
+        // snapshot and the launch, so nothing runs.
+        prepared.refusal.clone().map_or(Ok(()), Err)?;
         let mut warnings = prepared.warnings.clone();
         warnings.extend(launch.warnings.iter().cloned());
         // **Der Schnappschuss steht zwischen Planen und Starten.** Vorher gibt
@@ -4641,6 +4645,7 @@ impl Inner {
             agent_depot: agent.depot,
         };
         let warnings = agent.warnings;
+        let refusal = agent.refusal;
         let depot_scratch = Mutex::new(agent.scratch);
 
         // Ein Schnappschuss ist eine Anzeige, kein Start: Ohne `bwrap` steht
@@ -4670,6 +4675,7 @@ impl Inner {
             options,
             overlay_preview: None,
             wanted_mode: config.sandbox.mode,
+            refusal,
             plan_mode: humanitl_sandbox::ModeChoice {
                 mode: SandboxMode::Direct,
                 notice: None,
@@ -4799,6 +4805,7 @@ impl Inner {
             .with_hold(config.hold.for_agent(&config.egress))
             .with_briefing(config.agent.briefing.clone())
             .with_pi_web_access(config.agent.pi.web_access)
+            .with_inference(config.agents.inference(&config.agent.adapter))
             .with_home(
                 config
                     .sandbox
@@ -4845,7 +4852,6 @@ impl Inner {
         } else {
             ctx.with_command_from_caller(command.to_vec())
         };
-
         // An agent outside the sandbox's mounts, for example in
         // `~/.opencode/bin`, is bound read-only as one file and the command
         // points at it (HUM-278). A command from the caller stays as it is
@@ -4872,6 +4878,7 @@ impl Inner {
             scratch: depot.scratch,
             launcher: adapter.launcher(&ctx),
             keyless,
+            refusal: start_refusal(need, adapter, &ctx),
         })
     }
 
@@ -5238,6 +5245,23 @@ fn host_program(
     }
 }
 
+/// No start against a missing model server and no `own` for an agent
+/// without own providers (GitHub #112): the one check of the adapter's
+/// preflight a start of the daemon makes itself
+/// ([`humanitl_sandbox::agent::inference::finding`]), for the agent the
+/// daemon starts. A plan carries none and still shows the session; the
+/// start refuses after the backend's plan, so a refusal of the backend or of
+/// its limits still comes first ([`Inner::launch_with`]).
+fn start_refusal(
+    need: KeyNeed,
+    adapter: &dyn humanitl_sandbox::AgentAdapter,
+    ctx: &AgentContext,
+) -> Option<Diagnostic> {
+    (need == KeyNeed::Start)
+        .then(|| humanitl_sandbox::agent::inference::finding(adapter, ctx))
+        .flatten()
+}
+
 /// Was der Agent-Adapter beisteuert.
 #[derive(Debug, Default)]
 struct AgentContribution {
@@ -5258,6 +5282,9 @@ struct AgentContribution {
     launcher: Vec<OsString>,
     /// `llm.api_key_ref` is set and no key reached the session (HUM-517).
     keyless: bool,
+    /// Why the agent of a start has nowhere to send its inference
+    /// (`LLM_012`, `LLM_013`, GitHub #112); only for a start.
+    refusal: Option<Diagnostic>,
 }
 
 /// The final command with the adapter's launcher in front, when the command
@@ -5372,6 +5399,10 @@ struct Prepared {
     /// [`Prepared::wanted_mode`], aufgelöst gegen das System: der Modus eines
     /// Starts ohne eigenen Wunsch, mit dem Grund einer Abweichung (HUM-357).
     plan_mode: humanitl_sandbox::ModeChoice,
+    /// Why the agent of this start has nowhere to send its inference
+    /// (`LLM_012`, `LLM_013`, GitHub #112). [`Inner::launch_with`] refuses
+    /// the start with it after the backend's plan; a plan carries none.
+    refusal: Option<Diagnostic>,
 }
 
 /// Was ein Schnappschuss über den Plan sagt, aus einem Guss.
@@ -6339,6 +6370,12 @@ fn key_target(config: &Config) -> (Option<String>, &'static str) {
             humanitl_core::secret_mask::KEY_HEADER_DEFAULT,
         );
     };
+    // With the agent's own providers (GitHub #112) the agent gets no key of
+    // Humanitl at all, so the key is expected nowhere and stays a finding
+    // at every target, the provider's host included.
+    if config.agents.inference(adapter.id()) == humanitl_config::AgentInference::Own {
+        return (None, adapter.key_header(&config.llm));
+    }
     let authority = adapter
         .inference_endpoint(&config.llm)
         .and_then(|endpoint| {
@@ -7566,7 +7603,11 @@ mod tests {
     #[test]
     fn a_named_agent_still_gets_its_environment() {
         let home = tempfile::TempDir::new().unwrap();
-        let service = service_for(&home, "opencode");
+        // A model server, so the agent the daemon starts itself is not refused
+        // with `LLM_012` and gets its catalog path (GitHub #112).
+        let service = service_configured(&home, "opencode", None, SandboxPorts::none(), |config| {
+            config.llm.endpoint = Some(url::Url::parse("http://192.168.1.50:11434").unwrap());
+        });
 
         for named in [
             vec!["opencode"],
@@ -7979,6 +8020,7 @@ mod tests {
             warnings: Vec::new(),
             overlay_preview: None,
             wanted_mode: SandboxMode::Direct,
+            refusal: None,
             plan_mode: humanitl_sandbox::ModeChoice {
                 mode: SandboxMode::Direct,
                 notice: None,
@@ -10306,6 +10348,46 @@ mod tests {
                 start_path(&home, lock.clone(), None, &["claude", "-p", "hi"], tweak).unwrap();
             assert_eq!(command, ["/run/humanitl/agent/claude", "-p", "hi"]);
         }
+    }
+
+    /// Without a model server the agent the daemon starts itself is refused
+    /// with `LLM_012`, a plan still shows the session, and a command of the
+    /// caller still starts (GitHub #112).
+    #[test]
+    fn a_start_without_a_model_server_is_refused_and_a_plan_is_not() {
+        let home = tempfile::tempdir().unwrap();
+        let service = service_for(&home, "opencode");
+        let start = service
+            .inner
+            .prepare_keyed(&v1::sandbox_request::Plan::default(), &[], KeyNeed::Start)
+            .expect("the preparation runs; the launch refuses");
+        let refused = start
+            .refusal
+            .as_ref()
+            .expect("no start against a missing model server");
+        assert_eq!(refused.code, codes::LLM_012);
+        assert_eq!(refused.severity, Severity::Blocking);
+        let plan = service
+            .inner
+            .prepare_keyed(&v1::sandbox_request::Plan::default(), &[], KeyNeed::Plan)
+            .expect("a plan still shows the session");
+        assert!(plan.refusal.is_none());
+        let shell = service
+            .inner
+            .prepare_keyed(
+                &v1::sandbox_request::Plan::default(),
+                &[OsString::from("bash")],
+                KeyNeed::Start,
+            )
+            .expect("a shell of the caller starts");
+        assert!(shell.refusal.is_none());
+        let served = service_configured(&home, "opencode", None, SandboxPorts::none(), |config| {
+            config.llm.endpoint = Some(url::Url::parse("http://192.168.1.50:11434").unwrap());
+        })
+        .inner
+        .prepare_keyed(&v1::sandbox_request::Plan::default(), &[], KeyNeed::Start)
+        .expect("a model server starts");
+        assert!(served.refusal.is_none());
     }
 
     /// The app starts through `Sandbox(Start)`, which prepares with

@@ -235,6 +235,8 @@ void main() {
           FormKeys.llmModels,
           FormKeys.llmApiKeyRef,
           FormKeys.agentAdapter,
+          // GitHub #112: wohin die Inferenz geht, gilt ab der nächsten Sitzung.
+          'agents.opencode.inference',
           FormKeys.sandboxWorkDir,
           FormKeys.sandboxMode,
           // HUM-440: Eine laufende Sitzung behält ihr Backend.

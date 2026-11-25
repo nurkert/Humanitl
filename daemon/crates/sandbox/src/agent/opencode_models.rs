@@ -189,6 +189,35 @@ pub fn render_config(
         .map_err(|err| broken(FILE, &format!("could not be written back ({err})")))
 }
 
+/// Rendert `opencode.json` ohne `provider` und ohne `model` (GitHub #112).
+///
+/// Für `agents.opencode.inference = "own"` und für eine Shell ohne
+/// Modellserver: `OpenCode` behält seine eigenen Provider und wählt sein
+/// Modell selbst. Alles andere bleibt wie in der Vorlage, also
+/// `permission`, `share` und `autoupdate`.
+///
+/// # Errors
+///
+/// Ein [`Diagnostic`] mit `AGENT_003`, wenn die Vorlage kein JSON-Objekt ist
+/// oder `provider` oder `model` nicht trägt.
+pub fn render_config_without_provider() -> Result<String, Diagnostic> {
+    const FILE: &str = "agents/opencode/opencode.json.tmpl";
+
+    let mut doc = parse_object(FILE, CONFIG_TEMPLATE)?;
+    for key in ["provider", "model"] {
+        // Fehlt der Schlüssel, ist die Vorlage eine andere als die, gegen die
+        // dieser Weg gebaut ist; das ist ein Fehler im Build.
+        doc.remove(key)
+            .ok_or_else(|| broken(FILE, &format!("the key {key:?} is missing")))?;
+    }
+    serde_json::to_string_pretty(&Value::Object(doc))
+        .map(|mut text| {
+            text.push('\n');
+            text
+        })
+        .map_err(|err| broken(FILE, &format!("could not be written back ({err})")))
+}
+
 /// Die Berechtigungen aus der Vorlage, als kompaktes JSON.
 ///
 /// Denselben Block trägt `opencode.json`; hier kommt er noch einmal für die

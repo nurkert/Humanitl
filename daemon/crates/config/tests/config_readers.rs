@@ -84,19 +84,25 @@ const REGISTER: &[(&str, &str)] = &[
     // Gelesen von `effective_source` im Start, in der Vorprüfung, im Status
     // und im Doctor (ADR-0023, HUM-518); `credential_writeback` vom Start
     // einer Sitzung mit einem Agenten aus dem Depot, der den Wächter der
-    // Rückschrift einschaltet (HUM-520).
+    // Rückschrift einschaltet (HUM-520); `inference` von Start, Vorprüfung,
+    // Durchreiche und Hinweis auf Cloud-Inferenz (GitHub #112).
     ("agents.agy.credential_writeback", "effective"),
+    ("agents.agy.inference", "effective"),
     ("agents.agy.source", "effective"),
     ("agents.claude.credential_writeback", "effective"),
+    ("agents.claude.inference", "effective"),
     ("agents.claude.source", "effective"),
     ("agents.codex.credential_writeback", "effective"),
+    ("agents.codex.inference", "effective"),
     ("agents.codex.source", "effective"),
     // Gelesen vom Start einer Sitzung aus dem Depot, die einen abweichenden
     // Stand der Verschlüsselung nachzieht, und vom Status (HUM-523).
     ("agents.encrypt_credentials", "effective"),
     ("agents.opencode.credential_writeback", "effective"),
+    ("agents.opencode.inference", "effective"),
     ("agents.opencode.source", "effective"),
     ("agents.pi.credential_writeback", "effective"),
+    ("agents.pi.inference", "effective"),
     ("agents.pi.source", "effective"),
     ("agents.source", "effective"),
     // Gelesen in `humanitld` beim Öffnen des Audit-Schreibers (HUM-050).

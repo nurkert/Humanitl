@@ -59,7 +59,7 @@ pub fn cloud_inference_with(
 ) -> Option<CloudInference> {
     let endpoint = adapter.map_or_else(
         || config.llm.endpoint.clone(),
-        |adapter| adapter.inference_endpoint(&config.llm),
+        |adapter| crate::agent::inference::session_endpoint(adapter, config),
     )?;
     let provider = humanitl_config::inference::provider_outside(&config.llm, &endpoint)?;
     Some(CloudInference {

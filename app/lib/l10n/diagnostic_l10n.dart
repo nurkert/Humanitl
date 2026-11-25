@@ -313,6 +313,8 @@ abstract final class DiagnosticL10n {
   'LLM_009' => (l10n.diagLLM009Title, l10n.diagLLM009Why),
   'LLM_010' => (l10n.diagLLM010Title, l10n.diagLLM010Why),
   'LLM_011' => (l10n.diagLLM011Title, l10n.diagLLM011Why),
+  'LLM_012' => (l10n.diagLLM012Title, l10n.diagLLM012Why),
+  'LLM_013' => (l10n.diagLLM013Title, l10n.diagLLM013Why),
   'PROXY_001' => (l10n.diagPROXY001Title, l10n.diagPROXY001Why),
   'PROXY_002' => (l10n.diagPROXY002Title, l10n.diagPROXY002Why),
   'PROXY_003' => (l10n.diagPROXY003Title, l10n.diagPROXY003Why),

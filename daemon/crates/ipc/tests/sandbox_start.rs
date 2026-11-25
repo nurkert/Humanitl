@@ -1757,3 +1757,28 @@ async fn folding_that_appears_after_the_start_refuses_the_apply() {
         "nothing is written"
     );
 }
+
+/// Without a model server the agent the daemon starts itself does not
+/// start: `LLM_012` after the backend's plan, and the sandbox never runs
+/// (GitHub #112). The default configuration has `OpenCode` and no
+/// `llm.endpoint`.
+///
+/// Mutation proof: without the refusal in `Inner::launch_with` the start
+/// reaches `running` and `LLM_012` never arrives.
+#[tokio::test(flavor = "multi_thread")]
+async fn a_start_of_the_agent_without_a_model_server_never_runs() {
+    let fixture = Fixture::new();
+    if !usable(&fixture) {
+        return;
+    }
+    let service = fixture.service();
+    let mut request = fixture.start();
+    if let Some(v1::sandbox_request::Op::Start(start)) = request.op.as_mut() {
+        start.command.clear();
+    }
+    let seen = events(&service, request).await;
+    assert!(carries(&seen, "LLM_012"), "{seen:?}");
+    let states = states(&seen);
+    assert!(!states.contains(&v1::SandboxState::Running), "{states:?}");
+    assert!(states.contains(&v1::SandboxState::Failed), "{states:?}");
+}

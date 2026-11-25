@@ -178,6 +178,30 @@ pub fn render_settings(models: &[String], web_access: Option<&str>) -> Result<St
     write_back(SETTINGS_FILE, doc)
 }
 
+/// Renders `settings.json` without a provider and a model of Humanitl
+/// (GitHub #112): no `defaultProvider`, no `defaultModel`, so pi keeps its
+/// own choice. For a shell of the caller without a model server; the agent
+/// the daemon starts itself does not start then (`LLM_012`).
+///
+/// # Errors
+///
+/// A [`Diagnostic`] with `AGENT_003` when the template does not have the
+/// expected form.
+pub fn render_settings_without_provider(web_access: Option<&str>) -> Result<String, Diagnostic> {
+    let mut doc = parse_object(SETTINGS_FILE, SETTINGS_TEMPLATE)?;
+    if doc.remove("defaultModel").is_none() {
+        return Err(broken(SETTINGS_FILE, "the key \"defaultModel\" is missing"));
+    }
+    doc.remove("defaultProvider");
+    if let Some(package) = web_access {
+        doc.insert(
+            "packages".to_owned(),
+            Value::Array(vec![Value::String(package.to_owned())]),
+        );
+    }
+    write_back(SETTINGS_FILE, doc)
+}
+
 /// Renders `web-search.json`, the configuration of `pi-web-access`
 /// (HUM-309).
 ///

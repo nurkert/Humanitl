@@ -352,6 +352,8 @@ impl Inner {
             warnings: Vec::new(),
             overlay_preview: None,
             wanted_mode: SandboxMode::Direct,
+            // A maintenance run needs no model server (GitHub #112).
+            refusal: None,
             plan_mode: humanitl_sandbox::ModeChoice {
                 mode: SandboxMode::Direct,
                 notice: None,

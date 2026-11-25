@@ -338,6 +338,40 @@ mod tests {
         .expect("a local endpoint never waits");
     }
 
+    /// `agents.opencode.inference = "own"` names `opencode.ai`, and a start
+    /// without confirmation fails like for any cloud provider; a local
+    /// model server in `llm.endpoint` does not hide it (GitHub #112).
+    #[test]
+    fn the_own_providers_of_opencode_go_through_the_gate() {
+        let dir = tempfile::tempdir().unwrap();
+        let paths = paths_in(dir.path());
+        let mut own = config("http://192.168.1.20:11434");
+        own.agents.opencode.inference = humanitl_config::AgentInference::Own;
+
+        let found = cloud_inference(&own).expect("the notice");
+        assert_eq!(found.provider, "opencode.ai");
+        let refused = gate(&paths, &own, &start_with(false, false)).unwrap_err();
+        assert_eq!(refused.code, LLM_011);
+        assert!(refused.why.contains("opencode.ai"), "{}", refused.why);
+        assert!(
+            !humanitl_config::inference::is_acknowledged(&paths, "opencode", "opencode.ai"),
+            "never confirmed on the person's behalf"
+        );
+        let confirmed = v1::sandbox_request::Start {
+            acknowledge_cloud_inference: Some(v1::CloudNoticeFor {
+                agent: "opencode".to_owned(),
+                provider: "opencode.ai".to_owned(),
+            }),
+            ..v1::sandbox_request::Start::default()
+        };
+        gate(&paths, &own, &confirmed).expect("confirmed by the person");
+        assert!(humanitl_config::inference::is_acknowledged(
+            &paths,
+            "opencode",
+            "opencode.ai"
+        ));
+    }
+
     #[test]
     fn junk_is_a_diagnostic_and_nothing_is_written() {
         let dir = tempfile::tempdir().unwrap();

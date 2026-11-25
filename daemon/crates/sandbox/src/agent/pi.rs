@@ -53,6 +53,15 @@
 //! (`EnvHttpProxyAgent` on `HTTPS_PROXY`), measured with 0.46.0: a fetch
 //! arrived at the proxy as `CONNECT host:80`, keyless search as
 //! `CONNECT mcp.exa.ai:443`.
+//!
+//! **Where the inference goes (GitHub #112).** pi reaches a model only
+//! through `llm.endpoint` in Humanitl (`AgentAdapter::uses_model_server`):
+//! without one, the agent the daemon starts itself does not start
+//! (`LLM_012`), and the adapter writes no provider, no model and no key
+//! instead of a made-up base URL. The adapter declares no own providers
+//! (`AgentAdapter::own_inference` is `None`): which of pi's built-in
+//! providers a person would use, and their exact inference paths, are not
+//! sourced, so `agents.pi.inference = "own"` is refused with `LLM_013`.
 
 use std::ffi::{OsStr, OsString};
 use std::io::Read as _;
@@ -70,7 +79,7 @@ use crate::agent::opencode::{
 use crate::agent::opencode_models::DEFAULT_RULES;
 use crate::agent::pi_config::{
     ENV_KEY_FILE, NO_KEY_PLACEHOLDER, api_key_command, render_models, render_settings,
-    render_web_search,
+    render_settings_without_provider, render_web_search,
 };
 use crate::agent::{
     AgentAdapter, AgentContext, Reach, SandboxFile, SandboxLookup, briefing, find_in_path,
@@ -635,27 +644,39 @@ impl AgentAdapter for PiAdapter {
     }
 
     fn files(&self, ctx: &AgentContext) -> Result<Vec<SandboxFile>, Diagnostic> {
-        let base = ctx.llm.endpoint.as_ref().map_or_else(
-            || format!("http://127.0.0.1:{}/v1", ctx.proxy_port),
-            llm_endpoint::openai_base_url,
-        );
-        let api_key = if ctx.llm_key.is_some() {
-            api_key_command()
-        } else {
-            NO_KEY_PLACEHOLDER.to_owned()
-        };
-        let models = render_models(&base, &ctx.llm.models, &api_key)?;
         let web_access = web_access_package(ctx);
         let package = web_access
             .as_ref()
             .map(|package| package.to_string_lossy().into_owned());
-        let settings = render_settings(&ctx.llm.models, package.as_deref())?;
-
-        let mut files = vec![
-            SandboxFile::read_only(models_dst(&ctx.home), models.into_bytes()),
-            SandboxFile::read_only(settings_dst(&ctx.home), settings.into_bytes()),
-        ];
-        if ctx.llm_key.is_some() {
+        // Without a model server (no `llm.endpoint`, or
+        // `agents.pi.inference = "own"`) Humanitl writes no provider, no
+        // model and no key, never a made-up address such as the proxy port
+        // (GitHub #112). The agent the daemon starts itself does not start
+        // then (`LLM_012` or `LLM_013`, `inference::finding`); a shell of the
+        // caller gets pi with its own choice, and every request is held.
+        let mut files = Vec::new();
+        let settings = match ctx.model_server() {
+            Some(endpoint) => {
+                let base = llm_endpoint::openai_base_url(endpoint);
+                let api_key = if ctx.llm_key.is_some() {
+                    api_key_command()
+                } else {
+                    NO_KEY_PLACEHOLDER.to_owned()
+                };
+                let models = render_models(&base, &ctx.llm.models, &api_key)?;
+                files.push(SandboxFile::read_only(
+                    models_dst(&ctx.home),
+                    models.into_bytes(),
+                ));
+                render_settings(&ctx.llm.models, package.as_deref())?
+            }
+            None => render_settings_without_provider(package.as_deref())?,
+        };
+        files.push(SandboxFile::read_only(
+            settings_dst(&ctx.home),
+            settings.into_bytes(),
+        ));
+        if ctx.model_server().is_some() && ctx.llm_key.is_some() {
             files.push(SandboxFile::secret(API_KEY_DST, ctx.llm_key.file_content()));
         }
         // Read-only like the others: the extension's own commands that save
@@ -670,7 +691,9 @@ impl AgentAdapter for PiAdapter {
         // The same briefing as for OpenCode, with the host from the same
         // checked source as the passthrough rule (HUM-071).
         if ctx.briefing.enabled {
-            let llm_host = passthrough_authority(&ctx.llm);
+            let llm_host = ctx
+                .model_server()
+                .and_then(|_| passthrough_authority(&ctx.llm));
             let text = briefing::render_for_session(
                 ctx.language,
                 ctx.hold.ask_mode,
@@ -702,6 +725,10 @@ impl AgentAdapter for PiAdapter {
         DEFAULT_RULES
     }
 
+    fn uses_model_server(&self) -> bool {
+        true
+    }
+
     fn llm_passthrough(&self, llm: &LlmConfig) -> Vec<Rule> {
         passthrough_rules(llm)
     }
@@ -714,7 +741,9 @@ impl AgentAdapter for PiAdapter {
             diagnostics.extend(node_preflight(ctx, &started_command(ctx)));
         }
         diagnostics.extend(web_access_preflight(ctx));
-        diagnostics.extend(placeholder_model_finding(&ctx.llm));
+        if ctx.model_server().is_some() {
+            diagnostics.extend(placeholder_model_finding(&ctx.llm));
+        }
         diagnostics
     }
 

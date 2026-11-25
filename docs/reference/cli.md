@@ -126,15 +126,20 @@ below lists the flag names and their short aliases.
 | `--agent-command` | - | `LIST_OF_STRING,_OPTIONAL` | `agent.command` |
 | `--agent-pi-web-access` | - | `auto`, `on`, `off` | `agent.pi.web_access` |
 | `--agents-agy-credential-writeback` | - | `true`, `false` | `agents.agy.credential_writeback` |
+| `--agents-agy-inference` | - | `model-server`, `own` | `agents.agy.inference` |
 | `--agents-agy-source` | - | `host`, `depot`, `null` | `agents.agy.source` |
 | `--agents-claude-credential-writeback` | - | `true`, `false` | `agents.claude.credential_writeback` |
+| `--agents-claude-inference` | - | `model-server`, `own` | `agents.claude.inference` |
 | `--agents-claude-source` | - | `host`, `depot`, `null` | `agents.claude.source` |
 | `--agents-codex-credential-writeback` | - | `true`, `false` | `agents.codex.credential_writeback` |
+| `--agents-codex-inference` | - | `model-server`, `own` | `agents.codex.inference` |
 | `--agents-codex-source` | - | `host`, `depot`, `null` | `agents.codex.source` |
 | `--agents-encrypt-credentials` | - | `true`, `false` | `agents.encrypt_credentials` |
 | `--agents-opencode-credential-writeback` | - | `true`, `false` | `agents.opencode.credential_writeback` |
+| `--agents-opencode-inference` | - | `model-server`, `own` | `agents.opencode.inference` |
 | `--agents-opencode-source` | - | `host`, `depot`, `null` | `agents.opencode.source` |
 | `--agents-pi-credential-writeback` | - | `true`, `false` | `agents.pi.credential_writeback` |
+| `--agents-pi-inference` | - | `model-server`, `own` | `agents.pi.inference` |
 | `--agents-pi-source` | - | `host`, `depot`, `null` | `agents.pi.source` |
 | `--agents-source` | - | `host`, `depot` | `agents.source` |
 | `--audit-anchor-every` | - | `INTEGER` | `audit.anchor_every` |

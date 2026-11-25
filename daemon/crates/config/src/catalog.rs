@@ -190,6 +190,11 @@ pub const DEFS: &[Def] = &[
     // Wartungsläufe über `Agents`; die Schlüssel `agents.*` zeichnet die
     // Zeile selbst, darum stehen sie in `catalog/hidden.toml`.
     Def::key("agents.depot", "agents", Control::Special),
+    // Wohin `OpenCode` seine Inferenz schickt (GitHub #112), mit den Werten
+    // der Aufzählung des Schemas. Eine Zeile nur für einen Agenten, dessen
+    // Adapter eigene Provider kennt (`AgentAdapter::own_inference`); die
+    // übrigen `agents.<id>.inference` stehen in `catalog/hidden.toml`.
+    Def::key("agents.opencode.inference", "agents", Control::Choice).next(),
     Def::key("sandbox.work_dir", "sandbox", Control::Path).next(),
     Def::key("sandbox.mode", "sandbox", Control::Choice).next(),
     // Welche Backends es gibt und welche wählbar sind, sagt
