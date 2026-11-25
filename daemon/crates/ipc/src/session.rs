@@ -25,7 +25,7 @@
 //! Client; sie stehen in `config.toml` oder in einem globalen Profil, wo ein
 //! Mensch sie geschrieben hat, und der Daemon liest sie dort.
 //!
-//! Übrig bleiben die sechs Schlüssel in [`SESSION_OVERRIDE_KEYS`]; die ersten
+//! Übrig bleiben die sieben Schlüssel in [`SESSION_OVERRIDE_KEYS`]; die ersten
 //! zwei sind Flags aus `backlog/CONVENTIONS.md` 3.8:
 //!
 //! - `hold.timeout_secs` sagt, wie lange eine gehaltene Anfrage wartet. Er
@@ -89,6 +89,11 @@
 //!   (`command_follows_the_agent`). Die Quelle des Programms (Host oder
 //!   Depot) bestimmt weiter nur `agents.*`, und eine Firmenvorgabe, die den
 //!   Adapter sperrt, gewinnt als oberste Ebene.
+//! - `llm.cloud` (GitHub #113, `--llm-cloud block`) schaltet die Sperre der
+//!   Cloud-Inferenz für diese Sitzung ein. Er vergrößert nichts: Wie bei der
+//!   Untergrenze gilt beim Mischen der strengste Wert aller Ebenen, ein
+//!   `allow` des Starts hebt ein `block` aus Konfiguration, Profil,
+//!   Projektwahl oder Firmenvorgabe nie auf.
 //!
 //! [`SandboxService`]: crate::SandboxService
 //!
@@ -128,7 +133,13 @@ pub const SESSION_OVERRIDE_KEYS: &[&str] = &[
     "sandbox.podman.runtime",
     SANDBOX_MIN_ISOLATION_KEY,
     AGENT_ADAPTER_KEY,
+    LLM_CLOUD_KEY,
 ];
+
+/// Die Sperre der Cloud-Inferenz, seit GitHub #113 ein Schlüssel der
+/// Sitzung. Ein Wunsch über den Start schaltet sie nur ein: Beim Mischen
+/// gilt der strengste Wert aller Ebenen.
+pub const LLM_CLOUD_KEY: &str = humanitl_config::LlmCloud::KEY;
 
 /// Der Adapter der Sitzung, seit #8 ein Schlüssel der Sitzung: `humanitl go
 /// claude` wählt den Agenten für genau diesen Start.
@@ -881,10 +892,10 @@ mod tests {
         // vergrößert.
         assert_eq!(
             SESSION_OVERRIDE_KEYS.len(),
-            6,
+            7,
             "a client sets llm.endpoint, hold.timeout_secs, sandbox.backend, \
-             sandbox.podman.runtime, sandbox.min_isolation and agent.adapter, and nothing \
-             else: {SESSION_OVERRIDE_KEYS:?}"
+             sandbox.podman.runtime, sandbox.min_isolation, agent.adapter and llm.cloud, and \
+             nothing else: {SESSION_OVERRIDE_KEYS:?}"
         );
         for key in SESSION_OVERRIDE_KEYS {
             assert!(check_override_key(key).is_ok(), "{key} should be allowed");

@@ -231,6 +231,9 @@ void main() {
             if (entry.nextSession) entry.id,
         };
         expect(next, <String>{
+          // GitHub #113: die Sperre der Cloud-Inferenz gilt ab der nächsten
+          // Sitzung.
+          FormKeys.llmCloud,
           FormKeys.llmEndpoint,
           FormKeys.llmModels,
           FormKeys.llmApiKeyRef,

@@ -10,7 +10,7 @@
 //! `humanitl doctor`. Oberfläche und Kommandozeile entscheiden nichts davon
 //! selbst (ADR-018).
 
-use humanitl_config::{Config, Paths};
+use humanitl_config::{AgentInference, Config, LlmCloud, Origin, Paths, Resolved};
 use humanitl_core::diagnostics::codes::LLM_011;
 use humanitl_core::{Diagnostic, FixAction, Severity};
 use humanitl_sandbox::agent::cloud::{CloudInference, cloud_inference};
@@ -84,14 +84,26 @@ pub fn acknowledge(
 /// `LLM_011` für einen unbestätigten Start; die Befunde von
 /// [`humanitl_config::inference::acknowledge`], wenn die Bestätigung nicht
 /// geschrieben wurde.
+///
+/// Vor allem anderen die Sperre `llm.cloud = "block"` (GitHub #113): Mit ihr
+/// ist jede Inferenz hinaus `LLM_014`, und weder eine gemerkte noch eine
+/// mitgeschickte Bestätigung noch ein gezeigter Hinweis ändert das; eine
+/// mitgeschickte Bestätigung wird nicht gemerkt, und der Befund sagt, dass
+/// sie nicht galt.
 pub fn gate(
     paths: &Paths,
-    config: &Config,
+    resolved: &Resolved,
     start: &v1::sandbox_request::Start,
 ) -> Result<(), Diagnostic> {
+    let config = &resolved.config;
     let Some(found) = cloud_inference(config) else {
         return Ok(());
     };
+    if let Some(by) = humanitl_config::inference::lock_of(resolved) {
+        let answered =
+            start.acknowledge_cloud_inference.is_some() || start.cloud_notice_shown.is_some();
+        return Err(locked(config, &found, &by, answered));
+    }
     if humanitl_config::inference::is_acknowledged(paths, &found.agent, &found.provider) {
         return Ok(());
     }
@@ -116,6 +128,60 @@ fn answers(answer: Option<&v1::CloudNoticeFor>, found: &CloudInference) -> bool 
     })
 }
 
+/// Die Sperre allein, ohne Bestätigung (GitHub #113): `LLM_014`, wenn
+/// `llm.cloud = "block"` gilt und die Inferenz dieser Konfiguration hinaus
+/// ginge. Für die Frage vor dem Start (`check_cloud_inference`), damit ein
+/// Client gar nicht erst nach einer Bestätigung fragt, die nichts ändert,
+/// und für `humanitl sandbox run`, das am Tor des Daemons vorbei startet.
+///
+/// # Errors
+///
+/// `LLM_014`.
+pub fn lock(resolved: &Resolved) -> Result<(), Diagnostic> {
+    let Some(by) = humanitl_config::inference::lock_of(resolved) else {
+        return Ok(());
+    };
+    match cloud_inference(&resolved.config) {
+        Some(found) => Err(locked(&resolved.config, &found, &by, false)),
+        None => Ok(()),
+    }
+}
+
+/// `LLM_014` für einen Start, dessen Agent seine Inferenz an `found`
+/// schicken würde, mit der Ebene `by`, die gesperrt hat. `answered` sagt,
+/// dass der Start eine Bestätigung oder den gezeigten Hinweis mitbrachte;
+/// der Befund sagt dann, dass sie nicht galt.
+#[must_use]
+pub fn locked(config: &Config, found: &CloudInference, by: &Origin, answered: bool) -> Diagnostic {
+    let own = config.agents.inference(&found.agent) == AgentInference::Own;
+    let subject = if own {
+        format!(
+            "{} uses its own providers (agents.{}.inference = own) and would send its \
+             inference to",
+            found.agent, found.agent
+        )
+    } else {
+        format!("{} would send its inference to", found.agent)
+    };
+    let mut diagnostic = humanitl_config::inference::locked(&subject, &found.provider, by);
+    if answered {
+        diagnostic
+            .why
+            .push_str(" The confirmation this start carried was ignored: the lock takes none.");
+    }
+    // Der Ausweg, der die Sperre lässt, wie sie ist: zurück auf den
+    // Modellserver, oder einen lokalen wählen.
+    diagnostic.fix = if own {
+        humanitl_config::value::change_setting(
+            &format!("agents.{}.inference", found.agent),
+            AgentInference::ModelServer.as_str(),
+        )
+    } else {
+        Some(FixAction::CopyCommand("humanitl llm server ls".to_owned()))
+    };
+    diagnostic
+}
+
 /// Der Befund eines Starts, dessen Cloud-Inferenz niemand bestätigt hat.
 #[must_use]
 pub fn unconfirmed(found: &CloudInference) -> Diagnostic {
@@ -136,31 +202,60 @@ pub fn unconfirmed(found: &CloudInference) -> Diagnostic {
 /// `OK` mit „local", solange die Inferenz auf diesem Rechner oder im eigenen
 /// Netz bleibt oder es keinen Endpunkt gibt; `WARN` mit `LLM_010`, wenn sie
 /// an einen Anbieter außerhalb geht. Eine Warnung hält keinen Start auf.
+///
+/// Dazu der wirksame Wert von `llm.cloud` und die Ebene, von der er kommt
+/// (`cloud_from`, GitHub #113). Gilt `block` und ginge die Inferenz hinaus,
+/// ist die Zeile `FAIL` mit `LLM_014`: Der nächste Start scheitert daran.
 #[must_use]
-pub fn doctor_line(config: &Config) -> v1::DoctorCheck {
+pub fn doctor_line(config: &Config, cloud_from: Option<&Origin>) -> v1::DoctorCheck {
+    let lock = format!(
+        "llm.cloud = {} (from {})",
+        config.llm.cloud.as_str(),
+        cloud_from.unwrap_or(&Origin::Default)
+    );
     match cloud_inference(config) {
         None => v1::DoctorCheck {
             id: DOCTOR_ID.to_owned(),
             status: v1::CheckStatus::Ok.into(),
             evidence: format!(
-                "{}: inference stays on this machine or in your network, or no endpoint is set",
+                "{}: inference stays on this machine or in your network, or no endpoint is \
+                 set; {lock}",
                 config.agent.adapter
             ),
             diagnostic: None,
         },
+        Some(found) if config.llm.cloud == LlmCloud::Block => v1::DoctorCheck {
+            id: DOCTOR_ID.to_owned(),
+            status: v1::CheckStatus::Fail.into(),
+            evidence: format!(
+                "{}: inference would go to {}, and {lock} refuses the start",
+                found.agent, found.provider
+            ),
+            diagnostic: Some(convert::diagnostic_to_proto(&locked(
+                config,
+                &found,
+                cloud_from.unwrap_or(&Origin::Default),
+                false,
+            ))),
+        },
         Some(found) => v1::DoctorCheck {
             id: DOCTOR_ID.to_owned(),
             status: v1::CheckStatus::Warn.into(),
-            evidence: format!("{}: {}", found.agent, found.short_line()),
+            evidence: format!("{}: {}; {lock}", found.agent, found.short_line()),
             diagnostic: Some(convert::diagnostic_to_proto(&found.notice())),
         },
     }
 }
 
 /// Setzt die Zeile `inference` hinter die Zeile `egress`, sonst hinter
-/// `llm`, sonst ans Ende.
-pub fn insert_doctor_line(report: &mut v1::DoctorReport, config: &Config) {
-    let line = doctor_line(config);
+/// `llm`, sonst ans Ende. `cloud_from` ist die Ebene von `llm.cloud`
+/// ([`doctor_line`]).
+pub fn insert_doctor_line(
+    report: &mut v1::DoctorReport,
+    config: &Config,
+    cloud_from: Option<&Origin>,
+) {
+    let line = doctor_line(config, cloud_from);
     let after = |id: &str| report.checks.iter().position(|check| check.id == id);
     let at = after("egress")
         .or_else(|| after("llm"))
@@ -190,6 +285,143 @@ mod tests {
         let mut config = Config::default();
         config.llm.endpoint = Some(url::Url::parse(endpoint).unwrap());
         config
+    }
+
+    /// Eine Auflösung ohne Ebenen um `config`, mit `llm.cloud` aus `from`.
+    fn resolved_from(config: &Config, from: Origin) -> Resolved {
+        Resolved {
+            config: config.clone(),
+            origins: [(LlmCloud::KEY.to_owned(), from)].into_iter().collect(),
+            profiles: Vec::new(),
+            diagnostics: Vec::new(),
+        }
+    }
+
+    /// [`super::gate`] an einer Konfiguration ohne Herkunft.
+    fn gate(
+        paths: &Paths,
+        config: &Config,
+        start: &v1::sandbox_request::Start,
+    ) -> Result<(), Diagnostic> {
+        super::gate(paths, &resolved_from(config, Origin::Default), start)
+    }
+
+    /// Die Sperre der Cloud-Inferenz am Tor (GitHub #113): Mit
+    /// `llm.cloud = "block"` ist ein Start mit einem Modellserver außerhalb
+    /// `LLM_014`, auch mit Bestätigung im Start, mit gezeigtem Hinweis und mit
+    /// einer gemerkten Bestätigung; die Bestätigung des Starts wird nicht
+    /// gemerkt, und der Befund nennt die Ebene der Sperre. Ein lokaler
+    /// Modellserver startet unverändert.
+    ///
+    /// Mutationsbeweis: Ohne die Prüfung von `lock_of` in [`super::gate`]
+    /// ginge der bestätigte Start durch, und der Test wird rot.
+    #[test]
+    fn the_cloud_lock_refuses_even_a_confirmed_start() {
+        let dir = tempfile::tempdir().unwrap();
+        let paths = paths_in(dir.path());
+        let mut cloud = config("https://api.openai.com/v1");
+        cloud.llm.cloud = LlmCloud::Block;
+        let locked = resolved_from(&cloud, Origin::Global);
+
+        for start in [
+            start_with(false, false),
+            start_with(true, false),
+            start_with(false, true),
+            start_with(true, true),
+        ] {
+            let refused = super::gate(&paths, &locked, &start).unwrap_err();
+            assert_eq!(refused.code.as_str(), "LLM_014");
+            assert!(refused.why.contains("api.openai.com"), "{}", refused.why);
+            assert!(refused.why.contains("config.toml"), "{}", refused.why);
+            let answered =
+                start.acknowledge_cloud_inference.is_some() || start.cloud_notice_shown.is_some();
+            assert_eq!(
+                refused.why.contains("was ignored"),
+                answered,
+                "{}",
+                refused.why
+            );
+        }
+        assert!(
+            !humanitl_config::inference::is_acknowledged(&paths, "opencode", "api.openai.com"),
+            "a confirmation under the lock is not stored"
+        );
+        // Auch eine früher gemerkte Bestätigung hebt die Sperre nicht auf.
+        humanitl_config::inference::acknowledge(&paths, "opencode", "api.openai.com").unwrap();
+        assert_eq!(
+            super::gate(&paths, &locked, &start_with(false, false))
+                .unwrap_err()
+                .code
+                .as_str(),
+            "LLM_014"
+        );
+        assert_eq!(lock(&locked).unwrap_err().code.as_str(), "LLM_014");
+
+        // Die Ebene, die gesperrt hat, steht im Befund: Projekt und Sitzung.
+        for (from, named) in [
+            (
+                Origin::ProfileProject("/p/.humanitl/profile.toml".into()),
+                "project profile /p/.humanitl/profile.toml",
+            ),
+            (Origin::ProjectChoice, "project choice"),
+            (Origin::Cli, "command line"),
+        ] {
+            let refused = super::gate(
+                &paths,
+                &resolved_from(&cloud, from),
+                &start_with(true, false),
+            )
+            .unwrap_err();
+            assert_eq!(refused.code.as_str(), "LLM_014");
+            assert!(refused.why.contains(named), "{}", refused.why);
+        }
+
+        // Ein lokaler Modellserver startet mit der Sperre wie ohne sie.
+        let mut local = config("http://192.168.1.20:11434");
+        local.llm.cloud = LlmCloud::Block;
+        super::gate(
+            &paths,
+            &resolved_from(&local, Origin::Global),
+            &start_with(false, false),
+        )
+        .expect("a local model server is not locked");
+        lock(&resolved_from(&local, Origin::Global)).expect("local");
+    }
+
+    /// `agents.opencode.inference = "own"` unter der Sperre (GitHub #113):
+    /// `LLM_014`, und der Ausweg ist der Modellserver.
+    #[test]
+    fn the_cloud_lock_refuses_own_providers() {
+        let dir = tempfile::tempdir().unwrap();
+        let paths = paths_in(dir.path());
+        let mut own = config("http://192.168.1.20:11434");
+        own.agents.opencode.inference = AgentInference::Own;
+        own.llm.cloud = LlmCloud::Block;
+        let confirmed = v1::sandbox_request::Start {
+            acknowledge_cloud_inference: Some(v1::CloudNoticeFor {
+                agent: "opencode".to_owned(),
+                provider: "opencode.ai".to_owned(),
+            }),
+            ..v1::sandbox_request::Start::default()
+        };
+        let refused =
+            super::gate(&paths, &resolved_from(&own, Origin::Global), &confirmed).unwrap_err();
+        assert_eq!(refused.code.as_str(), "LLM_014");
+        assert!(refused.why.contains("opencode.ai"), "{}", refused.why);
+        assert!(
+            refused.why.contains("agents.opencode.inference"),
+            "{}",
+            refused.why
+        );
+        assert_eq!(
+            refused.fix,
+            humanitl_config::value::change_setting("agents.opencode.inference", "model-server")
+        );
+        assert!(!humanitl_config::inference::is_acknowledged(
+            &paths,
+            "opencode",
+            "opencode.ai"
+        ));
     }
 
     /// Erst unbestätigt, nach der Bestätigung bestätigt; ein anderer
@@ -392,16 +624,48 @@ mod tests {
 
     #[test]
     fn the_doctor_line_warns_for_cloud_and_stands_after_egress() {
-        let line = doctor_line(&config("https://api.anthropic.com"));
+        let line = doctor_line(&config("https://api.anthropic.com"), None);
         assert_eq!(line.status, v1::CheckStatus::Warn as i32);
         assert!(
             line.evidence.contains("api.anthropic.com"),
             "{}",
             line.evidence
         );
-        let local = doctor_line(&config("http://127.0.0.1:11434"));
+        assert!(
+            line.evidence.contains("llm.cloud = allow (from default)"),
+            "{}",
+            line.evidence
+        );
+        let local = doctor_line(&config("http://127.0.0.1:11434"), None);
         assert_eq!(local.status, v1::CheckStatus::Ok as i32);
         assert!(local.diagnostic.is_none());
+
+        // Die Sperre mit ihrer Ebene (GitHub #113): lokal `OK`, hinaus
+        // `FAIL` mit `LLM_014`.
+        let mut locked_local = config("http://127.0.0.1:11434");
+        locked_local.llm.cloud = LlmCloud::Block;
+        let line = doctor_line(&locked_local, Some(&Origin::ProjectChoice));
+        assert_eq!(line.status, v1::CheckStatus::Ok as i32);
+        assert!(
+            line.evidence
+                .contains("llm.cloud = block (from project choice)"),
+            "{}",
+            line.evidence
+        );
+        let mut locked_cloud = config("https://api.anthropic.com");
+        locked_cloud.llm.cloud = LlmCloud::Block;
+        let line = doctor_line(&locked_cloud, Some(&Origin::Global));
+        assert_eq!(line.status, v1::CheckStatus::Fail as i32);
+        assert!(
+            line.evidence
+                .contains("llm.cloud = block (from config.toml)"),
+            "{}",
+            line.evidence
+        );
+        assert_eq!(
+            line.diagnostic.as_ref().map(|found| found.code.as_str()),
+            Some("LLM_014")
+        );
 
         let mut report = v1::DoctorReport {
             checks: ["llm", "egress", "tray"]
@@ -413,7 +677,7 @@ mod tests {
                 .collect(),
             backends: Vec::new(),
         };
-        insert_doctor_line(&mut report, &Config::default());
+        insert_doctor_line(&mut report, &Config::default(), None);
         let ids: Vec<&str> = report
             .checks
             .iter()

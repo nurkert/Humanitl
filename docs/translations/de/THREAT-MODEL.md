@@ -276,6 +276,23 @@ verwalteten Konfiguration gewinnen weiter), aber jedes Ziel außerhalb der erkl�
 den Proxy und wird angehalten. Ohne Modellserver und ohne `own` starten OpenCode und pi nicht
 (`LLM_012`).
 
+Wer die Inferenz lokal halten muss, setzt die Sperre `llm.cloud = "block"` (GitHub #113). Sie macht
+aus jedem Fall, den der Hinweis nennen würde, eine Ablehnung: Ein Start, dessen Agent seine
+Inferenz nach außen schicken würde, ist `LLM_014`, gleich was der Start bestätigt; die Durchreiche
+enthält keine Regel zu einem Host, der nicht lokal ist, so dass ein Weg am Tor vorbei keine findet;
+und `LlmServers` lehnt ab, einen Server außerhalb anzulegen, zu ändern, zu wählen oder zuzuordnen.
+„Lokal" ist dieselbe Lesart wie die des Hinweises, ohne zweite Definition. Die Sperre mischt wie die
+Untergrenze der Isolation: Es gilt der strengste Wert aller Ebenen, und die Herkunft nennt die
+unterste Ebene, die `block` verlangt hat. Das Projekt-Profil eines Repositorys, das der Agent in
+einer Sitzung mit beschreibbarem Ordner schreiben kann, schaltet sie ein und nie aus; ein `allow`
+in der Projektwahl über einem `block` darunter ist `CONFIG_024`. *Restrisiko:* Die Sperre liest den
+Endpunkt wie der Hinweis nach seinem Namen: Ein öffentlicher Name, der ins eigene Netz zeigt, gilt
+als außerhalb (der Start wird abgelehnt, nichts fließt ab), und ein Server mit `local = true` gilt
+für seine eigene Herkunft als lokal, auf das Wort dessen, der ihn markiert hat. Die eigenen
+Verbindungen von Humanitl (die Update-Prüfung, `update.check`; auf Wunsch die Probe des Endpunkts,
+die Suche im Netz, die Prüfung des Entscheidungs-Proxys, ein Update und das Ziehen eines Abbilds)
+sind keine Inferenz und nicht erfasst; sie tragen nichts, was der Agent gelesen hat.
+
 ### K-03 Das Socket-Verzeichnis des Proxys
 
 Bände Humanitl das Verzeichnis ein, das den Socket enthält, wäre jede Datei, die dort später
@@ -1385,6 +1402,7 @@ Gegen diese Angreifer gibt es keine Abwehr, und Humanitl behauptet das auch nich
 | 2026-11-23 | K-02: Für ein Profil, das das Projekt-Profil mit `name` wählt, gelten die Grenzen des Projekt-Profils: Schlüssel mit `x-project-scope = "denied"` und jede Regel außer `block` und `ask` werden übergangen, je mit einer Warnung (`CONFIG_003`); dasselbe Profil, vom Menschen gewählt, gilt ganz | #95 |
 | 2026-11-23 | Harte Sperre: Ein überlappender Fund entfernt nie einen durch Prüfsumme bestätigten Fund; ein eigener Begriff (`findings.user_terms`) oder ein bekanntes Secret über denselben Bytes steht neben ihm | #96 |
 | 2026-11-25 | K-02: `agents.<id>.inference`; ohne Modellserver starten OpenCode und pi nicht (`LLM_012`); `own` (Opt-in, im Projekt-Profil gesperrt, nur für einen Adapter, der eigene Provider erklärt, sonst `LLM_013`) lässt OpenCode OpenCode Zen nutzen, mit einer Durchreiche nur auf dessen Inferenz-Pfaden, hinter Hinweis und Bestätigung | GitHub #112 |
+| 2026-11-25 | K-02: die Sperre der Cloud-Inferenz `llm.cloud = "block"`: ein Start mit Inferenz nach außen ist `LLM_014`, auch bestätigt, keine Durchreiche zu einem Host, der nicht lokal ist, kein Modellserver außerhalb lässt sich anlegen oder wählen; es gilt der strengste Wert aller Ebenen, so dass Projekt-Profil oder Sitzung die Sperre einschalten und nie ausschalten | GitHub #113 |
 
 Jede sicherheitsrelevante Änderung am Shim, an der Mount-Erlaubnisliste, am Filter oder an der
 Durchleitung bekommt hier eine Zeile. Schwachstellen werden gemeldet, wie in

@@ -177,7 +177,10 @@ pub const AGENT_ADAPTERS: &[&str] = &["opencode", "pi", "claude", "codex", "agy"
 pub const DEFS: &[Def] = &[
     // Modelle (HUM-405): Karten und Detailansicht der Server zeichnet die
     // Zeile `llm.servers`; Endpunkt, Modell und Schlüssel sind Zeilen der
-    // Detailansicht.
+    // Detailansicht. Die Sperre der Cloud-Inferenz steht zuoberst
+    // (GitHub #113): Wer nur lokale Modellserver will, sieht sie vor der
+    // Liste der Server.
+    Def::key("llm.cloud", "models", Control::Choice).next(),
     Def::key("llm.servers", "models", Control::Special),
     Def::key("llm.endpoint", "models", Control::Text).next(),
     Def::key("llm.models", "models", Control::Text).next(),

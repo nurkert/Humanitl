@@ -15,6 +15,12 @@ network = "Netz"
 egress = "Entscheidungs-Proxy"
 daemon = "Daemon"
 
+[entries."llm.cloud"]
+title = "Cloud-Inferenz"
+help = "Nur lokal: Die Inferenz verlässt nie diesen Rechner oder das eigene Netz. Die eigene Update-Prüfung von Humanitl ist ein eigener Schalter (update.check)."
+details = "Nur lokal: Die Inferenz verlässt nie diesen Rechner oder das eigene Netz. Ein Start, dessen Agent sie an einen Modellserver außerhalb oder an seine eigenen Provider schicken würde, wird abgelehnt, auch nach bestätigtem Cloud-Hinweis, und ein Modellserver außerhalb lässt sich weder anlegen noch wählen. Ein Projekt, ein Profil oder eine Sitzung kann die Sperre einschalten, nie ausschalten, wo eine andere Ebene sie gesetzt hat. Die eigene Update-Prüfung von Humanitl ist ein eigener Schalter (update.check)."
+keywords = ["Cloud", "lokal", "nur lokal", "Sperre", "offline", "Anbieter", "Provider", "Inferenz", "Netz", "Datenschutz", "LLM"]
+
 [entries."llm.servers"]
 title = "Modellserver"
 help = "Jeder Server hat eigene Adresse, Modelle und Zugangsschlüssel. Der Standard bedient jede Sitzung, außer ein Projekt oder ein Profil wählt einen anderen."
@@ -196,3 +202,7 @@ humanitl = "Humanitl"
 [choices."agents.opencode.inference"]
 model-server = "Modellserver"
 own = "Provider von OpenCode"
+
+[choices."llm.cloud"]
+allow = "Erlaubt, nach dem Cloud-Hinweis"
+block = "Nur lokal"

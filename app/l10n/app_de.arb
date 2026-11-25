@@ -2093,5 +2093,7 @@
   "diagLLM012Title": "Kein Modellserver eingestellt",
   "diagLLM012Why": "Der Agent schickt seine Inferenz an den Modellserver, den Humanitl einstellt, und es ist keiner eingestellt. Jeder Prompt schlüge fehl, deshalb ist nichts gestartet.",
   "diagLLM013Title": "Agent ohne eigene Provider",
-  "diagLLM013Why": "Dieser Agent soll seine eigenen Provider nutzen, und Humanitl kennt sie für ihn noch nicht. Jede Anfrage an das Modell würde angehalten, deshalb ist nichts gestartet."
+  "diagLLM013Why": "Dieser Agent soll seine eigenen Provider nutzen, und Humanitl kennt sie für ihn noch nicht. Jede Anfrage an das Modell würde angehalten, deshalb ist nichts gestartet.",
+  "diagLLM014Title": "Cloud-Inferenz gesperrt",
+  "diagLLM014Why": "Die Inferenz ist auf diesen Rechner oder das eigene Netz beschränkt, und dies schickte sie an einen Anbieter außerhalb. Es ist nichts geschehen, und eine Bestätigung des Cloud-Hinweises hebt die Sperre nicht auf. Wähle einen Modellserver auf diesem Rechner oder im eigenen Netz."
 }

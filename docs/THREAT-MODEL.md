@@ -263,6 +263,22 @@ for the session (only the managed configuration's `permission` and `share` still
 target outside the declared paths goes through the proxy and is held. Without a model server and
 without `own`, OpenCode and pi do not start (`LLM_012`).
 
+Whoever must keep inference local sets the cloud lock `llm.cloud = "block"` (GitHub #113). It
+turns every case the notice would name into a refusal: a start whose agent would send its
+inference outside is `LLM_014`, whatever the start confirms; the passthrough holds no rule to a
+host that is not local, so a way around the gate finds none; and `LlmServers` refuses to add,
+change, choose or assign a server outside. "Local" is the same reading as the notice's, with no
+second definition. The lock merges like the isolation floor: the strictest value of all levels
+applies, and the origin names the lowest level that asked for `block`. A repository's project
+profile, which the agent may write in a session with a writable folder, can switch it on and never
+off; an `allow` in the project choice under a `block` below it is `CONFIG_024`. *Residual risk:*
+the lock reads the endpoint by its name, like the notice: a public name that points into the own
+network counts as outside (the start is refused, nothing leaks), and a server marked
+`local = true` counts as local for its own origin, on the word of whoever marked it. Humanitl's own
+connections (the update check, `update.check`; on request the endpoint probe, the network search,
+the decision proxy check, an update and an image pull) are not inference and are not covered; they
+carry nothing the agent read.
+
 ### K-03 The socket directory of the proxy
 
 If Humanitl bound the directory holding the socket, every file created there later would be visible
@@ -1393,6 +1409,7 @@ These attackers are not defended against, and Humanitl does not claim to:
 | 2026-11-23 | K-02: a profile the project profile chooses with `name` is held to the limits of the project profile: keys with `x-project-scope = "denied"` and every rule other than `block` and `ask` are skipped, each with a warning (`CONFIG_003`); the same profile chosen by the human applies in full | #95 |
 | 2026-11-23 | Hard block: an overlapping finding never removes a checksum-confirmed finding; a user term (`findings.user_terms`) or a known secret over the same bytes is reported next to it | #96 |
 | 2026-11-25 | K-02: `agents.<id>.inference`; without a model server OpenCode and pi do not start (`LLM_012`); `own` (opt-in, locked in the project profile, only for an adapter that declares its own providers, else `LLM_013`) lets OpenCode use OpenCode Zen with a passthrough on its inference paths only, behind the cloud notice and the confirmation | GitHub #112 |
+| 2026-11-25 | K-02: the cloud lock `llm.cloud = "block"`: a start with inference outside is `LLM_014` even when confirmed, no passthrough to a host that is not local, no model server outside can be added or chosen; the strictest value of all levels applies, so a project profile or a session switches it on and never off | GitHub #113 |
 
 Every security-relevant change to the shim, the mount allowlist, the filter or the passthrough gets
 a line here. Vulnerabilities are reported as described in

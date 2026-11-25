@@ -65,6 +65,43 @@ const String fakeSettingsCatalogJson = r'''
     "entries": [
       {
         "category": "models",
+        "choices": [
+          {
+            "title": "Erlaubt, nach dem Cloud-Hinweis",
+            "value": "allow"
+          },
+          {
+            "title": "Nur lokal",
+            "value": "block"
+          }
+        ],
+        "client": "",
+        "control": "choice",
+        "details": "Nur lokal: Die Inferenz verlässt nie diesen Rechner oder das eigene Netz. Ein Start, dessen Agent sie an einen Modellserver außerhalb oder an seine eigenen Provider schicken würde, wird abgelehnt, auch nach bestätigtem Cloud-Hinweis, und ein Modellserver außerhalb lässt sich weder anlegen noch wählen. Ein Projekt, ein Profil oder eine Sitzung kann die Sperre einschalten, nie ausschalten, wo eine andere Ebene sie gesetzt hat. Die eigene Update-Prüfung von Humanitl ist ein eigener Schalter (update.check).",
+        "help": "Nur lokal: Die Inferenz verlässt nie diesen Rechner oder das eigene Netz. Die eigene Update-Prüfung von Humanitl ist ein eigener Schalter (update.check).",
+        "id": "llm.cloud",
+        "inProjectChoice": true,
+        "isKey": true,
+        "keywords": [
+          "Cloud",
+          "lokal",
+          "nur lokal",
+          "Sperre",
+          "offline",
+          "Anbieter",
+          "Provider",
+          "Inferenz",
+          "Netz",
+          "Datenschutz",
+          "LLM"
+        ],
+        "nextSession": true,
+        "order": 0,
+        "tier": "basic",
+        "title": "Cloud-Inferenz"
+      },
+      {
+        "category": "models",
         "choices": [],
         "client": "",
         "control": "special",
@@ -84,7 +121,7 @@ const String fakeSettingsCatalogJson = r'''
           "umbenennen"
         ],
         "nextSession": false,
-        "order": 0,
+        "order": 1,
         "tier": "advanced",
         "title": "Modellserver"
       },
@@ -108,7 +145,7 @@ const String fakeSettingsCatalogJson = r'''
           "Host"
         ],
         "nextSession": true,
-        "order": 1,
+        "order": 2,
         "tier": "basic",
         "title": "Endpunkt"
       },
@@ -129,7 +166,7 @@ const String fakeSettingsCatalogJson = r'''
           "Vorgabe"
         ],
         "nextSession": true,
-        "order": 2,
+        "order": 3,
         "tier": "basic",
         "title": "Modell"
       },
@@ -152,7 +189,7 @@ const String fakeSettingsCatalogJson = r'''
           "Zugangsdaten"
         ],
         "nextSession": true,
-        "order": 3,
+        "order": 4,
         "tier": "advanced",
         "title": "Zugangsschlüssel"
       },
@@ -174,7 +211,7 @@ const String fakeSettingsCatalogJson = r'''
           "Zuordnung"
         ],
         "nextSession": false,
-        "order": 4,
+        "order": 5,
         "tier": "advanced",
         "title": "Wer nutzt welchen Server"
       },
@@ -878,6 +915,42 @@ const String fakeSettingsCatalogJson = r'''
     "entries": [
       {
         "category": "models",
+        "choices": [
+          {
+            "title": "Allowed, after the cloud notice",
+            "value": "allow"
+          },
+          {
+            "title": "Local only",
+            "value": "block"
+          }
+        ],
+        "client": "",
+        "control": "choice",
+        "details": "Local only: inference never leaves this machine or network. A start whose agent would send it to a model server outside, or to its own providers, is refused, even after the cloud notice was confirmed, and a model server outside cannot be added or chosen. A project, a profile or a session can switch the lock on, never off where another level set it. Humanitl's own update check is a separate switch (update.check).",
+        "help": "Local only: inference never leaves this machine or network. Humanitl's own update check is a separate switch (update.check).",
+        "id": "llm.cloud",
+        "inProjectChoice": true,
+        "isKey": true,
+        "keywords": [
+          "cloud",
+          "local",
+          "local only",
+          "lock",
+          "offline",
+          "provider",
+          "inference",
+          "network",
+          "privacy",
+          "LLM"
+        ],
+        "nextSession": true,
+        "order": 0,
+        "tier": "basic",
+        "title": "Cloud inference"
+      },
+      {
+        "category": "models",
         "choices": [],
         "client": "",
         "control": "special",
@@ -898,7 +971,7 @@ const String fakeSettingsCatalogJson = r'''
           "rename"
         ],
         "nextSession": false,
-        "order": 0,
+        "order": 1,
         "tier": "advanced",
         "title": "Model servers"
       },
@@ -922,7 +995,7 @@ const String fakeSettingsCatalogJson = r'''
           "host"
         ],
         "nextSession": true,
-        "order": 1,
+        "order": 2,
         "tier": "basic",
         "title": "Endpoint"
       },
@@ -943,7 +1016,7 @@ const String fakeSettingsCatalogJson = r'''
           "default"
         ],
         "nextSession": true,
-        "order": 2,
+        "order": 3,
         "tier": "basic",
         "title": "Model"
       },
@@ -966,7 +1039,7 @@ const String fakeSettingsCatalogJson = r'''
           "credential"
         ],
         "nextSession": true,
-        "order": 3,
+        "order": 4,
         "tier": "advanced",
         "title": "Access key"
       },
@@ -988,7 +1061,7 @@ const String fakeSettingsCatalogJson = r'''
           "assignment"
         ],
         "nextSession": false,
-        "order": 4,
+        "order": 5,
         "tier": "advanced",
         "title": "Who uses which server"
       },

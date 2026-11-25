@@ -18,6 +18,12 @@ network = "Network"
 egress = "Decision proxy"
 daemon = "Daemon"
 
+[entries."llm.cloud"]
+title = "Cloud inference"
+help = "Local only: inference never leaves this machine or network. Humanitl's own update check is a separate switch (update.check)."
+details = "Local only: inference never leaves this machine or network. A start whose agent would send it to a model server outside, or to its own providers, is refused, even after the cloud notice was confirmed, and a model server outside cannot be added or chosen. A project, a profile or a session can switch the lock on, never off where another level set it. Humanitl's own update check is a separate switch (update.check)."
+keywords = ["cloud", "local", "local only", "lock", "offline", "provider", "inference", "network", "privacy", "LLM"]
+
 [entries."llm.servers"]
 title = "Model servers"
 help = "Each server keeps its own address, models and access key. The default serves every session unless a project or a profile picks another one."
@@ -199,3 +205,7 @@ humanitl = "Humanitl"
 [choices."agents.opencode.inference"]
 model-server = "Model server"
 own = "OpenCode providers"
+
+[choices."llm.cloud"]
+allow = "Allowed, after the cloud notice"
+block = "Local only"

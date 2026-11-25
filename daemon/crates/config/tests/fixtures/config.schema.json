@@ -818,6 +818,7 @@
       "default": {
         "active": null,
         "api_key_ref": null,
+        "cloud": "allow",
         "endpoint": null,
         "models": [],
         "passthrough_paths": [
@@ -848,6 +849,24 @@
           ],
           "x-project-scope": "denied",
           "x-tier": "advanced"
+        },
+        "cloud": {
+          "default": "allow",
+          "description": "Ob Inferenz diesen Rechner oder das eigene Netz verlassen darf (GitHub #113). `allow` (Vorgabe) lässt einen Modellserver außerhalb und die eigenen Provider eines Agenten (`agents.<id>.inference = \"own\"`) zu, hinter dem Hinweis auf Cloud-Inferenz (`LLM_010`, `LLM_011`). `block` hält die Inferenz lokal: Ein Start, dessen Agent sie an einen Anbieter außerhalb schicken würde, wird mit `LLM_014` abgelehnt, auch mit Bestätigung; es entsteht keine Durchreiche zu einem Host außerhalb, und `humanitl llm server add` und `use` sowie die Wahl eines Servers in der App lehnen einen Server außerhalb ab. Lokal ist, was auch keinen Hinweis auf Cloud-Inferenz auslöst: Loopback, private Adressen, Namen des eigenen Netzes und ein gespeicherter Server mit `local = true`. Über alle Ebenen gilt der strengste Wert: Projekt-Profil, Projektwahl, Profil, Umgebung und Sitzung können die Sperre einschalten, nie ausschalten, wenn eine andere Ebene sie gesetzt hat. Die eigene Update-Prüfung von Humanitl ist ein eigener Schalter (`update.check`), den die Sperre nicht berührt.",
+          "oneOf": [
+            {
+              "const": "allow",
+              "description": "Ein Anbieter außerhalb ist erlaubt, hinter dem Hinweis auf\nCloud-Inferenz.",
+              "type": "string"
+            },
+            {
+              "const": "block",
+              "description": "Nur lokal: Die Inferenz verlässt diesen Rechner und das eigene Netz\nnie.",
+              "type": "string"
+            }
+          ],
+          "x-project-scope": "allowed",
+          "x-tier": "basic"
         },
         "endpoint": {
           "default": null,

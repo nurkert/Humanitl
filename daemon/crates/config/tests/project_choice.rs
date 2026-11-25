@@ -152,6 +152,37 @@ fn a_choice_below_the_floor_is_config_024_at_load() {
     );
 }
 
+/// Die Sperre der Cloud-Inferenz in der Projektwahl (GitHub #113): Die Wahl
+/// schaltet sie ein; ein `allow` unter einem `block` der globalen Datei ist
+/// `CONFIG_024`, nie ein still übergangener oder gar geltender Wert.
+#[test]
+fn a_choice_switches_the_cloud_lock_on_and_never_off_at_load() {
+    let scratch = Scratch::new();
+    let open = scratch.write("open.toml", "[llm]\ncloud = \"allow\"\n");
+    let locked = load(
+        &Sources {
+            global_toml: Some(open),
+            ..Sources::empty()
+        }
+        .with_project_choice(Some(choice(&[("llm.cloud", "block")]))),
+    )
+    .unwrap();
+    assert_eq!(locked.config.llm.cloud, humanitl_config::LlmCloud::Block);
+    assert_eq!(locked.origin("llm.cloud"), Some(&Origin::ProjectChoice));
+
+    let global = scratch.write("config.toml", "[llm]\ncloud = \"block\"\n");
+    let lifted = load(
+        &Sources {
+            global_toml: Some(global),
+            ..Sources::empty()
+        }
+        .with_project_choice(Some(choice(&[("llm.cloud", "allow")]))),
+    )
+    .unwrap_err();
+    assert_eq!(lifted.code.as_str(), "CONFIG_024");
+    assert!(lifted.why.contains("llm.cloud"), "{}", lifted.why);
+}
+
 /// Die Sperre einer Firmenvorgabe ist die oberste Ebene (HUM-534): Weder
 /// Datei noch Projektwahl, Umgebung oder Kommandozeile ändern den Wert, und
 /// die Herkunft nennt die Vorgabe. Mutationsbeweis: Läge die Ebene unter der

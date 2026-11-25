@@ -4796,5 +4796,9 @@
   "diagLLM013Title": "Agent has no own-provider mode",
   "@diagLLM013Title": {"description": "Title of the diagnostic LLM_013 (docs/DIAGNOSTICS.md, #112): agents.<id>.inference is own, and Humanitl knows no own providers for this agent, so the start was refused."},
   "diagLLM013Why": "This agent is set to use its own providers, and Humanitl does not know them for this agent yet. Every request to the model would be held, so nothing started.",
-  "@diagLLM013Why": {"description": "Generic cause of LLM_013. Stands in the cause slot only when the diagnostic carries no sentence of the daemon's own (HUM-052)."}
+  "@diagLLM013Why": {"description": "Generic cause of LLM_013. Stands in the cause slot only when the diagnostic carries no sentence of the daemon's own (HUM-052)."},
+  "diagLLM014Title": "Cloud inference locked",
+  "@diagLLM014Title": {"description": "Title of the diagnostic LLM_014 (docs/DIAGNOSTICS.md, #113): llm.cloud is block, and the inference would leave this machine or network, so the start or the server choice was refused."},
+  "diagLLM014Why": "Inference is locked to this machine or network, and this would send it to a provider outside. Nothing was done, and confirming the cloud notice does not lift the lock. Choose a model server on this machine or in your network.",
+  "@diagLLM014Why": {"description": "Generic cause of LLM_014. Stands in the cause slot only when the diagnostic carries no sentence of the daemon's own (HUM-052)."}
 }

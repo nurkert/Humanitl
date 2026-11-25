@@ -2262,7 +2262,11 @@ impl v1::humanitl_server::Humanitl for IpcServer {
                     setup.paths.env(),
                     &[],
                 ) {
-                    crate::cloud::insert_doctor_line(&mut report, &resolved.config);
+                    crate::cloud::insert_doctor_line(
+                        &mut report,
+                        &resolved.config,
+                        resolved.origin(humanitl_config::LlmCloud::KEY),
+                    );
                 }
                 // Ob `rules.yaml` sich lesen lässt, und welche Regel fehlt
                 // (HUM-561); frisch von der Platte, wie der nächste Start sie

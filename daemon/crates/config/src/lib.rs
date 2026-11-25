@@ -59,6 +59,7 @@ pub mod assign;
 pub mod catalog;
 pub mod edit;
 pub mod env;
+mod floor;
 pub mod inference;
 pub mod llm_endpoint;
 pub mod load;
@@ -102,10 +103,10 @@ pub use crate::load::{
 };
 pub use crate::model::{
     AgentBriefing, AgentRef, AskMode, AuditConfig, Config, DetachKeys, EgressConfig, Experimental,
-    FindingsConfig, HoldConfig, IpPreference, Language, Limits, LlmConfig, LlmServer, MinIsolation,
-    OnClose, PiAgentConfig, PiWebAccess, PodmanConfig, PodmanRootfs, PodmanRuntime, ProxyResolve,
-    PseudonymConfig, QemuConfig, RecorderConfig, ResolverConfig, SandboxBackendName, SandboxMode,
-    SandboxRef, TerminalConfig, Theme, TlsConfig, UiConfig, UpdateConfig, WorkMode,
+    FindingsConfig, HoldConfig, IpPreference, Language, Limits, LlmCloud, LlmConfig, LlmServer,
+    MinIsolation, OnClose, PiAgentConfig, PiWebAccess, PodmanConfig, PodmanRootfs, PodmanRuntime,
+    ProxyResolve, PseudonymConfig, QemuConfig, RecorderConfig, ResolverConfig, SandboxBackendName,
+    SandboxMode, SandboxRef, TerminalConfig, Theme, TlsConfig, UiConfig, UpdateConfig, WorkMode,
 };
 pub use crate::origin::{Origin, Resolved};
 pub use crate::paths::{

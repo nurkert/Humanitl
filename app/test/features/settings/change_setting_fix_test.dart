@@ -115,6 +115,8 @@ const Map<String, Key> fieldOf = <String, Key>{
   FormKeys.egressProxyCa: Key('settings-egress-ca-row'),
   FormKeys.egressProxyResolve: Key('settings-egress-resolve'),
   FormKeys.egressProxyAuthRef: Key('settings-egress-auth-row'),
+  // GitHub #113: die Sperre der Cloud-Inferenz, eine Zeile des Katalogs.
+  FormKeys.llmCloud: ValueKey<String>('settings-generic-llm.cloud'),
 };
 
 void main() {
@@ -160,6 +162,10 @@ void main() {
     );
     await tester.pumpAndSettle();
 
+    // Seit GitHub #113 steht die Sperre der Cloud-Inferenz über den
+    // Servern; die Prüfung kann darunter aus dem Bild rutschen.
+    await tester.ensureVisible(find.byKey(const Key('settings-check')));
+    await tester.pumpAndSettle();
     await tester.tap(find.byKey(const Key('settings-check')));
     await tester.pumpAndSettle();
     expect(find.byKey(const Key('settings-probe-failure')), findsOneWidget);

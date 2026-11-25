@@ -63,7 +63,7 @@ use toml::Value as TomlValue;
 
 use crate::alias;
 use crate::env::Env;
-use crate::model::{Config, MinIsolation, RETIRED_KERNEL_RUNTIME};
+use crate::model::{Config, RETIRED_KERNEL_RUNTIME};
 use crate::origin::{Origin, Resolved};
 use crate::policy::PolicyLocks;
 use crate::profile::{ConfigOverlay, DEFAULT_PROFILE, Profile, ProfileSource, builtin_text};
@@ -620,20 +620,23 @@ impl Merge {
     /// das Laden abbricht oder nur einen Befund erzeugt. Ein Befund, der das
     /// Laden nicht abbricht, ist eine Warnung (heute: die Umgebung), nie ein
     /// Fehler; ein `Error` in `diagnostics` sähe aus wie ein gescheiterter Start.
-    /// Ein Wert für `sandbox.min_isolation`, der die Untergrenze nicht hebt:
-    /// Aus der Projektwahl ist ein niedrigerer `CONFIG_024` (HUM-532); aus
-    /// der Firmenvorgabe (HUM-534) ist ein gleicher die Herkunft und ein
-    /// niedrigerer ein Befund. Der Wert selbst bleibt draußen.
+    /// Ein Wert für einen Schlüssel, der nur strenger wird
+    /// (`sandbox.min_isolation`, `llm.cloud`, [`crate::floor`]), und der
+    /// nicht strenger ist als der bisherige: Aus der Projektwahl ist ein
+    /// lockererer `CONFIG_024` (HUM-532); aus der Firmenvorgabe (HUM-534) ist
+    /// ein gleicher die Herkunft und ein lockererer ein Befund. Der Wert
+    /// selbst bleibt draußen.
     fn floor_not_raised(&mut self, entry: &Entry) -> Result<(), Diagnostic> {
-        // Die Projektwahl senkt nie still (HUM-532): Ein Wert unter
+        // Die Projektwahl lockert nie still (HUM-532): Ein Wert unter
         // dem der Ebenen darunter ist `CONFIG_024`, ein gleicher
         // ändert nichts.
         if entry.origin == Origin::ProjectChoice
             && let Some(floor) = lowered_floor(self.flat.get(&entry.path), entry)
         {
             return Err(crate::project_choice::lowers_the_floor(
+                &entry.path,
                 entry.value.as_str().unwrap_or_default(),
-                floor,
+                &floor,
             ));
         }
         // Eine Sperre der Firmenvorgabe (HUM-534): Die strengere
@@ -649,9 +652,9 @@ impl Merge {
                 Some(floor) => self.diagnostics.push(
                     Diagnostic::builder(CONFIG_003, Severity::Warning)
                         .why(format!(
-                            "the company policy {by} fixes {MIN_ISOLATION} to {:?}, \
-                             below {floor:?}, which a layer beneath it requires; the \
-                             stronger floor applies",
+                            "the company policy {by} fixes {} to {:?}, below {floor:?}, \
+                             which a layer beneath it requires; the stricter value applies",
+                            entry.path,
                             entry.value.as_str().unwrap_or_default()
                         ))
                         .build(),
@@ -787,13 +790,15 @@ impl Merge {
                 continue;
             }
 
-            // Die Untergrenze der Isolation steigt nur (HUM-431): Ein Wert
-            // aus einer höheren Ebene, der schwächer ist als der bisherige,
-            // bleibt draußen, und die Herkunft nennt weiter die Ebene des
-            // strengsten. Sonst senkte ein Projekt-Profil, eine Variable aus
-            // der Umgebung oder ein Wunsch über den Start, was der Mensch in
-            // `config.toml` verlangt hat.
-            if entry.path == MIN_ISOLATION && !raises_the_floor(self.flat.get(&entry.path), &entry)
+            // Die Untergrenze der Isolation steigt nur (HUM-431), die Sperre
+            // der Cloud-Inferenz geht nur an (GitHub #113): Ein Wert aus
+            // einer höheren Ebene, der lockerer ist als der bisherige, bleibt
+            // draußen, und die Herkunft nennt weiter die Ebene des
+            // strengsten. Sonst lockerte ein Projekt-Profil, eine Variable
+            // aus der Umgebung oder ein Wunsch über den Start, was der Mensch
+            // in `config.toml` verlangt hat.
+            if crate::floor::is_floor(&entry.path)
+                && !raises_the_floor(self.flat.get(&entry.path), &entry)
             {
                 self.floor_not_raised(&entry)?;
                 continue;
@@ -823,9 +828,13 @@ impl Merge {
     }
 }
 
-/// Der Schlüssel, für den beim Mischen der strengste Wert gewinnt statt des
-/// obersten (HUM-431).
-const MIN_ISOLATION: &str = "sandbox.min_isolation";
+/// Die Untergrenze der Isolation (HUM-431); einer der Schlüssel aus
+/// [`crate::floor`].
+const MIN_ISOLATION: &str = crate::floor::MIN_ISOLATION;
+
+/// Die Sperre der Cloud-Inferenz (GitHub #113); einer der Schlüssel aus
+/// [`crate::floor`].
+const LLM_CLOUD: &str = crate::floor::LLM_CLOUD;
 
 /// Der Schlüssel, der das Sandbox-Backend wählt (HUM-431).
 const BACKEND: &str = "sandbox.backend";
@@ -893,33 +902,47 @@ pub(crate) fn retired_value(path: &str, value: Option<&str>, shown: &str) -> Opt
 /// Schlüssel, deren ungültiger Wert das Laden aus jeder Ebene abbricht, statt
 /// als Warnung übergangen zu werden (HUM-431): Ein übergangener Wert fiele auf
 /// die Ebene darunter zurück, und ein gewähltes Backend oder eine Untergrenze
-/// fällt nie still zurück.
+/// fällt nie still zurück. Ebenso die Sperre der Cloud-Inferenz (GitHub #113):
+/// Ein übergangenes `block` ließe die Inferenz hinaus.
 fn never_skipped(path: &str) -> bool {
     path == BACKEND
         || path == MIN_ISOLATION
+        || path == LLM_CLOUD
         || path.starts_with(PODMAN_PREFIX)
         || path.starts_with(KERNEL_LEVEL_PREFIX)
 }
 
-/// Ob `entry` die Untergrenze der Isolation hebt oder als erster Wert setzt.
-///
-/// Der erste Wert gilt immer, auch `policy`: Er ist so streng wie die
-/// Vorgabe, und die Herkunft soll die Ebene nennen, die ihn geschrieben hat.
-/// Danach gilt ein Wert nur, wenn er strenger ist als der bisherige; bei
-/// Gleichstand bleibt die Herkunft der tieferen Ebene, die ihn zuerst
-/// verlangt hat. Ein Wert, den [`MinIsolation::parse`] nicht kennt, kommt hier
-/// nicht an: [`check_value`] hat ihn vorher abgelehnt.
-/// Die Untergrenze der Ebenen darunter, wenn `entry` unter ihr liegt.
-fn lowered_floor(current: Option<&TomlValue>, entry: &Entry) -> Option<&'static str> {
-    let level = |value: &TomlValue| value.as_str().and_then(MinIsolation::parse);
-    match (current.and_then(level), level(&entry.value)) {
-        (Some(now), Some(wanted)) if wanted < now => Some(now.as_str()),
+/// Der bisherige Wert eines Schlüssels aus [`crate::floor`], wenn `entry`
+/// lockerer ist als er.
+fn lowered_floor(current: Option<&TomlValue>, entry: &Entry) -> Option<String> {
+    let rank = |value: &TomlValue| {
+        value
+            .as_str()
+            .and_then(|text| crate::floor::rank(&entry.path, text))
+    };
+    match (current.and_then(rank), rank(&entry.value)) {
+        (Some(now), Some(wanted)) if wanted < now => {
+            current.and_then(TomlValue::as_str).map(ToOwned::to_owned)
+        }
         _ => None,
     }
 }
 
+/// Ob `entry` einen Schlüssel aus [`crate::floor`] verschärft oder als
+/// erster Wert setzt.
+///
+/// Der erste Wert gilt immer, auch der lockerste: Er ist so streng wie die
+/// Vorgabe, und die Herkunft soll die Ebene nennen, die ihn geschrieben hat.
+/// Danach gilt ein Wert nur, wenn er strenger ist als der bisherige; bei
+/// Gleichstand bleibt die Herkunft der tieferen Ebene, die ihn zuerst
+/// verlangt hat. Ein Wert, den [`crate::floor::rank`] nicht kennt, kommt
+/// hier nicht an: [`check_value`] hat ihn vorher abgelehnt.
 fn raises_the_floor(current: Option<&TomlValue>, entry: &Entry) -> bool {
-    let level = |value: &TomlValue| value.as_str().and_then(MinIsolation::parse);
+    let level = |value: &TomlValue| {
+        value
+            .as_str()
+            .and_then(|text| crate::floor::rank(&entry.path, text))
+    };
     match (current.and_then(level), level(&entry.value)) {
         (None, _) => true,
         (Some(now), Some(wanted)) => wanted > now,

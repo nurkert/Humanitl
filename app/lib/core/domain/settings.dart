@@ -74,7 +74,15 @@ abstract final class FormKeys {
     egressProxy,
     egressProxyCa,
     egressProxyResolve,
+    llmCloud,
   ];
+
+  /// The cloud lock (GitHub #113): `allow` (the default) or `block`, local
+  /// inference only. Over all levels the strictest value applies.
+  static const String llmCloud = 'llm.cloud';
+
+  /// The values of [llmCloud], in the order the form shows them.
+  static const List<String> llmCloudValues = <String>['allow', 'block'];
 
   /// The decision proxy behind Humanitl, `http://HOST:PORT`; empty means
   /// none (HUM-511, ADR-0022). Effective after a daemon restart.

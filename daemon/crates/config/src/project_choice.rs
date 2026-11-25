@@ -25,7 +25,9 @@
 //! 2. ein Schlüssel, den eine Firmenvorgabe sperrt ([`PolicyLocks`]), mit
 //!    welchem Wert auch immer,
 //! 3. ein `sandbox.min_isolation` unter der Untergrenze der Ebenen darunter;
-//!    die Wahl hebt die Untergrenze, sie senkt sie nie.
+//!    die Wahl hebt die Untergrenze, sie senkt sie nie. Ebenso ein
+//!    `llm.cloud = "allow"`, wo eine Ebene darunter `block` setzt (GitHub
+//!    #113): Die Wahl schaltet die Sperre ein, nie aus.
 
 use std::collections::BTreeMap;
 
@@ -33,7 +35,7 @@ use humanitl_core::diagnostics::codes::CONFIG_024;
 use humanitl_core::{Diagnostic, FixAction, Severity};
 
 use crate::agents::{Locked, SOURCE_KEYS, SourceLock};
-use crate::model::{Config, MinIsolation};
+use crate::model::Config;
 pub use crate::policy::{LockedValue, PolicyLocks};
 
 /// Die Schlüssel des Erststart-Bildschirms ohne die Quelle der Agenten.
@@ -48,21 +50,32 @@ const SCREEN_KEYS: [&str; 8] = [
     "sandbox.profile",
 ];
 
+/// Schlüssel der Wahl, die nur verschärfen ([`crate::floor`]) und auf keinem
+/// Feld des Erststart-Bildschirms stehen: die Sperre der Cloud-Inferenz
+/// (GitHub #113), die die Einstellungen je Projekt einschalten.
+const STRICTER_KEYS: [&str; 1] = [crate::floor::LLM_CLOUD];
+
+/// Die Länge von [`PROJECT_CHOICE_KEYS`].
+const CHOICE_LEN: usize = SCREEN_KEYS.len() + SOURCE_KEYS.len() + STRICTER_KEYS.len();
+
 /// Die Schlüssel, die eine Projektwahl tragen darf: genau die des
 /// Erststart-Bildschirms (ADR-0024 Punkt 1), dazu je bekanntem Agenten
-/// `agents.<id>.source` (GitHub #15, Nachtrag zu ADR-0023).
+/// `agents.<id>.source` (GitHub #15, Nachtrag zu ADR-0023) und `llm.cloud`
+/// (GitHub #113).
 ///
 /// Wer diese Liste erweitert, erweitert, was ein Client je Projekt dauerhaft
 /// bestimmen darf, und schreibt dazu, warum der neue Schlüssel keine Garantie
 /// berührt. Die Quelle berührt keine: Sie wählt nur, woher das Programm
 /// kommt; beide Quellen laufen in derselben Sandbox, ein Start fällt nie auf
 /// die andere zurück, und eine Sperre der Firmenvorgabe auf die Quelle hält
-/// sie aus der Wahl ([`check_source_lock`]).
-pub const PROJECT_CHOICE_KEYS: [&str; SCREEN_KEYS.len() + SOURCE_KEYS.len()] = choice_keys();
+/// sie aus der Wahl ([`check_source_lock`]). `llm.cloud` berührt keine, weil
+/// über alle Ebenen der strengste Wert gilt: Die Wahl kann die Sperre nur
+/// einschalten, ein `allow` unter einem `block` darunter ist `CONFIG_024`.
+pub const PROJECT_CHOICE_KEYS: [&str; CHOICE_LEN] = choice_keys();
 
-/// [`SCREEN_KEYS`] und danach [`SOURCE_KEYS`].
-const fn choice_keys() -> [&'static str; SCREEN_KEYS.len() + SOURCE_KEYS.len()] {
-    let mut keys = [""; SCREEN_KEYS.len() + SOURCE_KEYS.len()];
+/// [`SCREEN_KEYS`], danach [`SOURCE_KEYS`] und [`STRICTER_KEYS`].
+const fn choice_keys() -> [&'static str; CHOICE_LEN] {
+    let mut keys = [""; CHOICE_LEN];
     let mut index = 0;
     while index < SCREEN_KEYS.len() {
         keys[index] = SCREEN_KEYS[index];
@@ -74,11 +87,14 @@ const fn choice_keys() -> [&'static str; SCREEN_KEYS.len() + SOURCE_KEYS.len()] 
         index += 1;
         source += 1;
     }
+    let mut stricter = 0;
+    while stricter < STRICTER_KEYS.len() {
+        keys[index] = STRICTER_KEYS[stricter];
+        index += 1;
+        stricter += 1;
+    }
     keys
 }
-
-/// Der Schlüssel der Untergrenze, die eine Wahl nur heben darf.
-const MIN_ISOLATION: &str = "sandbox.min_isolation";
 
 /// Ob die Projektwahl diesen Schlüssel tragen darf.
 #[must_use]
@@ -192,14 +208,17 @@ pub fn check_choice(
             )));
         }
     }
-    if let Some(wanted) = choice.get(MIN_ISOLATION)
-        && let Some(level) = MinIsolation::parse(wanted)
-        && level < below.sandbox.min_isolation
-    {
-        return Err(lowers_the_floor(
-            wanted,
-            below.sandbox.min_isolation.as_str(),
-        ));
+    for (key, wanted) in choice.iter() {
+        let Some(floor) = crate::floor::value_in(below, key) else {
+            continue;
+        };
+        if let (Some(level), Some(now)) = (
+            crate::floor::rank(key, wanted),
+            crate::floor::rank(key, floor),
+        ) && level < now
+        {
+            return Err(lowers_the_floor(key, wanted, floor));
+        }
     }
     Ok(())
 }
@@ -251,10 +270,10 @@ pub fn foreign_key(key: &str) -> Diagnostic {
 
 /// `CONFIG_024` für eine Untergrenze, die die Wahl senken würde.
 #[must_use]
-pub fn lowers_the_floor(wanted: &str, floor: &str) -> Diagnostic {
+pub fn lowers_the_floor(key: &str, wanted: &str, floor: &str) -> Diagnostic {
     refused(format!(
-        "the project choice sets {MIN_ISOLATION} = {wanted:?} below {floor:?}, which a layer \
-         beneath it requires; a project choice only raises the floor"
+        "the project choice sets {key} = {wanted:?} below {floor:?}, which a layer beneath it \
+         requires; a project choice only makes {key} stricter, never looser"
     ))
 }
 
@@ -371,5 +390,23 @@ mod tests {
         assert_eq!(refused.code.as_str(), "CONFIG_024");
         let other_key = ProjectChoice::from_pairs([("sandbox.work_mode", "ro")]).unwrap();
         check_choice(&other_key, &below, &locks).unwrap();
+    }
+
+    /// Die Wahl schaltet die Sperre der Cloud-Inferenz ein, nie aus
+    /// (GitHub #113): `allow` unter einem `block` darunter ist `CONFIG_024`.
+    #[test]
+    fn the_choice_switches_the_cloud_lock_on_and_never_off() {
+        assert!(super::is_choice_key("llm.cloud"));
+        let mut below = Config::default();
+        let on = ProjectChoice::from_pairs([("llm.cloud", "block")]).unwrap();
+        check_choice(&on, &below, &PolicyLocks::none()).unwrap();
+        let off = ProjectChoice::from_pairs([("llm.cloud", "allow")]).unwrap();
+        check_choice(&off, &below, &PolicyLocks::none()).unwrap();
+
+        below.llm.cloud = crate::model::LlmCloud::Block;
+        let refused = check_choice(&off, &below, &PolicyLocks::none()).unwrap_err();
+        assert_eq!(refused.code.as_str(), "CONFIG_024");
+        assert!(refused.why.contains("llm.cloud"), "{}", refused.why);
+        check_choice(&on, &below, &PolicyLocks::none()).unwrap();
     }
 }
