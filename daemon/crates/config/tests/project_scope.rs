@@ -149,6 +149,32 @@ fn a_project_profile_may_not_set_the_llm_endpoint() {
     assert_denied(&diagnostic, "llm.endpoint", &profile);
 }
 
+/// Ein Projekt markiert nie einen Server als lokal (GitHub #115): Das höbe
+/// die Sperre `llm.cloud = "block"` für einen Server außerhalb auf. Weder
+/// für einen eigenen Eintrag noch für einen, den der Nutzer gespeichert hat.
+#[test]
+fn a_project_profile_may_not_mark_a_server_local() {
+    let scratch = Scratch::new();
+    let global = scratch.write(
+        "config.toml",
+        "[llm]\nactive = \"office\"\ncloud = \"block\"\n\
+         [llm.servers.office]\nendpoint = \"https://llm.example.org/v1\"\n",
+    );
+    for body in [
+        "llm.servers.office.local = true",
+        "llm.servers.vpn = { endpoint = \"https://models.example.com/v1\", local = true }",
+    ] {
+        let profile = scratch.project_profile(body);
+        let sources = Sources {
+            global_toml: Some(global.clone()),
+            profile_project: Some(profile.clone()),
+            ..Sources::empty()
+        };
+        let diagnostic = expect_err(&sources);
+        assert_denied(&diagnostic, "llm.servers", &profile);
+    }
+}
+
 #[test]
 fn the_same_key_is_accepted_from_every_other_layer() {
     let scratch = Scratch::new();

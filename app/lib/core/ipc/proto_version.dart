@@ -169,7 +169,10 @@ abstract final class ProtoVersion {
   /// under "Running" in the start window reads
   /// `ProjectEntry.terminal_clients` and says when no terminal hangs on it
   /// (#13). 61 has no reader here.
-  static const int minor = 62;
+  /// Raised to 63 with the mark of a saved model server in the own network:
+  /// the server card reads `LlmServer.local` and writes it with
+  /// `LlmServersRequest.Edit.local` (#115).
+  static const int minor = 63;
 
   /// `major.minor` as text.
   static const String text = '$major.$minor';

@@ -591,6 +591,17 @@ pub enum ServerCmd {
         /// Make it the active server right away.
         #[arg(long = "use")]
         activate: bool,
+
+        /// Mark it as a server in your own network whose name looks public:
+        /// it counts as local, also under `llm.cloud = block`.
+        #[arg(
+            long,
+            value_name = "BOOL",
+            num_args = 0..=1,
+            require_equals = true,
+            default_missing_value = "true"
+        )]
+        local: Option<bool>,
     },
 
     /// Make a server the active one, from the next session on.
@@ -646,6 +657,18 @@ pub enum ServerCmd {
         /// Remove every model of the server.
         #[arg(long = "no-models")]
         no_models: bool,
+
+        /// Mark it as a server in your own network (`--local`) or remove the
+        /// mark (`--local=false`); without it the mark stays while the
+        /// address keeps its origin.
+        #[arg(
+            long,
+            value_name = "BOOL",
+            num_args = 0..=1,
+            require_equals = true,
+            default_missing_value = "true"
+        )]
+        local: Option<bool>,
     },
 
     /// Let a session profile or a project use a saved server. A project's

@@ -356,11 +356,14 @@ abstract class DaemonClient {
 
   /// `LlmServers(edit)`: changes the endpoint and, when [models] is given,
   /// the models of a saved server without making it the default (HUM-405).
-  /// Its key stays and goes only to its own origin.
+  /// Its key stays and goes only to its own origin. [local] sets or clears
+  /// the mark as a server in the own network (GitHub #115); null keeps it
+  /// while the endpoint keeps its origin.
   Future<SavedServers> editLlmServer(
     String name, {
     String? endpoint,
     List<String>? models,
+    bool? local,
   });
 
   /// `LlmServers(assign)`: lets the session profile [profile] or the project

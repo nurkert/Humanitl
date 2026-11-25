@@ -2095,5 +2095,8 @@
   "diagLLM013Title": "Agent ohne eigene Provider",
   "diagLLM013Why": "Dieser Agent soll seine eigenen Provider nutzen, und Humanitl kennt sie für ihn noch nicht. Jede Anfrage an das Modell würde angehalten, deshalb ist nichts gestartet.",
   "diagLLM014Title": "Cloud-Inferenz gesperrt",
-  "diagLLM014Why": "Die Inferenz ist auf diesen Rechner oder das eigene Netz beschränkt, und dies schickte sie an einen Anbieter außerhalb. Es ist nichts geschehen, und eine Bestätigung des Cloud-Hinweises hebt die Sperre nicht auf. Wähle einen Modellserver auf diesem Rechner oder im eigenen Netz."
+  "diagLLM014Why": "Die Inferenz ist auf diesen Rechner oder das eigene Netz beschränkt, und dies schickte sie an einen Anbieter außerhalb. Es ist nichts geschehen, und eine Bestätigung des Cloud-Hinweises hebt die Sperre nicht auf. Wähle einen Modellserver auf diesem Rechner oder im eigenen Netz.",
+  "settingsServerLocalRowTitle": "Eigenes Netz",
+  "settingsServerLocalLabel": "Dieser Server steht in meinem Netz",
+  "settingsServerLocalHelp": "Für einen Server im eigenen Netz, dessen Name öffentlich aussieht. Er gilt dann als lokal: kein Cloud-Hinweis, und er bleibt nutzbar, wenn die Cloud-Inferenz gesperrt ist. Nur du setzt diese Markierung, nie ein Projekt. Sie fällt weg, wenn die Adresse auf einen anderen Host wechselt."
 }

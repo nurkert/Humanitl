@@ -1111,6 +1111,7 @@ mod tests {
                             endpoint: endpoint.to_owned(),
                             models: Vec::new(),
                             activate,
+                            local: false,
                         },
                     )),
                 },

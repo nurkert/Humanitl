@@ -19,6 +19,7 @@ final class SavedServer {
     this.keyRef = '',
     this.active = false,
     this.profiles = const <String>[],
+    this.local = false,
   });
 
   /// The name: 1 to 32 characters `a-z`, `0-9`, `-` and `_`.
@@ -43,6 +44,11 @@ final class SavedServer {
   /// project it is starting.
   final List<String> profiles;
 
+  /// True when the server is marked as one in the own network
+  /// (`local = true`, GitHub #115): it counts as local although its name
+  /// looks public, also under `llm.cloud = block`.
+  final bool local;
+
   /// The default model, or empty.
   String get model => models.isEmpty ? '' : models.first;
 
@@ -57,7 +63,8 @@ final class SavedServer {
       _same(other.models, models) &&
       other.keyRef == keyRef &&
       other.active == active &&
-      _same(other.profiles, profiles);
+      _same(other.profiles, profiles) &&
+      other.local == local;
 
   @override
   int get hashCode => Object.hash(
@@ -67,6 +74,7 @@ final class SavedServer {
     keyRef,
     active,
     Object.hashAll(profiles),
+    local,
   );
 }
 

@@ -934,7 +934,7 @@
               },
               "local": {
                 "default": false,
-                "description": "Markiert einen Server im eigenen Netz, dessen Name öffentlich aussieht, als lokal: Sitzungen mit ihm zeigen keinen Hinweis auf Cloud-Inferenz. Ein Name unter `.local`, `.lan`, `.home.arpa` oder `.internal`, `localhost` und private Adressen gelten ohne Markierung als lokal. Ändert sich der Endpunkt auf eine andere Herkunft, fällt die Markierung weg (HUM-516).",
+                "description": "Markiert einen Server im eigenen Netz, dessen Name öffentlich aussieht, als lokal: Sitzungen mit ihm zeigen keinen Hinweis auf Cloud-Inferenz. Ein Name unter `.local`, `.lan`, `.home.arpa` oder `.internal`, `localhost` und private Adressen gelten ohne Markierung als lokal. Ändert sich der Endpunkt auf eine andere Herkunft, fällt die Markierung weg (HUM-516). Ein Wahrheitswert; gesetzt wird sie mit `humanitl llm server add|edit NAME --local[=false]` oder in den Einstellungen, nie aus einem Projekt (GitHub #115).",
                 "type": "boolean"
               },
               "models": {
@@ -949,7 +949,7 @@
             "type": "object"
           },
           "default": {},
-          "description": "Gespeicherte Modellserver, je Name ein Eintrag mit `endpoint`, `models` und `api_key_ref` (`secret-service:humanitl/NAME`, unter macOS `keychain:humanitl/NAME`). Der Eintrag, den `llm.active` nennt, liefert `llm.endpoint`, `llm.models` und `llm.api_key_ref`; die flachen Schlüssel sind seine Ansicht. Ein Name hat 1 bis 32 Zeichen `a-z`, `0-9`, `-` und `_`. Gepflegt wird die Tabelle mit `humanitl llm server` oder in den Einstellungen; ein Wechsel gilt ab der nächsten Sitzung. Ein Eintrag mit `local = true` ist ein Server im eigenen Netz, dessen Name öffentlich aussieht: Sitzungen mit ihm zeigen keinen Hinweis auf Cloud-Inferenz (HUM-516).",
+          "description": "Gespeicherte Modellserver, je Name ein Eintrag mit `endpoint`, `models` und `api_key_ref` (`secret-service:humanitl/NAME`, unter macOS `keychain:humanitl/NAME`). Der Eintrag, den `llm.active` nennt, liefert `llm.endpoint`, `llm.models` und `llm.api_key_ref`; die flachen Schlüssel sind seine Ansicht. Ein Name hat 1 bis 32 Zeichen `a-z`, `0-9`, `-` und `_`. Gepflegt wird die Tabelle mit `humanitl llm server` oder in den Einstellungen; ein Wechsel gilt ab der nächsten Sitzung. Ein Eintrag mit `local = true` ist ein Server im eigenen Netz, dessen Name öffentlich aussieht: Sitzungen mit ihm zeigen keinen Hinweis auf Cloud-Inferenz (HUM-516), und unter `llm.cloud = \"block\"` bleibt er wählbar. Gesetzt und entfernt wird die Markierung mit `humanitl llm server add|edit NAME --local[=false]` oder in den Einstellungen; ein Projekt setzt sie nie (GitHub #115).",
           "type": "object",
           "x-project-scope": "denied",
           "x-tier": "advanced"

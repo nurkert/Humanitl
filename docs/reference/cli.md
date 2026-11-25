@@ -2596,6 +2596,11 @@ Options:
       --use
           Make it the active server right away
 
+      --local[=<BOOL>]
+          Mark it as a server in your own network whose name looks public: it counts as local, also under `llm.cloud = block`
+
+          [possible values: true, false]
+
   -v, --verbose...
           Explain what is happening; repeat for more
 
@@ -2740,6 +2745,11 @@ Options:
 
   -v, --verbose...
           Explain what is happening; repeat for more
+
+      --local[=<BOOL>]
+          Mark it as a server in your own network (`--local`) or remove the mark (`--local=false`); without it the mark stays while the address keeps its origin
+
+          [possible values: true, false]
 
   -q, --quiet
           Only the result, no notes

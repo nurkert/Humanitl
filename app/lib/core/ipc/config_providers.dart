@@ -214,15 +214,17 @@ class LlmServersSetting extends _$LlmServersSetting {
       _settled(await ref.read(daemonClientProvider).activateLlmServer(name));
 
   /// Changes the endpoint and, when given, the models of [name] without
-  /// making it the default (HUM-405).
+  /// making it the default (HUM-405); [local] sets or clears its mark as a
+  /// server in the own network (GitHub #115).
   Future<SavedServers> edit(
     String name, {
     String? endpoint,
     List<String>? models,
+    bool? local,
   }) async => _settled(
     await ref
         .read(daemonClientProvider)
-        .editLlmServer(name, endpoint: endpoint, models: models),
+        .editLlmServer(name, endpoint: endpoint, models: models, local: local),
   );
 
   /// Lets the session profile [profile] or the project folder [projectDir]

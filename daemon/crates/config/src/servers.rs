@@ -300,6 +300,8 @@ pub struct ServerEntry {
     pub models: Vec<String>,
     /// Der Verweis auf den Zugangsschlüssel, wie er dasteht.
     pub api_key_ref: Option<String>,
+    /// Die Markierung als Server im eigenen Netz ([`LOCAL`]).
+    pub local: bool,
 }
 
 /// Die Einträge einer `config.toml` und welcher aktiv ist.
@@ -355,7 +357,8 @@ pub fn list(table: &toml::Table) -> ServerList {
 }
 
 /// Legt einen Eintrag an; mit `activate` oder als erster Eintrag wird er
-/// zugleich aktiv.
+/// zugleich aktiv. Mit `local` trägt er die Markierung [`LOCAL`] (GitHub
+/// #115).
 ///
 /// # Errors
 ///
@@ -369,6 +372,7 @@ pub fn add(
     endpoint: &str,
     models: &[String],
     activate: bool,
+    local: bool,
 ) -> Result<Vec<Edit>, Diagnostic> {
     check_name(name)?;
     check_endpoint(name, endpoint)?;
@@ -392,6 +396,7 @@ pub fn add(
     if !models.is_empty() {
         entry.insert("models".to_owned(), TomlValue::Array(models));
     }
+    mark(&mut entry, local);
     state.servers.insert(name.to_owned(), entry);
     if activate || state.active.is_none() {
         state.activate(name);
@@ -554,10 +559,12 @@ pub fn same_origin(left: &str, right: &str) -> bool {
     }
 }
 
-/// Ändert Endpunkt und Modelle eines Eintrags, ohne ihn aktiv zu machen
-/// (HUM-405).
+/// Ändert Endpunkt, Modelle und die Markierung [`LOCAL`] eines Eintrags,
+/// ohne ihn aktiv zu machen (HUM-405, GitHub #115).
 ///
 /// `None` lässt den Wert, wie er ist; leere Modelle nehmen `models` heraus.
+/// Eine neue Herkunft des Endpunkts nimmt die Markierung mit heraus; ein
+/// `local` im selben Auftrag setzt sie danach für die neue Adresse.
 /// Bleibt die Herkunft des Endpunkts dieselbe, bleibt der Verweis auf den
 /// Schlüssel. Bekommt der Endpunkt eine andere Herkunft, fällt der Verweis
 /// weg: Der Schlüssel wurde für die alte Adresse hinterlegt und geht nie
@@ -576,6 +583,7 @@ pub fn edit(
     name: &str,
     endpoint: Option<&str>,
     models: Option<&[String]>,
+    local: Option<bool>,
 ) -> Result<Edited, Diagnostic> {
     let mut state = State::read(table);
     if !state.servers.contains_key(name) {
@@ -628,6 +636,9 @@ pub fn edit(
             "models",
             (!models.is_empty()).then_some(TomlValue::Array(models)),
         );
+    }
+    if let Some(local) = local {
+        mark(entry, local);
     }
     if is_active {
         state.activate(name);
@@ -689,29 +700,29 @@ pub fn saved_outside(table: &toml::Table, name: &str) -> Option<String> {
     let state = State::read(table);
     let entry = state.servers.get(name)?;
     let endpoint = entry.get("endpoint").and_then(TomlValue::as_str)?;
-    let local = entry
-        .get(LOCAL)
-        .and_then(TomlValue::as_bool)
-        .unwrap_or(false);
-    endpoint_outside(endpoint, local)
+    endpoint_outside(endpoint, is_marked(entry))
 }
 
-/// [`endpoint_outside`] für den Server `name` mit dem neuen Endpunkt
-/// `endpoint`, wie [`edit`] ihn schriebe: Die Markierung [`LOCAL`] bleibt nur
-/// bei derselben Herkunft.
+/// [`endpoint_outside`] für den Server `name`, wie [`edit`] ihn mit dem
+/// Endpunkt `endpoint` und der Markierung `local` schriebe; `None` lässt
+/// beides, wie es ist. Ohne neue Markierung bleibt die alte nur bei derselben
+/// Herkunft.
 #[must_use]
-pub fn edited_outside(table: &toml::Table, name: &str, endpoint: &str) -> Option<String> {
+pub fn edited_outside(
+    table: &toml::Table,
+    name: &str,
+    endpoint: Option<&str>,
+    local: Option<bool>,
+) -> Option<String> {
     let state = State::read(table);
     let entry = state.servers.get(name);
     let old = entry
         .and_then(|entry| entry.get("endpoint"))
-        .and_then(TomlValue::as_str)
-        .unwrap_or_default();
-    let local = entry
-        .and_then(|entry| entry.get(LOCAL))
-        .and_then(TomlValue::as_bool)
-        .unwrap_or(false)
-        && same_origin(old, endpoint);
+        .and_then(TomlValue::as_str);
+    let endpoint = endpoint.or(old)?;
+    let local = local.unwrap_or_else(|| {
+        entry.is_some_and(is_marked) && old.is_some_and(|old| same_origin(old, endpoint))
+    });
     endpoint_outside(endpoint, local)
 }
 
@@ -1327,7 +1338,8 @@ fn shared_references(servers: &toml::Table) -> BTreeSet<String> {
         .collect()
 }
 
-/// Ein Eintrag ist eine Tabelle mit nur den Feldern aus [`FIELDS`].
+/// Ein Eintrag ist eine Tabelle mit nur den Feldern aus [`FIELDS`] und der
+/// Markierung [`LOCAL`] als Wahrheitswert (GitHub #115).
 fn check_entry_shape(name: &str, entry: &TomlValue, origin: &Origin) -> Result<(), Diagnostic> {
     let Some(table) = entry.as_table() else {
         return Err(Diagnostic::builder(CONFIG_003, Severity::Error)
@@ -1337,9 +1349,20 @@ fn check_entry_shape(name: &str, entry: &TomlValue, origin: &Origin) -> Result<(
             ))
             .build());
     };
-    for key in table.keys() {
+    for (key, value) in table {
         if FIELDS.contains(&key.as_str()) {
             continue;
+        }
+        if key == LOCAL {
+            if value.is_bool() {
+                continue;
+            }
+            return Err(Diagnostic::builder(CONFIG_003, Severity::Error)
+                .why(format!(
+                    "{SERVERS}.{name}.{LOCAL} (from {origin}) is not a boolean; write \
+                     {LOCAL} = true for a server in your own network, or leave it out"
+                ))
+                .build());
         }
         let hint = if key == "model" {
             format!(
@@ -1347,7 +1370,7 @@ fn check_entry_shape(name: &str, entry: &TomlValue, origin: &Origin) -> Result<(
                 model_hint(table)
             )
         } else {
-            "a server takes endpoint, models and api_key_ref".to_owned()
+            "a server takes endpoint, models, api_key_ref and local".to_owned()
         };
         return Err(Diagnostic::builder(CONFIG_002, Severity::Error)
             .why(format!(
@@ -1439,7 +1462,22 @@ fn entry_view(name: &str, entry: &toml::Table) -> ServerEntry {
             .get("api_key_ref")
             .and_then(TomlValue::as_str)
             .map(ToOwned::to_owned),
+        local: is_marked(entry),
     }
+}
+
+/// Ob ein Eintrag `local = true` trägt.
+fn is_marked(entry: &toml::Table) -> bool {
+    entry
+        .get(LOCAL)
+        .and_then(TomlValue::as_bool)
+        .unwrap_or(false)
+}
+
+/// Setzt die Markierung [`LOCAL`] oder nimmt sie heraus. Ungesetzt steht sie
+/// nicht in der Datei, auch nicht als `local = false`.
+fn mark(entry: &mut toml::Table, local: bool) {
+    put(entry, LOCAL, local.then_some(TomlValue::Boolean(true)));
 }
 
 /// Setzt ein Feld oder nimmt es heraus.
@@ -1663,12 +1701,12 @@ mod tests {
         );
         assert_eq!(saved_outside(&saved, "missing"), None);
         assert_eq!(
-            edited_outside(&saved, "vpn", "https://models.example.com/v2"),
+            edited_outside(&saved, "vpn", Some("https://models.example.com/v2"), None),
             None,
             "same origin keeps the mark"
         );
         assert_eq!(
-            edited_outside(&saved, "vpn", "https://other.example.com/v1").as_deref(),
+            edited_outside(&saved, "vpn", Some("https://other.example.com/v1"), None).as_deref(),
             Some("other.example.com"),
             "a new origin loses it"
         );
@@ -1703,7 +1741,15 @@ api_key_ref = "secret-service:humanitl/llm"
             Some("secret-service:humanitl/llm")
         );
 
-        let edits = add(&old, "cloud", "https://api.example.com/v1", &[], false).unwrap();
+        let edits = add(
+            &old,
+            "cloud",
+            "https://api.example.com/v1",
+            &[],
+            false,
+            false,
+        )
+        .unwrap();
         let new = apply(&old, &edits);
         assert_eq!(
             get(&new, "llm.servers.default.api_key_ref").and_then(TomlValue::as_str),
@@ -1741,6 +1787,7 @@ api_key_ref = "secret-service:humanitl/llm"
                 "https://api.example.com/v1",
                 &["gpt".to_owned()],
                 false,
+                false,
             )
             .unwrap(),
         );
@@ -1772,7 +1819,15 @@ api_key_ref = "secret-service:humanitl/llm"
         let old = table(FLAT);
         let new = apply(
             &old,
-            &add(&old, "cloud", "https://api.example.com/v1", &[], false).unwrap(),
+            &add(
+                &old,
+                "cloud",
+                "https://api.example.com/v1",
+                &[],
+                false,
+                false,
+            )
+            .unwrap(),
         );
         let edited = apply(
             &new,
@@ -1781,6 +1836,7 @@ api_key_ref = "secret-service:humanitl/llm"
                 "cloud",
                 Some("https://api.example.org/v2"),
                 Some(&["big".to_owned(), " ".to_owned(), "small".to_owned()]),
+                None,
             )
             .unwrap()
             .edits,
@@ -1812,6 +1868,7 @@ api_key_ref = "secret-service:humanitl/llm"
             "default",
             Some("http://192.168.1.20:11434/v1"),
             None,
+            None,
         )
         .unwrap();
         assert!(!same.origin_changed);
@@ -1832,15 +1889,15 @@ api_key_ref = "secret-service:humanitl/llm"
 
         let cleared = apply(
             &active,
-            &edit(&active, "cloud", None, Some(&[])).unwrap().edits,
+            &edit(&active, "cloud", None, Some(&[]), None).unwrap().edits,
         );
         assert!(get(&cleared, "llm.servers.cloud.models").is_none());
         assert_eq!(
-            edit(&active, "gone", None, None).unwrap_err().code,
+            edit(&active, "gone", None, None, None).unwrap_err().code,
             CONFIG_021
         );
         assert_eq!(
-            edit(&active, "cloud", Some("ftp://x"), None)
+            edit(&active, "cloud", Some("ftp://x"), None, None)
                 .unwrap_err()
                 .code,
             CONFIG_003
@@ -1855,9 +1912,24 @@ api_key_ref = "secret-service:humanitl/llm"
         let old = table(FLAT);
         let new = apply(
             &old,
-            &add(&old, "cloud", "https://api.example.com/v1", &[], false).unwrap(),
+            &add(
+                &old,
+                "cloud",
+                "https://api.example.com/v1",
+                &[],
+                false,
+                false,
+            )
+            .unwrap(),
         );
-        let moved = edit(&new, "default", Some("https://api.example.com/v1"), None).unwrap();
+        let moved = edit(
+            &new,
+            "default",
+            Some("https://api.example.com/v1"),
+            None,
+            None,
+        )
+        .unwrap();
         assert!(moved.origin_changed);
         assert_eq!(
             moved.orphaned_key.map(|key_ref| key_ref.to_string()),
@@ -1896,6 +1968,7 @@ local = true
             "office",
             Some("https://llm.example.org/api/v1"),
             None,
+            None,
         )
         .unwrap();
         let kept = apply(&marked, &same.edits);
@@ -1903,7 +1976,14 @@ local = true
             get(&kept, "llm.servers.office.local").and_then(TomlValue::as_bool),
             Some(true)
         );
-        let moved = edit(&marked, "office", Some("https://api.openai.com/v1"), None).unwrap();
+        let moved = edit(
+            &marked,
+            "office",
+            Some("https://api.openai.com/v1"),
+            None,
+            None,
+        )
+        .unwrap();
         let after = apply(&marked, &moved.edits);
         assert!(get(&after, "llm.servers.office.local").is_none());
     }
@@ -1916,7 +1996,15 @@ local = true
         let old = table(FLAT);
         let two = apply(
             &old,
-            &add(&old, "cloud", "https://api.example.com/v1", &[], false).unwrap(),
+            &add(
+                &old,
+                "cloud",
+                "https://api.example.com/v1",
+                &[],
+                false,
+                false,
+            )
+            .unwrap(),
         );
         let refused = remove(&two, "default", None).unwrap_err();
         assert_eq!(refused.code, CONFIG_021);
@@ -1989,29 +2077,34 @@ api_key_ref = "file:shared"
     fn names_and_endpoints_are_checked() {
         let old = table("");
         assert_eq!(
-            add(&old, "a b", "http://x.lan/", &[], false)
+            add(&old, "a b", "http://x.lan/", &[], false, false)
                 .unwrap_err()
                 .code,
             CONFIG_021
         );
         assert_eq!(
-            add(&old, "x", "http://x.lan/\"", &[], false)
+            add(&old, "x", "http://x.lan/\"", &[], false, false)
                 .unwrap_err()
                 .code,
             CONFIG_003
         );
         assert_eq!(
-            add(&old, "x", "ftp://x.lan/", &[], false).unwrap_err().code,
+            add(&old, "x", "ftp://x.lan/", &[], false, false)
+                .unwrap_err()
+                .code,
             CONFIG_003
         );
-        let one = apply(&old, &add(&old, "x", "http://x.lan/", &[], false).unwrap());
+        let one = apply(
+            &old,
+            &add(&old, "x", "http://x.lan/", &[], false, false).unwrap(),
+        );
         assert_eq!(
             get(&one, "llm.active").and_then(TomlValue::as_str),
             Some("x"),
             "the first server becomes the active one"
         );
         assert_eq!(
-            add(&one, "x", "http://y.lan/", &[], false)
+            add(&one, "x", "http://y.lan/", &[], false, false)
                 .unwrap_err()
                 .code,
             CONFIG_021
@@ -2025,13 +2118,13 @@ api_key_ref = "file:shared"
         let old = table(FLAT);
         let two = apply(
             &old,
-            &add(&old, "llm", "http://other.lan/", &[], false).unwrap(),
+            &add(&old, "llm", "http://other.lan/", &[], false, false).unwrap(),
         );
         assert_eq!(key_name_for(&two, "default").unwrap(), "llm");
         assert_eq!(key_name_for(&two, "llm").unwrap(), "llm-2");
         let three = apply(
             &two,
-            &add(&two, "cloud", "http://cloud.lan/", &[], false).unwrap(),
+            &add(&two, "cloud", "http://cloud.lan/", &[], false, false).unwrap(),
         );
         assert_eq!(key_name_for(&three, "cloud").unwrap(), "cloud");
     }
@@ -2046,7 +2139,7 @@ api_key_ref = "file:shared"
         let old = table(FLAT);
         let two = apply(
             &old,
-            &add(&old, "cloud", "http://cloud.lan/", &[], true).unwrap(),
+            &add(&old, "cloud", "http://cloud.lan/", &[], true, false).unwrap(),
         );
         let mirrored = mirror_of(&two, &segments, Some(&value));
         assert_eq!(
@@ -2352,5 +2445,144 @@ api_key_ref = "secret-service:humanitl/cloud"
             "{}",
             refused.why
         );
+    }
+
+    const MARKED: &str = r#"
+[llm]
+active = "office"
+[llm.servers.office]
+endpoint = "https://llm.example.org/v1"
+local = true
+"#;
+
+    /// Ein gespeicherter Server mit `local = true` lädt, und der Start liest
+    /// ihn als lokal (GitHub #115); ohne die Markierung ist derselbe Server
+    /// außerhalb.
+    #[test]
+    fn a_server_marked_local_loads_and_stays_local() {
+        let endpoint = url::Url::parse("https://llm.example.org/v1").unwrap();
+        let marked = load_text(MARKED, &[]);
+        assert!(marked.config.llm.servers["office"].local);
+        assert_eq!(
+            crate::inference::provider_outside(&marked.config.llm, &endpoint),
+            None
+        );
+        let plain = load_text(&MARKED.replace("local = true\n", ""), &[]);
+        assert_eq!(
+            crate::inference::provider_outside(&plain.config.llm, &endpoint).as_deref(),
+            Some("llm.example.org")
+        );
+        let listed = list(&table(MARKED));
+        assert!(listed.servers[0].local);
+    }
+
+    /// `local` ist ein Wahrheitswert; ein Text ist `CONFIG_003` mit einem
+    /// Satz, der den erwarteten Typ nennt (GitHub #115).
+    #[test]
+    fn a_local_mark_that_is_no_boolean_is_refused() {
+        let dir = tempfile::tempdir().unwrap();
+        let path = dir.path().join("config.toml");
+        std::fs::write(&path, MARKED.replace("local = true", "local = \"yes\"")).unwrap();
+        let sources = crate::load::Sources {
+            global_toml: Some(path),
+            ..crate::load::Sources::empty()
+        };
+        let refused = crate::load::load(&sources).unwrap_err();
+        assert_eq!(refused.code, CONFIG_003);
+        assert!(
+            refused.why.contains("llm.servers.office.local") && refused.why.contains("boolean"),
+            "{}",
+            refused.why
+        );
+    }
+
+    /// Anlegen und Bearbeiten setzen die Markierung und nehmen sie heraus;
+    /// herausgenommen steht sie nicht als `local = false` in der Datei. Eine
+    /// neue Herkunft mit `local` im selben Auftrag trägt sie für die neue
+    /// Adresse (GitHub #115).
+    #[test]
+    fn add_and_edit_set_and_clear_the_local_mark() {
+        let old = table(FLAT);
+        let added = apply(
+            &old,
+            &add(
+                &old,
+                "office",
+                "https://llm.example.org/v1",
+                &[],
+                false,
+                true,
+            )
+            .unwrap(),
+        );
+        assert_eq!(
+            get(&added, "llm.servers.office.local").and_then(TomlValue::as_bool),
+            Some(true)
+        );
+        assert_eq!(saved_outside(&added, "office"), None);
+
+        let cleared = apply(
+            &added,
+            &edit(&added, "office", None, None, Some(false))
+                .unwrap()
+                .edits,
+        );
+        assert!(get(&cleared, "llm.servers.office").is_some());
+        assert!(get(&cleared, "llm.servers.office.local").is_none());
+        assert_eq!(
+            saved_outside(&cleared, "office").as_deref(),
+            Some("llm.example.org")
+        );
+        assert_eq!(
+            edited_outside(&cleared, "office", None, Some(true)),
+            None,
+            "the mark the edit sets counts"
+        );
+
+        let marked = apply(
+            &cleared,
+            &edit(&cleared, "office", None, None, Some(true))
+                .unwrap()
+                .edits,
+        );
+        assert_eq!(saved_outside(&marked, "office"), None);
+
+        let moved = edit(
+            &marked,
+            "office",
+            Some("https://models.example.net/v1"),
+            None,
+            Some(true),
+        )
+        .unwrap();
+        let after = apply(&marked, &moved.edits);
+        assert_eq!(
+            get(&after, "llm.servers.office.local").and_then(TomlValue::as_bool),
+            Some(true)
+        );
+        assert_eq!(
+            edited_outside(
+                &marked,
+                "office",
+                Some("https://models.example.net/v1"),
+                Some(true)
+            ),
+            None
+        );
+        assert_eq!(
+            edited_outside(
+                &marked,
+                "office",
+                Some("https://models.example.net/v1"),
+                None
+            )
+            .as_deref(),
+            Some("models.example.net"),
+            "without a new mark a new origin loses the old one"
+        );
+        // Das Ergebnis lädt: Der Schreibweg und der Leser sind sich einig.
+        let mut text = toml::to_string(&after).unwrap();
+        text.push('\n');
+        let _ = load_text(&text, &[]);
     }
 }

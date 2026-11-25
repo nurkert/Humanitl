@@ -2711,6 +2711,11 @@ message LlmServer {
   // Projekte stehen hier nicht: Der Daemon kennt nur das Projekt, das er
   // gerade startet.
   repeated string profiles = 6;
+  // Wahr, wenn der Server als Server im eigenen Netz markiert ist
+  // (`local = true`, HUM-516, GitHub #115): Er gilt als lokal, auch wenn sein
+  // Name oeffentlich aussieht, und unter `llm.cloud = "block"` laesst er sich
+  // waehlen und starten.
+  bool local = 7;
 }
 
 // Auftrag an `LlmServers`. Genau eine Operation.
@@ -2725,6 +2730,8 @@ message LlmServersRequest {
     repeated string models = 3;
     // Danach aktiv. Der erste Server wird es immer.
     bool activate = 4;
+    // Als Server im eigenen Netz markieren (`local = true`, GitHub #115).
+    bool local = 5;
   }
   // Einen Server umbenennen. Der Verweis auf den Schluessel bleibt.
   message Rename {
@@ -2761,6 +2768,10 @@ message LlmServersRequest {
     optional string endpoint = 2;
     // Fehlt: die Modelle bleiben. Leer: keine Modelle mehr.
     Models models = 3;
+    // Fehlt: die Markierung `local` bleibt, solange der Endpunkt seine
+    // Herkunft behaelt. Wahr setzt sie, falsch nimmt sie heraus (GitHub
+    // #115); mit einem Endpunkt neuer Herkunft gilt sie fuer die neue Adresse.
+    optional bool local = 4;
   }
   // Einem Profil der Sitzung oder einem Projekt einen gespeicherten Server
   // zuordnen, oder die Zuordnung entfernen (HUM-405). Geschrieben wird

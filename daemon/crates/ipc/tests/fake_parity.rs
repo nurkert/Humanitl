@@ -664,6 +664,7 @@ fn table() -> Vec<Case> {
                             endpoint: "http://192.168.1.20:11434".to_owned(),
                             models: Vec::new(),
                             activate: false,
+                            local: false,
                         },
                     )),
                 }
@@ -681,6 +682,7 @@ fn table() -> Vec<Case> {
                             endpoint: "http://192.168.1.20:11434\"".to_owned(),
                             models: Vec::new(),
                             activate: false,
+                            local: false,
                         },
                     )),
                 }
