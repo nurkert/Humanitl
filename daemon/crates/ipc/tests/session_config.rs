@@ -1102,12 +1102,14 @@ async fn a_confirmation_does_not_pass_to_another_server_of_the_same_name() {
         name: "work".to_owned(),
         endpoint: Some("http://work.lan:8080/v2".to_owned()),
         models: None,
+        local: None,
     }));
     assert!(confirmed(), "the same origin keeps the confirmation");
     fixture.servers(Op::Edit(Edit {
         name: "work".to_owned(),
         endpoint: Some("http://elsewhere.lan:8080/v1".to_owned()),
         models: None,
+        local: None,
     }));
     assert!(!confirmed(), "a new origin drops it");
 

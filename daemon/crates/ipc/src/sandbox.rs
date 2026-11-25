@@ -9617,6 +9617,7 @@ mod tests {
                             endpoint: endpoint.to_owned(),
                             models: Vec::new(),
                             activate: false,
+                            local: false,
                         },
                     )),
                 },
@@ -9713,6 +9714,7 @@ mod tests {
                     endpoint: endpoint.to_owned(),
                     models: Vec::new(),
                     activate: false,
+                    local: false,
                 },
             )),
         };

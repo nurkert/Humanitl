@@ -635,9 +635,13 @@ class GrpcDaemonClient implements DaemonClient {
     String name, {
     String? endpoint,
     List<String>? models,
+    bool? local,
   }) {
     final pb.LlmServersRequest_Edit edit = pb.LlmServersRequest_Edit()
       ..name = name;
+    if (local != null) {
+      edit.local = local;
+    }
     if (endpoint != null) {
       edit.endpoint = endpoint;
     }

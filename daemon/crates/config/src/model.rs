@@ -121,7 +121,7 @@ pub struct LlmConfig {
     /// Verweis auf den Zugangsschlüssel des Endpunkts, nie der Schlüssel selbst: `secret-service:humanitl/llm` für den Schlüsselbund des Systems, unter macOS `keychain:humanitl/llm`, oder `file:llm` für eine Datei mit `0600` unter `$XDG_DATA_HOME/humanitl/keys`. Gesetzt wird er mit `humanitl llm key set` oder in den Einstellungen; der Agent bekommt den Schlüssel als Datei in der Sandbox, nie über die Kommandozeile. Leer heißt: kein Schlüssel.
     #[schemars(extend("x-tier" = "advanced", "x-project-scope" = "denied"))]
     pub api_key_ref: Option<String>,
-    /// Gespeicherte Modellserver, je Name ein Eintrag mit `endpoint`, `models` und `api_key_ref` (`secret-service:humanitl/NAME`, unter macOS `keychain:humanitl/NAME`). Der Eintrag, den `llm.active` nennt, liefert `llm.endpoint`, `llm.models` und `llm.api_key_ref`; die flachen Schlüssel sind seine Ansicht. Ein Name hat 1 bis 32 Zeichen `a-z`, `0-9`, `-` und `_`. Gepflegt wird die Tabelle mit `humanitl llm server` oder in den Einstellungen; ein Wechsel gilt ab der nächsten Sitzung. Ein Eintrag mit `local = true` ist ein Server im eigenen Netz, dessen Name öffentlich aussieht: Sitzungen mit ihm zeigen keinen Hinweis auf Cloud-Inferenz (HUM-516).
+    /// Gespeicherte Modellserver, je Name ein Eintrag mit `endpoint`, `models` und `api_key_ref` (`secret-service:humanitl/NAME`, unter macOS `keychain:humanitl/NAME`). Der Eintrag, den `llm.active` nennt, liefert `llm.endpoint`, `llm.models` und `llm.api_key_ref`; die flachen Schlüssel sind seine Ansicht. Ein Name hat 1 bis 32 Zeichen `a-z`, `0-9`, `-` und `_`. Gepflegt wird die Tabelle mit `humanitl llm server` oder in den Einstellungen; ein Wechsel gilt ab der nächsten Sitzung. Ein Eintrag mit `local = true` ist ein Server im eigenen Netz, dessen Name öffentlich aussieht: Sitzungen mit ihm zeigen keinen Hinweis auf Cloud-Inferenz (HUM-516), und unter `llm.cloud = "block"` bleibt er wählbar. Gesetzt und entfernt wird die Markierung mit `humanitl llm server add|edit NAME --local[=false]` oder in den Einstellungen; ein Projekt setzt sie nie (GitHub #115).
     #[schemars(extend("x-tier" = "advanced", "x-project-scope" = "denied"))]
     pub servers: BTreeMap<String, LlmServer>,
     /// Der Name des aktiven Eintrags aus `llm.servers`. Nur sein Endpunkt bekommt den hinterlegten Zugangsschlüssel und gilt als LLM-Passthrough. Leer, solange es keine Einträge gibt.
@@ -229,7 +229,7 @@ pub struct LlmServer {
     pub models: Vec<String>,
     /// Verweis auf den Zugangsschlüssel dieses Servers, wie `llm.api_key_ref`.
     pub api_key_ref: Option<String>,
-    /// Markiert einen Server im eigenen Netz, dessen Name öffentlich aussieht, als lokal: Sitzungen mit ihm zeigen keinen Hinweis auf Cloud-Inferenz. Ein Name unter `.local`, `.lan`, `.home.arpa` oder `.internal`, `localhost` und private Adressen gelten ohne Markierung als lokal. Ändert sich der Endpunkt auf eine andere Herkunft, fällt die Markierung weg (HUM-516).
+    /// Markiert einen Server im eigenen Netz, dessen Name öffentlich aussieht, als lokal: Sitzungen mit ihm zeigen keinen Hinweis auf Cloud-Inferenz. Ein Name unter `.local`, `.lan`, `.home.arpa` oder `.internal`, `localhost` und private Adressen gelten ohne Markierung als lokal. Ändert sich der Endpunkt auf eine andere Herkunft, fällt die Markierung weg (HUM-516). Ein Wahrheitswert; gesetzt wird sie mit `humanitl llm server add|edit NAME --local[=false]` oder in den Einstellungen, nie aus einem Projekt (GitHub #115).
     pub local: bool,
 }
 

@@ -538,6 +538,7 @@ class TestDaemonClient implements DaemonClient {
     String name, {
     String? endpoint,
     List<String>? models,
+    bool? local,
   }) async => SavedServers.none;
 
   @override

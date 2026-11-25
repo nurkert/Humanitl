@@ -479,6 +479,46 @@ void main() {
   }, variant: linux);
 
   testWidgets(
+    '"This server is in my network" sets and clears the local mark at once '
+    '(GitHub #115)',
+    (WidgetTester tester) async {
+      final FakeDaemonClient client = twoServers();
+      await openSettings(tester, client);
+      await tapKey(tester, 'settings-server-cloud');
+      HCheckbox box() => tester.widget<HCheckbox>(
+        find.byKey(const Key('settings-server-local')),
+      );
+      expect(box().value, isFalse);
+
+      await tapKey(tester, 'settings-server-local');
+      expect(client.serverRequests, <String>['edit cloud']);
+      expect(
+        client.savedServers
+            .firstWhere((SavedServer s) => s.name == 'cloud')
+            .local,
+        isTrue,
+      );
+      expect(box().value, isTrue);
+      expect(
+        find.byKey(const Key('settings-server-detail-cloud')),
+        findsOneWidget,
+        reason: 'the mark does not make the server the default',
+      );
+
+      await tapKey(tester, 'settings-server-local');
+      expect(client.serverRequests, <String>['edit cloud', 'edit cloud']);
+      expect(
+        client.savedServers
+            .firstWhere((SavedServer s) => s.name == 'cloud')
+            .local,
+        isFalse,
+      );
+      expect(box().value, isFalse);
+    },
+    variant: linux,
+  );
+
+  testWidgets(
     'the default is not removed while another could take its place; another '
     'server asks first, Cancel preselected, and names its profiles',
     (WidgetTester tester) async {

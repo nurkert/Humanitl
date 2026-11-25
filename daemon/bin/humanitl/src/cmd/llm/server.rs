@@ -69,12 +69,14 @@ fn operation(cmd: &ServerCmd) -> Result<(Op, bool), Failure> {
             url,
             model,
             activate,
+            local,
         } => (
             Op::Add(Add {
                 name: name.clone(),
                 endpoint: url.clone(),
                 models: model.clone(),
                 activate: *activate,
+                local: local.unwrap_or(false),
             }),
             true,
         ),
@@ -103,6 +105,7 @@ fn operation(cmd: &ServerCmd) -> Result<(Op, bool), Failure> {
             url,
             model,
             no_models,
+            local,
         } => (
             Op::Edit(Edit {
                 name: name.clone(),
@@ -110,6 +113,7 @@ fn operation(cmd: &ServerCmd) -> Result<(Op, bool), Failure> {
                 models: (*no_models || !model.is_empty()).then(|| edit::Models {
                     names: model.clone(),
                 }),
+                local: *local,
             }),
             true,
         ),
@@ -188,6 +192,7 @@ fn render(ctx: &Context, list: &v1::LlmServerList, changes: bool) {
                 "models": server.models,
                 "key_ref": server.key_ref,
                 "active": server.active,
+                "local": server.local,
                 "profiles": server.profiles,
             })).collect::<Vec<Value>>(),
             "profiles": list.profiles.iter().map(|profile| json!({
@@ -217,7 +222,15 @@ fn render(ctx: &Context, list: &v1::LlmServerList, changes: bool) {
                     if server.active { "*" } else { "" }.to_owned(),
                     server.name.clone(),
                     // Benutzer, Passwort und Query bleiben aus der Zeile.
-                    humanitl_config::llm_endpoint::display_text(&server.endpoint),
+                    // Die Markierung `local` steht dahinter (GitHub #115).
+                    if server.local {
+                        format!(
+                            "{} (local)",
+                            humanitl_config::llm_endpoint::display_text(&server.endpoint)
+                        )
+                    } else {
+                        humanitl_config::llm_endpoint::display_text(&server.endpoint)
+                    },
                     server
                         .models
                         .first()
@@ -279,6 +292,33 @@ mod tests {
         };
         assert_eq!(cleared.endpoint, None);
         assert_eq!(cleared.models.map(|models| models.names), Some(Vec::new()));
+    }
+
+    /// `--local` setzt die Markierung, `--local=false` nimmt sie heraus, und
+    /// ohne den Schalter bleibt sie bei `edit`, wie sie ist (GitHub #115).
+    #[test]
+    fn local_sets_and_clears_the_mark() {
+        let Op::Add(add) = op_of(&["add", "office", "https://llm.example.org/v1", "--local"])
+        else {
+            panic!("not an add");
+        };
+        assert!(add.local);
+        let Op::Add(plain) = op_of(&["add", "office", "https://llm.example.org/v1"]) else {
+            panic!("not an add");
+        };
+        assert!(!plain.local);
+        let Op::Edit(marked) = op_of(&["edit", "office", "--local"]) else {
+            panic!("not an edit");
+        };
+        assert_eq!(marked.local, Some(true));
+        let Op::Edit(cleared) = op_of(&["edit", "office", "--local=false"]) else {
+            panic!("not an edit");
+        };
+        assert_eq!(cleared.local, Some(false));
+        let Op::Edit(kept) = op_of(&["edit", "office", "--no-models"]) else {
+            panic!("not an edit");
+        };
+        assert_eq!(kept.local, None);
     }
 
     /// `assign` und `unassign` nennen genau ein Ziel; ein Projektordner geht

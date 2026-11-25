@@ -72,6 +72,7 @@ pub fn plan(table: &toml::Table, request: &v1::LlmServersRequest) -> Result<Plan
             &add.endpoint,
             &add.models,
             add.activate,
+            add.local,
         )
         .map(|edits| Planned {
             forget: vec![add.name.trim().to_owned()],
@@ -108,6 +109,7 @@ pub fn plan(table: &toml::Table, request: &v1::LlmServersRequest) -> Result<Plan
                 edit.name.trim(),
                 edit.endpoint.as_deref(),
                 edit.models.as_ref().map(|models| models.names.as_slice()),
+                edit.local,
             )?;
             // Eine neue Herkunft: Der Schlüssel der alten Adresse geht mit
             // (HUM-405, Review), und eine Bestätigung galt der alten.
@@ -348,13 +350,15 @@ pub fn refuse_outside(
     let (name, provider) = match &request.op {
         Some(Op::Add(add)) => (
             add.name.trim(),
-            servers::endpoint_outside(add.endpoint.trim(), false),
+            servers::endpoint_outside(add.endpoint.trim(), add.local),
         ),
+        // Ein Auftrag, der nur die Markierung herausnimmt, wählt nichts; die
+        // Sperre greift beim nächsten Wählen oder Start (GitHub #115).
         Some(Op::Edit(edit)) => (
             edit.name.trim(),
-            edit.endpoint
-                .as_deref()
-                .and_then(|endpoint| servers::edited_outside(table, edit.name.trim(), endpoint)),
+            edit.endpoint.as_deref().and_then(|endpoint| {
+                servers::edited_outside(table, edit.name.trim(), Some(endpoint), edit.local)
+            }),
         ),
         Some(Op::Activate(activate)) => (
             activate.name.trim(),
@@ -526,6 +530,7 @@ pub fn listing(
                 key_ref: entry.api_key_ref.clone().unwrap_or_default(),
                 active: list.active.as_deref() == Some(entry.name.as_str()),
                 profiles: uses.get(&entry.name).cloned().unwrap_or_default(),
+                local: entry.local,
             })
             .collect(),
         active: list.active.clone().unwrap_or_default(),
@@ -606,6 +611,7 @@ mod tests {
                 endpoint: endpoint.to_owned(),
                 models: vec!["m".to_owned()],
                 activate: false,
+                local: false,
             },
         ))
     }
@@ -652,6 +658,7 @@ mod tests {
             name: "home".to_owned(),
             endpoint: Some("https://api.openai.com/v1".to_owned()),
             models: None,
+            local: None,
         })));
         refused(&op(v1::llm_servers_request::Op::Assign(Assign {
             server: "cloud".to_owned(),
@@ -685,6 +692,81 @@ mod tests {
             })),
         )
         .expect("a rename sends nothing anywhere");
+    }
+
+    /// Ein Server im eigenen Netz, dessen Name öffentlich aussieht, lässt
+    /// sich unter `llm.cloud = "block"` markieren, wählen und starten
+    /// (GitHub #115); ohne die Markierung ist er außerhalb.
+    ///
+    /// Mutationsbeweis: Lehnt `check_entry_shape` `local` wieder mit
+    /// `CONFIG_002` ab, schreibt das markierte `add` nichts (die Gegenprobe
+    /// lädt nicht), und der Test wird rot.
+    #[test]
+    fn a_marked_server_is_local_under_the_cloud_lock() {
+        use v1::llm_servers_request::{Activate, Add, Edit, Op};
+
+        let dir = tempfile::tempdir().unwrap();
+        let paths = paths_in(dir.path());
+        let keys = KeyStore::for_paths(&paths).with_secret_tool(None);
+        write_config(
+            &paths,
+            "[llm]\ncloud = \"block\"\nactive = \"home\"\n\n\
+             [llm.servers.home]\nendpoint = \"http://192.168.1.20:11434\"\n",
+        );
+        let run = |op: Op| {
+            answer(
+                &paths,
+                &keys,
+                &OPEN,
+                &v1::LlmServersRequest { op: Some(op) },
+            )
+        };
+        let mark = |local: bool| {
+            Op::Edit(Edit {
+                name: "office".to_owned(),
+                endpoint: None,
+                models: None,
+                local: Some(local),
+            })
+        };
+        let activate = || {
+            Op::Activate(Activate {
+                name: "office".to_owned(),
+            })
+        };
+
+        let listed = run(Op::Add(Add {
+            name: "office".to_owned(),
+            endpoint: "https://llm.example.org/v1".to_owned(),
+            models: vec!["m".to_owned()],
+            activate: false,
+            local: true,
+        }))
+        .expect("a marked server is local");
+        let office = listed.servers.iter().find(|s| s.name == "office").unwrap();
+        assert!(office.local);
+
+        // Ohne Markierung ist derselbe Server außerhalb und lässt sich nicht
+        // wählen; mit ihr wieder.
+        let cleared = run(mark(false)).expect("clearing the mark selects nothing");
+        assert!(
+            !cleared
+                .servers
+                .iter()
+                .any(|s| s.name == "office" && s.local)
+        );
+        assert_eq!(run(activate()).unwrap_err().code.as_str(), "LLM_014");
+        run(mark(true)).expect("mark");
+        run(activate()).expect("a marked server can be selected");
+
+        // Und gestartet: Die Datei lädt, und die Sperre lässt den Start durch.
+        let resolved = humanitl_config::load(&humanitl_config::Sources {
+            global_toml: Some(paths.config_path()),
+            ..humanitl_config::Sources::empty()
+        })
+        .expect("a marked server loads");
+        assert_eq!(resolved.config.llm.active.as_deref(), Some("office"));
+        crate::cloud::lock(&resolved).expect("a marked server starts under the lock");
     }
 
     /// Anlegen, aktivieren, umbenennen, entfernen: jede Antwort ist die Liste
@@ -866,6 +948,7 @@ mod tests {
                 models: Some(edit::Models {
                     names: vec!["big".to_owned()],
                 }),
+                local: None,
             })),
         )
         .unwrap();
@@ -935,6 +1018,7 @@ mod tests {
                 name: "default".to_owned(),
                 endpoint: Some(endpoint.to_owned()),
                 models: None,
+                local: None,
             }))
         };
         let same = answer(&paths, &keys, &OPEN, &edit("http://home.lan:11434/v1")).unwrap();

@@ -1132,6 +1132,7 @@ extension LlmServerListToDomain on pb.LlmServerList {
           keyRef: server.keyRef,
           active: server.active,
           profiles: List<String>.unmodifiable(server.profiles),
+          local: server.local,
         ),
       ),
     ),

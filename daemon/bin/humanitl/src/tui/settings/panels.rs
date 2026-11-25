@@ -455,6 +455,7 @@ fn add_step(screen: &mut SettingsScreen, target: Target, text: String) {
                 endpoint,
                 models: models_of(&text),
                 activate: false,
+                local: false,
             }),
         ),
         _ => {}
@@ -475,6 +476,7 @@ pub fn commit(screen: &mut SettingsScreen, target: Target, text: String) {
                 name,
                 endpoint: Some(text),
                 models: None,
+                local: None,
             }),
         ),
         Target::EditModels(name) => servers_call(
@@ -485,6 +487,7 @@ pub fn commit(screen: &mut SettingsScreen, target: Target, text: String) {
                 models: Some(edit::Models {
                     names: models_of(&text),
                 }),
+                local: None,
             }),
         ),
         Target::Rename(name) => servers_call(

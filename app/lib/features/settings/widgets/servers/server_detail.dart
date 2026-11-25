@@ -42,6 +42,10 @@ const String serverNameRowId = 'llm.server_name';
 /// The id of the row "Default server"; no entry of the register.
 const String serverDefaultRowId = 'llm.server_default';
 
+/// The id of the row that marks the server as one in the own network; no
+/// entry of the register (GitHub #115).
+const String serverLocalRowId = 'llm.server_local';
+
 /// The id of the row that removes the server; no entry of the register.
 const String serverRemoveRowId = 'llm.server_remove';
 
@@ -223,6 +227,15 @@ class _ServerDetailState extends ConsumerState<ServerDetail> {
     _form.run(() async => ref.read(llmServersProvider.notifier).activate(name)),
   );
 
+  // Wie "Make default" ein Auftrag sofort, kein Entwurf im Formular: Die
+  // Markierung gehört der gespeicherten Adresse (GitHub #115).
+  void _setLocal(String name, bool local) => unawaited(
+    _form.run(
+      () async =>
+          ref.read(llmServersProvider.notifier).edit(name, local: local),
+    ),
+  );
+
   Future<void> _remove(String name, bool deleteKey) async {
     final bool done = await _form.run(
       () async => ref
@@ -385,6 +398,8 @@ class _ServerDetailState extends ConsumerState<ServerDetail> {
               const HHairline(),
               _defaultRow(context, server),
               const HHairline(),
+              _localRow(context, server),
+              const HHairline(),
               _removeRow(context, server),
             ],
           ],
@@ -416,6 +431,23 @@ class _ServerDetailState extends ConsumerState<ServerDetail> {
               ? l10n.settingsServerIsDefault
               : l10n.settingsServerMakeDefault,
         ),
+      ),
+    );
+  }
+
+  /// The mark as a server in the own network (`local = true`, GitHub #115).
+  Widget _localRow(BuildContext context, SavedServer server) {
+    final AppLocalizations l10n = context.l10n;
+    return SettingRow(
+      settingId: serverLocalRowId,
+      title: l10n.settingsServerLocalRowTitle,
+      help: l10n.settingsServerLocalHelp,
+      child: HCheckbox(
+        key: const Key('settings-server-local'),
+        label: l10n.settingsServerLocalLabel,
+        value: server.local,
+        enabled: !_form.busy,
+        onChanged: (bool local) => _setLocal(server.name, local),
       ),
     );
   }

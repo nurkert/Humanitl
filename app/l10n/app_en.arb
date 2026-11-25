@@ -4800,5 +4800,11 @@
   "diagLLM014Title": "Cloud inference locked",
   "@diagLLM014Title": {"description": "Title of the diagnostic LLM_014 (docs/DIAGNOSTICS.md, #113): llm.cloud is block, and the inference would leave this machine or network, so the start or the server choice was refused."},
   "diagLLM014Why": "Inference is locked to this machine or network, and this would send it to a provider outside. Nothing was done, and confirming the cloud notice does not lift the lock. Choose a model server on this machine or in your network.",
-  "@diagLLM014Why": {"description": "Generic cause of LLM_014. Stands in the cause slot only when the diagnostic carries no sentence of the daemon's own (HUM-052)."}
+  "@diagLLM014Why": {"description": "Generic cause of LLM_014. Stands in the cause slot only when the diagnostic carries no sentence of the daemon's own (HUM-052)."},
+  "settingsServerLocalRowTitle": "Own network",
+  "@settingsServerLocalRowTitle": {"description": "Settings, server detail: title of the row that marks a saved server as one in the own network (local = true, GitHub #115)."},
+  "settingsServerLocalLabel": "This server is in my network",
+  "@settingsServerLocalLabel": {"description": "Settings, server detail: label of the checkbox that sets local = true on the server (GitHub #115)."},
+  "settingsServerLocalHelp": "For a server in your network whose name looks public. It then counts as local: no cloud notice, and it stays usable when cloud inference is locked. Only you can set this mark, never a project. It is dropped when the address moves to another host.",
+  "@settingsServerLocalHelp": {"description": "Settings, server detail: help of the row Own network (GitHub #115). Must say that the mark lifts the cloud notice and the lock for this server, that a project cannot set it, and that a new host drops it."}
 }

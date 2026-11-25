@@ -2988,6 +2988,7 @@ class FakeDaemonClient
             endpoint: old.endpoint,
             models: old.models,
             keyRef: old.keyRef,
+            local: old.local,
           )
         else
           server,
@@ -3066,6 +3067,7 @@ class FakeDaemonClient
           active: server.name == activeServer,
           // Die Profile, die ihn wählen, wie der Test sie setzt (HUM-400).
           profiles: server.profiles,
+          local: server.local,
         ),
     ]),
     active: activeServer,
@@ -3145,6 +3147,7 @@ class FakeDaemonClient
                             .toList())
                 : server.models,
             keyRef: server.keyRef,
+            local: server.local,
           )
         else
           server,
@@ -3161,6 +3164,7 @@ class FakeDaemonClient
             endpoint: server.endpoint,
             models: server.models,
             keyRef: keyRef,
+            local: server.local,
           )
         else
           server,
@@ -3677,6 +3681,7 @@ class FakeDaemonClient
     String name, {
     String? endpoint,
     List<String>? models,
+    bool? local,
   }) async {
     _serverCheck();
     final SavedServer old = _server(name) ?? _unknownServer(name);
@@ -3716,6 +3721,9 @@ class FakeDaemonClient
                   ],
             keyRef: moved ? '' : old.keyRef,
             profiles: old.profiles,
+            // Wie der Daemon (GitHub #115): Eine neue Herkunft nimmt die
+            // Markierung mit; ein `local` im selben Auftrag setzt sie neu.
+            local: local ?? (!moved && old.local),
           )
         else
           server,

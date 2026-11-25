@@ -667,6 +667,7 @@ mod tests {
                         endpoint: "https://api.example.com/v1".to_owned(),
                         models: Vec::new(),
                         activate: false,
+                        local: false,
                     },
                 )),
             },
