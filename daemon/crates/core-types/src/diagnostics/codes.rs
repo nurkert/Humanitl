@@ -2106,6 +2106,23 @@ registry! {
     TERM_003 => "terminal", "Terminal unsuitable for a full-screen view", "#term_003",
         "A full-screen view of `humanitl` needs a terminal that can place the cursor and has at least the minimum size the view names. This terminal is smaller, or `TERM` is unset or `dumb`. Nothing was changed on the terminal; the sentence names the measured and the needed size and the command that does the same without a full-screen view.",
         "`CopyCommand` with the command that needs no full-screen view; otherwise enlarge the window and run the command again.";
+    // GitHub #112: where an agent's inference goes.
+    /// The agent reaches a model only through the model server Humanitl sets
+    /// (`OpenCode`, pi), `agents.<id>.inference` is `model-server`, and no
+    /// model server is set (`llm.endpoint` empty). Before GitHub #112 the
+    /// adapter wrote the proxy port as the base URL, and every prompt failed
+    /// after the start. Blocking for the agent the daemon starts itself; a
+    /// command of the caller (a shell) starts without a provider.
+    LLM_012 => "llm", "No model server set", "#llm_012",
+        "The agent sends its inference to the model server Humanitl sets (`agents.<id>.inference = \"model-server\"`), and none is set: `llm.endpoint` is empty and no saved server is chosen. The agent would start and fail at every prompt. Nothing started.",
+        "`ChangeSetting` on `llm.endpoint` with the address of a model server (or `humanitl llm server add NAME URL`); for an agent whose adapter knows its own providers (OpenCode) the sentence also names `agents.<id>.inference = \"own\"`, which sends the inference to those providers behind the cloud inference notice (`LLM_010`).";
+    /// `agents.<id>.inference` is `own` for an agent whose adapter declares
+    /// no own providers in Humanitl (`AgentAdapter::own_inference` is
+    /// `None`). Blocking: the start never falls back to the model server or
+    /// to an unbounded passthrough (GitHub #112).
+    LLM_013 => "llm", "Agent has no own-provider mode", "#llm_013",
+        "`agents.<id>.inference` is `own`, and Humanitl knows no own providers for this agent yet: it cannot name the hosts and paths a passthrough would need, so it would hold every request to the model. Nothing started.",
+        "`ChangeSetting` on `agents.<id>.inference` with `model-server`, and a model server in `llm.endpoint`.";
 }
 
 /// Sucht einen Code im Register.

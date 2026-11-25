@@ -49,6 +49,12 @@ help = "The agent a new session starts in the sandbox."
 details = "The agent the next session starts in the sandbox. Humanitl writes its configuration, endpoint, models and key for it."
 keywords = ["agent", "OpenCode", "pi", "Claude Code", "claude", "Codex", "codex", "Antigravity", "agy", "Gemini", "coding", "assistant"]
 
+[entries."agents.opencode.inference"]
+title = "OpenCode inference"
+help = "Model server: OpenCode uses only the model server Humanitl sets. OpenCode providers: OpenCode keeps its own providers, such as OpenCode Zen and its free models."
+details = "With OpenCode providers, Humanitl writes no provider and no model for OpenCode and passes only the inference paths of OpenCode Zen on opencode.ai without holding them. Prompts and the files the agent reads then go to opencode.ai; the first start asks once. A provider connected with /connect is held like any other request."
+keywords = ["OpenCode", "Zen", "free", "provider", "model", "inference", "cloud", "opencode.ai", "connect"]
+
 [entries."agents.depot"]
 title = "Agent depot"
 help = "Per agent: whether sessions start the program installed on this machine or the copy in the depot, which version the depot holds, and whether it is logged in. Install, update, log in and configure run in a sandbox of their own."
@@ -189,3 +195,7 @@ system = "System"
 [choices."egress.proxy_resolve"]
 proxy = "Proxy"
 humanitl = "Humanitl"
+
+[choices."agents.opencode.inference"]
+model-server = "Model server"
+own = "OpenCode providers"

@@ -89,23 +89,80 @@
 //! ein Projekt darüber hinaus darf, entscheidet HUM-043
 //! („`/work`-Härtung"). Neue Ziele, die eine Projekt-Konfiguration hinzufügt,
 //! gehen ohnehin durch den Proxy und werden gehalten.
+//!
+//! **Eigene Provider (GitHub #112).** Mit `agents.opencode.inference =
+//! "own"` schreibt der Adapter an keinen der drei Orte `provider` oder
+//! `model`, keinen Katalog, keinen Schlüssel und setzt [`ENV_MODELS_PATH`]
+//! nicht; alles andere bleibt (Berechtigungen, `share`, `autoupdate`, die
+//! Schalter der Umgebung, `tui.json`, Briefing und Skill). Ohne
+//! `llm.endpoint` im Modus `model-server` schreibt er dasselbe, statt wie
+//! bis dahin den Port des Proxys als `baseURL` einzutragen; der Agent, den
+//! der Daemon selbst startet, startet dann nicht (`LLM_012`,
+//! [`crate::agent::inference::finding`]). Die Durchreiche deckt genau
+//! [`ZEN_INFERENCE_PATHS`] und die Generate-Aufrufe unter
+//! [`ZEN_GOOGLE_MODELS`] auf [`ZEN_HOST`], nur mit `POST`
+//! ([`zen_inference`]); die Sperren `…0009` (`models.opencode.ai`) und
+//! `…000a` (`opencode.ai` `/share/**`) aus `rules/default.yaml` treffen
+//! keinen dieser Pfade. Gelesen am 2026-11-25, nicht in einem Lauf
+//! gemessen, denn auf diesem Rechner läuft kein `OpenCode` für diesen Zweck:
+//!
+//! - **Katalog.** `packages/core/src/models-dev.ts` von `OpenCode` 1.18.25
+//!   (Tag `v1.18.25` von `anomalyco/opencode`): `populate` nimmt zuerst die
+//!   Datei unter `OPENCODE_MODELS_PATH` oder den Cache unter
+//!   `Global.Path.cache` (in der Sitzung leer, `XDG_CACHE_HOME` liegt im
+//!   frischen Home), dann den eingebetteten Schnappschuss
+//!   `OPENCODE_MODELS_DEV`, erst danach wirkt
+//!   `OPENCODE_DISABLE_MODELS_FETCH` (leerer Katalog) oder der Abruf von
+//!   `models.opencode.ai/api.json`. `packages/opencode/script/build.ts` setzt
+//!   `OPENCODE_MODELS_DEV` beim Bau ohne Bedingung aus `script/generate.ts`,
+//!   das `models.dev/api.json` lädt. Mit [`ENV_DISABLE_MODELS_FETCH`] und
+//!   ohne [`ENV_MODELS_PATH`] listet `OpenCode` also den Katalog seines
+//!   Baus, mit dem Provider `opencode`; die Sperre `…0009` bleibt. Welche
+//!   freien Modelle dieser Schnappschuss nennt, hängt vom Tag des Baus ab.
+//! - **Pfade.** `models.dev/api.json` am 2026-11-25: Provider `opencode`
+//!   mit `api` `https://opencode.ai/inference/openai/v1` und
+//!   `@ai-sdk/openai-compatible`; je Modell `provider.api`
+//!   `…/inference/openai/v1` (`@ai-sdk/openai`, `@ai-sdk/mistral` oder
+//!   ohne Angabe), `…/inference/anthropic/v1` (`@ai-sdk/anthropic`) oder
+//!   `…/inference/google/v1beta` (`@ai-sdk/google`). Ältere Schnappschüsse
+//!   nennen `https://opencode.ai/zen/v1` (gemessen in `backlog/sprint-3.md`:
+//!   `POST opencode.ai /zen/v1/chat/completions`). Der Pfad hinter der Basis
+//!   ist der, den das AI-SDK-Paket anhängt: `chat/completions`, `responses`,
+//!   `messages`, `models/<modell>:generateContent` und
+//!   `:streamGenerateContent`. Der Lader des Providers `opencode` in
+//!   `packages/opencode/src/provider/provider.ts` (1.18.25) setzt ohne
+//!   Anmeldung `apiKey: "public"` und lässt nur Modelle mit Kosten 0 übrig;
+//!   Kopfzeilen dieser Anfragen schreibt der Proxy nicht um.
+//! - **Was offen bleibt.** Ob die installierte Fassung weitere Pfade unter
+//!   `/zen/v1` ruft (etwa Google-Modelle unter `/zen/v1/models/…`), ist nicht
+//!   gemessen; ein solcher Aufruf wird angehalten, nicht durchgereicht.
+//!
+//! Ein mit `/connect` verbundener anderer Anbieter bekommt keine
+//! Durchreiche; seine Anfragen werden gehalten, bis der Mensch eine Regel
+//! anlegt. Die Anmeldung liegt im Home der Sitzung und geht mit ihr. Das
+//! verwaltete Verzeichnis gewinnt weiter für `permission` und `share`; ein
+//! geklontes Repository kann mit `own` aber `model` und `provider` setzen.
+//! Jedes neue Ziel, das es dabei nennt, geht durch den Proxy und wird
+//! gehalten. Die Bestätigung der Cloud-Inferenz (`LLM_011`) für `opencode.ai`
+//! gibt nie Humanitl an Stelle des Menschen.
 
 use std::ffi::{OsStr, OsString};
 use std::path::{Path, PathBuf};
 
 use humanitl_config::llm_endpoint;
-use humanitl_config::{AskMode, HoldConfig, LlmConfig};
+use humanitl_config::{AgentInference, AskMode, HoldConfig, LlmConfig};
 use humanitl_core::diagnostics::codes::{AGENT_001, AGENT_002, AGENT_004, LLM_004};
-use humanitl_core::rule::Rule;
+use humanitl_core::rule::{PathPattern, Rule};
 use humanitl_core::shell::shell_path;
 use humanitl_core::{Diagnostic, FixAction, HostName, Method, Scheme, Severity};
 use url::Url;
 
 use crate::agent::briefing;
+use crate::agent::inference::OwnInference;
 use crate::agent::locate;
 use crate::agent::opencode_models::{
-    DEFAULT_RULES, PROVIDER_ID, effective_models, permission_json, render_config, render_models,
-    render_tui,
+    DEFAULT_RULES, PROVIDER_ID, effective_models, permission_json, render_config,
+    render_config_without_provider, render_models, render_tui,
 };
 use crate::agent::passthrough::{self, Route, Target};
 use crate::agent::skill;
@@ -1154,6 +1211,11 @@ impl AgentAdapter for OpenCodeAdapter {
             ("LANG", "C.UTF-8".to_owned()),
         ]
         .into_iter()
+        // Ohne Provider von Humanitl zeigt der Katalog nicht auf die Datei
+        // von Humanitl: `OpenCode` nimmt dann den Katalog, den es beim Bau
+        // eingebettet hat (Modulkommentar, GitHub #112). Das Abschalten des
+        // Abrufs bleibt.
+        .filter(|(key, _)| *key != ENV_MODELS_PATH || ctx.model_server().is_some())
         .map(|(key, value)| (key.to_owned(), value))
         .chain(
             ENV_NO_PROJECT_CONFIG
@@ -1182,24 +1244,41 @@ impl AgentAdapter for OpenCodeAdapter {
         // (HUM-387): `OpenCode` schickt eine Loopback-Adresse am Proxy vorbei,
         // einen Namen durch ihn, und der Proxy setzt den Namen auf genau
         // diesen Endpunkt um.
-        let base = ctx.llm.endpoint.as_ref().map_or_else(
-            || format!("http://127.0.0.1:{}/v1", ctx.proxy_port),
-            llm_endpoint::openai_base_url_via_alias,
-        );
-        let key_file = ctx.llm_key.is_some().then_some(API_KEY_DST);
-        let config = render_config(&base, &ctx.llm.models, key_file)?;
-        let models = render_models(&ctx.llm.models)?;
+        //
+        // Ohne Modellserver, mit `agents.opencode.inference = "own"` oder
+        // ohne `llm.endpoint`, schreibt Humanitl weder Provider noch Modell
+        // noch Katalog und keinen Schlüssel: `OpenCode` behält seine eigenen
+        // Provider (GitHub #112). Nie eine erfundene Adresse wie der Port des
+        // Proxys; ohne Endpunkt startet der Agent, den der Daemon selbst
+        // startet, gar nicht (`LLM_012`, `inference::finding`).
+        let server = ctx.model_server();
+        let key_file = server.and(ctx.llm_key.is_some().then_some(API_KEY_DST));
+        let (config, models) = match server {
+            Some(endpoint) => {
+                let base = llm_endpoint::openai_base_url_via_alias(endpoint);
+                (
+                    render_config(&base, &ctx.llm.models, key_file)?,
+                    Some(render_models(&ctx.llm.models)?),
+                )
+            }
+            None => (render_config_without_provider()?, None),
+        };
         let tui = render_tui()?;
 
         let config_home = ctx.config_home();
-        let mut files = vec![
-            SandboxFile::read_only(CONFIG_DST, config.clone().into_bytes()),
-            SandboxFile::read_only(MODELS_DST, models.into_bytes()),
+        let mut files = vec![SandboxFile::read_only(
+            CONFIG_DST,
+            config.clone().into_bytes(),
+        )];
+        if let Some(models) = models {
+            files.push(SandboxFile::read_only(MODELS_DST, models.into_bytes()));
+        }
+        files.extend([
             SandboxFile::read_only(config_dst(&config_home), config.clone().into_bytes()),
             SandboxFile::read_only(keep_dst(&config_home), Vec::new()),
             SandboxFile::read_only(MANAGED_CONFIG_DST, config.into_bytes()),
             SandboxFile::read_only(tui_dst(&config_home), tui.into_bytes()),
-        ];
+        ]);
         // Der Schlüssel als eigene Datei, nie in der Konfiguration selbst: Die
         // steht dreimal in der Sandbox und ist für den Menschen lesbar gedacht.
         if let Some(dst) = key_file {
@@ -1216,8 +1295,13 @@ impl AgentAdapter for OpenCodeAdapter {
             // einen Host, der gar nicht durchgereicht wird — und der Agent
             // wunderte sich, warum sein Modell in der Warteschlange steht.
             // Unter dem Namen, den der Agent in seiner `baseURL` sieht
-            // (HUM-387).
-            let llm_host = agent_authority(&ctx.llm);
+            // (HUM-387). Mit `own` ist es der Host von OpenCode Zen, der
+            // einzige, dessen Inferenz durchgereicht wird; ohne Modellserver
+            // und ohne `own` gibt es keinen (GitHub #112).
+            let llm_host = match ctx.inference {
+                AgentInference::ModelServer => server.and_then(|_| agent_authority(&ctx.llm)),
+                AgentInference::Own => Some(format!("{ZEN_HOST}:443")),
+            };
             let text = briefing::render_for_session(
                 ctx.language,
                 ctx.hold.ask_mode,
@@ -1253,15 +1337,96 @@ impl AgentAdapter for OpenCodeAdapter {
         passthrough_rules(llm)
     }
 
+    fn uses_model_server(&self) -> bool {
+        true
+    }
+
+    fn own_inference(&self) -> Option<OwnInference> {
+        zen_inference()
+    }
+
     fn preflight(&self, ctx: &AgentContext) -> Vec<Diagnostic> {
         let mut diagnostics = command_preflight(ctx, self);
-        diagnostics.extend(placeholder_model_finding(&ctx.llm));
+        // Only for a model of Humanitl: with the agent's own providers or
+        // without a model server Humanitl writes no model at all.
+        if ctx.model_server().is_some() {
+            diagnostics.extend(placeholder_model_finding(&ctx.llm));
+        }
         diagnostics
     }
 
     fn is_fullscreen_tui(&self) -> bool {
         true
     }
+}
+
+/// Der Host von `OpenCode Zen`, dem eingebauten Provider `opencode`
+/// (GitHub #112).
+pub const ZEN_HOST: &str = "opencode.ai";
+
+/// Die Basis von `OpenCode Zen`, wie sie die Dokumentation nennt; steht im
+/// Hinweis auf Cloud-Inferenz (`LLM_010`) und in dessen Bestätigung.
+pub const ZEN_BASE_URL: &str = "https://opencode.ai/zen/v1";
+
+/// Die Pfade auf [`ZEN_HOST`], an die `OpenCode` die Inferenz seiner
+/// eigenen Provider mit `POST` schickt (GitHub #112), jeder genau.
+///
+/// Abgeleitet, nicht in einem Lauf beobachtet (Modulkommentar,
+/// „Eigene Provider"): die Basis eines Modells aus dem Katalog (`api` des
+/// Providers `opencode` oder des Modells), dahinter der Pfad, den das
+/// AI-SDK-Paket des Modells anhängt: `@ai-sdk/openai-compatible` und
+/// `@ai-sdk/mistral` `chat/completions`, `@ai-sdk/openai` `responses`,
+/// `@ai-sdk/anthropic` `messages`.
+pub const ZEN_INFERENCE_PATHS: &[&str] = &[
+    "/zen/v1/chat/completions",
+    "/zen/v1/responses",
+    "/zen/v1/messages",
+    "/inference/openai/v1/chat/completions",
+    "/inference/openai/v1/responses",
+    "/inference/anthropic/v1/messages",
+];
+
+/// Der Baum, unter dem die Modelle von Google auf `OpenCode Zen` rechnen:
+/// `@ai-sdk/google` schickt `POST <basis>/models/<modell>:generateContent`
+/// und `:streamGenerateContent` an die Basis
+/// `https://opencode.ai/inference/google/v1beta` (GitHub #112).
+pub const ZEN_GOOGLE_MODELS: &str = "/inference/google/v1beta/models/";
+
+/// Die eigenen Provider von `OpenCode` in Humanitl: genau die Inferenz von
+/// `OpenCode Zen` ([`ZEN_INFERENCE_PATHS`], [`ZEN_GOOGLE_MODELS`]), nur mit
+/// `POST`, nie ein anderer Pfad von [`ZEN_HOST`] (GitHub #112). Die Sperren
+/// des mitgelieferten Regelsatzes auf `opencode.ai` (`/share/**`) und
+/// `models.opencode.ai` treffen keinen dieser Pfade und bleiben.
+#[must_use]
+pub fn zen_inference() -> Option<OwnInference> {
+    let endpoint = Url::parse(ZEN_BASE_URL).ok()?;
+    let host = HostName::parse(ZEN_HOST).ok()?;
+    let exact = ZEN_INFERENCE_PATHS
+        .iter()
+        .map(|path| humanitl_core::exact_path_entry(path))
+        .collect();
+    let google = PathPattern::Regex(format!(
+        "^{}[A-Za-z0-9._-]+:(?:generateContent|streamGenerateContent)$",
+        passthrough::regex_literal(ZEN_GOOGLE_MODELS)
+    ));
+    Some(OwnInference {
+        endpoint,
+        target: Target {
+            host,
+            scheme: Scheme::Https,
+            port: 443,
+            // Ein Anbieter im Netz, nie eine Adresse im eigenen Netz.
+            allow_private: false,
+            note: format!(
+                "Inference of OpenCode's own providers (OpenCode Zen) on {ZEN_HOST}, \
+                 agents.opencode.inference = own. Logged, never held."
+            ),
+        },
+        routes: vec![
+            Route::new(&[Method::POST], exact),
+            Route::new(&[Method::POST], vec![ZEN_GOOGLE_MODELS.to_owned()]).with_pattern(google),
+        ],
+    })
 }
 
 /// The finding about an empty `llm.models` (`LLM_004`), shared by every

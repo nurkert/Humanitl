@@ -975,6 +975,26 @@ gezeigt wurde; ein Client, der den Hinweis
 überspringt, scheitert sichtbar statt still zu starten. `humanitl sandbox run`, das im eigenen
 Prozess startet, fragt genauso. Bestätigt, blockiert der Hinweis nichts.
 
+**Die eigenen Provider eines Agenten (GitHub #112).** `agents.<id>.inference` entscheidet je
+Agent, wohin seine Inferenz geht. `model-server`, die Vorgabe, schickt sie nur an den Modellserver,
+den Humanitl einstellt; ein Agent, der nur so ein Modell erreicht (OpenCode, pi), startet ohne ihn
+nicht (`LLM_012`), statt gegen eine Adresse zu starten, die ins Leere führt. `own` ist ein Opt-in,
+im Projekt-Profil gesperrt, für einen Adapter, der die eigenen Provider seines Agenten erklärt:
+heute nur OpenCode, dessen eingebauter Provider OpenCode Zen (auch mit seinen freien Modellen) nur
+dem eigenen Client von OpenCode antwortet. Mit `own` schreibt Humanitl dem Agenten weder Provider
+noch Modell, und die Durchreiche deckt genau die Inferenz-Pfade, die der Adapter erklärt, nur mit
+`POST`: für OpenCode `/zen/v1/{chat/completions,responses,messages}`,
+`/inference/openai/v1/{chat/completions,responses}`, `/inference/anthropic/v1/messages` und die
+Generate-Aufrufe unter `/inference/google/v1beta/models/` auf `opencode.ai`, nie den ganzen Host;
+die Sperren auf `opencode.ai/share/**` und `models.opencode.ai` bleiben. Prompts, die Dateien, die
+der Agent liest, und die Ausgabe seiner Werkzeuge gehen dann an `opencode.ai`; der Hinweis auf
+Cloud-Inferenz (`LLM_010`) gilt, und der erste Start fragt nach der Bestätigung (`LLM_011`), die
+niemand an Stelle des Menschen gibt. Jeder andere Anbieter, den der Agent selbst verbindet
+(`/connect` von OpenCode), hat keine Durchreiche, und seine Anfragen werden wie jede andere
+angehalten. Der Agent bekommt in diesem Modus keinen Schlüssel von Humanitl; dieser Schlüssel
+bleibt an jedem Ziel ein Fund. Ein Adapter ohne erklärte eigene Provider lehnt `own` mit `LLM_013`
+ab.
+
 #### Der Zugangsschlüssel des Modells (HUM-140)
 
 *Wo er liegt.* Im Schlüsselbund des Systems über den Secret Service (`gnome-keyring`, `kwallet`),

@@ -257,6 +257,41 @@ const String fakeSettingsCatalogJson = r'''
         "title": "Agent-Depot"
       },
       {
+        "category": "agents",
+        "choices": [
+          {
+            "title": "Modellserver",
+            "value": "model-server"
+          },
+          {
+            "title": "Provider von OpenCode",
+            "value": "own"
+          }
+        ],
+        "client": "",
+        "control": "choice",
+        "details": "Mit den Providern von OpenCode schreibt Humanitl OpenCode weder Provider noch Modell und reicht nur die Inferenz-Pfade von OpenCode Zen auf opencode.ai ungehalten durch. Prompts und die Dateien, die der Agent liest, gehen dann an opencode.ai; der erste Start fragt einmal. Ein mit /connect verbundener Anbieter wird wie jede andere Anfrage angehalten.",
+        "help": "Modellserver: OpenCode nutzt nur den Modellserver, den Humanitl einstellt. Provider von OpenCode: OpenCode behält seine eigenen Provider, etwa OpenCode Zen mit seinen freien Modellen.",
+        "id": "agents.opencode.inference",
+        "inProjectChoice": false,
+        "isKey": true,
+        "keywords": [
+          "OpenCode",
+          "Zen",
+          "kostenlos",
+          "Provider",
+          "Modell",
+          "Inferenz",
+          "Cloud",
+          "opencode.ai",
+          "connect"
+        ],
+        "nextSession": true,
+        "order": 1,
+        "tier": "advanced",
+        "title": "Inferenz von OpenCode"
+      },
+      {
         "category": "sandbox",
         "choices": [],
         "client": "",
@@ -1034,6 +1069,41 @@ const String fakeSettingsCatalogJson = r'''
         "order": 0,
         "tier": "basic",
         "title": "Agent depot"
+      },
+      {
+        "category": "agents",
+        "choices": [
+          {
+            "title": "Model server",
+            "value": "model-server"
+          },
+          {
+            "title": "OpenCode providers",
+            "value": "own"
+          }
+        ],
+        "client": "",
+        "control": "choice",
+        "details": "With OpenCode providers, Humanitl writes no provider and no model for OpenCode and passes only the inference paths of OpenCode Zen on opencode.ai without holding them. Prompts and the files the agent reads then go to opencode.ai; the first start asks once. A provider connected with /connect is held like any other request.",
+        "help": "Model server: OpenCode uses only the model server Humanitl sets. OpenCode providers: OpenCode keeps its own providers, such as OpenCode Zen and its free models.",
+        "id": "agents.opencode.inference",
+        "inProjectChoice": false,
+        "isKey": true,
+        "keywords": [
+          "OpenCode",
+          "Zen",
+          "free",
+          "provider",
+          "model",
+          "inference",
+          "cloud",
+          "opencode.ai",
+          "connect"
+        ],
+        "nextSession": true,
+        "order": 1,
+        "tier": "advanced",
+        "title": "OpenCode inference"
       },
       {
         "category": "sandbox",

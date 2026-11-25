@@ -1356,6 +1356,7 @@ fn agent_contribution(
         .with_hold(config.hold.for_agent(&config.egress))
         .with_briefing(config.agent.briefing.clone())
         .with_pi_web_access(config.agent.pi.web_access)
+        .with_inference(config.agents.inference(&config.agent.adapter))
         // Das Heimatverzeichnis, das der Agent tatsächlich vorfindet, und das
         // Konfigurationsverzeichnis dazu.
         //
@@ -1397,7 +1398,9 @@ fn agent_contribution(
     };
 
     let preview = matches!(wiring, Wiring::Preview);
-    for diagnostic in adapter.preflight(&agent_ctx) {
+    // The adapter's own checks and where its inference goes (`LLM_012`,
+    // `LLM_013`, GitHub #112) in one list.
+    for diagnostic in humanitl_sandbox::agent::inference::preflight(adapter, &agent_ctx) {
         if diagnostic.severity == Severity::Blocking && !preview {
             return Err(Failure::new(diagnostic));
         }

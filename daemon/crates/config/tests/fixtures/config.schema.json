@@ -101,23 +101,28 @@
       "default": {
         "agy": {
           "credential_writeback": true,
+          "inference": "model-server",
           "source": null
         },
         "claude": {
           "credential_writeback": true,
+          "inference": "model-server",
           "source": null
         },
         "codex": {
           "credential_writeback": true,
+          "inference": "model-server",
           "source": null
         },
         "encrypt_credentials": false,
         "opencode": {
           "credential_writeback": true,
+          "inference": "model-server",
           "source": null
         },
         "pi": {
           "credential_writeback": true,
+          "inference": "model-server",
           "source": null
         },
         "source": "host"
@@ -128,6 +133,7 @@
           "additionalProperties": false,
           "default": {
             "credential_writeback": true,
+            "inference": "model-server",
             "source": null
           },
           "description": "Die Antigravity CLI (`agy`).",
@@ -139,6 +145,24 @@
               "x-project-scope": "denied",
               "x-tier": "expert"
             },
+            "inference": {
+              "default": "model-server",
+              "description": "Wohin dieser Agent seine Inferenz schickt (GitHub #112). `model-server` (Vorgabe) nimmt nur den Modellserver, den Humanitl einstellt (`llm.endpoint`); ein Agent, der nur so ein Modell erreicht (`OpenCode`, pi), startet ohne ihn nicht (`LLM_012`). `own` lässt den Agenten seine eigenen Provider nutzen, bei `OpenCode` etwa dessen Provider `opencode` (`OpenCode Zen`) mit seinen freien Modellen: Humanitl schreibt ihm dann weder Provider noch Modell und reicht nur die Inferenz-Pfade dieser Provider ungehalten durch. Prompts und gelesene Dateien gehen dann an den Anbieter, erst nach dem Hinweis auf Cloud-Inferenz (`LLM_010`) und einer Bestätigung (`LLM_011`). Jeder andere Anbieter, den der Agent selbst anspricht, wird wie jede andere Anfrage gehalten. Ein Agent ohne diesen Modus in Humanitl startet mit `own` nicht (`LLM_013`). Im Projekt-Profil gesperrt: wohin Prompts und Dateien gehen, entscheidet der Nutzer.",
+              "oneOf": [
+                {
+                  "const": "model-server",
+                  "description": "Nur an den Modellserver, den Humanitl einstellt (`llm.endpoint`).",
+                  "type": "string"
+                },
+                {
+                  "const": "own",
+                  "description": "An die eigenen Provider des Agenten, soweit sein Adapter sie in\nHumanitl kennt; Humanitl schreibt ihm weder Provider noch Modell.",
+                  "type": "string"
+                }
+              ],
+              "x-project-scope": "denied",
+              "x-tier": "advanced"
+            },
             "source": {
               "default": null,
               "description": "Woher dieser Agent kommt, `host` oder `depot`; ungesetzt gilt `agents.source`. Zurück auf `host` behält das Depot, bis `humanitl agents remove` es entfernt. Im Projekt-Profil gesperrt; die Projektwahl des Erststart-Bildschirms darf sie je Projekt setzen, eine Sperre der Firmenvorgabe nicht.",
@@ -163,6 +187,7 @@
           "additionalProperties": false,
           "default": {
             "credential_writeback": true,
+            "inference": "model-server",
             "source": null
           },
           "description": "Claude Code.",
@@ -173,6 +198,24 @@
               "type": "boolean",
               "x-project-scope": "denied",
               "x-tier": "expert"
+            },
+            "inference": {
+              "default": "model-server",
+              "description": "Wohin dieser Agent seine Inferenz schickt (GitHub #112). `model-server` (Vorgabe) nimmt nur den Modellserver, den Humanitl einstellt (`llm.endpoint`); ein Agent, der nur so ein Modell erreicht (`OpenCode`, pi), startet ohne ihn nicht (`LLM_012`). `own` lässt den Agenten seine eigenen Provider nutzen, bei `OpenCode` etwa dessen Provider `opencode` (`OpenCode Zen`) mit seinen freien Modellen: Humanitl schreibt ihm dann weder Provider noch Modell und reicht nur die Inferenz-Pfade dieser Provider ungehalten durch. Prompts und gelesene Dateien gehen dann an den Anbieter, erst nach dem Hinweis auf Cloud-Inferenz (`LLM_010`) und einer Bestätigung (`LLM_011`). Jeder andere Anbieter, den der Agent selbst anspricht, wird wie jede andere Anfrage gehalten. Ein Agent ohne diesen Modus in Humanitl startet mit `own` nicht (`LLM_013`). Im Projekt-Profil gesperrt: wohin Prompts und Dateien gehen, entscheidet der Nutzer.",
+              "oneOf": [
+                {
+                  "const": "model-server",
+                  "description": "Nur an den Modellserver, den Humanitl einstellt (`llm.endpoint`).",
+                  "type": "string"
+                },
+                {
+                  "const": "own",
+                  "description": "An die eigenen Provider des Agenten, soweit sein Adapter sie in\nHumanitl kennt; Humanitl schreibt ihm weder Provider noch Modell.",
+                  "type": "string"
+                }
+              ],
+              "x-project-scope": "denied",
+              "x-tier": "advanced"
             },
             "source": {
               "default": null,
@@ -198,6 +241,7 @@
           "additionalProperties": false,
           "default": {
             "credential_writeback": true,
+            "inference": "model-server",
             "source": null
           },
           "description": "Codex.",
@@ -208,6 +252,24 @@
               "type": "boolean",
               "x-project-scope": "denied",
               "x-tier": "expert"
+            },
+            "inference": {
+              "default": "model-server",
+              "description": "Wohin dieser Agent seine Inferenz schickt (GitHub #112). `model-server` (Vorgabe) nimmt nur den Modellserver, den Humanitl einstellt (`llm.endpoint`); ein Agent, der nur so ein Modell erreicht (`OpenCode`, pi), startet ohne ihn nicht (`LLM_012`). `own` lässt den Agenten seine eigenen Provider nutzen, bei `OpenCode` etwa dessen Provider `opencode` (`OpenCode Zen`) mit seinen freien Modellen: Humanitl schreibt ihm dann weder Provider noch Modell und reicht nur die Inferenz-Pfade dieser Provider ungehalten durch. Prompts und gelesene Dateien gehen dann an den Anbieter, erst nach dem Hinweis auf Cloud-Inferenz (`LLM_010`) und einer Bestätigung (`LLM_011`). Jeder andere Anbieter, den der Agent selbst anspricht, wird wie jede andere Anfrage gehalten. Ein Agent ohne diesen Modus in Humanitl startet mit `own` nicht (`LLM_013`). Im Projekt-Profil gesperrt: wohin Prompts und Dateien gehen, entscheidet der Nutzer.",
+              "oneOf": [
+                {
+                  "const": "model-server",
+                  "description": "Nur an den Modellserver, den Humanitl einstellt (`llm.endpoint`).",
+                  "type": "string"
+                },
+                {
+                  "const": "own",
+                  "description": "An die eigenen Provider des Agenten, soweit sein Adapter sie in\nHumanitl kennt; Humanitl schreibt ihm weder Provider noch Modell.",
+                  "type": "string"
+                }
+              ],
+              "x-project-scope": "denied",
+              "x-tier": "advanced"
             },
             "source": {
               "default": null,
@@ -240,6 +302,7 @@
           "additionalProperties": false,
           "default": {
             "credential_writeback": true,
+            "inference": "model-server",
             "source": null
           },
           "description": "`OpenCode`.",
@@ -250,6 +313,24 @@
               "type": "boolean",
               "x-project-scope": "denied",
               "x-tier": "expert"
+            },
+            "inference": {
+              "default": "model-server",
+              "description": "Wohin dieser Agent seine Inferenz schickt (GitHub #112). `model-server` (Vorgabe) nimmt nur den Modellserver, den Humanitl einstellt (`llm.endpoint`); ein Agent, der nur so ein Modell erreicht (`OpenCode`, pi), startet ohne ihn nicht (`LLM_012`). `own` lässt den Agenten seine eigenen Provider nutzen, bei `OpenCode` etwa dessen Provider `opencode` (`OpenCode Zen`) mit seinen freien Modellen: Humanitl schreibt ihm dann weder Provider noch Modell und reicht nur die Inferenz-Pfade dieser Provider ungehalten durch. Prompts und gelesene Dateien gehen dann an den Anbieter, erst nach dem Hinweis auf Cloud-Inferenz (`LLM_010`) und einer Bestätigung (`LLM_011`). Jeder andere Anbieter, den der Agent selbst anspricht, wird wie jede andere Anfrage gehalten. Ein Agent ohne diesen Modus in Humanitl startet mit `own` nicht (`LLM_013`). Im Projekt-Profil gesperrt: wohin Prompts und Dateien gehen, entscheidet der Nutzer.",
+              "oneOf": [
+                {
+                  "const": "model-server",
+                  "description": "Nur an den Modellserver, den Humanitl einstellt (`llm.endpoint`).",
+                  "type": "string"
+                },
+                {
+                  "const": "own",
+                  "description": "An die eigenen Provider des Agenten, soweit sein Adapter sie in\nHumanitl kennt; Humanitl schreibt ihm weder Provider noch Modell.",
+                  "type": "string"
+                }
+              ],
+              "x-project-scope": "denied",
+              "x-tier": "advanced"
             },
             "source": {
               "default": null,
@@ -275,6 +356,7 @@
           "additionalProperties": false,
           "default": {
             "credential_writeback": true,
+            "inference": "model-server",
             "source": null
           },
           "description": "pi.",
@@ -285,6 +367,24 @@
               "type": "boolean",
               "x-project-scope": "denied",
               "x-tier": "expert"
+            },
+            "inference": {
+              "default": "model-server",
+              "description": "Wohin dieser Agent seine Inferenz schickt (GitHub #112). `model-server` (Vorgabe) nimmt nur den Modellserver, den Humanitl einstellt (`llm.endpoint`); ein Agent, der nur so ein Modell erreicht (`OpenCode`, pi), startet ohne ihn nicht (`LLM_012`). `own` lässt den Agenten seine eigenen Provider nutzen, bei `OpenCode` etwa dessen Provider `opencode` (`OpenCode Zen`) mit seinen freien Modellen: Humanitl schreibt ihm dann weder Provider noch Modell und reicht nur die Inferenz-Pfade dieser Provider ungehalten durch. Prompts und gelesene Dateien gehen dann an den Anbieter, erst nach dem Hinweis auf Cloud-Inferenz (`LLM_010`) und einer Bestätigung (`LLM_011`). Jeder andere Anbieter, den der Agent selbst anspricht, wird wie jede andere Anfrage gehalten. Ein Agent ohne diesen Modus in Humanitl startet mit `own` nicht (`LLM_013`). Im Projekt-Profil gesperrt: wohin Prompts und Dateien gehen, entscheidet der Nutzer.",
+              "oneOf": [
+                {
+                  "const": "model-server",
+                  "description": "Nur an den Modellserver, den Humanitl einstellt (`llm.endpoint`).",
+                  "type": "string"
+                },
+                {
+                  "const": "own",
+                  "description": "An die eigenen Provider des Agenten, soweit sein Adapter sie in\nHumanitl kennt; Humanitl schreibt ihm weder Provider noch Modell.",
+                  "type": "string"
+                }
+              ],
+              "x-project-scope": "denied",
+              "x-tier": "advanced"
             },
             "source": {
               "default": null,

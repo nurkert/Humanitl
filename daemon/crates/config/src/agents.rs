@@ -148,6 +148,43 @@ pub struct AgentSourceSettings {
     /// Ob eine Sitzung die geprüfte Zugangsdatei des Agenten ins Depot zurückschreiben darf, damit eine erneuerte Anmeldung die Sitzung überdauert. Der Wächter lässt nur diese eine Datei durch, im Format des Adapters, nie älter und nie von einem anderen Konto (HUM-520); mit `false` bleibt nichts einer Sitzung im Depot. Im Projekt-Profil gesperrt.
     #[schemars(extend("x-tier" = "expert", "x-project-scope" = "denied"))]
     pub credential_writeback: bool,
+    /// Wohin dieser Agent seine Inferenz schickt (GitHub #112). `model-server` (Vorgabe) nimmt nur den Modellserver, den Humanitl einstellt (`llm.endpoint`); ein Agent, der nur so ein Modell erreicht (`OpenCode`, pi), startet ohne ihn nicht (`LLM_012`). `own` lässt den Agenten seine eigenen Provider nutzen, bei `OpenCode` etwa dessen Provider `opencode` (`OpenCode Zen`) mit seinen freien Modellen: Humanitl schreibt ihm dann weder Provider noch Modell und reicht nur die Inferenz-Pfade dieser Provider ungehalten durch. Prompts und gelesene Dateien gehen dann an den Anbieter, erst nach dem Hinweis auf Cloud-Inferenz (`LLM_010`) und einer Bestätigung (`LLM_011`). Jeder andere Anbieter, den der Agent selbst anspricht, wird wie jede andere Anfrage gehalten. Ein Agent ohne diesen Modus in Humanitl startet mit `own` nicht (`LLM_013`). Im Projekt-Profil gesperrt: wohin Prompts und Dateien gehen, entscheidet der Nutzer.
+    #[schemars(extend("x-tier" = "advanced", "x-project-scope" = "denied"))]
+    pub inference: AgentInference,
+}
+
+/// Wohin ein Agent seine Inferenz schickt (`agents.<id>.inference`,
+/// GitHub #112).
+#[derive(Debug, Clone, Copy, Default, PartialEq, Eq, Hash, Serialize, Deserialize, JsonSchema)]
+#[serde(rename_all = "kebab-case")]
+pub enum AgentInference {
+    /// Nur an den Modellserver, den Humanitl einstellt (`llm.endpoint`).
+    #[default]
+    ModelServer,
+    /// An die eigenen Provider des Agenten, soweit sein Adapter sie in
+    /// Humanitl kennt; Humanitl schreibt ihm weder Provider noch Modell.
+    Own,
+}
+
+impl AgentInference {
+    /// Der Name, wie ihn `config.toml` und `humanitl config set` schreiben.
+    #[must_use]
+    pub const fn as_str(self) -> &'static str {
+        match self {
+            Self::ModelServer => "model-server",
+            Self::Own => "own",
+        }
+    }
+}
+
+impl AgentsConfig {
+    /// `agents.<id>.inference` eines Agenten; ein unbekannter Agent nimmt
+    /// die Vorgabe `model-server` (GitHub #112).
+    #[must_use]
+    pub fn inference(&self, agent: &str) -> AgentInference {
+        self.settings(agent)
+            .map_or(AgentInference::default(), |settings| settings.inference)
+    }
 }
 
 /// Das Schema von `agents.<id>.source`: eine Zeichenkette aus der Aufzählung
@@ -165,6 +202,7 @@ impl Default for AgentSourceSettings {
         Self {
             source: None,
             credential_writeback: true,
+            inference: AgentInference::default(),
         }
     }
 }

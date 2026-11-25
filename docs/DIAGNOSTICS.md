@@ -1092,6 +1092,22 @@ Cloud inference not confirmed
 
 **Fix.** `CopyCommand` with `humanitl run --yes`, which confirms and starts; in the app the start asks once. A client of its own shows the notice and sets one of the two fields.
 
+#### LLM_012
+
+No model server set
+
+**Auslöser.** The agent sends its inference to the model server Humanitl sets (`agents.<id>.inference = "model-server"`), and none is set: `llm.endpoint` is empty and no saved server is chosen. The agent would start and fail at every prompt. Nothing started.
+
+**Fix.** `ChangeSetting` on `llm.endpoint` with the address of a model server (or `humanitl llm server add NAME URL`); for an agent whose adapter knows its own providers (OpenCode) the sentence also names `agents.<id>.inference = "own"`, which sends the inference to those providers behind the cloud inference notice (`LLM_010`).
+
+#### LLM_013
+
+Agent has no own-provider mode
+
+**Auslöser.** `agents.<id>.inference` is `own`, and Humanitl knows no own providers for this agent yet: it cannot name the hosts and paths a passthrough would need, so it would hold every request to the model. Nothing started.
+
+**Fix.** `ChangeSetting` on `agents.<id>.inference` with `model-server`, and a model server in `llm.endpoint`.
+
 ### Bereich rules
 
 #### RULES_001

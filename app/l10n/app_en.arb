@@ -4788,5 +4788,13 @@
   "firstStartFieldSource": "Source",
   "@firstStartFieldSource": {"description": "First-start screen (#15): label of the field that chooses where the program of the chosen agent comes from, the host or the agent depot."},
   "interceptUnicodeHost": "Unicode form: {host}",
-  "@interceptUnicodeHost": {"description": "Decisions view (#103): small line under the URL of the request card when the host has an internationalised name. The URL above always shows the A-label (Punycode); this line names the Unicode form beside it and never replaces it.", "placeholders": {"host": {"type": "String", "example": "münchen.de"}}}
+  "@interceptUnicodeHost": {"description": "Decisions view (#103): small line under the URL of the request card when the host has an internationalised name. The URL above always shows the A-label (Punycode); this line names the Unicode form beside it and never replaces it.", "placeholders": {"host": {"type": "String", "example": "münchen.de"}}},
+  "diagLLM012Title": "No model server set",
+  "@diagLLM012Title": {"description": "Title of the diagnostic LLM_012 (docs/DIAGNOSTICS.md, #112): an agent that reaches a model only through the model server Humanitl sets (OpenCode, pi) would start without any model server, so the start was refused."},
+  "diagLLM012Why": "The agent sends its inference to the model server Humanitl sets, and none is set. It would fail at every prompt, so nothing started.",
+  "@diagLLM012Why": {"description": "Generic cause of LLM_012. Stands in the cause slot only when the diagnostic carries no sentence of the daemon's own (HUM-052)."},
+  "diagLLM013Title": "Agent has no own-provider mode",
+  "@diagLLM013Title": {"description": "Title of the diagnostic LLM_013 (docs/DIAGNOSTICS.md, #112): agents.<id>.inference is own, and Humanitl knows no own providers for this agent, so the start was refused."},
+  "diagLLM013Why": "This agent is set to use its own providers, and Humanitl does not know them for this agent yet. Every request to the model would be held, so nothing started.",
+  "@diagLLM013Why": {"description": "Generic cause of LLM_013. Stands in the cause slot only when the diagnostic carries no sentence of the daemon's own (HUM-052)."}
 }

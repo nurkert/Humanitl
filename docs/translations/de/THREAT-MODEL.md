@@ -263,6 +263,19 @@ Herkunft als lokal. *Restrisiko:* Der Hinweis informiert und blockiert nichts; w
 nimmt hin, dass der Anbieter sieht, was der Agent liest. Ein öffentlicher Name, der ins eigene Netz
 zeigt, gilt als außerhalb, bis er markiert ist.
 
+Die eigenen Provider eines Agenten (`agents.<id>.inference = "own"`, GitHub #112) sind ein Opt-in
+des Nutzers, im Projekt-Profil gesperrt, und gibt es nur für einen Adapter, der sie erklärt (heute
+OpenCode mit OpenCode Zen auf `opencode.ai`). Die Durchreiche deckt dann nur die erklärten
+Inferenz-Pfade mit `POST`, nie den Host; `opencode.ai/share/**` und `models.opencode.ai` bleiben
+gesperrt, und OpenCode greift auf den Modellkatalog zurück, der in sein Programm eingebaut ist,
+statt einen zu holen (aus dem Quelltext von OpenCode 1.18.25 gelesen, in einem Lauf noch nicht
+beobachtet; fehlt dieser Katalog, bleibt die Modellliste leer, und nichts wird durchgereicht). Hinweis und Bestätigung gelten unverändert. *Restrisiko:* Wer `own` wählt,
+nimmt hin, dass OpenCode Zen sieht, was der Agent liest; die `opencode.json` eines geklonten
+Repositorys kann dann `model` und `provider` der Sitzung setzen (nur `permission` und `share` der
+verwalteten Konfiguration gewinnen weiter), aber jedes Ziel außerhalb der erklärten Pfade geht durch
+den Proxy und wird angehalten. Ohne Modellserver und ohne `own` starten OpenCode und pi nicht
+(`LLM_012`).
+
 ### K-03 Das Socket-Verzeichnis des Proxys
 
 Bände Humanitl das Verzeichnis ein, das den Socket enthält, wäre jede Datei, die dort später
@@ -1371,6 +1384,7 @@ Gegen diese Angreifer gibt es keine Abwehr, und Humanitl behauptet das auch nich
 | 2026-11-23 | K-02: Ein mitgeliefertes Profil, das das Projekt-Profil mit `name` wählt, lädt seinen eingebetteten Text, Schlüssel und Regeln; die eigene Datei des Nutzers gleichen Namens gilt nur, wenn der Mensch das Profil wählt (`--profile`, das Profil der Session) | #90 |
 | 2026-11-23 | K-02: Für ein Profil, das das Projekt-Profil mit `name` wählt, gelten die Grenzen des Projekt-Profils: Schlüssel mit `x-project-scope = "denied"` und jede Regel außer `block` und `ask` werden übergangen, je mit einer Warnung (`CONFIG_003`); dasselbe Profil, vom Menschen gewählt, gilt ganz | #95 |
 | 2026-11-23 | Harte Sperre: Ein überlappender Fund entfernt nie einen durch Prüfsumme bestätigten Fund; ein eigener Begriff (`findings.user_terms`) oder ein bekanntes Secret über denselben Bytes steht neben ihm | #96 |
+| 2026-11-25 | K-02: `agents.<id>.inference`; ohne Modellserver starten OpenCode und pi nicht (`LLM_012`); `own` (Opt-in, im Projekt-Profil gesperrt, nur für einen Adapter, der eigene Provider erklärt, sonst `LLM_013`) lässt OpenCode OpenCode Zen nutzen, mit einer Durchreiche nur auf dessen Inferenz-Pfaden, hinter Hinweis und Bestätigung | GitHub #112 |
 
 Jede sicherheitsrelevante Änderung am Shim, an der Mount-Erlaubnisliste, am Filter oder an der
 Durchleitung bekommt hier eine Zeile. Schwachstellen werden gemeldet, wie in

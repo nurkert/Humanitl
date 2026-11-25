@@ -92,8 +92,8 @@ pub use crate::validate::{
 };
 
 pub use crate::agents::{
-    AgentSource, AgentSourceSettings, AgentsConfig, EffectiveSource, LockScope, Locked, SourceLock,
-    SourceOrigin, effective_source,
+    AgentInference, AgentSource, AgentSourceSettings, AgentsConfig, EffectiveSource, LockScope,
+    Locked, SourceLock, SourceOrigin, effective_source,
 };
 pub use crate::alias::{ALIASES, Alias, Retired, RetiredShape};
 pub use crate::env::{Env, LOADER_ENV_KEYS, is_loader_key};

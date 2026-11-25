@@ -921,6 +921,24 @@ provider or says the notice for exactly them was shown without a terminal, so a 
 silently. `humanitl sandbox run`, which starts in its own process, asks the same way. Once
 confirmed, the notice blocks nothing.
 
+**An agent's own providers (GitHub #112).** `agents.<id>.inference` decides per agent where its
+inference goes. `model-server`, the default, sends it only to the model server Humanitl sets; an
+agent that reaches a model only that way (OpenCode, pi) does not start without one (`LLM_012`)
+instead of starting against an address that leads nowhere. `own` is an opt-in, locked in the
+project profile, for an adapter that declares its agent's own providers: today only OpenCode, whose
+built-in provider OpenCode Zen (including its free models) answers only OpenCode's own client.
+With `own`, Humanitl writes no provider and no model for the agent, and the passthrough covers
+exactly the inference paths the adapter declares, with `POST` only: for OpenCode
+`/zen/v1/{chat/completions,responses,messages}`, `/inference/openai/v1/{chat/completions,responses}`,
+`/inference/anthropic/v1/messages` and the generate calls under `/inference/google/v1beta/models/`
+on `opencode.ai`, never the whole host; the blocks on `opencode.ai/share/**` and
+`models.opencode.ai` stay. Prompts, the files the agent reads and the output of its tools then go
+to `opencode.ai`, so the cloud notice (`LLM_010`) applies and the first start asks for the
+confirmation (`LLM_011`); nothing confirms it on the person's behalf. Any other provider the agent
+connects itself (OpenCode's `/connect`) has no passthrough, and its requests are held like any
+other. The agent gets no key of Humanitl in this mode, so that key stays a finding at every
+target. An adapter without declared own providers refuses `own` with `LLM_013`.
+
 #### The reserved name `llm.humanitl.internal` (HUM-387)
 
 *Why it exists.* OpenCode 2.2.5 sends its model requests to a loopback `baseURL`

@@ -33,6 +33,7 @@ pub mod claude;
 pub mod cloud;
 pub mod codex;
 pub mod depot;
+pub mod inference;
 pub mod locate;
 pub mod opencode;
 pub mod opencode_models;
@@ -45,7 +46,9 @@ use std::ffi::{OsStr, OsString};
 use std::path::{Path, PathBuf};
 
 use humanitl_config::secret::ApiKey;
-use humanitl_config::{AgentBriefing, HoldConfig, Language, LlmConfig, PiWebAccess};
+use humanitl_config::{
+    AgentBriefing, AgentInference, HoldConfig, Language, LlmConfig, PiWebAccess,
+};
 use humanitl_core::rule::Rule;
 use humanitl_core::{Diagnostic, SessionId};
 
@@ -233,6 +236,10 @@ pub struct AgentContext {
     /// Whether the pi adapter loads the extension `pi-web-access`
     /// (`agent.pi.web_access`, HUM-309). Other adapters ignore it.
     pub pi_web_access: PiWebAccess,
+    /// Where the agent sends its inference (`agents.<id>.inference` of the
+    /// adapter of this session, GitHub #112). Read it through
+    /// [`AgentContext::model_server`].
+    pub inference: AgentInference,
 }
 
 /// Der Zugangsschlüssel des Modells, so weit ihn ein Adapter sehen darf
@@ -301,6 +308,7 @@ impl AgentContext {
             host_home: None,
             trust: None,
             pi_web_access: PiWebAccess::default(),
+            inference: AgentInference::default(),
         }
     }
 
@@ -388,6 +396,32 @@ impl AgentContext {
     pub const fn with_pi_web_access(mut self, mode: PiWebAccess) -> Self {
         self.pi_web_access = mode;
         self
+    }
+
+    /// Sets where the agent sends its inference (`agents.<id>.inference`,
+    /// GitHub #112).
+    #[must_use]
+    pub const fn with_inference(mut self, mode: AgentInference) -> Self {
+        self.inference = mode;
+        self
+    }
+
+    /// The model server the adapter writes into the agent's configuration:
+    /// `llm.endpoint`, and only with `agents.<id>.inference = "model-server"`
+    /// (GitHub #112).
+    ///
+    /// `None` means: write no provider and no model of Humanitl. That is the
+    /// case with `own` (the agent keeps its own providers) and without an
+    /// endpoint, where the agent the daemon starts itself is refused with
+    /// `LLM_012` and a shell of the caller starts without a provider. Never
+    /// a made-up address such as the proxy port: a provider that points
+    /// nowhere starts and fails at every prompt.
+    #[must_use]
+    pub fn model_server(&self) -> Option<&url::Url> {
+        match self.inference {
+            AgentInference::ModelServer => self.llm.endpoint.as_ref(),
+            AgentInference::Own => None,
+        }
     }
 
     /// Setzt das Heimatverzeichnis des Agenten in der Sandbox.
@@ -784,6 +818,41 @@ pub trait AgentAdapter: Send + Sync {
     /// diesen. `None` heißt: kein Endpunkt, also kein Hinweis.
     fn inference_endpoint(&self, llm: &LlmConfig) -> Option<url::Url> {
         llm.endpoint.clone()
+    }
+
+    /// Whether the agent reaches a model only through the model server
+    /// Humanitl sets, `llm.endpoint` (GitHub #112).
+    ///
+    /// True for an adapter that writes `llm.endpoint` into the agent's
+    /// provider configuration and has no other route (`OpenCode`, pi). With
+    /// `agents.<id>.inference = "model-server"` and no endpoint, such an
+    /// agent does not start (`LLM_012`, [`inference::finding`]) instead of
+    /// starting against nothing. False, the default, for an adapter whose
+    /// agent has a vendor of its own without `llm.endpoint` (Claude Code,
+    /// Codex, `agy`; see [`AgentAdapter::inference_endpoint`]).
+    fn uses_model_server(&self) -> bool {
+        false
+    }
+
+    /// The agent's own providers, for `agents.<id>.inference = "own"`
+    /// (GitHub #112).
+    ///
+    /// **What a new adapter declares here.** Exactly the provider endpoints
+    /// the agent's own client calls for inference, measured or sourced and
+    /// named in the adapter's module comment: one host, scheme and port, and
+    /// per set of methods the exact paths ([`inference::OwnInference`]). From that one
+    /// declaration [`inference::session_passthrough`] builds the passthrough,
+    /// [`inference::session_endpoint`] the cloud notice (`LLM_010`) and its
+    /// confirmation (`LLM_011`), and [`inference::finding`] offers the mode
+    /// in the fix of `LLM_012`. The adapter itself only leaves out what it
+    /// would otherwise force on the agent (provider, model, catalog) when
+    /// [`AgentContext::model_server`] is `None`.
+    ///
+    /// `None`, the default, means the adapter has no such mode: a start with
+    /// `own` is refused with `LLM_013`, never moved to the model server or
+    /// to a passthrough of a whole host.
+    fn own_inference(&self) -> Option<inference::OwnInference> {
+        None
     }
 
     /// The header, in lower case, in which the agent sends its key to

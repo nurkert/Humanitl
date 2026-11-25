@@ -742,7 +742,7 @@ fn llm_passthrough_rules(config: &Config, diagnostics: &mut Vec<Diagnostic>) -> 
         );
         return Vec::new();
     };
-    adapter.llm_passthrough(&config.llm)
+    humanitl_sandbox::agent::inference::session_passthrough(adapter, config)
 }
 
 /// Liest ein Regeldokument und macht aus einem Fehlschlag einen leeren Satz.
