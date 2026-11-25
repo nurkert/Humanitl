@@ -17,6 +17,81 @@ section here and list their commits instead.
 
 ## [Unreleased]
 
+## [0.7.0] - 2026-11-25
+
+Agents that use a model server no longer start without one, and an agent
+can use its own providers when you ask for it: OpenCode with OpenCode Zen,
+including its free models. A new cloud lock keeps inference on this machine
+or network for people who want only local models. A saved model server in
+your own network can be marked as local. The protocol (1.63) and the
+configuration gain fields, so this is a minor version; read the upgrade
+notes.
+
+### Added
+
+- `agents.<id>.inference` for every agent: `model-server` (default) sends
+  inference only to the model server Humanitl chose, `own` lets the agent
+  use its own providers where Humanitl knows them. Today that is OpenCode
+  with OpenCode Zen: only its inference paths are passed through, `POST`
+  only, behind the cloud notice and its confirmation. The setting is
+  user-level; a project cannot switch it (#112).
+- `llm.cloud = "block"` keeps inference on this machine or network. The
+  strictest level wins: a project or a session can switch the lock on, never
+  off. Under the lock a start whose inference would leave this machine is
+  refused with `LLM_014`, whatever was confirmed before; no passthrough to a
+  non-local host is created; a non-local saved server cannot be added or
+  chosen; `humanitl doctor` shows the lock and the level that set it.
+  `docs/SECURITY.md` lists every connection Humanitl itself makes next to
+  the lock (#113).
+- `humanitl llm server add|edit NAME --local[=false]` and the checkbox "Own
+  network" on a server card mark a saved server in your own network whose
+  name looks public. The mark counts for the cloud notice and the cloud
+  lock, drops when the address moves to another origin, and a project can
+  never set it (#115).
+
+### Fixed
+
+- OpenCode and pi without a model server were configured against the
+  proxy's own port, so the agent started and every prompt failed with a
+  connection error. Such a start is now refused with `LLM_012`, which names
+  the setting to fix; an agent set to `own` without own providers in
+  Humanitl is refused with `LLM_013` (#112).
+- A saved server with `local = true` made the configuration fail to load
+  with `CONFIG_002`; the loader now accepts the mark (#115).
+
+### Security
+
+- A profile that a project's profile selects by the name of a bundled
+  profile always loads the bundled text, never a file of the same name in
+  the user's configuration directory (#90).
+- A profile that a project's profile names follows the project scope of
+  each key, like the project's own profile (#95).
+- An overlapping finding, such as a user term, never removes a finding that
+  a checksum confirmed, so `hold.hard_block_checksum_secrets` blocks it as
+  intended (#96).
+- The decision surfaces in the app, the CLI and the terminal show the
+  A-label of a host (`xn--...`), with the Unicode form only beside it, as
+  `docs/SECURITY.md` states for look-alike names (#103). In
+  `humanitl flows --json` the field `host` now carries the A-label;
+  `authority.host` and `authority.display_host` are unchanged.
+
+### Upgrade notes
+
+- Restart the daemon after upgrading:
+  `systemctl --user restart humanitld.service`, `humanitl daemon install`
+  for archive and AppImage installs, or `humanitl daemon restart` after
+  replacing the macOS app. A CLI that needs a newer daemon names the
+  restart (`CLI_004`).
+- OpenCode and pi now need a model server to start
+  (`humanitl llm server add`); without one the start is refused with
+  `LLM_012`. To use OpenCode with OpenCode Zen instead, run
+  `humanitl config set agents.opencode.inference own` and confirm the cloud
+  notice at the next start; under `llm.cloud = "block"` that start is
+  refused with `LLM_014`. pi has no own providers in Humanitl yet
+  (`own` is refused with `LLM_013`), so it needs a model server.
+- Scripts that read `host` from `humanitl flows --json` now get the
+  A-label of an internationalized name (#103).
+
 ## [0.6.0] - 2026-11-23
 
 A start window in the app and `humanitl go` as the one command to start an
