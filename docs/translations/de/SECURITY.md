@@ -1031,7 +1031,7 @@ eigenen Verbindungen von Humanitl tragen keinen Prompt und keine Datei des Agent
 damit jeder, der die Inferenz sperrt, weiß, was sonst hinausgeht:
 
 - die Update-Prüfung, höchstens einmal am Tag, bei GitHub
-  ([Updates from inside the app](../../SECURITY.md#updates-from-inside-the-app)); ihr eigener
+  (Abschnitt „Updates from inside the app“ der englischen Fassung); ihr eigener
   Schalter ist `update.check`, den die Sperre nicht ändert (ADR-0025);
 - nur auf Wunsch: die Probe eines Modellservers (`humanitl llm test`, die Prüfung in den
   Einstellungen), die Suche nach Modellservern im eigenen Netz (`humanitl llm discover`), die
