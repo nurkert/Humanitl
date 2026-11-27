@@ -17,6 +17,38 @@ section here and list their commits instead.
 
 ## [Unreleased]
 
+## [0.7.2] - 2026-11-27
+
+Two fixes for 0.7.1. No change to the configuration, the protocol or the
+rule format.
+
+### Fixed
+
+- Choosing "Use the agent's own providers" in the guided setup, or the
+  settings row for an agent's inference, failed with "SetConfig did not
+  write this: agents.opencode.inference is not one of the settings of the
+  form". The daemon now accepts `agents.<id>.inference` from the app; only
+  `model-server` and `own` are valid values. A test now checks that every
+  visible, editable settings row has a key the daemon accepts (#131).
+- The floating terminal snapped back from where it was dropped, such as the
+  bottom centre over the bar with Allow and Block, and its grip stopped at
+  that bar, so on Intercept it never got wider than the context pane. Once
+  you move or resize the window, its place and size are now yours: it stays
+  where you put it, over the queue or the bar too, and grows up to 80 % of
+  the sections (at most 1280 x 800, before 60 % and 960 x 640). A window
+  never moved still keeps clear of the queue, the bar and the editor
+  controls, and a place or size changed before this release counts as
+  chosen (#129).
+
+### Upgrade notes
+
+- Restart the daemon after upgrading:
+  `systemctl --user restart humanitld.service`, `humanitl daemon install`
+  for archive and AppImage installs, or `humanitl daemon restart` after
+  replacing the macOS app. Until then the old daemon still refuses the
+  inference setting; `humanitl config set agents.opencode.inference own`
+  works with either.
+
 ## [0.7.1] - 2026-11-27
 
 OpenCode can be installed into the agent depot, and the start window walks
