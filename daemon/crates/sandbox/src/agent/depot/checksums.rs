@@ -18,11 +18,24 @@
 //! `sha2` hashes; nothing here is cryptography of the daemon's own. What
 //! binds the chain is TLS to the vendor's host, as for the vendor's own
 //! installer: no key of the vendor's stands behind the metadata.
+//!
+//! Where the vendor publishes no list either but releases on GitHub as an
+//! immutable release ([`ReleaseDigest`], `OpenCode`, #110), the run downloads
+//! metadata and archive alone, and [`check_release_digest`] checks:
+//!
+//! 1. the metadata names the release of the version the run installed;
+//! 2. the release is immutable ([`ReleaseDigest::immutable_pointer`] is
+//!    `true`): its assets cannot change after publication;
+//! 3. the metadata names exactly one asset of the archive's name, with a
+//!    SHA-256, and the archive has it.
+//!
+//! The SHA-256 is GitHub's, computed at upload, not a statement of the
+//! vendor's (ADR-0023, amendment 2026-11-27).
 
 use sha2::{Digest as _, Sha256};
 
 use super::adopt::hex;
-use super::recipe::ChecksumList;
+use super::recipe::{ChecksumList, ReleaseDigest};
 
 /// The directory of the run's result that holds the files of the check.
 pub(crate) const DIR: &str = "checked";
@@ -57,24 +70,7 @@ pub(crate) fn check(
     list: &[u8],
     archive_sha256: &str,
 ) -> Result<(), Failed> {
-    let value: serde_json::Value = serde_json::from_slice(metadata).map_err(|err| {
-        Failed::Checksum(format!("the vendor's release metadata is no JSON ({err})"))
-    })?;
-    let release = value
-        .pointer(spec.version_pointer)
-        .and_then(serde_json::Value::as_str)
-        .ok_or_else(|| {
-            Failed::Version(format!(
-                "the vendor's release metadata names no release at {}",
-                spec.version_pointer
-            ))
-        })?;
-    let wanted = format!("{}{version}", spec.version_prefix);
-    if release != wanted {
-        return Err(Failed::Version(format!(
-            "the run named version {version}, and the vendor's release metadata names {release:?}"
-        )));
-    }
+    let value = release_of(metadata, spec.version_pointer, spec.version_prefix, version)?;
     let list_digest = asset_digest(&value, spec.list)?;
     let list_sum = hex(&Sha256::digest(list));
     if list_sum != list_digest {
@@ -94,6 +90,71 @@ pub(crate) fn check(
         )));
     }
     Ok(())
+}
+
+/// Checks GitHub's digest of an immutable release for `version` on the
+/// vendor's `platform`; `archive_sha256` is the archive's SHA-256 the daemon
+/// computed, lower-case hex.
+///
+/// # Errors
+///
+/// [`Failed::Version`] for metadata of another release, [`Failed::Checksum`]
+/// for a release that is not immutable or an archive without exactly one
+/// matching digest.
+pub(crate) fn check_release_digest(
+    spec: &ReleaseDigest,
+    platform: &str,
+    version: &str,
+    metadata: &[u8],
+    archive_sha256: &str,
+) -> Result<(), Failed> {
+    let value = release_of(metadata, spec.version_pointer, spec.version_prefix, version)?;
+    // Only `true` itself: a missing flag, `false`, or a string say nothing
+    // about whether the assets can still change.
+    if value.pointer(spec.immutable_pointer) != Some(&serde_json::Value::Bool(true)) {
+        return Err(Failed::Checksum(format!(
+            "the release {}{version} is not immutable ({} is not true), so its assets could \
+             change after publication",
+            spec.version_prefix, spec.immutable_pointer
+        )));
+    }
+    let archive = spec.archive.replace("{platform}", platform);
+    let expected = asset_digest(&value, &archive)?;
+    if archive_sha256 != expected {
+        return Err(Failed::Checksum(format!(
+            "the SHA-256 of {archive} is {archive_sha256}, and GitHub's digest of the release \
+             names {expected}"
+        )));
+    }
+    Ok(())
+}
+
+/// The release metadata as JSON, when it names the release of `version`
+/// (`prefix` and the version at `pointer`).
+fn release_of(
+    metadata: &[u8],
+    pointer: &str,
+    prefix: &str,
+    version: &str,
+) -> Result<serde_json::Value, Failed> {
+    let value: serde_json::Value = serde_json::from_slice(metadata).map_err(|err| {
+        Failed::Checksum(format!("the vendor's release metadata is no JSON ({err})"))
+    })?;
+    let release = value
+        .pointer(pointer)
+        .and_then(serde_json::Value::as_str)
+        .ok_or_else(|| {
+            Failed::Version(format!(
+                "the vendor's release metadata names no release at {pointer}"
+            ))
+        })?;
+    let wanted = format!("{prefix}{version}");
+    if release != wanted {
+        return Err(Failed::Version(format!(
+            "the run named version {version}, and the vendor's release metadata names {release:?}"
+        )));
+    }
+    Ok(value)
 }
 
 /// The SHA-256 the metadata names for the asset `name`: the `digest` of the
@@ -295,6 +356,106 @@ mod tests {
         let mut broken = release(b"the archive");
         broken.metadata = b"<html>".to_vec();
         assert!(checked(&broken, "1.2.3").is_err());
+    }
+
+    const DIGEST: ReleaseDigest = ReleaseDigest {
+        version_pointer: "/tag_name",
+        version_prefix: "v",
+        immutable_pointer: "/immutable",
+        archive: "tool-{platform}",
+        evidence: "https://standin.test/docs",
+    };
+
+    /// GitHub's release metadata as the API answers it, with the archive's
+    /// digest among other assets.
+    fn github_release(archive: &[u8], immutable: &serde_json::Value) -> Vec<u8> {
+        serde_json::json!({
+            "tag_name": "v1.2.3",
+            "name": "v1.2.3",
+            "immutable": immutable,
+            "assets": [
+                {"name": "tool-linux-arm64.tar.gz", "digest": format!("sha256:{}", sha(b"arm"))},
+                {"name": "tool-linux-x64.tar.gz", "digest": format!("sha256:{}", sha(archive))},
+            ],
+        })
+        .to_string()
+        .into_bytes()
+    }
+
+    fn digest_checked(metadata: &[u8], version: &str, archive: &[u8]) -> Result<(), Failed> {
+        check_release_digest(
+            &DIGEST,
+            "linux-x64.tar.gz",
+            version,
+            metadata,
+            &sha(archive),
+        )
+    }
+
+    #[test]
+    fn an_immutable_release_whose_digest_holds_is_taken() {
+        let metadata = github_release(b"the archive", &serde_json::Value::Bool(true));
+        digest_checked(&metadata, "1.2.3", b"the archive").unwrap();
+    }
+
+    /// A release that is not immutable, or says so in no clear `true`, is
+    /// refused even when the digest matches: its assets could have changed.
+    ///
+    /// Mutation proof: without the check of the flag this turns red.
+    #[test]
+    fn a_release_that_is_not_immutable_is_refused() {
+        for flag in [
+            serde_json::Value::Bool(false),
+            serde_json::Value::Null,
+            serde_json::Value::from("true"),
+        ] {
+            let metadata = github_release(b"the archive", &flag);
+            let Err(Failed::Checksum(why)) = digest_checked(&metadata, "1.2.3", b"the archive")
+            else {
+                panic!("taken with immutable = {flag}");
+            };
+            assert!(why.contains("not immutable"), "{why}");
+        }
+        let mut without: serde_json::Value = serde_json::from_slice(&github_release(
+            b"the archive",
+            &serde_json::Value::Bool(true),
+        ))
+        .unwrap();
+        without.as_object_mut().unwrap().remove("immutable");
+        assert!(
+            digest_checked(&without.to_string().into_bytes(), "1.2.3", b"the archive").is_err()
+        );
+    }
+
+    /// Mutation proof: without the comparison of the archive with the digest
+    /// this turns red.
+    #[test]
+    fn an_archive_other_than_the_release_digest_names_is_refused() {
+        let metadata = github_release(b"the archive", &serde_json::Value::Bool(true));
+        let Err(Failed::Checksum(why)) = digest_checked(&metadata, "1.2.3", b"planted") else {
+            panic!("taken");
+        };
+        assert!(why.contains("tool-linux-x64.tar.gz"), "{why}");
+    }
+
+    #[test]
+    fn a_release_digest_of_another_release_or_without_one_asset_is_refused() {
+        let metadata = github_release(b"the archive", &serde_json::Value::Bool(true));
+        assert!(matches!(
+            digest_checked(&metadata, "1.2.4", b"the archive"),
+            Err(Failed::Version(_))
+        ));
+        // The asset twice, or without a digest (GitHub's `null` for assets
+        // uploaded before it computed them).
+        let mut twice: serde_json::Value = serde_json::from_slice(&metadata).unwrap();
+        let copy = twice["assets"][1].clone();
+        twice["assets"].as_array_mut().unwrap().push(copy);
+        assert!(digest_checked(&twice.to_string().into_bytes(), "1.2.3", b"the archive").is_err());
+        let mut no_digest: serde_json::Value = serde_json::from_slice(&metadata).unwrap();
+        no_digest["assets"][1]["digest"] = serde_json::Value::Null;
+        assert!(
+            digest_checked(&no_digest.to_string().into_bytes(), "1.2.3", b"the archive").is_err()
+        );
     }
 
     /// `sha256sum -b` writes `*` before the name; upper-case hex is the same

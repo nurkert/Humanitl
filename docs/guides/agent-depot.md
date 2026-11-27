@@ -42,7 +42,8 @@ refused, so a depot cannot be filled there (`AGENT_015`, see [Current limits](#c
 |---|---|---|---|
 | Claude Code (`claude`) | yes, from `downloads.claude.ai`, the vendor's signed `manifest.json` verified with the host's `gpg` | not yet: `humanitl agents login claude` answers `AGENT_014` | yes, with the access key Humanitl keeps (below) |
 | Codex (`codex`) | yes, the vendor's whole package from `releases.openai.com`, checked against its list of checksums (no signature) | declared (device login), not tried with the real `codex` | from the depot, but see [Current limits](#current-limits) |
-| OpenCode, pi | no recipe: `AGENT_015` | no | no |
+| OpenCode (`opencode`) | yes, the release archive from GitHub, checked against GitHub's SHA-256 of an immutable release (no signature, no vendor list) | yes: `humanitl agents login opencode` runs `opencode auth login` in its terminal; pick a provider and paste its key | yes, with the logins stored in the depot |
+| pi | no recipe: `AGENT_015` | no | no |
 | Antigravity CLI (`agy`) | no: `AGENT_015` names why (no chosen version can be fetched, no signed check) | none, API key only: `humanitl agents login agy` answers `AGENT_014` | no, there is no install |
 
 Why, and what follows, is in [Current limits](#current-limits).
@@ -165,7 +166,10 @@ source setting stays as it is.
   the host's `gpg` and the program's SHA-256. Codex signs nothing; there the daemon checks its own
   copy of the vendor's chain: the release metadata names the SHA-256 of
   `codex-package_SHA256SUMS`, that list names the SHA-256 of the package archive. What vouches for
-  the chain is TLS to `releases.openai.com`, the same trust the vendor's own installer has. The
+  the chain is TLS to `releases.openai.com`, the same trust the vendor's own installer has.
+  OpenCode publishes neither; there the daemon checks GitHub's release metadata: the release must
+  be immutable, and the archive must have the SHA-256 GitHub names for it. That anchor is weaker:
+  the SHA-256 is GitHub's, computed at upload, not the vendor's (ADR-0023, amendment 2026-11-27). The
   session mounts the resolved version directory read-only, never the `current` link, so an update
   never changes a running session.
 - **Nothing from a session persists in the depot.** A session gets a writable scratch copy of the
@@ -245,7 +249,33 @@ and the depot is only what you choose.
   Cloud Storage bucket; and the only check is a SHA-512 in that same unsigned manifest. A
   configuration run answers `AGENT_015` as well: no variable moves `agy`'s `~/.gemini`, so the depot
   carries only the program, and each session writes its settings afresh.
-- **OpenCode and pi** have no depot recipe; with `depot` they answer `AGENT_015`.
+- **OpenCode.** `humanitl agents install opencode [--version V]` takes the release archive
+  (`opencode-<target>.tar.gz`, on macOS `.zip`) from `github.com/anomalyco/opencode/releases`
+  and keeps the one program `opencode` from its top (#110). Only OpenCode 1 is installed, as the
+  vendor's own installer does; without `--version` the run takes the newest `v1.x.y` of the release
+  list. On x86_64 it takes the `baseline` build, which runs on every x86_64 CPU. The check is
+  GitHub's digest of an immutable release, a weaker anchor than a signature or a vendor's list
+  ([What the depot protects](#what-the-depot-protects)). OpenCode keeps its logins in `auth.json`
+  under its data directory, so the depot's copy is its `XDG_DATA_HOME` and the credential file is
+  `opencode/auth.json`; the adapter's own configuration (`XDG_CONFIG_HOME/opencode`,
+  `OPENCODE_CONFIG`) is written as for a host install. **Logins:** `humanitl agents login
+  opencode` runs `opencode auth login` in the run's terminal; choose a provider and paste its key
+  (a provider's own browser login reaches hosts the recipe does not name, and they are held like any
+  request). Only this run stores `auth.json` and adds a provider. A session renews what is stored
+  (a refreshed OAuth token goes back through the guard), but it never adds or drops a provider: a
+  `/connect` inside a session works for that session only, and when it ends the guard refuses the
+  file (`AGENT_012`, "the file holds other entries than the stored one … a new provider comes only
+  through a login run") and the stored logins stay as they were. Add the provider with `humanitl
+  agents login opencode` instead. The guard checks `auth.json` against OpenCode's schema: each
+  entry a provider with `type` `oauth`, `api` or `wellknown` and exactly that kind's keys; any
+  other kind or key is refused. **No configuration run:** `humanitl agents config opencode`
+  answers `AGENT_015`, because the copy is OpenCode's data directory (sessions, logs, the model
+  catalog's cache), not its configuration. Sources, read 2026-11-27: the vendor's
+  `install` and `packages/core/src/global.ts`, `packages/opencode/src/auth/index.ts`,
+  `packages/core/src/flag/flag.ts`, `packages/opencode/src/cli/cmd/providers.ts` at tag `v1.19.6`
+  (`github.com/anomalyco/opencode`, commit `f4e363c`), and GitHub's REST documentation of
+  releases (`immutable`, `assets[].digest`).
+- **pi** has no depot recipe; with `depot` it answers `AGENT_015`.
 - **Backends.** The kernel level refuses a depot session; Seatbelt (macOS) and the kernel level
   refuse install, update, login and configuration runs (`AGENT_015`).
 - **One run at a time**, and only while no session runs in the daemon (`CLI_005`).

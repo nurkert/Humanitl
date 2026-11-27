@@ -2107,8 +2107,13 @@ Antigravity CLI läuft aus dem Depot nur mit einem Gemini-API-Schlüssel: `human
 antwortet mit `AGENT_014`, ein Konfigurationslauf mit `AGENT_015`, weil keine Variable ihr
 `~/.gemini` verlegt. Codex installiert sein ganzes Paket von `releases.openai.com` (HUM-566). Die
 Antigravity CLI hat kein Installationsrezept: Ihr Anbieter bietet keinen Abruf einer gewählten
-Version und signiert nichts, und `install` antwortet mit `AGENT_015` und diesem Grund. OpenCode und
-pi haben kein Rezept fürs Depot; auch für sie antwortet `install` mit `AGENT_015`.
+Version und signiert nichts, und `install` antwortet mit `AGENT_015` und diesem Grund. OpenCode
+installiert sein Release-Archiv von GitHub, geprüft gegen den Digest, den GitHub für ein
+unveränderliches Release nennt (#110); `humanitl agents login opencode` startet `opencode auth
+login` in seinem Terminal und ist der einzige Weg, einen Provider zu speichern oder hinzuzufügen
+(ein `/connect` in einer Session bleibt nicht erhalten, `AGENT_012`), und `humanitl agents config
+opencode` antwortet mit `AGENT_015`. pi hat kein Rezept fürs Depot; auch für es antwortet
+`install` mit `AGENT_015`.
 
 ## `humanitl projects`
 

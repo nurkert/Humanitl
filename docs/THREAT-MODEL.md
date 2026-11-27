@@ -1100,10 +1100,16 @@ group has no LLM passthrough. The run only downloads; the daemon reads no verdic
 the tree on its own copy, verifies a signing vendor's manifest with the host's `gpg` against the
 fingerprint fixed in the adapter and the program's checksum against it, or, for a vendor that
 publishes a list of checksums instead (Codex, HUM-566), its own copy of the chain from release
-metadata over the list to the archive, and only then switches `current` with a journal; a run with a
+metadata over the list to the archive, or, for a vendor that publishes neither but releases on
+GitHub as an immutable release (OpenCode, #110), GitHub's release metadata (`"immutable": true`,
+the archive's SHA-256 in `assets[].digest`), and only then switches `current` with a journal; a run with a
 status other than 0 or a red guarantee changes nothing. The version is pinned, sessions keep theirs,
 and a session's read-only program directory makes a self-update fail. *Residual risk:* an unsigned
-recipe's version is the run's word; behind a checksum list stands only TLS to the vendor's host, and
+recipe's version is the run's word; behind a checksum list stands only TLS to the vendor's host;
+behind GitHub's release digest stands GitHub, not the vendor: whoever can publish a release in the
+vendor's repository (a stolen maintainer token, a compromised release workflow) publishes an archive
+whose digest matches, and only TLS to GitHub vouches for the metadata; immutability only keeps an
+archive from changing after publication; and
 the unpacked tree is bound to the checked archive by the run, not by the daemon; the person's own
 rules apply to the run as to any session; the kernel level and Seatbelt refuse a maintenance run for
 now (`AGENT_015`).
@@ -1410,6 +1416,7 @@ These attackers are not defended against, and Humanitl does not claim to:
 | 2026-11-23 | Hard block: an overlapping finding never removes a checksum-confirmed finding; a user term (`findings.user_terms`) or a known secret over the same bytes is reported next to it | #96 |
 | 2026-11-25 | K-02: `agents.<id>.inference`; without a model server OpenCode and pi do not start (`LLM_012`); `own` (opt-in, locked in the project profile, only for an adapter that declares its own providers, else `LLM_013`) lets OpenCode use OpenCode Zen with a passthrough on its inference paths only, behind the cloud notice and the confirmation | GitHub #112 |
 | 2026-11-25 | K-02: the cloud lock `llm.cloud = "block"`: a start with inference outside is `LLM_014` even when confirmed, no passthrough to a host that is not local, no model server outside can be added or chosen; the strictest value of all levels applies, so a project profile or a session switches it on and never off | GitHub #113 |
+| 2026-11-27 | K-36: an install may be checked against GitHub's digest of an immutable release where the vendor publishes neither a signature nor a list (OpenCode): the daemon refuses a release that is not immutable and an archive without exactly one matching digest; residual: the digest is GitHub's, not the vendor's, so a release published through the vendor's repository by anyone who can publish there passes. A credential file may lie one directory deep in the copy (`opencode/auth.json` under `XDG_DATA_HOME`); the guard opens every directory on the way with `O_NOFOLLOW`, and a path with `..` or an absolute one is refused. A credential format may be a map of entries of declared kinds (OpenCode's providers); a session's write-back must hold exactly the stored entries, so a session cannot add a provider whose account it controls; only a login run the person starts does | #110 |
 
 Every security-relevant change to the shim, the mount allowlist, the filter or the passthrough gets
 a line here. Vulnerabilities are reported as described in

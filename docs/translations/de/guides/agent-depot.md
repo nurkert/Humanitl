@@ -50,7 +50,8 @@ noch nicht läuft: Mit der Kernel-Stufe wird eine Depot-Session abgelehnt, und u
 |---|---|---|---|
 | Claude Code (`claude`) | ja, von `downloads.claude.ai`, das signierte `manifest.json` des Herstellers geprüft mit dem `gpg` des Hosts | noch nicht: `humanitl agents login claude` antwortet mit `AGENT_014` | ja, mit dem Zugangsschlüssel, den Humanitl verwahrt (unten) |
 | Codex (`codex`) | ja, das ganze Paket des Herstellers von `releases.openai.com`, geprüft gegen seine Liste der Prüfsummen (keine Signatur) | erklärt (Geräte-Anmeldung), mit dem echten `codex` nicht erprobt | aus dem Depot, aber siehe [Heutige Grenzen](#current-limits) |
-| OpenCode, pi | kein Rezept: `AGENT_015` | nein | nein |
+| OpenCode (`opencode`) | ja, das Release-Archiv von GitHub, geprüft gegen den SHA-256, den GitHub für ein unveränderliches Release nennt (keine Signatur, keine Liste des Herstellers) | ja: `humanitl agents login opencode` startet `opencode auth login` in seinem Terminal; Provider wählen und seinen Schlüssel einfügen | ja, mit den im Depot gespeicherten Anmeldungen |
+| pi | kein Rezept: `AGENT_015` | nein | nein |
 | Antigravity CLI (`agy`) | nein: `AGENT_015` nennt den Grund (keine gewählte Version abrufbar, keine signierte Prüfung) | keine, nur API-Schlüssel: `humanitl agents login agy` antwortet mit `AGENT_014` | nein, es gibt keine Installation |
 
 Warum, und was daraus folgt, steht unter [Heutige Grenzen](#current-limits).
@@ -175,7 +176,11 @@ fragt vorher und wird abgelehnt, solange eine Session oder ein Lauf das Depot nu
   Herstellers mit dem `gpg` des Hosts und den SHA-256 des Programms. Codex signiert nichts; dort
   prüft der Daemon seine eigene Kopie der Kette des Herstellers: Die Release-Metadaten nennen den
   SHA-256 von `codex-package_SHA256SUMS`, diese Liste den SHA-256 des Paketarchivs. Für die Kette
-  bürgt TLS zu `releases.openai.com`, dasselbe Vertrauen wie beim Installer des Herstellers. Die
+  bürgt TLS zu `releases.openai.com`, dasselbe Vertrauen wie beim Installer des Herstellers.
+  OpenCode veröffentlicht beides nicht; dort prüft der Daemon die Release-Metadaten von GitHub: Das
+  Release muss unveränderlich sein, und das Archiv muss den SHA-256 haben, den GitHub dafür nennt.
+  Dieser Anker ist schwächer: Der SHA-256 ist der von GitHub, beim Hochladen berechnet, nicht der
+  des Herstellers (ADR-0023, Nachtrag 2026-11-27). Die
   Session bindet den aufgelösten Versionsordner nur lesbar ein, nie den Verweis `current`, sodass
   ein Update nie eine laufende Session ändert.
 - **Aus einer Session bleibt nichts im Depot.** Eine Session bekommt eine schreibbare Arbeitskopie
@@ -266,7 +271,37 @@ wählst.
   ein SHA-512 in demselben unsignierten Manifest. Ein Konfigurationslauf antwortet ebenfalls mit
   `AGENT_015`: Keine Variable verlegt `~/.gemini` von `agy`, also trägt das Depot nur das Programm,
   und jede Session schreibt ihre Einstellungen neu.
-- **OpenCode und pi** haben kein Rezept fürs Depot; mit `depot` antworten sie mit `AGENT_015`.
+- **OpenCode.** `humanitl agents install opencode [--version V]` übernimmt das Release-Archiv
+  (`opencode-<ziel>.tar.gz`, unter macOS `.zip`) von `github.com/anomalyco/opencode/releases` und
+  behält das eine Programm `opencode` von dessen oberster Ebene (#110). Installiert wird nur
+  OpenCode 1, wie es der Installer des Herstellers tut; ohne `--version` nimmt der Lauf das neueste
+  `v1.x.y` der Release-Liste. Unter x86_64 nimmt er den Build `baseline`, der auf jeder
+  x86_64-CPU läuft. Geprüft wird gegen den Digest, den GitHub für ein unveränderliches Release
+  nennt, einen schwächeren Anker als Signatur oder Liste des Herstellers. OpenCode hält seine
+  Anmeldungen in `auth.json` in seinem Datenverzeichnis, also ist die Kopie des Depots sein
+  `XDG_DATA_HOME` und die Zugangsdatei `opencode/auth.json`; die eigene Konfiguration des Adapters
+  (`XDG_CONFIG_HOME/opencode`, `OPENCODE_CONFIG`) wird wie bei einer Installation auf dem Host
+  geschrieben. **Anmeldungen:** `humanitl agents login opencode` startet `opencode auth login`
+  im Terminal des Laufs; wähle einen Provider und füge seinen Schlüssel ein (die eigene
+  Browser-Anmeldung eines Providers erreicht Hosts, die das Rezept nicht nennt, und sie werden wie
+  jede Anfrage angehalten). Nur dieser Lauf speichert `auth.json` und fügt einen Provider hinzu.
+  Eine Session erneuert, was gespeichert ist (ein aufgefrischtes OAuth-Token geht über den Wächter
+  zurück), fügt aber nie einen Provider hinzu und entfernt keinen: Ein `/connect` in einer Session
+  gilt nur für diese Session, und an ihrem Ende lehnt der Wächter die Datei ab (`AGENT_012`, „the
+  file holds other entries than the stored one … a new provider comes only through a login
+  run"), die gespeicherten Anmeldungen bleiben, wie sie waren. Füge den Provider stattdessen mit
+  `humanitl agents login opencode` hinzu. Der Wächter prüft `auth.json` gegen das Schema von
+  OpenCode: jeder Eintrag ein Provider mit `type` `oauth`, `api` oder `wellknown` und genau den
+  Schlüsseln dieser Art; jede andere Art und jeder andere Schlüssel wird abgelehnt. **Kein
+  Konfigurationslauf:** `humanitl agents config opencode` antwortet mit `AGENT_015`, weil die
+  Kopie das Datenverzeichnis von OpenCode ist (Sessions, Logs, der Cache des Modellkatalogs), nicht
+  seine Konfiguration. Quellen, gelesen am
+  2026-11-27: `install`, `packages/core/src/global.ts`, `packages/opencode/src/auth/index.ts` und
+  `packages/core/src/flag/flag.ts` und `packages/opencode/src/cli/cmd/providers.ts` des
+  Herstellers beim Tag `v1.19.6`
+  (`github.com/anomalyco/opencode`, Commit `f4e363c`) und die REST-Dokumentation von GitHub zu
+  Releases (`immutable`, `assets[].digest`).
+- **pi** hat kein Rezept fürs Depot; mit `depot` antwortet es mit `AGENT_015`.
 - **Backends.** Die Kernel-Stufe lehnt eine Depot-Session ab; Seatbelt (macOS) und die
   Kernel-Stufe lehnen Installations-, Update-, Anmelde- und Konfigurationsläufe ab (`AGENT_015`).
 - **Ein Lauf zur Zeit**, und nur, solange keine Session im Daemon läuft (`CLI_005`).

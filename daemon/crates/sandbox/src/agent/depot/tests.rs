@@ -68,6 +68,7 @@ fn depot_for(agent: &str) -> Config {
         "opencode" => config.agents.opencode.source = Some(AgentSource::Depot),
         "codex" => config.agents.codex.source = Some(AgentSource::Depot),
         "agy" => config.agents.agy.source = Some(AgentSource::Depot),
+        "pi" => config.agents.pi.source = Some(AgentSource::Depot),
         other => panic!("{other}"),
     }
     config
@@ -155,18 +156,24 @@ fn a_depot_agent_that_is_not_installed_is_agent_008() {
     assert_eq!(found.code, AGENT_008);
 }
 
-/// `agents.opencode.source = "depot"` loads, the start says `AGENT_015`.
+/// `agents.pi.source = "depot"` loads, the start says `AGENT_015` (`OpenCode`
+/// has a recipe since #110).
 #[test]
 fn an_agent_without_a_recipe_is_agent_015_at_the_start() {
     let fx = Fixture::new();
-    let found = fx
-        .plan(
-            &depot_for("opencode"),
-            &SourceLock::none(),
-            &["opencode"],
-            false,
-        )
-        .unwrap_err();
+    let command = vec![OsString::from("pi")];
+    let found = plan_session(&DepotInput {
+        config: &depot_for("pi"),
+        lock: &SourceLock::none(),
+        paths: &fx.paths,
+        session: SessionId::nil(),
+        adapter: "pi",
+        command: &command,
+        from_caller: false,
+        purpose: Purpose::Preview,
+        keys: None,
+    })
+    .unwrap_err();
     assert_eq!(found.code, AGENT_015);
 }
 
@@ -855,4 +862,70 @@ fn a_login_run_carries_only_its_own_depot_program() {
     );
     // A named agent without a mount.
     assert!(check(&run(Some("claude"), None, &[program])).is_err());
+}
+
+/// `OpenCode` from the depot (#110): its copy is `OpenCode`'s `XDG_DATA_HOME`,
+/// and the depot's value wins over the adapter's own `{home}/.local/share`
+/// in the session's environment, so `auth.json` is read from and written to
+/// the copy. The adapter's configuration (`XDG_CONFIG_HOME`,
+/// `OPENCODE_CONFIG`) stays as the adapter set it.
+///
+/// Mutation proof: the depot's variables merged before the session's in
+/// `effective_env` turn the first assert on `XDG_DATA_HOME` red.
+#[test]
+fn opencode_from_the_depot_keeps_its_data_in_the_copy_and_its_configuration() {
+    let fx = Fixture::new();
+    filled(&fx.paths.data_dir(), "opencode", "opencode");
+    let command = vec![OsString::from("opencode")];
+    let plan = plan_session(&DepotInput {
+        config: &depot_for("opencode"),
+        lock: &SourceLock::none(),
+        paths: &fx.paths,
+        session: SessionId::nil(),
+        adapter: "opencode",
+        command: &command,
+        from_caller: false,
+        purpose: Purpose::Start,
+        keys: None,
+    })
+    .unwrap();
+    let mount = plan.session.mount.clone().expect("mounted");
+    assert!(mount.scratch.is_some(), "OpenCode gets a copy");
+    assert_eq!(
+        mount.env,
+        [
+            ("XDG_DATA_HOME".to_owned(), DEPOT_CONFIG_DST.to_owned()),
+            ("OPENCODE_DISABLE_AUTOUPDATE".to_owned(), "true".to_owned()),
+        ]
+    );
+    let mut ctx = session(&["opencode"], plan.session.clone());
+    // What the OpenCode adapter puts into the session's environment
+    // (`super::super::opencode`, `env`).
+    ctx.session_env = vec![
+        ("HOME".to_owned(), "/home/agent".to_owned()),
+        (
+            "XDG_DATA_HOME".to_owned(),
+            "/home/agent/.local/share".to_owned(),
+        ),
+        (
+            "XDG_CONFIG_HOME".to_owned(),
+            "/home/agent/.config".to_owned(),
+        ),
+        (
+            "OPENCODE_CONFIG".to_owned(),
+            super::super::opencode::CONFIG_DST.to_owned(),
+        ),
+        ("OPENCODE_DISABLE_AUTOUPDATE".to_owned(), "true".to_owned()),
+    ];
+    let env: std::collections::BTreeMap<String, String> =
+        profile().effective_env(&ctx, None).into_iter().collect();
+    assert_eq!(env["XDG_DATA_HOME"], DEPOT_CONFIG_DST);
+    assert_eq!(env["XDG_CONFIG_HOME"], "/home/agent/.config");
+    assert_eq!(env["OPENCODE_CONFIG"], super::super::opencode::CONFIG_DST);
+    assert_eq!(env["HOME"], "/home/agent");
+    assert!(
+        env["PATH"].starts_with("/run/humanitl/agent:"),
+        "{}",
+        env["PATH"]
+    );
 }

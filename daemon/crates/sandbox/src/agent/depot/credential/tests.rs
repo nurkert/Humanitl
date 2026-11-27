@@ -44,6 +44,7 @@ const FORMAT: CredentialFormat = CredentialFormat {
     one_of: &[],
     requires: &[],
     fixed: &[],
+    entries: None,
     evidence: "stand-in of the tests",
 };
 
@@ -774,6 +775,7 @@ const NULLABLE: CredentialFormat = CredentialFormat {
     one_of: &[],
     requires: &[],
     fixed: &[],
+    entries: None,
     evidence: "stand-in of the tests",
 };
 
@@ -814,6 +816,7 @@ const KEY_OR_TOKENS: CredentialFormat = CredentialFormat {
     one_of: &["/key", "/oauth"],
     requires: &[],
     fixed: &[],
+    entries: None,
     evidence: "stand-in of the tests",
 };
 
@@ -890,5 +893,108 @@ fn a_session_cannot_change_the_codex_auth_mode() {
     assert_eq!(
         setup.stored().unwrap(),
         canonical(&codex("chatgpt", r#""sk-exchanged""#))
+    );
+}
+
+/// A credential file one directory deeper in the session's copy (`OpenCode`'s
+/// `opencode/auth.json` under `XDG_DATA_HOME`, #110): a login and a later
+/// session take it back from there, the depot keeps it under its name, and
+/// a file beside it or above it stays out. A link on the way, or a path that
+/// climbs out of the copy, is refused and the stored file stays.
+///
+/// Mutation proofs: `read_credential` that opens the directory without
+/// `O_NOFOLLOW` (or the whole path at once) takes the file behind the link
+/// and turns the link assert red; `credential_path_ok` that lets `..` pass
+/// reads the file above the copy and turns the climb assert red.
+#[test]
+fn a_credential_file_one_directory_deeper_is_taken_and_nothing_beside_it() {
+    const NESTED: &str = "tool/auth.json";
+    fn request<'a>(
+        depot: &'a Depot,
+        origin: Origin,
+        base: Option<&'a str>,
+        file: &'a str,
+    ) -> TakeBack<'a> {
+        TakeBack {
+            depot,
+            file,
+            format: &FORMAT,
+            session: SessionId::new(),
+            base,
+            origin,
+            keys: None,
+        }
+    }
+    let setup = Setup::new();
+    let depot = &setup.depot;
+    let login = setup.session_copy("login");
+    std::fs::create_dir_all(login.join("tool")).unwrap();
+    std::fs::write(login.join(NESTED), doc("t1", 1_000, "acc-1")).unwrap();
+    let Taken::Stored { new: base, .. } =
+        take_back(&login, &request(depot, Origin::Login, None, NESTED)).unwrap()
+    else {
+        panic!("not stored");
+    };
+    assert_eq!(
+        fingerprint(&login, NESTED),
+        Some(sha256_hex(&std::fs::read(login.join(NESTED)).unwrap()))
+    );
+    assert_eq!(
+        listing(&setup.depot.credentials_dir()),
+        vec!["auth.json".to_owned()]
+    );
+    assert_eq!(
+        stored_path(&setup.depot, NESTED),
+        setup.depot.credentials_dir().join("auth.json")
+    );
+
+    // A later session renews it; a second file beside it and one at the top
+    // of the copy stay out.
+    let copy = setup.session_copy("s");
+    std::fs::create_dir_all(copy.join("tool/log")).unwrap();
+    std::fs::write(copy.join("tool/storage.json"), doc("t8", 8_000, "acc-1")).unwrap();
+    std::fs::write(copy.join("auth.json"), doc("t9", 9_000, "acc-1")).unwrap();
+    std::fs::write(copy.join(NESTED), doc("t2", 2_000, "acc-1")).unwrap();
+    let taken = take_back(&copy, &request(depot, Origin::Session, Some(&base), NESTED)).unwrap();
+    assert!(matches!(taken, Taken::Stored { .. }), "{taken:?}");
+    let stored = std::fs::read(setup.depot.credentials_dir().join("auth.json")).unwrap();
+    assert_eq!(stored, canonical(&doc("t2", 2_000, "acc-1")));
+    assert_eq!(
+        listing(&setup.depot.credentials_dir()),
+        vec!["auth.json".to_owned()]
+    );
+
+    // The directory on the way is a link to a directory outside the copy.
+    let outside = setup.root.join("outside");
+    std::fs::create_dir_all(&outside).unwrap();
+    std::fs::write(outside.join("auth.json"), doc("t3", 3_000, "acc-1")).unwrap();
+    let linked = setup.session_copy("linked");
+    std::os::unix::fs::symlink(&outside, linked.join("tool")).unwrap();
+    let found = take_back(&linked, &request(depot, Origin::Login, None, NESTED)).unwrap_err();
+    assert_eq!(found.found.code, AGENT_012);
+    assert!(
+        found.found.why.contains("symbolic link"),
+        "{}",
+        found.found.why
+    );
+    assert_eq!(fingerprint(&linked, NESTED), None);
+
+    // A path that climbs out of the copy.
+    let climbing = setup.session_copy("climb");
+    std::fs::write(
+        setup.root.join("scratch").join("auth.json"),
+        doc("t4", 4_000, "acc-1"),
+    )
+    .unwrap();
+    let found = take_back(
+        &climbing,
+        &request(depot, Origin::Login, None, "../auth.json"),
+    )
+    .unwrap_err();
+    assert_eq!(found.found.code, AGENT_012);
+    assert_eq!(
+        std::fs::read(setup.depot.credentials_dir().join("auth.json")).unwrap(),
+        stored,
+        "the stored file stays"
     );
 }

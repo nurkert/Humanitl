@@ -638,9 +638,10 @@ impl MaintenanceRun {
                     &format!("program/ cannot be opened ({err})"),
                 )
             })?;
-        let checked = match self.install.checksums {
-            Some(_) => Some(self.read_checked(out.as_fd())?),
-            None => None,
+        let checked = if self.install.checksums.is_some() || self.install.release_digest.is_some() {
+            Some(self.read_checked(out.as_fd())?)
+        } else {
+            None
         };
         Ok(RunResult {
             version,
@@ -672,7 +673,13 @@ impl MaintenanceRun {
                 .ok_or_else(|| missing(name))
         };
         let metadata = read(super::checksums::METADATA)?;
-        let list = read(super::checksums::LIST)?;
+        // GitHub's release digest (#110) has no list: metadata and archive
+        // are the whole chain.
+        let list = if self.install.checksums.is_some() {
+            read(super::checksums::LIST)?
+        } else {
+            Vec::new()
+        };
         let archive_sha256 = adopt::sha256_at(
             out,
             &path(super::checksums::ARCHIVE),
@@ -688,21 +695,35 @@ impl MaintenanceRun {
     }
 
     /// Checks the chain of a checksum list on the daemon's own reading
-    /// ([`super::checksums::check`]); nothing for a recipe without one.
+    /// ([`super::checksums::check`]) or of GitHub's release digest
+    /// ([`super::checksums::check_release_digest`]); nothing for a recipe
+    /// without either.
     fn check_list(&self, result: &RunResult) -> Result<(), Diagnostic> {
         let agent = self.agent.id;
-        let (Some(spec), Some(checked)) = (self.install.checksums, &result.checked) else {
+        let Some(checked) = &result.checked else {
             return Ok(());
         };
-        super::checksums::check(
-            &spec,
-            self.platform,
-            &result.version,
-            &checked.metadata,
-            &checked.list,
-            &checked.archive_sha256,
-        )
-        .map_err(|found| match found {
+        let found = if let Some(spec) = self.install.checksums {
+            super::checksums::check(
+                &spec,
+                self.platform,
+                &result.version,
+                &checked.metadata,
+                &checked.list,
+                &checked.archive_sha256,
+            )
+        } else if let Some(spec) = self.install.release_digest {
+            super::checksums::check_release_digest(
+                &spec,
+                self.platform,
+                &result.version,
+                &checked.metadata,
+                &checked.archive_sha256,
+            )
+        } else {
+            return Ok(());
+        };
+        found.map_err(|found| match found {
             super::checksums::Failed::Version(what) => failed(agent, Step::Pin, &what),
             super::checksums::Failed::Checksum(what) => failed(agent, Step::Checksum, &what),
         })
@@ -1176,3 +1197,6 @@ mod tests;
 
 #[cfg(test)]
 mod package_tests;
+
+#[cfg(test)]
+mod opencode_tests;

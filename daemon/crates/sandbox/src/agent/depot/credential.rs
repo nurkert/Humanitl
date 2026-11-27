@@ -47,7 +47,7 @@
 use std::collections::BTreeSet;
 use std::ffi::OsStr;
 use std::io::{Read as _, Write as _};
-use std::os::fd::{AsFd as _, OwnedFd};
+use std::os::fd::{AsFd, OwnedFd};
 use std::os::unix::fs::OpenOptionsExt as _;
 use std::path::{Path, PathBuf};
 use std::time::Duration;
@@ -60,6 +60,7 @@ use serde::{Deserialize, Serialize};
 use serde_json::Value;
 
 use super::adopt;
+use super::recipe::{credential_name, credential_path_ok};
 use super::seal::{self, CredentialKeys};
 use super::store::Depot;
 
@@ -117,7 +118,37 @@ pub enum ValueForm {
     /// One of these strings exactly, as an enumeration of the vendor's
     /// (Codex's `auth_mode`, HUM-515).
     OneOf(&'static [&'static str]),
+    /// An object of at most 64 entries, each a non-empty
+    /// [`ValueForm::Text`] key with a [`ValueForm::Text`] value (`OpenCode`'s
+    /// `metadata` of an API key, #110).
+    TextMap,
 }
+
+/// A credential file that is a map from a name the vendor does not fix to
+/// an entry of one of several kinds (#110: `OpenCode`'s `auth.json`, provider
+/// identifier to `oauth`, `api` or `wellknown`).
+///
+/// Every top-level key must be an entry name ([`ENTRY_NAME_CAP`] visible
+/// ASCII characters at most, no space) whose value is an object; its key
+/// [`EntryMap::tag`] picks the kind, and the entry is checked against that
+/// kind's fields like a whole file against [`CredentialFormat::fields`]. An
+/// unknown kind, a value that is no object and a key the kind does not
+/// declare are refused. A later write-back must hold exactly the stored
+/// entries, each of the same kind with the same keys: a session renews the
+/// tokens of the providers a login stored, it never adds or drops one.
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+pub struct EntryMap {
+    /// The key of an entry that names its kind: `type`.
+    pub tag: &'static str,
+    /// The kinds, each with its fields; pointers are relative to the entry
+    /// (`/type`, `/key`).
+    pub kinds: &'static [(&'static str, &'static [CredentialField])],
+    /// The most entries a file holds.
+    pub max_entries: usize,
+}
+
+/// The longest entry name of an [`EntryMap`], in characters.
+pub const ENTRY_NAME_CAP: usize = 256;
 
 /// Material a file must carry when one of its keys holds a given value
 /// ([`CredentialFormat::requires`]): Codex's `auth_mode = "chatgpt"` needs
@@ -190,6 +221,9 @@ pub struct CredentialFormat {
     /// has it, present or absent (Codex's `auth_mode`: its refresh keeps the
     /// mode). Empty for none.
     pub fixed: &'static [&'static str],
+    /// The file is a map of entries ([`EntryMap`]) instead of fixed keys;
+    /// [`CredentialFormat::fields`] is then empty (#110).
+    pub entries: Option<EntryMap>,
     /// Where the vendor documents the format, or the measurement it comes
     /// from.
     pub evidence: &'static str,
@@ -406,7 +440,10 @@ fn take_back_with(
         old: None,
         new: Some(new.clone()),
     })?;
-    let stored = read_stored(depot, request.file, request.keys).map_err(|found| Refused {
+    // The depot keeps the file under its name; the session may keep it one
+    // directory deeper (OpenCode's `opencode/auth.json`, #110).
+    let name = credential_name(request.file);
+    let stored = read_stored(depot, name, request.keys).map_err(|found| Refused {
         found,
         old: None,
         new: Some(new.clone()),
@@ -437,9 +474,8 @@ fn take_back_with(
     }
     // Sealed when the depot is; read under the lock, so a switch of the
     // encryption that ran since this session started is followed.
-    let on_disk =
-        seal::for_disk(depot, request.file, &bytes, request.keys).map_err(&refuse_against)?;
-    let warning = store(depot, request.file, &on_disk, interrupt)
+    let on_disk = seal::for_disk(depot, name, &bytes, request.keys).map_err(&refuse_against)?;
+    let warning = store(depot, name, &on_disk, interrupt)
         .map_err(|what| refuse_against(refused(agent, &what)))?;
     let state = WritebackState {
         session: request.session.to_string(),
@@ -466,6 +502,9 @@ fn compare(
     old: Option<&str>,
 ) -> Result<(), Diagnostic> {
     let agent = request.depot.agent();
+    if let Some(map) = request.format.entries {
+        compare_entries(stored, value, &map).map_err(|what| refused(agent, &what))?;
+    }
     let fields = request.format.fields;
     let before = present(stored, fields);
     let after = present(value, fields);
@@ -570,11 +609,35 @@ fn millis(value: u64, unit: TimeUnit) -> u64 {
 /// (`O_NOFOLLOW`), never blocking on a FIFO (`O_NONBLOCK`), and only a
 /// regular file of at most [`CREDENTIAL_CAP`] bytes. `Ok(None)` when nothing
 /// lies there.
+///
+/// `file` may lie one directory deeper ([`credential_path_ok`], `OpenCode`'s
+/// `opencode/auth.json`, #110): every directory on the way is opened relative
+/// to the one before with `O_DIRECTORY` and `O_NOFOLLOW`, so a link in the
+/// session's copy never leads the read out of it.
 fn read_credential(
     dir: std::os::fd::BorrowedFd<'_>,
     file: &str,
 ) -> Result<Option<Vec<u8>>, String> {
-    read_capped(dir, file, CREDENTIAL_CAP)
+    if !credential_path_ok(file) {
+        return Err("is no path inside the configuration copy".to_owned());
+    }
+    let mut parts: Vec<&str> = file.split('/').collect();
+    let leaf = parts.pop().unwrap_or(file);
+    let mut held: Option<OwnedFd> = None;
+    for part in parts {
+        let at = held.as_ref().map_or(dir, AsFd::as_fd);
+        match adopt::open_dir_at(at, OsStr::new(part)) {
+            Ok(fd) => held = Some(fd),
+            Err(rustix::io::Errno::NOENT) => return Ok(None),
+            Err(rustix::io::Errno::LOOP | rustix::io::Errno::NOTDIR) => {
+                return Err(format!(
+                    "lies under {part}, which is a symbolic link or no directory"
+                ));
+            }
+            Err(err) => return Err(format!("cannot be opened ({err})")),
+        }
+    }
+    read_capped(held.as_ref().map_or(dir, AsFd::as_fd), leaf, CREDENTIAL_CAP)
 }
 
 /// [`read_credential`] with another cap.
@@ -636,6 +699,7 @@ fn read_stored(
     file: &str,
     keys: Option<&CredentialKeys>,
 ) -> Result<Option<Stored>, Diagnostic> {
+    let file = credential_name(file);
     let agent = depot.agent();
     let dir = match adopt::open_dir(&depot.credentials_dir()) {
         Ok(dir) => dir,
@@ -692,7 +756,11 @@ fn serialise(value: &Value) -> Result<Vec<u8>, String> {
 ///
 /// What is wrong, naming the pointer, never a value.
 pub(crate) fn check_document(value: &Value, format: &CredentialFormat) -> Result<(), String> {
-    check_format(value, format.fields)?;
+    if let Some(map) = format.entries {
+        check_entries(value, &map)?;
+    } else {
+        check_format(value, format.fields)?;
+    }
     if !format.one_of.is_empty()
         && !format
             .one_of
@@ -728,6 +796,108 @@ pub(crate) fn check_document(value: &Value, format: &CredentialFormat) -> Result
                 "{pointer} names no account; a file with tokens must name the account they \
                  belong to"
             ));
+        }
+    }
+    Ok(())
+}
+
+/// Checks a map of entries ([`EntryMap`]): every top-level key an entry name,
+/// every value an object of a declared kind, checked against its fields.
+fn check_entries(value: &Value, map: &EntryMap) -> Result<(), String> {
+    let Some(object) = value.as_object() else {
+        return Err("the file is no object".to_owned());
+    };
+    if object.len() > map.max_entries {
+        return Err(format!(
+            "the file holds {} entries, more than {}",
+            object.len(),
+            map.max_entries
+        ));
+    }
+    for (name, entry) in object {
+        let at = shown_key(&format!("/{}", escape(name)));
+        if name.is_empty()
+            || name.chars().count() > ENTRY_NAME_CAP
+            || !name.bytes().all(|b| b.is_ascii_graphic())
+        {
+            return Err(format!("{at} is no entry name"));
+        }
+        let fields = entry_fields(entry, map).map_err(|what| format!("{at}: {what}"))?;
+        check_format(entry, fields).map_err(|what| format!("{at}: {what}"))?;
+    }
+    Ok(())
+}
+
+/// The fields of the kind an entry names; an error for a value that is no
+/// object or names no declared kind.
+fn entry_fields(entry: &Value, map: &EntryMap) -> Result<&'static [CredentialField], String> {
+    if !entry.is_object() {
+        return Err("is no object".to_owned());
+    }
+    let tag = entry
+        .get(map.tag)
+        .and_then(Value::as_str)
+        .ok_or_else(|| format!("names no kind in {}", map.tag))?;
+    map.kinds
+        .iter()
+        .find(|(kind, _)| *kind == tag)
+        .map(|(_, fields)| *fields)
+        .ok_or_else(|| {
+            format!(
+                "names a kind the adapter's format does not know in {}",
+                map.tag
+            )
+        })
+}
+
+/// [`compare`] for a map of entries: the same entries, each of the same
+/// kind with the same keys of the same forms.
+fn compare_entries(stored: &Value, value: &Value, map: &EntryMap) -> Result<(), String> {
+    let names = |doc: &Value| -> BTreeSet<String> {
+        doc.as_object()
+            .map(|object| object.keys().cloned().collect())
+            .unwrap_or_default()
+    };
+    let (before, after) = (names(stored), names(value));
+    if before != after {
+        let gone: Vec<String> = before
+            .difference(&after)
+            .map(|key| shown_key(key))
+            .collect();
+        let added: Vec<String> = after
+            .difference(&before)
+            .map(|key| shown_key(key))
+            .collect();
+        return Err(format!(
+            "the file holds other entries than the stored one (missing: {gone:?}, added: \
+             {added:?}); a new provider comes only through a login run"
+        ));
+    }
+    for name in &after {
+        let (Some(old), Some(new)) = (stored.get(name), value.get(name)) else {
+            continue;
+        };
+        if old.get(map.tag) != new.get(map.tag) {
+            return Err(format!(
+                "{} has another kind than in the stored file; only a login run changes it",
+                shown_key(name)
+            ));
+        }
+        let fields = entry_fields(new, map)?;
+        let (was, is) = (present(old, fields), present(new, fields));
+        if was != is {
+            return Err(format!(
+                "{} has other keys than in the stored file",
+                shown_key(name)
+            ));
+        }
+        for pointer in &is {
+            if kind(old.pointer(pointer)) != kind(new.pointer(pointer)) {
+                return Err(format!(
+                    "{}{pointer} has another form than in the stored file",
+                    shown_key(name)
+                ));
+            }
         }
     }
     Ok(())
@@ -783,6 +953,12 @@ fn check_value(value: &Value, pointer: &str, form: ValueForm) -> Result<(), Stri
         ValueForm::OneOf(allowed) => value.as_str().is_some_and(|text| allowed.contains(&text)),
         ValueForm::TextList => value.as_array().is_some_and(|items| {
             items.len() <= LIST_CAP && items.iter().all(|item| item.as_str().is_some_and(text_ok))
+        }),
+        ValueForm::TextMap => value.as_object().is_some_and(|object| {
+            object.len() <= LIST_CAP
+                && object.iter().all(|(key, item)| {
+                    !key.is_empty() && text_ok(key) && item.as_str().is_some_and(text_ok)
+                })
         }),
     };
     if fits {
@@ -854,6 +1030,7 @@ fn store(
     bytes: &[u8],
     interrupt: Option<usize>,
 ) -> Result<Option<String>, String> {
+    let file = credential_name(file);
     let dir = depot.credentials_dir();
     adopt::make_dir(&dir).map_err(|err| format!("credentials/ cannot be created ({err})"))?;
     let temp = depot.root().join(format!(".{file}.writeback"));
@@ -1236,6 +1413,7 @@ pub fn restore(
 }
 
 fn restore_files(depot: &Depot, file: &str, snapshot: &Snapshot) -> Result<(), String> {
+    let file = credential_name(file);
     match &snapshot.credential {
         Some(bytes) => {
             store(depot, file, bytes, None)?;
@@ -1303,7 +1481,7 @@ fn now() -> String {
 /// Where the credential file of a depot lies; for the status and tests.
 #[must_use]
 pub fn stored_path(depot: &Depot, file: &str) -> PathBuf {
-    depot.credentials_dir().join(file)
+    depot.credentials_dir().join(credential_name(file))
 }
 
 #[cfg(test)]

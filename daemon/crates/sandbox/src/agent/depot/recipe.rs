@@ -30,7 +30,9 @@
 //! inside the configuration copy, the config crate's lists in step), so a new
 //! entry is checked without a new test.
 
-use super::credential::{CredentialField, CredentialFormat, NamedFields, Requires, ValueForm};
+use super::credential::{
+    CredentialField, CredentialFormat, EntryMap, NamedFields, Requires, ValueForm,
+};
 
 /// How an agent logs in inside a maintenance run (HUM-520 builds the run).
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
@@ -43,6 +45,12 @@ pub enum LoginFlow {
     /// A device flow that needs no callback into the sandbox (Codex
     /// `--device-auth`).
     DeviceCode,
+    /// The agent asks in the run's terminal which provider to log in to and
+    /// then for its key, which the person pastes there (`OpenCode`'s
+    /// `opencode auth login`, #110). No URL to open and no callback; a
+    /// provider's own browser login reaches hosts the recipe does not name,
+    /// and they are held like any request of the run.
+    TerminalPrompt,
 }
 
 /// The declarations of one agent for running from the depot.
@@ -64,12 +72,20 @@ pub struct DepotRecipe {
     /// program directory makes an update fail even without them.
     pub update_off: &'static [(&'static str, &'static str)],
     /// The credential file, relative to the configuration directory; the
-    /// one file HUM-520 takes back through its guard.
+    /// one file HUM-520 takes back through its guard. A relative path inside
+    /// the copy, never absolute and never with `..` (#110: `OpenCode`'s
+    /// `opencode/auth.json` under `XDG_DATA_HOME`); the depot stores it under
+    /// its file name ([`credential_name`]).
     pub credential_file: Option<&'static str>,
     /// How an install or update runs in a maintenance sandbox (HUM-519);
     /// `None` until every value is sourced, then `install` answers
     /// `AGENT_015`.
     pub install: Option<InstallRecipe>,
+    /// Why a configuration run is refused although
+    /// [`DepotRecipe::config_env`] points at a copy (#110: `OpenCode`'s copy is
+    /// its data directory, which holds sessions and logs, not configuration);
+    /// `agents config` then answers `AGENT_015` with it.
+    pub config_refused: Option<&'static str>,
     /// Why there is no [`DepotRecipe::install`], with its evidence, for the
     /// `why` of `AGENT_015` (HUM-566): an agent whose vendor ships no install
     /// the depot can pin and check says so instead of a general sentence.
@@ -202,6 +218,40 @@ pub struct ChecksumList {
     pub evidence: &'static str,
 }
 
+/// The vendor signs nothing and publishes no list of checksums, but releases
+/// on GitHub as an immutable release (#110, ADR-0023 amendment 2026-11-27;
+/// `OpenCode`). GitHub computes the SHA-256 of every asset at upload and names
+/// it in the release metadata (`assets[].digest`, `sha256:<hex>`); an
+/// immutable release keeps its assets and its tag from then on
+/// (docs.github.com, "Immutable releases").
+///
+/// The run downloads metadata and archive and unpacks the archive into the
+/// program tree; the daemon reads its own copy of both after the run and
+/// checks them itself (`super::checksums::check_release_digest`): the
+/// metadata names the version the run installed, says the release is
+/// immutable, and names exactly one SHA-256 for the platform's archive, which
+/// the archive has.
+///
+/// The anchor is weaker than a [`ChecksumList`]: the SHA-256 is GitHub's
+/// statement about what was uploaded, not one of the vendor's, and what binds
+/// it is TLS to GitHub. Anyone who can upload to the vendor's repository
+/// stands behind the release as the vendor would.
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+pub struct ReleaseDigest {
+    /// The JSON pointer of the release's name in the metadata: `/tag_name`.
+    pub version_pointer: &'static str,
+    /// What precedes the version in that name: `v`.
+    pub version_prefix: &'static str,
+    /// The JSON pointer of the flag that must be `true`: `/immutable`. A
+    /// release without it, or with it `false`, is refused.
+    pub immutable_pointer: &'static str,
+    /// The archive's name among the metadata's `/assets`, with `{platform}`
+    /// for the vendor's platform name.
+    pub archive: &'static str,
+    /// Where GitHub documents the metadata and the flag.
+    pub evidence: &'static str,
+}
+
 /// What an install or update runs in its maintenance sandbox (HUM-519).
 ///
 /// The daemon builds the run around [`InstallRecipe::script`]: it sets the
@@ -219,7 +269,8 @@ pub struct ChecksumList {
 ///   as `signed/manifest`, `signed/signature` and `signed/key.asc`; for a
 ///   recipe with a [`ChecksumList`] the vendor's release metadata, the list
 ///   and the archive the tree came from as `checked/metadata`,
-///   `checked/list` and `checked/archive`.
+///   `checked/list` and `checked/archive`; for a recipe with a
+///   [`ReleaseDigest`] the metadata and the archive alone.
 ///
 /// Only the program tree is taken over; a launcher or anything else the
 /// installer leaves in `HOME` is discarded with the run.
@@ -253,6 +304,9 @@ pub struct InstallRecipe {
     /// The vendor's list of checksums, where it publishes one instead of a
     /// signature (HUM-566).
     pub checksums: Option<ChecksumList>,
+    /// GitHub's digest of an immutable release, where the vendor publishes
+    /// neither a signature nor a list (#110).
+    pub release_digest: Option<ReleaseDigest>,
     /// The source the manifest names: where the program comes from.
     pub source: &'static str,
 }
@@ -277,8 +331,10 @@ pub struct KnownAgent {
 /// `humanitl_config::agents::KNOWN_AGENTS`.
 pub const KNOWN: &[KnownAgent] = &[
     // opencode.ai/docs (2026-11-17): the installer puts the binary under
-    // `~/.opencode/bin` (the host's home, never mounted); the npm package
-    // `opencode-ai` and Homebrew put it where the sandbox's `/usr` reaches.
+    // `~/.opencode/bin` (the host's home, never mounted; re-read 2026-11-27
+    // in the vendor's `install` at tag v1.19.6, `INSTALL_DIR=$HOME/.opencode/
+    // bin`); the npm package `opencode-ai` and Homebrew put it where the
+    // sandbox's `/usr` reaches.
     KnownAgent {
         id: "opencode",
         display_name: "OpenCode",
@@ -290,7 +346,7 @@ pub const KNOWN: &[KnownAgent] = &[
             "/usr/local/lib/node_modules/opencode-ai",
             "/opt/homebrew/bin/opencode",
         ],
-        recipe: None,
+        recipe: Some(OPENCODE_RECIPE),
     },
     // The adapter's install command (`pi.rs`, `INSTALL_COMMAND`): a global npm
     // install of `@earendil-works/pi-coding-agent`.
@@ -328,6 +384,7 @@ pub const KNOWN: &[KnownAgent] = &[
             credential_file: Some(".credentials.json"),
             install: Some(CLAUDE_INSTALL),
             install_refused: None,
+            config_refused: None,
             login: LoginFlow::PastedCode,
             // The keys of `.credentials.json` and the fields of `.claude.json`
             // that a session needs to start logged in are not published by
@@ -413,6 +470,314 @@ pub const KNOWN: &[KnownAgent] = &[
     },
 ];
 
+/// The vendor's repository at the tag every `OpenCode` source below was read
+/// at (2026-11-27): `v1.19.6`, commit
+/// `f4e363c8295fa90a03dddc451882fffe8fbce357`.
+pub const OPENCODE_SOURCE: &str =
+    "https://github.com/anomalyco/opencode/blob/f4e363c8295fa90a03dddc451882fffe8fbce357/";
+
+/// `OpenCode` from the depot (#110). Sources, read 2026-11-27 at
+/// [`OPENCODE_SOURCE`] (paths relative to it):
+///
+/// - **Data directory as the copy** ([`DepotRecipe::config_env`]
+///   `XDG_DATA_HOME`): `OpenCode` keeps its provider logins in
+///   `path.join(Global.Path.data, "auth.json")`
+///   (`packages/opencode/src/auth/index.ts`), written with mode `0600`, and
+///   `Global.Path.data` is `path.join(xdgData, "opencode")`
+///   (`packages/core/src/global.ts`, `xdg-basedir`: `$XDG_DATA_HOME` or
+///   `~/.local/share`). `OPENCODE_CONFIG_DIR` moves only the configuration
+///   directory (same file, `Global.make`; `packages/opencode/src/config/
+///   paths.ts` adds it to the directories read), never `auth.json`. So the
+///   depot's copy is `OpenCode`'s data directory's parent, and the credential
+///   file lies at `opencode/auth.json` inside it. The adapter's own
+///   configuration (`XDG_CONFIG_HOME/opencode`, the managed configuration,
+///   `OPENCODE_CONFIG`) is untouched by it (`super::super::opencode`).
+/// - `OPENCODE_DISABLE_AUTOUPDATE` (`truthy`: `true` or `1`) turns the update
+///   check off (`packages/core/src/flag/flag.ts`,
+///   `packages/opencode/src/cli/upgrade.ts`); the adapter sets it as well.
+/// - **Login in the run's terminal** ([`LoginFlow::TerminalPrompt`], lead's
+///   decision on #110): `opencode auth login` (`providers` has the alias
+///   `auth`, `login` its command, `packages/opencode/src/cli/cmd/
+///   providers.ts`) asks for a provider and then its key or the provider's
+///   own login, and writes `auth.json` (`Auth.set`). Only this run stores the
+///   first file and adds a provider; a session renews what is stored, and a
+///   `/connect` in a session that adds a provider is refused by the guard
+///   (`AGENT_012`).
+/// - **Credential format** ([`OPENCODE_AUTH_JSON`]): a map of entries.
+/// - **No configuration run** ([`DepotRecipe::config_refused`]): the copy is
+///   the data directory, with sessions, logs and the catalog's cache, not
+///   configuration; the adapter writes `OpenCode`'s configuration itself.
+/// - The install ([`OPENCODE_INSTALL`]) takes the release archive from
+///   GitHub, checked against GitHub's digest of an immutable release.
+pub const OPENCODE_RECIPE: DepotRecipe = DepotRecipe {
+    program: "opencode",
+    config_env: Some("XDG_DATA_HOME"),
+    update_off: &[("OPENCODE_DISABLE_AUTOUPDATE", "true")],
+    credential_file: Some("opencode/auth.json"),
+    install: Some(OPENCODE_INSTALL),
+    install_refused: None,
+    config_refused: Some(
+        "its copy in the depot is OpenCode's data directory (XDG_DATA_HOME), which holds \
+         sessions, logs and the model catalog's cache, not configuration; Humanitl writes \
+         OpenCode's configuration for every session itself",
+    ),
+    login: LoginFlow::TerminalPrompt,
+    credential_format: Some(OPENCODE_AUTH_JSON),
+    login_run: Some(LoginRecipe {
+        args: &["auth", "login"],
+        // The key itself needs no network. `login` refreshes the provider
+        // catalog first (`modelsDev.refresh(true)`) from
+        // `https://models.opencode.ai/api.json` with a timeout of 10 s and
+        // falls back to the catalog built in (`packages/core/src/
+        // models-dev.ts`); allowed, so the run does not wait on a hold.
+        hosts: &[InstallHost {
+            host: "models.opencode.ai",
+            evidence: concat!(
+                "https://github.com/anomalyco/opencode/blob/f4e363c8295fa90a03dddc451882fffe8fbce357/",
+                "packages/core/src/models-dev.ts (source https://models.opencode.ai, ",
+                "fetchApi <source>/api.json) and packages/opencode/src/cli/cmd/providers.ts ",
+                "(modelsDev.refresh(true)), read 2026-11-27"
+            ),
+        }],
+        callback: None,
+        named: None,
+        device_flow_setting: None,
+    }),
+    // No configuration run, so nothing to highlight.
+    command_keys: &[],
+};
+
+/// One key of an `OpenCode` login entry.
+const fn opencode_field(pointer: &'static str, form: ValueForm, required: bool) -> CredentialField {
+    CredentialField {
+        pointer,
+        form,
+        required,
+    }
+}
+
+/// The format of `OpenCode`'s `auth.json`, from the schema that reads and
+/// writes it (`packages/opencode/src/auth/index.ts` at [`OPENCODE_SOURCE`],
+/// read 2026-11-27): an object from a provider's identifier (any string, a
+/// URL for `wellknown`; `Auth.set` strips a trailing `/`) to `Info`, the
+/// union of three classes picked by `type`:
+///
+/// - `oauth`: `refresh` and `access` (`String`), `expires`
+///   (`NonNegativeInt`), optional `accountId` and `enterpriseUrl`;
+/// - `api`: `key` (`String`), optional `metadata` (`Record<String,
+///   String>`);
+/// - `wellknown`: `key` (the name of the variable the token goes into) and
+///   `token` (`String`).
+///
+/// `Auth.all` drops an entry that does not decode; the guard refuses the
+/// whole file instead. No expiry: each `oauth` entry carries its own, so a
+/// session writes back only when it started on the stored file. No account:
+/// the file names none.
+pub const OPENCODE_AUTH_JSON: CredentialFormat = CredentialFormat {
+    fields: &[],
+    expiry: None,
+    account: None,
+    one_of: &[],
+    requires: &[],
+    fixed: &[],
+    entries: Some(EntryMap {
+        tag: "type",
+        kinds: &[
+            (
+                "oauth",
+                &[
+                    opencode_field("/type", ValueForm::OneOf(&["oauth"]), true),
+                    opencode_field("/refresh", ValueForm::Token, true),
+                    opencode_field("/access", ValueForm::Token, true),
+                    opencode_field("/expires", ValueForm::Count, true),
+                    opencode_field("/accountId", ValueForm::Text, false),
+                    opencode_field("/enterpriseUrl", ValueForm::Text, false),
+                ],
+            ),
+            (
+                "api",
+                &[
+                    opencode_field("/type", ValueForm::OneOf(&["api"]), true),
+                    opencode_field("/key", ValueForm::Token, true),
+                    opencode_field("/metadata", ValueForm::TextMap, false),
+                ],
+            ),
+            (
+                "wellknown",
+                &[
+                    opencode_field("/type", ValueForm::OneOf(&["wellknown"]), true),
+                    opencode_field("/key", ValueForm::Text, true),
+                    opencode_field("/token", ValueForm::Token, true),
+                ],
+            ),
+        ],
+        max_entries: 64,
+    }),
+    evidence: concat!(
+        "https://github.com/anomalyco/opencode/blob/f4e363c8295fa90a03dddc451882fffe8fbce357/",
+        "packages/opencode/src/auth/index.ts (Oauth, Api, WellKnown, Info), read 2026-11-27"
+    ),
+};
+
+/// `OpenCode` from its GitHub release, checked against GitHub's digest of the
+/// immutable release (#110, ADR-0023 amendment 2026-11-27).
+///
+/// Sources, read 2026-11-27:
+///
+/// - The vendor's installer `install` at [`OPENCODE_SOURCE`]: archives at
+///   `https://github.com/anomalyco/opencode/releases/download/v<version>/
+///   opencode-<target><ext>`, `.tar.gz` on Linux, `.zip` on macOS; the
+///   target is `<os>-<arch>`, then `-baseline` for an `x64` CPU without AVX2,
+///   then `-musl` on a musl system; it unpacks and moves `opencode` from the
+///   top of the archive. It installs `OpenCode` 1 only ("`OpenCode` 2 ships as
+///   `@opencode/cli`"; a version from 2 on is refused) and verifies nothing.
+///   Without a version the installer reads the newest `v1.x.y` `tag_name` of
+///   `https://api.github.com/repos/anomalyco/opencode/releases?per_page=100`
+///   (its fallback; npm's registry, its first choice, is left out: one source
+///   of the version suffices). The depot reads `releases/latest` instead,
+///   which GitHub defines as the newest release that is neither a draft nor
+///   a prerelease (docs.github.com/en/rest/releases, "Get the latest
+///   release"): a prerelease is never installed without `--version`. Once the
+///   latest release is `OpenCode` 2, a run without `--version` is refused
+///   below and names the version; an `OpenCode` 1 release is then pinned
+///   with `--version`.
+/// - The release `v1.19.6` (`https://api.github.com/repos/anomalyco/opencode/
+///   releases/tags/v1.19.6`): `"immutable": true`, every asset with
+///   `"digest": "sha256:<hex>"`; no list of checksums, no signature of the
+///   CLI archives (`.github/workflows/publish.yml` signs only the macOS and
+///   Windows binaries with the platforms' code signing).
+/// - The download from `github.com` answers with a redirect to
+///   `release-assets.githubusercontent.com` (measured with a `HEAD` request,
+///   2026-11-27; nothing was downloaded).
+/// - x64 takes the `baseline` build: the depot does not look at the CPU, and
+///   the vendor builds it for every x64 CPU, as its installer chooses it
+///   without AVX2.
+pub const OPENCODE_INSTALL: InstallRecipe = InstallRecipe {
+    script: r#"api=https://api.github.com/repos/anomalyco/opencode
+download=https://github.com/anomalyco/opencode/releases/download
+out=$HUMANITL_DEPOT_OUT
+version=$HUMANITL_DEPOT_VERSION
+if [ -z "$version" ]; then
+    version=$(curl -fsSL "$api/releases/latest" | tr ',' '\n' \
+        | sed -n 's/.*"tag_name"[[:space:]]*:[[:space:]]*"v\([^"]*\)".*/\1/p' | head -n 1)
+fi
+case $version in
+    *[!0-9A-Za-z.+-]*) echo "humanitl: the vendor named no version: $version" >&2; exit 1 ;;
+    1.[0-9]*.[0-9]*) ;;
+    *) echo "humanitl: no OpenCode 1 version: $version" >&2; exit 1 ;;
+esac
+asset="opencode-$HUMANITL_DEPOT_PLATFORM"
+mkdir -p "$out/program" "$out/checked"
+curl -fsSL -o "$out/checked/metadata" "$api/releases/tags/v$version"
+# Each JSON object's own keys, without its children and without blanks outside
+# strings: the release must say `"immutable":true` itself, and exactly one
+# asset object names the archive and its digest, in whatever key order.
+expected=$(tr -d '\n' < "$out/checked/metadata" | awk -v asset="$asset" '{
+    depth = 0; quoted = 0; escaped = 0
+    for (i = 1; i <= length($0); i++) {
+        c = substr($0, i, 1)
+        if (quoted) {
+            own[depth] = own[depth] c
+            if (escaped) escaped = 0
+            else if (c == "\\") escaped = 1
+            else if (c == "\"") quoted = 0
+            continue
+        }
+        if (c == "\"") { quoted = 1; own[depth] = own[depth] c; continue }
+        if (c == " " || c == "\t" || c == "\r") continue
+        if (c == "{") { depth++; own[depth] = ""; continue }
+        if (c == "}") {
+            text = own[depth]
+            if (depth == 1 && index(text, "\"immutable\":true") > 0) immutable = 1
+            if (index(text, "\"name\":\"" asset "\"") > 0) {
+                found++
+                sum = ""
+                if (match(text, /"digest":"sha256:[0-9a-fA-F]*"/)) {
+                    sum = substr(text, RSTART + 17, RLENGTH - 18)
+                }
+            }
+            depth--
+            continue
+        }
+        own[depth] = own[depth] c
+    }
+} END {
+    if (!immutable) { print "not-immutable"; exit }
+    if (found == 1 && length(sum) == 64) print tolower(sum)
+}')
+if [ "$expected" = not-immutable ]; then
+    echo "humanitl: release v$version is not immutable" >&2
+    exit 1
+fi
+if [ -z "$expected" ]; then
+    echo "humanitl: release v$version names no single digest for $asset" >&2
+    exit 1
+fi
+curl -fsSL -o "$out/checked/archive" "$download/v$version/$asset"
+actual=$(sha256sum "$out/checked/archive" | cut -d ' ' -f 1)
+if [ "$expected" != "$actual" ]; then
+    echo "humanitl: $asset does not match the digest of release v$version" >&2
+    exit 1
+fi
+case $asset in
+    *.tar.gz) tar -xzf "$out/checked/archive" -C "$out/program" --no-same-owner --no-same-permissions ;;
+    *.zip) unzip -q "$out/checked/archive" -d "$out/program" ;;
+    *) echo "humanitl: unknown archive $asset" >&2; exit 1 ;;
+esac
+printf '%s\n' "$version" > "$out/version"
+"#,
+    hosts: &[
+        InstallHost {
+            host: "api.github.com",
+            evidence: concat!(
+                "https://github.com/anomalyco/opencode/blob/f4e363c8295fa90a03dddc451882fffe8fbce357/",
+                "install (releases?per_page=100), ",
+                "https://docs.github.com/en/rest/releases/releases#get-the-latest-release (releases/latest) and ",
+                "https://docs.github.com/en/rest/releases/releases (immutable, assets[].digest), ",
+                "read 2026-11-27"
+            ),
+        },
+        InstallHost {
+            host: "github.com",
+            evidence: concat!(
+                "https://github.com/anomalyco/opencode/blob/f4e363c8295fa90a03dddc451882fffe8fbce357/",
+                "install (releases/download/v<version>/<filename>), read 2026-11-27"
+            ),
+        },
+        InstallHost {
+            host: "release-assets.githubusercontent.com",
+            evidence: concat!(
+                "https://github.com/anomalyco/opencode/releases/download/v1.19.6/",
+                "opencode-linux-x64.tar.gz answers 302 with this host, HEAD request 2026-11-27"
+            ),
+        },
+    ],
+    program: "opencode",
+    expected: &[],
+    platforms: &[
+        (HostPlatform::LinuxX64, "linux-x64-baseline.tar.gz"),
+        (HostPlatform::LinuxArm64, "linux-arm64.tar.gz"),
+        (HostPlatform::LinuxX64Musl, "linux-x64-baseline-musl.tar.gz"),
+        (HostPlatform::LinuxArm64Musl, "linux-arm64-musl.tar.gz"),
+        (HostPlatform::MacX64, "darwin-x64-baseline.zip"),
+        (HostPlatform::MacArm64, "darwin-arm64.zip"),
+    ],
+    signature: None,
+    checksums: None,
+    release_digest: Some(ReleaseDigest {
+        version_pointer: "/tag_name",
+        version_prefix: "v",
+        immutable_pointer: "/immutable",
+        archive: "opencode-{platform}",
+        evidence: concat!(
+            "https://docs.github.com/en/rest/releases/releases (immutable, assets[].digest) and ",
+            "https://docs.github.com/en/code-security/supply-chain-security/",
+            "understanding-your-software-supply-chain/immutable-releases, read 2026-11-27"
+        ),
+    }),
+    source: "https://github.com/anomalyco/opencode/releases",
+};
+
 /// The Antigravity CLI from the depot (HUM-517). Sources, read 2026-11-20:
 /// antigravity.google/docs (install, tab CLI; cli/troubleshooting; settings)
 /// and the install script antigravity.google/cli/install.sh.
@@ -440,6 +805,7 @@ pub const AGY_RECIPE: DepotRecipe = DepotRecipe {
     credential_file: None,
     install: None,
     install_refused: Some(AGY_INSTALL_REFUSED),
+    config_refused: None,
     login: LoginFlow::ApiKeyOnly,
     credential_format: None,
     login_run: None,
@@ -498,6 +864,7 @@ pub const CODEX_RECIPE: DepotRecipe = DepotRecipe {
     credential_file: Some("auth.json"),
     install: Some(CODEX_INSTALL),
     install_refused: None,
+    config_refused: None,
     login: LoginFlow::DeviceCode,
     credential_format: Some(CODEX_AUTH_JSON),
     login_run: Some(LoginRecipe {
@@ -672,6 +1039,7 @@ pub const CODEX_AUTH_JSON: CredentialFormat = CredentialFormat {
     // The refresh (`persist_tokens` in the same file) refuses any mode but
     // `chatgpt` and keeps `auth_mode`; only a login changes it.
     fixed: &["/auth_mode"],
+    entries: None,
     evidence: concat!(
         "https://github.com/openai/codex/blob/a0a30c40e8dbcc44af52e2df64dcce64368d4422/",
         "codex-rs/login/src/auth/storage.rs (AuthDotJson) and codex-rs/login/src/token_data.rs ",
@@ -774,6 +1142,7 @@ printf '%s\n' "$version" > "$out/version"
             "https://releases.openai.com/codex/releases/0.171.0/release.json, read 2026-11-20"
         ),
     }),
+    release_digest: None,
     source: "https://releases.openai.com/codex/releases",
 };
 
@@ -853,8 +1222,33 @@ printf '%s
         ),
     }),
     checksums: None,
+    release_digest: None,
     source: "https://downloads.claude.ai/claude-code-releases",
 };
+
+/// Whether `path` is a credential path the guard takes: relative, inside the
+/// copy, without `..`, `.` or an empty part, and not more than
+/// [`CREDENTIAL_DEPTH`] parts deep (#110).
+#[must_use]
+pub fn credential_path_ok(path: &str) -> bool {
+    let parts: Vec<&str> = path.split('/').collect();
+    !path.is_empty()
+        && parts.len() <= CREDENTIAL_DEPTH
+        && parts
+            .iter()
+            .all(|part| !part.is_empty() && *part != "." && *part != ".." && !part.contains('\0'))
+}
+
+/// The most parts a credential path has: a directory and the file
+/// (`opencode/auth.json`).
+pub const CREDENTIAL_DEPTH: usize = 2;
+
+/// The name under which the depot stores the credential file `path`: its
+/// last part. `credentials/` holds one flat file per agent.
+#[must_use]
+pub fn credential_name(path: &str) -> &str {
+    path.rsplit('/').next().unwrap_or(path)
+}
 
 /// The known agent with this identifier.
 #[must_use]
@@ -979,6 +1373,139 @@ mod tests {
         assert_eq!(CODEX_AUTH_JSON.expiry, None, "the expiry lies in the JWT");
     }
 
+    /// `OpenCode`'s logins land in the depot's copy (#110): the copy is its
+    /// `XDG_DATA_HOME`, and `auth.json` lies at `opencode/auth.json` inside it,
+    /// where `packages/opencode/src/auth/index.ts` writes it
+    /// (`Global.Path.data` = `$XDG_DATA_HOME/opencode`).
+    ///
+    /// Mutation proofs: the `OpenCode` recipe back to `None` turns the first
+    /// assert red; a credential file outside the copy (`../auth.json`, an
+    /// absolute path) the asserts on the path.
+    #[test]
+    fn the_opencode_credential_file_lies_inside_the_configuration_copy() {
+        let recipe = known("opencode")
+            .and_then(|agent| agent.recipe)
+            .expect("OpenCode has a depot recipe");
+        assert_eq!(recipe.config_env, Some("XDG_DATA_HOME"));
+        let file = recipe.credential_file.expect("a credential file");
+        assert_eq!(file, "opencode/auth.json");
+        assert!(credential_path_ok(file));
+        let copy = Path::new(super::super::DEPOT_CONFIG_DST);
+        let in_session = copy.join(file);
+        assert!(in_session.starts_with(copy));
+        assert!(
+            in_session
+                .components()
+                .all(|part| matches!(part, Component::RootDir | Component::Normal(_)))
+        );
+        // `$XDG_DATA_HOME/opencode/auth.json` with the copy as XDG_DATA_HOME.
+        assert_eq!(
+            in_session,
+            Path::new("/run/humanitl/agent-config/opencode/auth.json")
+        );
+        assert_eq!(credential_name(file), "auth.json");
+        assert_eq!(recipe.login, LoginFlow::TerminalPrompt);
+        assert_eq!(
+            recipe.login_run.map(|login| login.args),
+            Some(&["auth", "login"][..])
+        );
+        assert_eq!(recipe.credential_format, Some(OPENCODE_AUTH_JSON));
+        assert!(recipe.config_refused.is_some());
+        assert!(
+            recipe
+                .update_off
+                .contains(&("OPENCODE_DISABLE_AUTOUPDATE", "true"))
+        );
+        let install = recipe.install.expect("an install recipe");
+        assert!(install.signature.is_none() && install.checksums.is_none());
+        let digest = install.release_digest.expect("GitHub's release digest");
+        assert_eq!(digest.immutable_pointer, "/immutable");
+        let hosts: Vec<&str> = install.hosts.iter().map(|host| host.host).collect();
+        assert_eq!(
+            hosts,
+            [
+                "api.github.com",
+                "github.com",
+                "release-assets.githubusercontent.com"
+            ]
+        );
+        for platform in [
+            HostPlatform::LinuxX64,
+            HostPlatform::LinuxArm64,
+            HostPlatform::MacArm64,
+        ] {
+            assert!(
+                install.platforms.iter().any(|(have, _)| *have == platform),
+                "{platform:?}"
+            );
+        }
+    }
+
+    /// `OpenCode`'s format takes what `opencode auth login` writes for each
+    /// kind (`packages/opencode/src/auth/index.ts`), and refuses an unknown
+    /// `type`, an entry that is no object, a key a kind does not have, a
+    /// missing required key and an entry name with a space. Made-up values.
+    ///
+    /// Mutation proof: `entry_fields` that takes any `type` turns the first
+    /// refusal red.
+    #[test]
+    fn the_opencode_format_takes_the_entries_its_login_writes() {
+        use super::super::credential::check_document;
+        let format = &OPENCODE_AUTH_JSON;
+        let taken: serde_json::Value = serde_json::from_str(
+            r#"{
+                "opencode": {"type": "api", "key": "sk-zen-0123"},
+                "openrouter": {"type": "api", "key": "sk-or-1", "metadata": {"label": "work"}},
+                "anthropic": {"type": "oauth", "refresh": "r-1", "access": "a-1", "expires": 1700000000000},
+                "github-copilot": {"type": "oauth", "refresh": "r-2", "access": "a-2", "expires": 0, "enterpriseUrl": "https://example.invalid", "accountId": "acc"},
+                "https://auth.example.invalid": {"type": "wellknown", "key": "EXAMPLE_TOKEN", "token": "t-1"}
+            }"#,
+        )
+        .unwrap();
+        check_document(&taken, format).unwrap();
+        check_document(&serde_json::json!({}), format).unwrap();
+        for text in [
+            r#"{"x":{"type":"session","key":"k"}}"#,
+            r#"{"x":{"key":"k"}}"#,
+            r#"{"x":"sk-plain"}"#,
+            r#"{"x":["api"]}"#,
+            r#"{"x":{"type":"api","key":"k","hooks":"curl evil"}}"#,
+            r#"{"x":{"type":"api"}}"#,
+            r#"{"x":{"type":"oauth","refresh":"r","access":"a","expires":-1}}"#,
+            r#"{"x":{"type":"api","key":"k","metadata":{"a":1}}}"#,
+            r#"{"x y":{"type":"api","key":"k"}}"#,
+            r#"["x"]"#,
+        ] {
+            let value: serde_json::Value = serde_json::from_str(text).unwrap();
+            assert!(check_document(&value, format).is_err(), "taken: {text}");
+        }
+    }
+
+    /// A credential path never leaves the copy: relative, without `..`, `.`
+    /// or an empty part, at most a directory and a file.
+    ///
+    /// Mutation proof: `credential_path_ok` that lets `..` pass turns the
+    /// first refusal red.
+    #[test]
+    fn a_credential_path_that_leaves_the_copy_is_refused() {
+        for path in [
+            "../auth.json",
+            "opencode/../../auth.json",
+            "/etc/passwd",
+            "",
+            "./auth.json",
+            "opencode//auth.json",
+            "opencode/",
+            "a/b/auth.json",
+            "..",
+        ] {
+            assert!(!credential_path_ok(path), "taken: {path:?}");
+        }
+        for path in ["auth.json", ".credentials.json", "opencode/auth.json"] {
+            assert!(credential_path_ok(path), "refused: {path:?}");
+        }
+    }
+
     /// Every registered recipe, present and future, keeps these.
     #[test]
     #[allow(clippy::too_many_lines)]
@@ -1037,9 +1564,28 @@ mod tests {
             }
             if let Some(file) = recipe.credential_file {
                 // Inside the configuration copy and never the program.
-                assert!(plain_name(file), "{}: credential file {file}", agent.id);
+                assert!(
+                    credential_path_ok(file),
+                    "{}: credential file {file}",
+                    agent.id
+                );
+                assert!(
+                    super::super::adopt::relative_inside(file),
+                    "{}: credential file {file}",
+                    agent.id
+                );
+                assert!(
+                    plain_name(credential_name(file)),
+                    "{}: credential file {file}",
+                    agent.id
+                );
                 assert_ne!(file, recipe.program, "{}", agent.id);
-                assert_ne!(file, super::super::store::MANIFEST_FILE, "{}", agent.id);
+                assert_ne!(
+                    credential_name(file),
+                    super::super::store::MANIFEST_FILE,
+                    "{}",
+                    agent.id
+                );
             }
             if let Some(install) = recipe.install {
                 assert!(!install.hosts.is_empty(), "{}: install hosts", agent.id);
@@ -1086,10 +1632,24 @@ mod tests {
                     );
                 }
                 assert!(
-                    install.signature.is_none() || install.checksums.is_none(),
+                    [
+                        install.signature.is_some(),
+                        install.checksums.is_some(),
+                        install.release_digest.is_some()
+                    ]
+                    .iter()
+                    .filter(|set| **set)
+                    .count()
+                        <= 1,
                     "{}: one way of checking",
                     agent.id
                 );
+                if let Some(digest) = install.release_digest {
+                    assert!(digest.version_pointer.starts_with('/'), "{}", agent.id);
+                    assert!(digest.immutable_pointer.starts_with('/'), "{}", agent.id);
+                    assert!(digest.archive.contains("{platform}"), "{}", agent.id);
+                    assert!(digest.evidence.starts_with("https://"), "{}", agent.id);
+                }
                 if let Some(list) = install.checksums {
                     assert!(list.version_pointer.starts_with('/'), "{}", agent.id);
                     assert!(list.archive.contains("{platform}"), "{}", agent.id);

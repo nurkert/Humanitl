@@ -485,7 +485,7 @@ fn validate(agents: &Path, journal: &Journal) -> Result<(), Diagnostic> {
         let listed = known
             .recipe
             .and_then(|recipe| recipe.credential_file)
-            .is_some_and(|name| name == file)
+            .is_some_and(|name| super::super::recipe::credential_name(name) == file)
             || std::fs::symlink_metadata(dir.join(file)).is_ok_and(|meta| meta.is_file());
         if !plain_name || !listed || !dir.join(file).starts_with(agents) {
             return Err(refuse(format!("{file:?} is no credential file of {agent}")));

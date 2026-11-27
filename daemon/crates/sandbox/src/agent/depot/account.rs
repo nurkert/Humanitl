@@ -216,6 +216,20 @@ pub(crate) fn prepare_in(
             )))
             .build());
     }
+    if task == MaintenanceTask::Config
+        && let Some(reason) = recipe.config_refused
+    {
+        return Err(Diagnostic::builder(AGENT_015, Severity::Error)
+            .why(format!(
+                "{} has no configuration run: {reason}",
+                agent.display_name
+            ))
+            .fix(FixAction::CopyCommand(format!(
+                "humanitl agents status {}",
+                agent.id
+            )))
+            .build());
+    }
     let installed = depot.installed().map_err(|found| {
         if found.code == AGENT_008 {
             Diagnostic::builder(AGENT_008, Severity::Error)
@@ -841,7 +855,9 @@ fn copy_config_at(
     let (names, _) = crate::worktree::dir_names(dir, CONFIG_ENTRIES_CAP + 1)
         .map_err(|err| refuse(rel, &format!("cannot be listed ({err})")))?;
     for name in names {
-        if rel.as_os_str().is_empty() && skip.is_some_and(|skip| name == skip) {
+        // The credential file, at the top of the copy or one directory
+        // deeper (OpenCode's `opencode/auth.json`, #110), never goes this way.
+        if skip.is_some_and(|skip| rel.join(&name) == Path::new(skip)) {
             continue;
         }
         budget.1 = budget.1.checked_sub(1).ok_or_else(|| {

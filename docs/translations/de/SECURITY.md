@@ -195,7 +195,12 @@ prüft der Daemon stattdessen seine eigene Kopie der Kette: Die Release-Metadate
 Release und den SHA-256 der Liste, die Liste den des Archivs; der Lauf vergleicht das Archiv, bevor
 `tar` es auspackt, und ein Baum ohne eine Datei, die das Rezept erwartet, wird abgelehnt. Das
 Programm eines solchen Pakets startet über einen Verweis `<programm> -> <pfad>`, den nur der Daemon
-anlegt. Ein
+anlegt. Wo ein Anbieter weder Signatur noch Liste veröffentlicht, aber auf GitHub als
+unveränderliches Release herausgibt (OpenCode, #110), prüft der Daemon seine eigene Kopie der
+Release-Metadaten von GitHub: Sie nennen das Release der Version, sagen `"immutable": true` und
+nennen für das Archiv genau einen SHA-256, den das Archiv haben muss; ein Release, das nicht
+unveränderlich ist, wird abgelehnt, und der Lauf prüft dasselbe, bevor er das Archiv lädt oder
+`tar` es auspackt. Ein
 Lauf, der mit einem Status ungleich 0 oder einer roten Garantie endet, ändert nichts. Die Version
 ist angeheftet: nur `update` ändert sie, und Sitzungen behalten die Version, mit der sie starteten. In
 einer Sitzung ist der Programmordner nur lesbar; ein Selbst-Update des Agenten scheitert dort mit
@@ -203,6 +208,10 @@ Absicht. *Grenzen:* Die Version eines Rezepts ohne Signatur ist das Wort des Lau
 Form geprüft; eine Liste von Prüfsummen bindet Version und Archiv an die Release-Metadaten des
 Anbieters, für diese bürgt aber nur TLS zum Host des Anbieters, und an das Archiv bindet den
 ausgepackten Baum der Lauf, der nichts Heruntergeladenes ausführt, keine Prüfung des Daemons;
+der Release-Digest von GitHub ist ein noch schwächerer Anker: Der SHA-256 ist der von GitHub,
+beim Hochladen berechnet, keine Aussage des Anbieters; wer ein Release in das Repository des
+Anbieters hochladen kann, steht dafür ein wie der Anbieter, und für die Metadaten bürgt nur TLS
+zu GitHub (ADR-0023, Nachtrag 2026-11-27);
 Kernel-Stufe und Seatbelt lehnen einen Wartungslauf vorerst ab (`AGENT_015`); ein Lauf
 zur Zeit, und nur, solange keine andere Sitzung läuft.
 
@@ -2193,6 +2202,7 @@ der Durchleitung oder an der Audit-Kette bekommt hier eine Zeile und in der Änd
 | 0.1.x | Eine Regel der `rules.yaml`, die sich nicht lesen lässt, kostet nur sich selbst statt aller Regeln der Datei; an ihrem Platz steht die Regel selbst (Aktion und Bedingung lesbar) oder `ask` für ihren Host oder für jeden Host und jede Adresse, nie nichts, außer bei einem `allow`; der Eintrag wird an seinem Platz zurückgeschrieben, und eine Datei, die sich als Ganzes nicht lesen lässt, wird nie überschrieben (HUM-561, [Abschnitt 7](#7-die-regel-engine)). |
 | 0.1.x | Die Zugangsdateien des Agent-Depots wahlweise verschlüsselt auf der Platte (`agents.encrypt_credentials`, Vorgabe aus, im Projekt-Profil gesperrt): ChaCha20-Poly1305 aus `ring` mit einer frischen zufälligen Nonce je Schreiben, der Schlüssel nur im Schlüsselbund des Systems und nie in einer Datei neben den Daten, ohne Schlüsselbund, der antwortet, wird die Einstellung abgelehnt (`AGENT_020`); das Umschalten wandelt jede Datei atomar unter den Sperren der Depots um, alles oder nichts; der Daemon entschlüsselt trotzdem für jede Sitzung (HUM-523, [Abschnitt 5.7](#57-die-zugangsdatei-des-depots), K-36). |
 | 0.1.x | Ein überlappender Fund entfernt nie einen durch Prüfsumme bestätigten Fund; ein eigener Begriff (`findings.user_terms`) oder ein bekanntes Secret über denselben Bytes steht neben ihm, so dass die harte Sperre (`hold.hard_block_checksum_secrets`) ihn immer sieht (#96, [Abschnitt 7](#7-die-regel-engine)). |
+| 0.1.x | OpenCode installiert sich aus seinem GitHub-Release in das Agenten-Depot, geprüft gegen den SHA-256, den GitHub für ein unveränderliches Release nennt; ein Release, das nicht unveränderlich ist, wird abgelehnt. Der Anker ist der Digest von GitHub, keine Signatur und keine Liste des Anbieters (ADR-0023, Nachtrag 2026-11-27, #110, [Das Agent-Depot](#das-agent-depot-hum-518-adr-0023)). Seine Anmeldungen (`auth.json`) liegen in seinem Datenverzeichnis, also ist die Kopie des Depots sein `XDG_DATA_HOME` und die Zugangsdatei `opencode/auth.json`; der Wächter liest sie über jedes Verzeichnis auf dem Weg mit `O_NOFOLLOW`. Ihr Format ist eine Zuordnung von Providern, jeder ein Eintrag der Art `oauth`, `api` oder `wellknown` mit genau den Schlüsseln dieser Art; nur der Anmeldelauf `humanitl agents login opencode` speichert die erste Datei oder fügt einen Provider hinzu, und die Rückschrift einer Session muss genau die gespeicherten Provider enthalten (sonst `AGENT_012`). |
 | 0.1.x | Die Sperre der Cloud-Inferenz `llm.cloud = "block"`: Ein Start, dessen Inferenz diesen Rechner oder das eigene Netz verließe, wird mit `LLM_014` abgelehnt, gleich was bestätigt ist; keine Durchreiche zu einem Host, der nicht lokal ist; kein Modellserver außerhalb lässt sich anlegen oder wählen; es gilt der strengste Wert aller Ebenen, so dass kein Projekt, Profil und keine Sitzung ein `block` einer anderen Ebene ausschaltet (GitHub #113, [Abschnitt 5.1](#sperre-der-cloud-inferenz-github-113), K-02). |
 
 ## 12. macOS: Seatbelt statt bubblewrap
