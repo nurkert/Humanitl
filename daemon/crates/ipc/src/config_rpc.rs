@@ -218,8 +218,9 @@ pub fn form_value(
 /// Ob `SetConfig` diesen Schlüssel schreibt: eine Einstellung aus
 /// [`FORM_KEYS`] oder eine der Quelle eines Agenten (HUM-518):
 /// `agents.source`, `agents.<id>.source`, `agents.<id>.credential_writeback`
-/// für jeden Agenten, den `agents` kennt. Die Oberfläche (HUM-521) und ein
-/// `ChangeSetting`-Fix schreiben sie hierüber.
+/// und `agents.<id>.inference` (GitHub #112, #131) für jeden Agenten, den
+/// `agents` kennt. Die Oberfläche (HUM-521, die geführte Einrichtung #111) und
+/// ein `ChangeSetting`-Fix schreiben sie hierüber; den Wert prüft das Schema.
 #[must_use]
 pub fn is_form_key(key: &str) -> bool {
     if FORM_KEYS.contains(&key) || key == "agents.source" {
@@ -229,7 +230,7 @@ pub fn is_form_key(key: &str) -> bool {
         .and_then(|rest| rest.split_once('.'))
         .is_some_and(|(agent, leaf)| {
             humanitl_config::agents::KNOWN_AGENTS.contains(&agent)
-                && matches!(leaf, "source" | "credential_writeback")
+                && matches!(leaf, "source" | "credential_writeback" | "inference")
         })
 }
 
@@ -1100,5 +1101,64 @@ mod tests {
             assert_eq!(refused.code, CONFIG_014, "{key}");
         }
         assert!(!paths.config_path().exists());
+    }
+
+    /// GitHub #131: Jede sichtbare Zeile, die über `SetConfig` schreibt,
+    /// nimmt der Daemon auch an. `agents.<id>.inference` stand im Katalog und
+    /// in der geführten Einrichtung, `is_form_key` kannte es nicht; die Tests
+    /// der App liefen gegen einen Fake, der jeden Schlüssel nimmt.
+    #[test]
+    fn every_visible_row_that_writes_through_set_config_is_admitted() {
+        use humanitl_config::catalog::{Client, Control};
+        for macos in [false, true] {
+            for entry in catalog::catalog_for(Language::En, macos).entries {
+                let writes = matches!(
+                    entry.control,
+                    Control::Switch
+                        | Control::Choice
+                        | Control::Text
+                        | Control::Number
+                        | Control::Path
+                );
+                // Die Zeile der Backends ist eine besondere, schreibt aber
+                // über `SetConfig` (Review #131).
+                let writes = writes || entry.id == "sandbox.backend";
+                if !writes || entry.client != Client::All {
+                    continue;
+                }
+                assert!(
+                    is_form_key(entry.id) || entry.id.starts_with(SANDBOX_ENV_PREFIX),
+                    "{} is a visible row, but SetConfig refuses it",
+                    entry.id
+                );
+            }
+        }
+    }
+
+    /// GitHub #131: Die eigenen Provider eines Agenten an- und abschalten.
+    #[test]
+    fn the_inference_of_an_agent_is_written_and_checked() {
+        let dir = tempfile::tempdir().unwrap();
+        let paths = paths_in(dir.path());
+        set(&paths, "agents.opencode.inference", "own").unwrap();
+        let written = std::fs::read_to_string(paths.config_path()).unwrap();
+        let table: toml::Table = written.parse().unwrap();
+        assert_eq!(
+            table["agents"]["opencode"]["inference"].as_str(),
+            Some("own"),
+            "{written}"
+        );
+        set(&paths, "agents.opencode.inference", "model-server").unwrap();
+        let table: toml::Table = std::fs::read_to_string(paths.config_path())
+            .unwrap()
+            .parse()
+            .unwrap();
+        assert_eq!(
+            table["agents"]["opencode"]["inference"].as_str(),
+            Some("model-server")
+        );
+        let refused = set(&paths, "agents.opencode.inference", "cloud").unwrap_err();
+        assert_eq!(refused.code, CONFIG_003);
+        assert!(!is_form_key("agents.unknown.inference"));
     }
 }
