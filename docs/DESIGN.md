@@ -598,7 +598,7 @@ notices wait while any layer (`HLayerScope.openLayers`) is open.
 
 ### HKeepClear and the floating terminal
 
-`HKeepClear` marks a region nothing floating may cover (HUM-300): the queue
+`HKeepClear` marks a region nothing floating covers on its own (HUM-300): the queue
 pane, the Intercept action bar, every notice column of an `HNoticeLayer`,
 every `HSheet` and every `HModal` inside the work (the command palette opts
 out, it lies above everything). It draws nothing and takes no pointer or
@@ -609,8 +609,8 @@ and the `card` radius, no shadow. A 28 px title bar in `bg2` (title `ui12`
 semibold, drag by it) carries a ghost button back to the Sandbox section and
 an `HIconButton` close; below it the terminal with its usual banner, which
 there keeps only the full-window button. A 14 px grip in the window's
-corner across from its anchor resizes it between 320 x 200 and 60 % of the
-sections (at most 960 x 640), the same at every anchor; on a middle axis it
+corner across from its anchor resizes it between 320 x 200 and 80 % of the
+sections (at most 1280 x 800, #129), the same at every anchor; on a middle axis it
 sits right or bottom and the window grows on both sides. When the grip sits
 in the top row, title bar and banner leave its 14 px free on its side
 (HUM-352). The window holds to one of nine anchors (the corners, the middles
@@ -625,6 +625,10 @@ again. The strip takes the first free corner in the same order as the
 window; on the Sandbox page the window and the strip give way to the pane.
 Notices inside the window (`HKeepClearExempt`) keep nothing clear from it,
 and the bar with Allow and Block keeps clear only while a request waits.
+All of this holds only until the person drags or resizes the window (#129):
+from then on the anchor and size they chose win, over regions to keep
+clear too, and only a window that does not fit into the sections at all
+still shrinks or turns into the strip.
 
 ### HContextMenu
 

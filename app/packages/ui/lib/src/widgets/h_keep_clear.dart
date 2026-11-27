@@ -3,13 +3,15 @@ import 'package:flutter/rendering.dart';
 import 'package:flutter/scheduler.dart';
 import 'package:flutter/widgets.dart';
 
-/// A region that nothing floating may cover (HUM-300).
+/// A region that nothing floating covers on its own (HUM-300).
 ///
 /// The floating terminal of the application lies over the sections, and some
-/// of what lies there must stay clickable whatever floats: the queue with its
-/// rows and its notices, the bar with Allow and Block, the notices of the
-/// shell, an open sheet, a modal. Each of them wraps itself in this widget,
-/// and whatever floats asks [rectsIn] where they are and stays out of them.
+/// of what lies there should stay clickable: the queue with its rows and its
+/// notices, the bar with Allow and Block, the controls of the editor. Each of
+/// them wraps itself in this widget, and whatever floats asks [rectsIn] where
+/// they are and places itself out of them. A floater the person placed by
+/// hand may stand over them (#129): the choice of the person wins over the
+/// rule.
 ///
 /// **The region says where it is, the floater decides.** No list of screens
 /// or panes lives in the floater; a control that must stay free marks itself

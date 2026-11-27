@@ -514,7 +514,7 @@ Hinweise warten, solange irgendeine Ebene (`HLayerScope.openLayers`) offen ist.
 
 ### HKeepClear und das schwebende Terminal
 
-`HKeepClear` markiert eine Region, die nichts Schwebendes verdecken darf
+`HKeepClear` markiert eine Region, die nichts Schwebendes von sich aus verdeckt
 (HUM-300): den Bereich der Warteschlange, die Aktionsleiste von Anhalten, jede
 Hinweisspalte eines `HNoticeLayer`, jedes `HSheet` und jedes `HModal` in der
 Arbeitsfläche (die Befehlspalette nimmt sich aus, sie liegt über allem). Es
@@ -527,8 +527,8 @@ Titelleiste von 28 px in `bg2` (Titel `ui12` halbfett, daran wird gezogen) träg
 einen Ghost-Knopf zurück zum Abschnitt Sandbox und ein `HIconButton` zum
 Schließen; darunter das Terminal mit seinem üblichen Banner, das dort nur den
 Knopf für das ganze Fenster behält. Ein Griff von 14 px in der Ecke des Fensters
-gegenüber seinem Anker ändert seine Größe zwischen 320 x 200 und 60 % der
-Abschnitte (höchstens 960 x 640), an jedem Anker gleich; auf einer mittleren
+gegenüber seinem Anker ändert seine Größe zwischen 320 x 200 und 80 % der
+Abschnitte (höchstens 1280 x 800, #129), an jedem Anker gleich; auf einer mittleren
 Achse sitzt er rechts oder unten, und das Fenster wächst nach beiden Seiten.
 Sitzt der Griff in der oberen Reihe, lassen Titelleiste und Banner auf seiner
 Seite seine 14 px frei (HUM-352). Das Fenster hält sich an einen von neun Ankern
@@ -544,7 +544,10 @@ halbfett und ein Ghost-Knopf mit der Glyphe zum Maximieren, der es wieder
 Fenster; auf der Seite Sandbox weichen Fenster und Streifen dem Bereich.
 Hinweise im Fenster (`HKeepClearExempt`) halten nichts von ihm frei, und die
 Leiste mit Senden und Blockieren hält sich nur frei, solange eine Anfrage
-wartet.
+wartet. Das alles gilt nur, bis die Person das Fenster verschiebt oder seine
+Größe ändert (#129): Ab dann gelten der gewählte Anker und die gewählte Größe,
+auch über Regionen, die frei bleiben sollen; nur ein Fenster, das gar nicht in
+die Abschnitte passt, schrumpft noch oder wird zum Streifen.
 
 ### HContextMenu
 

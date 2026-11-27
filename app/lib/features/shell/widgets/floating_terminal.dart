@@ -8,17 +8,17 @@
 /// the Sandbox section stays empty. The window itself is drawn in
 /// `floating_terminal_window.dart`; this file decides where it stands.
 ///
-/// **What it never covers.** Every region marked with `HKeepClear` -- the
-/// queue with its rows and notices, the bar with Allow and Block, the notices
-/// of the shell, an open sheet, a modal -- stays free. The window snaps to the
-/// anchor the person chose (a corner, the middle of an edge or the centre,
-/// HUM-352); when something to keep clear lies there, it takes the smallest
-/// size, then the next free corner, and when no corner is
-/// free it shrinks to a slim title strip that finds a place of its own
-/// (`placeTerminalStrip`, `floating_terminal_strip.dart`, HUM-315); only
-/// without room even for that it steps back until there is room. Two
-/// exceptions while a hand holds it: a resize never grows into such a region,
-/// a drag may pass over one, and both give way again when they are let go.
+/// **What it covers (#129).** Until the person moves or resizes it, every
+/// region marked with `HKeepClear` -- the queue with its rows and notices,
+/// the bar with Allow and Block, the controls of the editor -- stays free:
+/// the window takes the smallest size, then the next free corner, and when
+/// no corner is free it shrinks to a slim title strip that finds a place of
+/// its own (`placeTerminalStrip`, `floating_terminal_strip.dart`, HUM-315);
+/// only without room even for that it steps back until there is room. Once
+/// the person dropped it at an anchor or pulled its grip, the place and the
+/// size are theirs: the window stays there, at that size, over whatever lies
+/// below, and the grip grows it up to the limits. The notices of the shell
+/// lie above this layer and stay visible either way.
 ///
 /// **Letting go (HUM-352).** A drag ends at an anchor, never in between. A
 /// calm drop takes the nearest anchor; a throw takes the next anchor in the
@@ -27,8 +27,7 @@
 ///
 /// **Resizing (HUM-352).** One rule at every anchor: the window grows away
 /// from the edges it holds to, around its middle on a middle axis, up to the
-/// same share of the region at every anchor (`terminalFloatMaxIn`), and up to
-/// the edge of a region to keep clear rather than one step short of it.
+/// same share of the region at every anchor (`terminalFloatMaxIn`).
 ///
 /// **The keyboard.** No focus scope of its own and no `HLayerScope`: the
 /// window is part of the work, not a layer above it, so the terminal in it
@@ -332,22 +331,12 @@ class _FloatingTerminalLayerState extends ConsumerState<FloatingTerminalLayer>
   /// Where the window stands while it glides to [target] after a drop: on
   /// the way from where it was let go. Only the place glides, never the size;
   /// a window that changes its size on the way would resize the session in
-  /// every frame, so a drop that changes the size jumps.
-  ///
-  /// **The way is checked, not only the goal.** The rule of the anchors keeps
-  /// the goal free; the way from a drop over Allow and Block would still
-  /// cross them for the length of the glide. When the rectangle the glide
-  /// sweeps touches a region to keep clear, the window jumps instead
-  /// (HUM-352, review round 1).
+  /// every frame, so a drop that changes the size jumps. A drop makes the
+  /// place the person's own (#129), so the way may cross what the goal may
+  /// cover.
   Rect _gliding(Rect target) {
     final Rect? from = _glideFrom;
     if (from == null || from.size != target.size || !_glide.isAnimating) {
-      return target;
-    }
-    final Rect swept = from.expandToInclude(target);
-    if (_keepClear().any((Rect zone) => zone.overlaps(swept))) {
-      _glide.stop();
-      _glideFrom = null;
       return target;
     }
     return Rect.lerp(from, target, _glideCurve.value) ?? target;
@@ -417,9 +406,7 @@ class _FloatingTerminalLayerState extends ConsumerState<FloatingTerminalLayer>
   }
 
   /// The place while a hand moves the window or its grip: it follows the
-  /// pointer until it is let go. A drag may pass over a region to keep clear
-  /// (the hand is busy with the window, and the place is decided on release);
-  /// a resize never grows into one ([_resized]).
+  /// pointer until it is let go, over whatever lies below (#129).
   Rect? _interactiveRect(Rect region, double inset) {
     final Offset? origin = _dragOrigin;
     final Rect? shown = _shown;
@@ -486,9 +473,18 @@ class _FloatingTerminalLayerState extends ConsumerState<FloatingTerminalLayer>
     final Rect? shown = _interactiveRect(_region, 0) ?? _shown;
     if (shown != null) {
       final double inset = HTheme.of(context).spacing.x3;
-      ref
-          .read(terminalFloatProvider.notifier)
-          .snapTo(FloatAnchor.release(_region, shown, inset, velocity));
+      final TerminalFloat float = ref.read(terminalFloatProvider.notifier);
+      // Ein unberührtes Fenster, das ausweichend kleiner stand, behält die
+      // Größe, in der die Hand es trug; sonst wüchse es beim Loslassen und
+      // spränge statt zu gleiten (#129, Review).
+      final TerminalFloatGeometry before = ref.read(terminalFloatProvider);
+      if (!before.chosen &&
+          (shown.size.width - before.size.width).abs() +
+                  (shown.size.height - before.size.height).abs() >
+              0.5) {
+        float.resize(shown.size);
+      }
+      float.snapTo(FloatAnchor.release(_region, shown, inset, velocity));
       final Duration glide = HReducedMotion.displace(context, HMotion.arrive);
       if (glide > Duration.zero) {
         _glideFrom = shown;
@@ -510,10 +506,8 @@ class _FloatingTerminalLayerState extends ConsumerState<FloatingTerminalLayer>
   /// The grip sits in the corner across from the anchor, so moving it away
   /// from the anchor makes the window larger; on a middle axis the window
   /// grows on both sides, by twice the way of the grip, so the grip stays
-  /// under the hand. Each direction grows only as far as the window does not
-  /// reach into a region to keep clear: the hand cannot pull it over Allow
-  /// and Block, and it stops at their edge, not one step of the pointer
-  /// before it (HUM-352).
+  /// under the hand. Up to the limits of the sections, over whatever lies
+  /// below (#129).
   void _resized(Offset delta) {
     final Size? size = _resizing;
     if (size == null) {
@@ -522,30 +516,23 @@ class _FloatingTerminalLayerState extends ConsumerState<FloatingTerminalLayer>
     final FloatAnchor anchor = _shownAnchor;
     final double dx = delta.dx * anchor.gripX * (anchor.x == 0 ? 2 : 1);
     final double dy = delta.dy * anchor.gripY * (anchor.y == 0 ? 2 : 1);
-    final Size next = growTerminalFloat(
-      region: _region,
-      anchor: anchor,
-      from: growTerminalFloat(
-        region: _region,
-        anchor: anchor,
-        from: size,
-        by: Size(dx, 0),
-        keepClear: _keepClear(),
-        inset: HTheme.of(context).spacing.x3,
+    setState(
+      () => _resizing = clampTerminalFloatSize(
+        Size(size.width + dx, size.height + dy),
+        region: _region.size,
       ),
-      by: Size(0, dy),
-      keepClear: _keepClear(),
-      inset: HTheme.of(context).spacing.x3,
     );
-    setState(() => _resizing = next);
   }
 
   void _resizeEnded() {
     final Size? size = _resizing;
     if (size != null) {
-      ref
-          .read(terminalFloatProvider.notifier)
-          .resize(clampTerminalFloatSize(size, region: _region.size));
+      // Das Fenster stand womöglich ausgewichen an einem anderen Anker als
+      // dem gespeicherten; was die Hand gerade gezogen hat, ist jetzt die
+      // Wahl, Anker und Größe zusammen (#129).
+      ref.read(terminalFloatProvider.notifier)
+        ..snapTo(_shownAnchor)
+        ..resize(clampTerminalFloatSize(size, region: _region.size));
     }
     setState(() => _resizing = null);
   }

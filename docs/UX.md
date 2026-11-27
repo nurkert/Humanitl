@@ -642,18 +642,22 @@ corners, the middles of the edges, the centre, HUM-352): let go calmly, to
 the nearest; thrown, to the next anchor in the direction of the throw, so a
 short flick from a corner reaches its neighbour instead of falling back. A
 drag that is cancelled after it moved counts as a calm drop and keeps the
-nearest anchor; a glide that would cross a region to keep clear jumps. A
+nearest anchor. A
 grip in the corner across from the anchor resizes it between 320 x 200 and
-60 % of the sections (at most 960 x 640), equally at every anchor, and anchor
+80 % of the sections (at most 1280 x 800, #129), equally at every anchor, and anchor
 and size survive a restart in the state file of the interface. The default corner is bottom right: on
 Intercept that is the bottom of the context pane, the one corner without a
-decision. **It never covers what must stay clickable.** The queue with its
+decision. **Untouched, it never covers what must stay clickable.** The queue with its
 rows and notices, the bar with Allow and Block, the notices of the shell, a
 sheet and a modal mark themselves as regions to keep clear (`HKeepClear`);
 the bar only while a request waits, and the notices inside the window never
 (HUM-352);
 the window takes the chosen corner at the chosen size, else the smallest
-size, else the corner beside, above or across. **Without a free corner it
+size, else the corner beside, above or across. **Once the person drags or
+resizes it, their choice wins** (#129): it stays at the anchor where it was
+let go and at the size it was given, over the queue or Allow and Block too,
+and the grip grows it up to the limit; a window that jumped back from where
+the hand put it read as broken. The decision keys keep working underneath. **Without a free corner it
 shrinks to a slim title strip** (HUM-315, `HSize.terminalStrip`, 240 x 28):
 the profile of the sandbox or "Terminal", the active tab, and a button; it
 takes the first corner in the same order that leaves room for it and never
