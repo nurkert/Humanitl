@@ -17,6 +17,49 @@ section here and list their commits instead.
 
 ## [Unreleased]
 
+## [0.7.1] - 2026-11-27
+
+OpenCode can be installed into the agent depot, and the start window walks
+you through what an agent needs before it can work. No change to the
+configuration, the protocol or the rule format.
+
+### Added
+
+- A guided agent setup in the start window, opened for a project whose
+  agent is not ready and from the agent cell of each project row: where the
+  agent comes from (this computer or installed in isolation), install and
+  sign in, keep it up to date, where its inference goes, and a summary
+  before the start. Each step shows its state, names its CLI equivalent and
+  uses the daemon's own operations; a start refused for a reason a step
+  solves opens that step. "Only my model server" is the default and is used
+  only after a successful test; an agent's own providers are never
+  preselected and need their own confirmation (#111).
+- OpenCode in the agent depot: `humanitl agents install opencode` installs
+  it from its GitHub release, `humanitl agents update opencode` keeps it
+  current, and `humanitl agents login opencode` adds a provider. Without
+  `--version` the latest release is taken, never a prerelease; an OpenCode 2
+  release is refused until it is supported (#110).
+
+### Security
+
+- OpenCode publishes no checksum list and no signature for its CLI
+  archives. The depot checks the archive against the SHA-256 that GitHub
+  reports for the release asset and accepts it only from an immutable
+  release, so the trust rests on GitHub rather than on a statement of the
+  vendor: a release published through the vendor's repository passes the
+  check. ADR-0023, `docs/SECURITY.md` and the threat model say so (#110).
+- OpenCode's logins in the depot are kept only through a login run. A
+  provider added with `/connect` inside a session is not kept, and the
+  stored logins stay as they were (#110).
+
+### Upgrade notes
+
+- Restart the daemon after upgrading:
+  `systemctl --user restart humanitld.service`, `humanitl daemon install`
+  for archive and AppImage installs, or `humanitl daemon restart` after
+  replacing the macOS app. A CLI that needs a newer daemon names the
+  restart (`CLI_004`).
+
 ## [0.7.0] - 2026-11-25
 
 Agents that use a model server no longer start without one, and an agent
