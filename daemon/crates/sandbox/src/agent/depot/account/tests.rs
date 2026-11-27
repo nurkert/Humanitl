@@ -38,6 +38,7 @@ const FORMAT: CredentialFormat = CredentialFormat {
     one_of: &[],
     requires: &[],
     fixed: &[],
+    entries: None,
     evidence: "stand-in of the tests",
 };
 
@@ -69,6 +70,7 @@ const RECIPE: DepotRecipe = DepotRecipe {
     credential_file: Some(".credentials.json"),
     install: None,
     install_refused: None,
+    config_refused: None,
     login: LoginFlow::DeviceCode,
     credential_format: Some(FORMAT),
     login_run: Some(LOGIN),
@@ -777,4 +779,192 @@ fn a_login_in_a_sealed_depot_stores_sealed_and_restores_byte_for_byte() {
             assert_eq!(value["token"], "t1");
         }
     }
+}
+
+/// `OpenCode`'s depot (#110), with the real recipe: the depot of `opencode`
+/// under a fresh data directory.
+fn opencode_fixture() -> (tempfile::TempDir, Paths, Depot) {
+    let base = tempfile::tempdir().unwrap();
+    let dir = &base.path().canonicalize().unwrap();
+    let paths = Paths::new(humanitl_config::Env::from_pairs([
+        ("HOME", dir.join("home").to_str().unwrap()),
+        ("XDG_RUNTIME_DIR", dir.join("run").to_str().unwrap()),
+        ("XDG_DATA_HOME", dir.join("data").to_str().unwrap()),
+    ]));
+    filled(&paths.data_dir(), "opencode", "opencode");
+    let depot = Depot::of(&paths, "opencode");
+    (base, paths, depot)
+}
+
+fn opencode() -> &'static KnownAgent {
+    crate::agent::depot::recipe::known("opencode").unwrap()
+}
+
+/// What `opencode auth login` writes for an API key and for a provider's own
+/// login (`Auth.set`, `packages/opencode/src/auth/index.ts`); made-up values.
+const OPENCODE_LOGIN: &str = r#"{"opencode":{"type":"api","key":"sk-zen-0123"},"anthropic":{"type":"oauth","refresh":"r-1","access":"a-1","expires":1000}}"#;
+
+/// Acceptance 3 with the real `OpenCode` recipe: `humanitl agents login
+/// opencode` runs `opencode auth login` in the terminal and stores the
+/// `auth.json` it wrote; the next session finds it at
+/// `$XDG_DATA_HOME/opencode/auth.json` of its copy, renews a token, and the
+/// session after it gets the renewed file. A session that adds a provider
+/// with `/connect` is refused (`AGENT_012`), and the stored file stays; the
+/// login run adds it.
+///
+/// Mutation proofs: the guard's comparison of the entries (`compare_entries`)
+/// left out turns the `/connect` assert red; the recipe's login run back to
+/// `None` turns the first `unwrap` red.
+#[test]
+fn an_opencode_login_is_kept_and_a_provider_added_in_a_session_is_refused() {
+    let (_base, paths, depot) = opencode_fixture();
+    let agent = opencode();
+    assert!(login_declared(agent));
+    let run = prepare(
+        &paths,
+        agent,
+        MaintenanceTask::Login,
+        SessionId::new(),
+        None,
+    )
+    .unwrap();
+    let words: Vec<String> = run
+        .command()
+        .iter()
+        .map(|word| word.to_string_lossy().into_owned())
+        .collect();
+    assert_eq!(words, ["/run/humanitl/agent/opencode", "auth", "login"]);
+    assert!(
+        run.mount()
+            .env
+            .contains(&("XDG_DATA_HOME".to_owned(), DEPOT_CONFIG_DST.to_owned()))
+    );
+    let copy = run.mount().scratch.unwrap();
+    std::fs::create_dir_all(copy.join("opencode/log")).unwrap();
+    std::fs::write(copy.join("opencode/log/x.log"), "log").unwrap();
+    std::fs::write(copy.join("opencode/auth.json"), OPENCODE_LOGIN).unwrap();
+    let done = run.commit_login(true, true).unwrap();
+    assert!(
+        matches!(done.taken, Taken::Stored { .. }),
+        "{:?}",
+        done.taken
+    );
+    assert_eq!(listing(&depot.credentials_dir()), ["auth.json"]);
+    assert!(
+        !depot.config_dir().join("opencode").exists(),
+        "only auth.json"
+    );
+
+    let file = "opencode/auth.json";
+    let format = agent.recipe.unwrap().credential_format.unwrap();
+    let session = |text: &str| {
+        let scratch = scratch::create(&paths, SessionId::new(), &depot, None, None).unwrap();
+        let seen = std::fs::read_to_string(scratch.path().join(file)).unwrap();
+        std::fs::write(scratch.path().join(file), text).unwrap();
+        let taken = credential::take_back(
+            scratch.path(),
+            &TakeBack {
+                depot: &depot,
+                file,
+                format: &format,
+                session: SessionId::new(),
+                base: scratch.base(file),
+                origin: Origin::Session,
+                keys: None,
+            },
+        );
+        (seen, taken)
+    };
+    // A session renews the provider's token.
+    let renewed = OPENCODE_LOGIN.replace(
+        r#""access":"a-1","expires":1000"#,
+        r#""access":"a-2","expires":2000"#,
+    );
+    let (seen, taken) = session(&renewed);
+    assert!(seen.contains("sk-zen-0123"), "the session got the login");
+    assert!(matches!(taken, Ok(Taken::Stored { .. })), "{taken:?}");
+    // The next session gets the renewed file; it adds a provider with
+    // `/connect`, which the guard refuses.
+    let connected = renewed.replace(
+        r#"{"opencode":"#,
+        r#"{"openai":{"type":"api","key":"sk-other"},"opencode":"#,
+    );
+    let (seen, taken) = session(&connected);
+    assert!(seen.contains(r#""a-2""#), "{seen}");
+    let refused = taken.unwrap_err();
+    assert_eq!(refused.found.code, AGENT_012);
+    assert!(
+        refused.found.why.contains("login run"),
+        "{}",
+        refused.found.why
+    );
+    let stored = std::fs::read_to_string(depot.credentials_dir().join("auth.json")).unwrap();
+    assert!(!stored.contains("openai"), "{stored}");
+    // The login run adds it.
+    let run = prepare(
+        &paths,
+        agent,
+        MaintenanceTask::Login,
+        SessionId::new(),
+        None,
+    )
+    .unwrap();
+    let copy = run.mount().scratch.unwrap();
+    std::fs::write(copy.join(file), &connected).unwrap();
+    run.commit_login(true, true).unwrap();
+    let stored = std::fs::read_to_string(depot.credentials_dir().join("auth.json")).unwrap();
+    assert!(stored.contains("openai"), "{stored}");
+}
+
+/// The login run refuses an `auth.json` the format does not take: an entry
+/// of an unknown `type`, a value that is no object, a key the kind does not
+/// have; nothing is stored.
+///
+/// Mutation proof: `entry_fields` that takes any `type` (the first kind's
+/// fields) turns the first refusal red.
+#[test]
+fn an_opencode_auth_json_out_of_its_format_is_refused() {
+    let (_base, paths, depot) = opencode_fixture();
+    for text in [
+        r#"{"x":{"type":"session","key":"k"}}"#,
+        r#"{"x":"sk-plain"}"#,
+        r#"{"x":{"type":"api","key":"k","hooks":"curl evil"}}"#,
+        r#"{"x":{"type":"api"}}"#,
+        r#"["x"]"#,
+    ] {
+        let run = prepare(
+            &paths,
+            opencode(),
+            MaintenanceTask::Login,
+            SessionId::new(),
+            None,
+        )
+        .unwrap();
+        let copy = run.mount().scratch.unwrap();
+        std::fs::create_dir_all(copy.join("opencode")).unwrap();
+        std::fs::write(copy.join("opencode/auth.json"), text).unwrap();
+        let failed = run.commit_login(true, true).unwrap_err();
+        assert_eq!(failed.found.code, AGENT_014, "{text}");
+        assert!(listing(&depot.credentials_dir()).is_empty(), "{text}");
+    }
+}
+
+/// `OpenCode` has no configuration run (#110): its copy is its data
+/// directory. `agents config opencode` answers `AGENT_015` with the reason.
+///
+/// Mutation proof: without the check of `config_refused` the run is
+/// prepared and the `unwrap_err` turns red.
+#[test]
+fn opencode_has_no_configuration_run() {
+    let (_base, paths, _depot) = opencode_fixture();
+    let found = prepare(
+        &paths,
+        opencode(),
+        MaintenanceTask::Config,
+        SessionId::new(),
+        None,
+    )
+    .unwrap_err();
+    assert_eq!(found.code, humanitl_core::diagnostics::codes::AGENT_015);
+    assert!(found.why.contains("data directory"), "{}", found.why);
 }

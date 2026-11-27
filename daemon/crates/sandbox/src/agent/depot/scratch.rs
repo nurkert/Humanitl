@@ -15,7 +15,7 @@
 //! dies; [`sweep_stale`] removes such a scratch the next time a daemon or a
 //! local start comes by, judged by the process that wrote its owner file.
 
-use std::os::unix::fs::PermissionsExt as _;
+use std::os::unix::fs::{DirBuilderExt as _, PermissionsExt as _};
 use std::path::{Path, PathBuf};
 
 use humanitl_config::Paths;
@@ -184,18 +184,26 @@ pub fn create(
                     "is not a regular file; credentials/ holds only the credential file",
                 ));
             }
-            copy_credential(
-                depot,
-                &path,
-                &dir.join(entry.file_name()),
-                &meta,
-                &mut budget,
-                keys,
-            )?;
-            if let Some(name) = entry.file_name().to_str()
-                && let Some(sum) = super::credential::fingerprint(&dir, name)
+            let Some(name) = entry.file_name().to_str().map(ToOwned::to_owned) else {
+                return Err(unusable(
+                    depot.agent(),
+                    &path,
+                    "has a name that is not UTF-8",
+                ));
+            };
+            // Where the agent looks for it: the recipe's path, which may lie
+            // one directory deeper than the depot keeps it (OpenCode's
+            // `opencode/auth.json` under `XDG_DATA_HOME`, #110).
+            let in_session = session_path(depot.agent(), &name);
+            let target = dir.join(in_session);
+            if let Some(parent) = Path::new(in_session).parent()
+                && !parent.as_os_str().is_empty()
             {
-                scratch.bases.push((name.to_owned(), sum));
+                private_parent(depot, &dir.join(parent))?;
+            }
+            copy_credential(depot, &path, &target, &meta, &mut budget, keys)?;
+            if let Some(sum) = super::credential::fingerprint(&dir, in_session) {
+                scratch.bases.push((in_session.to_owned(), sum));
             }
         }
     }
@@ -308,6 +316,43 @@ fn copy_credential(
         .map_err(|err| failed(depot, to, &err))
 }
 
+/// The path inside the copy where the agent looks for the stored credential
+/// file `name`: the recipe's [`super::DepotRecipe::credential_file`] when its
+/// file name is `name`, else `name` at the top of the copy.
+fn session_path<'a>(agent: &str, name: &'a str) -> &'a str {
+    match super::recipe::known(agent)
+        .and_then(|known| known.recipe)
+        .and_then(|recipe| recipe.credential_file)
+    {
+        Some(path)
+            if super::recipe::credential_path_ok(path)
+                && super::recipe::credential_name(path) == name =>
+        {
+            path
+        }
+        _ => name,
+    }
+}
+
+/// Makes the directory that holds the credential file in the copy, `0700`;
+/// one that the configuration brought along must be a directory itself,
+/// never a link, so the file is never written through one.
+fn private_parent(depot: &Depot, parent: &Path) -> Result<(), Diagnostic> {
+    match std::fs::symlink_metadata(parent) {
+        Ok(meta) if meta.file_type().is_dir() => Ok(()),
+        Ok(_) => Err(unusable(
+            depot.agent(),
+            parent,
+            "holds the credential file in the session and is no directory",
+        )),
+        Err(err) if err.kind() == std::io::ErrorKind::NotFound => std::fs::DirBuilder::new()
+            .mode(0o700)
+            .create(parent)
+            .map_err(|err| failed(depot, parent, &err)),
+        Err(err) => Err(failed(depot, parent, &err)),
+    }
+}
+
 fn make_private_dir(dir: &Path) -> std::io::Result<()> {
     std::fs::create_dir_all(dir)?;
     std::fs::set_permissions(dir, std::fs::Permissions::from_mode(0o700))
@@ -394,6 +439,42 @@ mod tests {
         let dir = scratch.path().to_path_buf();
         drop(scratch);
         assert!(!dir.exists());
+    }
+
+    /// `OpenCode`'s stored `auth.json` lands where `OpenCode` reads it, at
+    /// `opencode/auth.json` of the copy that is its `XDG_DATA_HOME` (#110),
+    /// `0600` in a directory `0700`, and the write-back's base is recorded
+    /// under that path. A directory on the way that the configuration
+    /// brought as a link is refused, and nothing is written through it.
+    ///
+    /// Mutation proof: placing the file at the top of the copy (by its stored
+    /// name) turns the first assert red.
+    #[test]
+    fn a_credential_file_lands_where_the_recipe_names_it() {
+        use std::os::unix::fs::PermissionsExt as _;
+        let base = tempfile::tempdir().unwrap();
+        let depot = filled(base.path(), "opencode", "opencode");
+        std::fs::write(depot.credentials_dir().join("auth.json"), b"{}").unwrap();
+        let paths = paths(base.path());
+        let scratch = create(&paths, SessionId::new(), &depot, None, None).unwrap();
+        let file = scratch.path().join("opencode/auth.json");
+        assert!(file.is_file(), "the file lies where OpenCode reads it");
+        assert!(!scratch.path().join("auth.json").exists());
+        let mode = |path: &Path| std::fs::metadata(path).unwrap().permissions().mode() & 0o777;
+        assert_eq!(mode(&file), 0o600);
+        assert_eq!(mode(&scratch.path().join("opencode")), 0o700);
+        assert!(scratch.base("opencode/auth.json").is_some());
+        drop(scratch);
+
+        let outside = base.path().join("outside");
+        std::fs::create_dir_all(&outside).unwrap();
+        std::os::unix::fs::symlink(&outside, depot.config_dir().join("opencode")).unwrap();
+        let found = create(&paths, SessionId::new(), &depot, None, None).unwrap_err();
+        assert_eq!(found.code, AGENT_013, "{}", found.why);
+        assert!(
+            !outside.join("auth.json").exists(),
+            "written through the link"
+        );
     }
 
     #[test]

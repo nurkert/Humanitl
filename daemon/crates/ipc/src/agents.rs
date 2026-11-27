@@ -394,9 +394,9 @@ fn actions_of(
         // the depot's copy (`agy` keeps its configuration in the session,
         // HUM-517).
         config: installed
-            && agent
-                .recipe
-                .is_some_and(|recipe| recipe.config_env.is_some()),
+            && agent.recipe.is_some_and(|recipe| {
+                recipe.config_env.is_some() && recipe.config_refused.is_none()
+            }),
         config_show: installed,
         remove: exists && !entry.in_use,
         source_host: entry.locked_by.is_empty(),

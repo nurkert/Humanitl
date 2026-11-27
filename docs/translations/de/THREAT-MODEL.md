@@ -1108,11 +1108,19 @@ herunter; der Daemon liest kein Urteil aus ihm, prüft den Baum an seiner eigene
 Manifest eines signierenden Anbieters mit dem `gpg` des Hosts gegen den im Adapter festen
 Fingerabdruck und die Prüfsumme des Programms dagegen, oder, bei einem Anbieter, der stattdessen
 eine Liste von Prüfsummen veröffentlicht (Codex, HUM-566), seine eigene Kopie der Kette von den
-Release-Metadaten über die Liste zum Archiv, und schaltet erst dann `current` mit einem Journal um;
+Release-Metadaten über die Liste zum Archiv, oder, bei einem Anbieter, der beides nicht
+veröffentlicht, aber auf GitHub als unveränderliches Release herausgibt (OpenCode, #110), die
+Release-Metadaten von GitHub (`"immutable": true`, der SHA-256 des Archivs in `assets[].digest`),
+und schaltet erst dann `current` mit einem Journal um;
 ein Lauf mit einem Status ungleich 0 oder einer roten Garantie ändert nichts. Die Version ist
 angeheftet, Sitzungen behalten ihre, und der nur lesbare Programmordner einer Sitzung lässt ein
 Selbst-Update scheitern. *Restrisiko:* Die Version eines Rezepts ohne Signatur ist das Wort des
-Laufs; hinter einer Liste von Prüfsummen steht nur TLS zum Host des Anbieters, und an das geprüfte
+Laufs; hinter einer Liste von Prüfsummen steht nur TLS zum Host des Anbieters; hinter dem
+Release-Digest von GitHub steht GitHub, nicht der Anbieter: Wer im Repository des Anbieters ein
+Release veröffentlichen kann (ein gestohlenes Token eines Maintainers, ein kompromittierter
+Release-Workflow), veröffentlicht ein Archiv mit passendem Digest, und für die Metadaten bürgt nur
+TLS zu GitHub; die Unveränderlichkeit verhindert nur, dass sich ein Archiv nach der
+Veröffentlichung ändert; und an das geprüfte
 Archiv bindet den ausgepackten Baum der Lauf, nicht der Daemon; die eigenen Regeln des Menschen
 gelten für den Lauf wie für jede Sitzung; Kernel-Stufe und Seatbelt lehnen einen Wartungslauf
 vorerst ab (`AGENT_015`).
@@ -1403,6 +1411,7 @@ Gegen diese Angreifer gibt es keine Abwehr, und Humanitl behauptet das auch nich
 | 2026-11-23 | Harte Sperre: Ein überlappender Fund entfernt nie einen durch Prüfsumme bestätigten Fund; ein eigener Begriff (`findings.user_terms`) oder ein bekanntes Secret über denselben Bytes steht neben ihm | #96 |
 | 2026-11-25 | K-02: `agents.<id>.inference`; ohne Modellserver starten OpenCode und pi nicht (`LLM_012`); `own` (Opt-in, im Projekt-Profil gesperrt, nur für einen Adapter, der eigene Provider erklärt, sonst `LLM_013`) lässt OpenCode OpenCode Zen nutzen, mit einer Durchreiche nur auf dessen Inferenz-Pfaden, hinter Hinweis und Bestätigung | GitHub #112 |
 | 2026-11-25 | K-02: die Sperre der Cloud-Inferenz `llm.cloud = "block"`: ein Start mit Inferenz nach außen ist `LLM_014`, auch bestätigt, keine Durchreiche zu einem Host, der nicht lokal ist, kein Modellserver außerhalb lässt sich anlegen oder wählen; es gilt der strengste Wert aller Ebenen, so dass Projekt-Profil oder Sitzung die Sperre einschalten und nie ausschalten | GitHub #113 |
+| 2026-11-27 | K-36: Eine Installation darf gegen den Digest geprüft werden, den GitHub für ein unveränderliches Release nennt, wo der Anbieter weder Signatur noch Liste veröffentlicht (OpenCode): Der Daemon lehnt ein Release ab, das nicht unveränderlich ist, und ein Archiv ohne genau einen passenden Digest; Restrisiko: Der Digest ist der von GitHub, nicht der des Anbieters, also besteht ein Release, das jemand über das Repository des Anbieters veröffentlicht, der dort veröffentlichen kann. Eine Zugangsdatei darf ein Verzeichnis tief in der Kopie liegen (`opencode/auth.json` unter `XDG_DATA_HOME`); der Wächter öffnet jedes Verzeichnis auf dem Weg mit `O_NOFOLLOW`, ein Pfad mit `..` oder ein absoluter wird abgelehnt. Ein Format einer Zugangsdatei darf eine Zuordnung von Einträgen erklärter Arten sein (die Provider von OpenCode); die Rückschrift einer Session muss genau die gespeicherten Einträge enthalten, also kann eine Session keinen Provider hinzufügen, dessen Konto sie kontrolliert; das tut nur ein Anmeldelauf, den der Mensch startet | #110 |
 
 Jede sicherheitsrelevante Änderung am Shim, an der Mount-Erlaubnisliste, am Filter oder an der
 Durchleitung bekommt hier eine Zeile. Schwachstellen werden gemeldet, wie in

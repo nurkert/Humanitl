@@ -64,7 +64,7 @@ pub use self::maintenance::{
 };
 pub use self::recipe::{
     ChecksumList, DepotRecipe, HostPlatform, InstallHost, InstallRecipe, KNOWN, KnownAgent,
-    LoginCallback, LoginFlow, LoginRecipe, SignedManifest,
+    LoginCallback, LoginFlow, LoginRecipe, ReleaseDigest, SignedManifest,
 };
 pub use self::scratch::Scratch;
 pub use self::store::{Depot, Installed, Manifest, Reservation};

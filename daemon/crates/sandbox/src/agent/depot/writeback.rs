@@ -232,6 +232,7 @@ mod tests {
         one_of: &[],
         requires: &[],
         fixed: &[],
+        entries: None,
         evidence: "stand-in of the tests",
     };
 

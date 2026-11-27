@@ -2213,7 +2213,11 @@ Gemini API key only: `humanitl agents login agy` answers `AGENT_014`, and a conf
 answers `AGENT_015`, because no variable moves its `~/.gemini`. Codex installs its whole package
 from `releases.openai.com` (HUM-566). The Antigravity CLI has no install recipe: its vendor offers
 no way to fetch a chosen version and signs nothing, and `install` answers `AGENT_015` with that
-reason. OpenCode and pi have no depot recipe; for them `install` answers `AGENT_015` as well.
+reason. OpenCode installs its release archive from GitHub, checked against GitHub's digest of an
+immutable release (#110); `humanitl agents login opencode` runs `opencode auth login` in its
+terminal and is the only way to store or add a provider (a `/connect` inside a session is not
+kept, `AGENT_012`), and `humanitl agents config opencode` answers `AGENT_015`. pi has no depot
+recipe; for it `install` answers `AGENT_015` as well.
 
 ## `humanitl projects`
 

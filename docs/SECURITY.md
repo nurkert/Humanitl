@@ -180,14 +180,21 @@ publishes a list of checksums (Codex, HUM-566), the daemon checks its own copy o
 the release metadata names the release and the list's SHA-256, the list names the archive's; the
 run compares the archive before `tar` unpacks it, and a tree without a file the recipe expects is
 refused. The program of such a package starts through a link `<program> -> <path>` that only the
-daemon makes. A run that ends with a status
+daemon makes. Where a vendor publishes neither a signature nor a list but releases on GitHub as an
+immutable release (OpenCode, #110), the daemon checks its own copy of GitHub's release metadata:
+it names the release of the version, says `"immutable": true`, and names exactly one SHA-256 for
+the archive, which the archive must have; a release that is not immutable is refused, and the run
+checks the same before it downloads the archive or `tar` unpacks it. A run that ends with a status
 other than 0 or with a red guarantee changes nothing. The version is pinned: only `update` changes
 it, and sessions keep the version they started with. In a session the program directory is
 read-only, so an agent's self-update fails there on purpose. *Limits:* an unsigned recipe's version
 is the run's word, checked only for its form; a checksum list binds the version and the archive to
 the vendor's release metadata, but only TLS to the vendor's host vouches for that metadata, and
 the unpacked tree is bound to the archive by the run, which executes nothing it downloaded, not by
-a check of the daemon's; the kernel level and Seatbelt refuse a maintenance run
+a check of the daemon's; GitHub's release digest is a weaker anchor still: the SHA-256 is
+GitHub's, computed when the asset was uploaded, not a statement of the vendor's, so whoever can
+upload a release to the vendor's repository stands behind it as the vendor would, and only TLS to
+GitHub vouches for the metadata (ADR-0023, amendment 2026-11-27); the kernel level and Seatbelt refuse a maintenance run
 for now (`AGENT_015`); one run at a time, and only while no other session runs.
 
 **Login and configuration runs (HUM-520).** `humanitl agents login` and `humanitl agents config`
@@ -2325,6 +2332,7 @@ passthrough or the audit chain gets a line here and in the change history of
 | 0.1.x | The credential files of the agent depot optionally encrypted at rest (`agents.encrypt_credentials`, off by default, closed to project profiles): ChaCha20-Poly1305 from `ring` with a fresh random nonce per write, the key only in the system keyring and never in a file next to the data, the setting refused without a keyring that answers (`AGENT_020`); the switch converts every file atomically under the depots' locks, all or nothing; the daemon still decrypts for every session (HUM-523, [section 5.7](#57-the-credential-file-of-the-depot), K-36). |
 | 0.1.x | Closing the terminal of `humanitl go` detaches it (`terminal.on_close`, default `detach`, closed to project profiles): the session keeps running in the daemon, held requests wait for a person or their deadline (expiry blocks), `humanitl sessions` and the start window show the session without a terminal; `SIGTERM` stops, `humanitl run` stops on `SIGHUP` as before; no guarantee depends on a client (GitHub #13, [section 6](#a-session-without-a-terminal-github-13), K-39). |
 | 0.1.x | An overlapping finding never removes a checksum-confirmed finding; a user term (`findings.user_terms`) or a known secret over the same bytes is reported next to it, so the hard block (`hold.hard_block_checksum_secrets`) always sees it (#96, [section 7](#7-the-rules-engine)). |
+| 0.1.x | OpenCode installs into the agent depot from its GitHub release, checked against GitHub's SHA-256 of an immutable release; a release that is not immutable is refused. The anchor is GitHub's digest, not a vendor's signature or list (ADR-0023 amendment 2026-11-27, #110, [the agent depot](#the-agent-depot-hum-518-adr-0023)). Its logins (`auth.json`) lie under its data directory, so the depot's copy is its `XDG_DATA_HOME` and the credential file `opencode/auth.json`; the guard reads it through every directory on the way with `O_NOFOLLOW`. Its format is a map of providers, each an entry of kind `oauth`, `api` or `wellknown` with exactly that kind's keys; only the login run `humanitl agents login opencode` stores the first file or adds a provider, and a session's write-back must hold exactly the stored providers (`AGENT_012` otherwise). |
 | 0.1.x | The cloud lock `llm.cloud = "block"`: a start whose inference would leave this machine or network is refused with `LLM_014`, whatever was confirmed; no passthrough to a host that is not local; no model server outside can be added or chosen; the strictest value of all levels applies, so no project, profile or session switches off a `block` another level set (GitHub #113, [section 5.1](#cloud-lock-github-113), K-02). |
 
 ## 12. macOS: Seatbelt instead of bubblewrap

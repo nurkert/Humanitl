@@ -134,9 +134,11 @@ static STAND_IN: [KnownAgent; 1] = [KnownAgent {
             ],
             signature: None,
             checksums: None,
+            release_digest: None,
             source: "https://downloads.standin.test",
         }),
         install_refused: None,
+        config_refused: None,
         login: LoginFlow::PastedCode,
         credential_format: None,
         login_run: None,
@@ -729,6 +731,7 @@ static STAND_IN_LOGIN: [KnownAgent; 1] = [KnownAgent {
         credential_file: Some(".credentials.json"),
         install: None,
         install_refused: None,
+        config_refused: None,
         login: LoginFlow::PastedCode,
         credential_format: Some(CredentialFormat {
             fields: &[
@@ -744,6 +747,7 @@ static STAND_IN_LOGIN: [KnownAgent; 1] = [KnownAgent {
             one_of: &[],
             requires: &[],
             fixed: &[],
+            entries: None,
             evidence: "the stand-in of this test",
         }),
         login_run: Some(LoginRecipe {

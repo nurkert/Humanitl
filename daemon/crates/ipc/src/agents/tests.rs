@@ -401,10 +401,13 @@ fn the_actions_follow_recipe_depot_and_lock() {
     // Claude Code declares no login run yet (HUM-520), so no login.
     assert!(!claude.login);
     // Ohne Rezept: kein Lauf, aber `set_source depot` nimmt der Daemon an.
+    let pi = of(&fresh, "pi").actions.unwrap();
+    assert!(!pi.install && pi.source_depot && pi.source_host);
+    assert!(!pi.remove, "no depot, nothing to remove");
+    assert!(of(&fresh, "pi").credential_writeback);
+    // OpenCode installs from the depot (#110); it takes a key, so no login.
     let opencode = of(&fresh, "opencode").actions.unwrap();
-    assert!(!opencode.install && opencode.source_depot && opencode.source_host);
-    assert!(!opencode.remove, "no depot, nothing to remove");
-    assert!(of(&fresh, "opencode").credential_writeback);
+    assert!(opencode.install && !opencode.login && !opencode.remove);
 
     fill(&paths, "claude");
     let filled = status(&paths, &Config::default(), &locked(), None, &no_keyring());
@@ -456,7 +459,7 @@ fn a_running_run_takes_back_every_maintenance_action() {
 fn a_depot_without_recipe_can_be_removed() {
     let dir = tempfile::tempdir().unwrap();
     let paths = paths(dir.path());
-    fill(&paths, "opencode");
+    fill(&paths, "pi");
     let state = status(
         &paths,
         &Config::default(),
@@ -464,7 +467,7 @@ fn a_depot_without_recipe_can_be_removed() {
         None,
         &no_keyring(),
     );
-    let actions = of(&state, "opencode").actions.unwrap();
+    let actions = of(&state, "pi").actions.unwrap();
     assert!(actions.remove && actions.config_show);
     assert!(!actions.install && !actions.update && !actions.login && !actions.config);
 }

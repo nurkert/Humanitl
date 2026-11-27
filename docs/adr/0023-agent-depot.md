@@ -337,7 +337,8 @@ An agent joins in two places:
 The schema snapshot, `docs/CONFIG.md` and the reader register then name the new keys, and their
 tests say so. A test walks every registered entry and holds the invariants (install locations
 named and absolute, a plain program name, a credential file inside the configuration copy, the
-same identifiers in both places), so a new entry is checked without a new test. What cannot be
+same identifiers in both places; a credential file may lie one directory deep, see the amendment
+of 2026-11-27), so a new entry is checked without a new test. What cannot be
 data stays in the agent's adapter (`AgentAdapter::depot_recipe` may override the table).
 
 ## Addendum 2026-11-23: The source as part of the project choice (#15)
@@ -387,6 +388,74 @@ required". The source therefore also becomes a key of the project choice:
    source, and a choice that names it is `CONFIG_024` when it is saved and
    when a start loads it, whatever its value, like any locked key of the
    choice (HUM-534).
+
+## Amendment 2026-11-27: GitHub release digest (#110)
+
+**Context.** Point 5 admits an install whose download the daemon can check:
+a vendor's signed manifest (Claude Code) or, since HUM-566, a vendor's list
+of checksums whose SHA-256 its release metadata names (Codex). OpenCode
+publishes neither. Its releases on GitHub carry no list and no signature of
+the CLI archives (its release workflow signs only the macOS and Windows
+binaries with the platforms' code signing), and its own installer verifies
+nothing (`install` at tag `v1.19.6`, read 2026-11-27). What exists is
+GitHub's own metadata: for every asset the SHA-256 GitHub computed at upload
+(`assets[].digest`, `sha256:<hex>`), and for the release the flag
+`immutable`, which says that its assets and its tag can no longer change
+(docs.github.com, "Get a release" and "Immutable releases", read
+2026-11-27). OpenCode's releases are immutable (`v1.19.6`: `"immutable":
+true`).
+
+**Decision** (owner, 2026-11-27). A third way of checking, `ReleaseDigest`
+beside `SignedManifest` and `ChecksumList`, one per recipe:
+
+1. The run downloads the release metadata from `api.github.com`
+   (`releases/tags/v<version>`), refuses a release that is not immutable,
+   downloads the archive from `github.com` (redirected to
+   `release-assets.githubusercontent.com`), compares its SHA-256 with the
+   digest before `tar` sees it, and unpacks it. The recipe names exactly
+   these three hosts with their evidence.
+2. The daemon reads its own copy of metadata and archive after the run and
+   checks: the metadata names the release of the version the run
+   installed; `immutable` is `true` itself (missing, `false` or any other
+   value is refused); exactly one asset carries the archive's name, with a
+   SHA-256, and the archive has it. Hashing is `sha2`, as for a list; no
+   cryptography of Humanitl's own.
+3. `manifest.json` records such an install as `unsigned`, as one checked
+   against a list.
+
+**Consequence.** The trust rests on GitHub, not on a statement of the
+vendor's. A list of checksums is at least the vendor's own file; GitHub's
+digest only says what was uploaded. Whoever can publish a release in the
+vendor's repository (a maintainer's stolen token, a compromised release
+workflow) publishes an archive whose digest matches, and only TLS to GitHub
+vouches for the metadata. Immutability closes the narrower gap of an asset
+swapped after publication, so a version once checked stays the same bytes.
+`docs/SECURITY.md` and `docs/THREAT-MODEL.md` name this anchor as weaker than
+a signature and a list. A vendor that later signs or publishes a list moves
+to that kind of check.
+
+**Credential file one directory deep.** OpenCode keeps its logins in
+`auth.json` under its data directory (`$XDG_DATA_HOME/opencode`), which
+`OPENCODE_CONFIG_DIR` does not move. Its recipe therefore names
+`XDG_DATA_HOME` as the variable that points at the depot's copy, and the
+credential file `opencode/auth.json`. A credential path is a relative path
+inside the copy of at most a directory and a file, never absolute and never
+with `..`; the guard opens every directory on the way relative to the one
+before with `O_NOFOLLOW`, and the depot keeps the file under its name in
+`credentials/`.
+
+**Login and format** (lead's decision, 2026-11-27). `OpenCode`'s `auth.json`
+maps a provider's identifier, any string, to an entry whose `type` is
+`oauth`, `api` or `wellknown`. The guard gets a map form (`EntryMap`): every
+top-level key an entry name, every value an object of a declared kind with
+exactly that kind's keys; an unknown kind is refused. The login run is
+`opencode auth login` in the run's terminal (`LoginFlow::TerminalPrompt`),
+and as for every agent only a login run stores the first file and changes
+which providers it holds: a session's write-back must hold exactly the
+stored entries, each of the same kind with the same keys (values such as a
+refreshed token may change). A configuration run is refused for `OpenCode`
+(`DepotRecipe::config_refused`): its copy is the data directory, not
+configuration.
 
 ## Affected issues
 

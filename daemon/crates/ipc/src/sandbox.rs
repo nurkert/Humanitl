@@ -10551,9 +10551,9 @@ mod tests {
         .inner
         .prepare_keyed(&v1::sandbox_request::Plan::default(), &[], KeyNeed::Start)
         .unwrap_err();
-        // OpenCode has no recipe yet: under the lock it does not start from
-        // the host either.
-        assert_eq!(refused.code.as_str(), "AGENT_015");
+        // OpenCode has a recipe (#110) but no depot here: under the lock it
+        // does not start from the host either.
+        assert_eq!(refused.code.as_str(), "AGENT_008");
     }
 
     /// AC1: without `agents.*` the plan of a host agent is the one of today.
