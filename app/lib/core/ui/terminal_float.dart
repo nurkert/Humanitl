@@ -3,10 +3,17 @@
 /// The floating terminal is a small window over the sections: the owner
 /// watches the agent while deciding its requests. It snaps to one of nine
 /// anchors of the sections (the corners, the middles of the edges and the
-/// centre, HUM-352), keeps its anchor and its size across restarts in
-/// the small state file of the interface (`UiStateFile`, HUM-254), and never
-/// covers what must stay clickable: every region marked with `HKeepClear`
-/// (the queue, the bar with Allow and Block, the notices, a sheet, a modal).
+/// centre, HUM-352) and keeps its anchor and its size across restarts in
+/// the small state file of the interface (`UiStateFile`, HUM-254).
+///
+/// **Whose place it is (#129).** Until the person moves or resizes it, the
+/// window never covers what must stay clickable: every region marked with
+/// `HKeepClear` (the queue, the bar with Allow and Block, the notices, the
+/// controls of the editor). Once the person chose a place or a size, that
+/// choice wins: the window stands where it was put, at the size it was
+/// given, even over such a region. It only gives way where it does not fit
+/// into the sections at all. A window that jumped back from where the hand
+/// put it was the failure the owner reported.
 ///
 /// The rule that picks the place is a pure function, [placeFloatingTerminal],
 /// so it can be measured without a widget; the shell's host only feeds it the
@@ -154,12 +161,14 @@ const Size terminalFloatMinSize = Size(320, 200);
 const Size terminalFloatDefaultSize = Size(480, 300);
 
 /// The largest it gets, whatever the window: above that it is no longer a
-/// picture in the picture but a second layout.
-const Size terminalFloatMaxSize = Size(960, 640);
+/// picture in the picture but a second layout. Wide enough for a terminal
+/// read beside the queue (#129).
+const Size terminalFloatMaxSize = Size(1280, 800);
 
 /// The share of the sections it may take at most, in each direction, so the
-/// page below stays a page.
-const double terminalFloatMaxShare = 0.6;
+/// page below stays a page (#129: from 0.6, too narrow to read beside the
+/// queue).
+const double terminalFloatMaxShare = 0.8;
 
 /// The key of the anchor in the state file. The name stays from the time of
 /// four corners, so a stored corner survives HUM-352.
@@ -168,29 +177,38 @@ const String terminalFloatCornerKey = 'terminalFloatCorner';
 /// The key of the size in the state file, as `[width, height]`.
 const String terminalFloatSizeKey = 'terminalFloatSize';
 
-/// The anchor and the size the person chose.
+/// The key of the mark that the person placed or sized the window (#129).
+const String terminalFloatChosenKey = 'terminalFloatChosen';
+
+/// The anchor and the size of the window, and whether the person chose them.
 @immutable
 class TerminalFloatGeometry {
   /// Creates the geometry.
   const TerminalFloatGeometry({
     this.anchor = FloatAnchor.bottomRight,
     this.size = terminalFloatDefaultSize,
+    this.chosen = false,
   });
 
-  /// Where the window snaps to while nothing is in the way.
+  /// Where the window snaps to.
   final FloatAnchor anchor;
 
   /// How large it is while the sections leave room for it.
   final Size size;
 
+  /// Whether the person moved or resized the window (#129). A chosen place
+  /// wins over the regions to keep clear; the untouched default avoids them.
+  final bool chosen;
+
   @override
   bool operator ==(Object other) =>
       other is TerminalFloatGeometry &&
       other.anchor == anchor &&
-      other.size == size;
+      other.size == size &&
+      other.chosen == chosen;
 
   @override
-  int get hashCode => Object.hash(anchor, size);
+  int get hashCode => Object.hash(anchor, size, chosen);
 }
 
 /// The largest size the floating terminal may take in [region].
@@ -212,55 +230,6 @@ Size clampTerminalFloatSize(Size size, {Size? region}) {
     clampTo(size.width, terminalFloatMinSize.width, max.width),
     clampTo(size.height, terminalFloatMinSize.height, max.height),
   );
-}
-
-/// The size a window at [anchor] of [region] takes when the grip asks it to
-/// grow [by] from [from] (HUM-352).
-///
-/// Within the limits of [clampTerminalFloatSize] for [region], the same at
-/// every anchor. Shrinking is always taken. Growing is taken as far as the
-/// window reaches into none of [keepClear]: when the whole step would, the
-/// largest part of it that does not, so the window stops at the edge of such
-/// a region and not one step of the pointer before it. A fast hand used to
-/// lose the whole step there, and the window stopped short of Allow and
-/// Block by however far the pointer had moved in that frame.
-Size growTerminalFloat({
-  required Rect region,
-  required FloatAnchor anchor,
-  required Size from,
-  required Size by,
-  required List<Rect> keepClear,
-  required double inset,
-}) {
-  Size clamp(Size size) => clampTerminalFloatSize(size, region: region.size);
-  final Size start = clamp(from);
-  final Size wanted = clamp(
-    Size(start.width + by.width, start.height + by.height),
-  );
-  bool free(Size size) {
-    final Rect rect = terminalFloatRectAt(region, anchor, size, inset);
-    return !keepClear.any((Rect zone) => zone.overlaps(rect));
-  }
-
-  final bool grows = wanted.width > start.width || wanted.height > start.height;
-  if (!grows || free(wanted)) {
-    return wanted;
-  }
-  if (!free(start)) {
-    return start;
-  }
-  // Halbieren, bis die Grenze auf einen Bruchteil eines Pixels genau sitzt.
-  double low = 0;
-  double high = 1;
-  for (int i = 0; i < 16; i++) {
-    final double mid = (low + high) / 2;
-    if (free(Size.lerp(start, wanted, mid)!)) {
-      low = mid;
-    } else {
-      high = mid;
-    }
-  }
-  return Size.lerp(start, wanted, low)!;
 }
 
 /// The rectangle of a window of [size] at [anchor] of [region], [inset] from
@@ -291,6 +260,10 @@ Rect terminalFloatRectAt(
 typedef FloatPlacement = ({Rect rect, FloatAnchor anchor});
 
 /// Where the floating terminal goes, or null when it fits nowhere.
+///
+/// **A chosen geometry (#129)** stands at its anchor and size whatever lies
+/// below it: [keepClear] does not count, only the sections themselves. The
+/// rest of this rule then only applies where the chosen size does not fit.
 ///
 /// The anchor the person chose comes first. Then the four corners, from the
 /// corner of that anchor ([FloatAnchor.homeCorner]): the one beside it, the
@@ -323,7 +296,7 @@ FloatPlacement? placeFloatingTerminal({
       chosen,
       if (chosen != terminalFloatMinSize) terminalFloatMinSize,
     ],
-    keepClear: keepClear,
+    keepClear: geometry.chosen ? const <Rect>[] : keepClear,
     inset: inset,
   );
 }
@@ -409,15 +382,20 @@ class TerminalFloat extends Notifier<TerminalFloatGeometry> {
   @override
   TerminalFloatGeometry build() {
     final Map<String, Object?> stored = ref.read(uiStateFileProvider).read();
-    final Object? anchor = stored[terminalFloatCornerKey];
-    final Object? size = stored[terminalFloatSizeKey];
-    return TerminalFloatGeometry(
-      anchor: FloatAnchor.values.firstWhere(
-        (FloatAnchor a) => a.name == anchor,
-        orElse: () => FloatAnchor.bottomRight,
-      ),
-      size: _size(size) ?? terminalFloatDefaultSize,
+    final FloatAnchor anchor = FloatAnchor.values.firstWhere(
+      (FloatAnchor a) => a.name == stored[terminalFloatCornerKey],
+      orElse: () => FloatAnchor.bottomRight,
     );
+    final Size size =
+        _size(stored[terminalFloatSizeKey]) ?? terminalFloatDefaultSize;
+    // Ein Stand von vor #129 trägt die Marke nicht: Wer Ecke oder Größe
+    // schon geändert hatte, hat sie gewählt und behält sie.
+    final bool chosen = switch (stored[terminalFloatChosenKey]) {
+      final bool mark => mark,
+      _ =>
+        anchor != FloatAnchor.bottomRight || size != terminalFloatDefaultSize,
+    };
+    return TerminalFloatGeometry(anchor: anchor, size: size, chosen: chosen);
   }
 
   static Size? _size(Object? value) {
@@ -435,25 +413,48 @@ class TerminalFloat extends Notifier<TerminalFloatGeometry> {
     return clampTerminalFloatSize(Size(width.toDouble(), height.toDouble()));
   }
 
-  /// Snaps to [anchor] and keeps it.
+  /// Snaps to [anchor], chosen by the person, and keeps it.
   void snapTo(FloatAnchor anchor) {
+    _choose();
     if (anchor == state.anchor) {
       return;
     }
-    state = TerminalFloatGeometry(anchor: anchor, size: state.size);
+    state = TerminalFloatGeometry(
+      anchor: anchor,
+      size: state.size,
+      chosen: true,
+    );
     ref.read(uiStateFileProvider).setValue(terminalFloatCornerKey, anchor.name);
   }
 
-  /// Takes [size], within the limits, and keeps it.
+  /// Takes [size], within the limits, chosen by the person, and keeps it.
   void resize(Size size) {
+    _choose();
     final Size next = clampTerminalFloatSize(size);
     if (next == state.size) {
       return;
     }
-    state = TerminalFloatGeometry(anchor: state.anchor, size: next);
+    state = TerminalFloatGeometry(
+      anchor: state.anchor,
+      size: next,
+      chosen: true,
+    );
     ref.read(uiStateFileProvider).setValue(terminalFloatSizeKey, <double>[
       next.width,
       next.height,
     ]);
+  }
+
+  /// Marks the geometry as the person's own (#129), once.
+  void _choose() {
+    if (state.chosen) {
+      return;
+    }
+    state = TerminalFloatGeometry(
+      anchor: state.anchor,
+      size: state.size,
+      chosen: true,
+    );
+    ref.read(uiStateFileProvider).setValue(terminalFloatChosenKey, true);
   }
 }

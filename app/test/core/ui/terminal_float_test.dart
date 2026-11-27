@@ -37,9 +37,10 @@ FloatPlacement? place({
   Size size = terminalFloatDefaultSize,
   List<Rect> keepClear = const <Rect>[],
   Rect within = region,
+  bool chosen = false,
 }) => placeFloatingTerminal(
   region: within,
-  geometry: TerminalFloatGeometry(anchor: anchor, size: size),
+  geometry: TerminalFloatGeometry(anchor: anchor, size: size, chosen: chosen),
   keepClear: keepClear,
   inset: inset,
 );
@@ -106,8 +107,48 @@ void main() {
 
     test('the_size_never_exceeds_the_share_of_the_region', () {
       final FloatPlacement? placed = place(size: const Size(5000, 5000));
-      expect(placed!.rect.width, lessThanOrEqualTo(region.width * 0.6));
-      expect(placed.rect.height, lessThanOrEqualTo(region.height * 0.6));
+      expect(placed!.rect.width, lessThanOrEqualTo(region.width * 0.8));
+      expect(placed.rect.height, lessThanOrEqualTo(region.height * 0.8));
+    });
+
+    // --- #129 ----------------------------------------------------------------
+
+    test('a_chosen_anchor_stands_over_a_region_to_keep_clear', () {
+      // Die Leiste mit Freigeben und Blockieren unten in der Mitte: Wer das
+      // Fenster dorthin gelegt hat, behält es dort, in seiner Größe.
+      const Rect actionBar = Rect.fromLTWH(400, 700, 700, 100);
+      final FloatPlacement? placed = place(
+        anchor: FloatAnchor.bottomCenter,
+        keepClear: <Rect>[actionBar],
+        chosen: true,
+      );
+      expect(placed?.anchor, FloatAnchor.bottomCenter);
+      expect(placed?.rect.size, terminalFloatDefaultSize);
+      expect(placed!.rect.overlaps(actionBar), isTrue);
+    });
+
+    test('the_untouched_default_still_gives_way', () {
+      const Rect actionBar = Rect.fromLTWH(400, 700, 700, 100);
+      final FloatPlacement? placed = place(
+        anchor: FloatAnchor.bottomCenter,
+        keepClear: <Rect>[actionBar],
+      );
+      expect(placed?.anchor, isNot(FloatAnchor.bottomCenter));
+      expect(placed!.rect.overlaps(actionBar), isFalse);
+    });
+
+    test('a_chosen_size_too_large_for_the_region_still_shrinks', () {
+      final FloatPlacement? placed = place(
+        size: const Size(480, 300),
+        within: const Rect.fromLTWH(0, 0, 400, 260),
+        chosen: true,
+      );
+      // 80 Prozent von 400 x 260.
+      expect(placed?.rect.size, const Size(320, 208));
+      expect(
+        place(within: const Rect.fromLTWH(0, 0, 300, 180), chosen: true),
+        isNull,
+      );
     });
   });
 
@@ -207,56 +248,20 @@ void main() {
     });
   });
 
-  group('growTerminalFloat', () {
-    Size grow(
-      FloatAnchor anchor,
-      Size by, {
-      List<Rect> keepClear = const <Rect>[],
-    }) => growTerminalFloat(
-      region: region,
-      anchor: anchor,
-      from: terminalFloatDefaultSize,
-      by: by,
-      keepClear: keepClear,
-      inset: inset,
-    );
-
-    test('the_largest_size_is_the_same_at_every_anchor', () {
-      final Set<Size> largest = <Size>{
-        for (final FloatAnchor anchor in FloatAnchor.values)
-          grow(anchor, const Size(5000, 5000)),
-      };
-      expect(largest, <Size>{terminalFloatMaxIn(region.size)});
-    });
-
-    test('it_stops_at_the_edge_of_a_region_to_keep_clear', () {
-      // Eine Leiste links neben dem Fenster unten rechts; ein großer Schritt
-      // endet an ihrer Kante statt vor ihr.
-      final Rect window = terminalFloatRectAt(
-        region,
-        FloatAnchor.bottomRight,
-        terminalFloatDefaultSize,
-        inset,
-      );
-      final Rect bar = Rect.fromLTRB(0, 700, window.left - 100, 800);
-      final Size grown = grow(
-        FloatAnchor.bottomRight,
-        const Size(300, 0),
-        keepClear: <Rect>[bar],
-      );
-      expect(grown.width, closeTo(terminalFloatDefaultSize.width + 100, 0.1));
-      final Rect after = terminalFloatRectAt(
-        region,
-        FloatAnchor.bottomRight,
-        grown,
-        inset,
-      );
-      expect(after.overlaps(bar), isFalse);
-    });
-
-    test('shrinking_is_always_taken_down_to_the_minimum', () {
+  group('clampTerminalFloatSize', () {
+    test('the_largest_size_is_the_share_of_the_region', () {
       expect(
-        grow(FloatAnchor.topLeft, const Size(-5000, -5000)),
+        clampTerminalFloatSize(const Size(5000, 5000), region: region.size),
+        terminalFloatMaxIn(region.size),
+      );
+      // #129: 80 Prozent, damit das Terminal neben der Warteschlange lesbar
+      // breit wird.
+      expect(terminalFloatMaxIn(region.size), const Size(1200, 640));
+    });
+
+    test('shrinking_stops_at_the_minimum', () {
+      expect(
+        clampTerminalFloatSize(const Size(-5000, -5000), region: region.size),
         terminalFloatMinSize,
       );
     });
@@ -285,13 +290,43 @@ void main() {
         overrides: [uiStateFileProvider.overrideWithValue(UiStateFile(path))],
       );
       addTearDown(second.dispose);
+      expect(stored[terminalFloatChosenKey], isTrue);
       expect(
         second.read(terminalFloatProvider),
         const TerminalFloatGeometry(
           anchor: FloatAnchor.topLeft,
           size: Size(600, 400),
+          chosen: true,
         ),
       );
+    });
+
+    test('a_drop_at_the_default_anchor_is_a_choice_too', () {
+      final (ProviderContainer container, String path) = containerWith(null);
+      container
+          .read(terminalFloatProvider.notifier)
+          .snapTo(FloatAnchor.bottomRight);
+      expect(container.read(terminalFloatProvider).chosen, isTrue);
+      final Map<String, Object?> stored =
+          jsonDecode(File(path).readAsStringSync()) as Map<String, Object?>;
+      expect(stored[terminalFloatChosenKey], isTrue);
+    });
+
+    test('a_stored_geometry_from_before_129_counts_as_chosen', () {
+      final (ProviderContainer moved, String _) = containerWith(
+        <String, Object?>{terminalFloatCornerKey: 'topLeft'},
+      );
+      expect(moved.read(terminalFloatProvider).chosen, isTrue);
+      final (ProviderContainer sized, String _) = containerWith(
+        <String, Object?>{
+          terminalFloatSizeKey: <double>[600, 400],
+        },
+      );
+      expect(sized.read(terminalFloatProvider).chosen, isTrue);
+      final (ProviderContainer untouched, String _) = containerWith(
+        <String, Object?>{terminalFloatCornerKey: 'bottomRight'},
+      );
+      expect(untouched.read(terminalFloatProvider).chosen, isFalse);
     });
 
     test('a_size_below_the_minimum_is_raised_to_it', () {

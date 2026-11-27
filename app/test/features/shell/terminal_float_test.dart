@@ -21,6 +21,7 @@ import 'package:humanitl/core/ui/terminal_placement.dart';
 import 'package:humanitl/core/ui_state/ui_state_file.dart';
 import 'package:humanitl/features/intercept/providers/coach_mark.dart'
     show coachMarkSeenKey;
+import 'package:humanitl/features/intercept/widgets/domain_panel.dart';
 import 'package:humanitl/features/intercept/widgets/action_bar.dart';
 import 'package:humanitl/features/intercept/widgets/queue_pane.dart';
 import 'package:humanitl/features/intercept/widgets/queue_row.dart';
@@ -338,7 +339,9 @@ void main() {
     );
   }, variant: linux);
 
-  testWidgets('a_corner_over_the_queue_is_refused_for_the_next_free_one', (
+  // #129: Eine Ecke, die die Person gewählt hat, gilt, auch über der
+  // Warteschlange; ein Stand von vor #129 ohne Marke zählt als gewählt.
+  testWidgets('a_chosen_corner_over_the_queue_stays_there', (
     WidgetTester tester,
   ) async {
     final (Override state, String _) = stateFile(<String, Object?>{
@@ -357,11 +360,8 @@ void main() {
     expect(floating, findsOneWidget);
     final Rect pip = tester.getRect(floating);
     final Rect queue = tester.getRect(find.byType(QueuePane));
-    expect(pip.overlaps(queue), isFalse);
-    expect(pip.left, greaterThanOrEqualTo(queue.right));
-    for (final Rect zone in decisionRects(tester)) {
-      expect(pip.overlaps(zone), isFalse, reason: '$pip covers $zone');
-    }
+    expect(pip.overlaps(queue), isTrue, reason: '$pip stays over $queue');
+    expectSize(pip.size, terminalFloatDefaultSize, 'the chosen size');
   }, variant: linux);
 
   testWidgets('the_queue_keeps_the_keyboard_until_the_terminal_takes_it', (
@@ -706,40 +706,41 @@ void main() {
     expect(placement(tester), TerminalPlacement.pane);
   }, variant: linux);
 
-  // Codex: Ein Zug am Griff zog das Fenster über die Aktionsleiste.
-  testWidgets('the_grip_never_pulls_the_window_over_the_bar', (
+  // Owner (#129): Unten rechts wurde das Fenster nie breiter als das Pane
+  // mit der Domain, weil der Griff an Freigeben und Blockieren anhielt.
+  testWidgets('the_grip_widens_the_window_past_the_context_pane', (
     WidgetTester tester,
   ) async {
-    await pumpApp(tester, client: HeldAndRunningClient(), size: window);
+    final (Override state, String path) = stateFile();
+    await pumpApp(
+      tester,
+      client: HeldAndRunningClient(),
+      size: window,
+      uiState: state,
+    );
     await tester.pump(const Duration(milliseconds: 100));
     await settle(tester);
-    await pressFloat(tester);
-    final Rect before = tester.getRect(floating);
-
-    final TestGesture hand = await tester.startGesture(
-      tester.getCenter(find.byKey(const Key('shell-terminal-floating-grip'))),
-      kind: PointerDeviceKind.mouse,
-    );
-    for (int i = 0; i < 8; i++) {
-      await hand.moveBy(const Offset(-60, -20));
-      await tester.pump();
-      for (final Rect zone in decisionRects(tester)) {
-        final Rect pip = tester.getRect(floating);
-        expect(pip.overlaps(zone), isFalse, reason: 'mid-drag $pip on $zone');
-      }
-    }
-    await hand.up();
+    await tester.tap(find.byType(QueueRow).first);
     await settle(tester);
+    await pressFloat(tester);
+    final Rect context = tester.getRect(find.byType(DomainPanel));
+
+    await pullGripFar(tester, FloatAnchor.bottomRight);
     final Rect after = tester.getRect(floating);
-    expect(after.height, greaterThan(before.height), reason: 'it still grew');
-    for (final Rect zone in decisionRects(tester)) {
-      expect(after.overlaps(zone), isFalse, reason: '$after on $zone');
-    }
+    final Rect layer = layerRect(tester);
+    expect(
+      after.width,
+      greaterThan(context.width),
+      reason: 'wider than $context',
+    );
+    expectSize(after.size, terminalFloatMaxIn(layer.size), 'up to the limit');
+    expect(after.overlaps(tester.getRect(find.byType(ActionBar))), isTrue);
+    final Map<String, Object?> stored = readState(path);
+    expect(stored[terminalFloatChosenKey], isTrue);
   }, variant: linux);
 
-  // Codex: Beim Ziehen darf es kurz über der Warteschlange stehen; losgelassen
-  // weicht es aus, und die gewählte Ecke bleibt die gewählte.
-  testWidgets('a_window_let_go_over_the_queue_gives_way', (
+  // #129: Über der Warteschlange losgelassen, bleibt es dort.
+  testWidgets('a_window_let_go_over_the_queue_stays_there', (
     WidgetTester tester,
   ) async {
     final (Override state, String path) = stateFile();
@@ -762,10 +763,8 @@ void main() {
     );
     await glideHome(tester);
     expect(readState(path)[terminalFloatCornerKey], 'bottomLeft');
-    final Rect after = tester.getRect(floating);
-    for (final Rect zone in decisionRects(tester)) {
-      expect(after.overlaps(zone), isFalse, reason: '$after on $zone');
-    }
+    expect(readState(path)[terminalFloatChosenKey], isTrue);
+    expect(tester.getRect(floating).overlaps(queue), isTrue);
   }, variant: linux);
 
   // Sonnet: Ein Klick auf die Titelleiste endet als abgebrochener Zug und
@@ -773,8 +772,10 @@ void main() {
   testWidgets('a_click_on_the_title_keeps_the_chosen_corner', (
     WidgetTester tester,
   ) async {
+    // Eine Ecke ohne Wahl (#129): Das Fenster weicht der Warteschlange aus.
     final (Override state, String path) = stateFile(<String, Object?>{
       terminalFloatCornerKey: FloatAnchor.bottomLeft.name,
+      terminalFloatChosenKey: false,
     });
     await pumpApp(
       tester,
@@ -797,6 +798,11 @@ void main() {
     await tester.tapAt(title.centerLeft + const Offset(40, 0));
     await settle(tester);
     expect(readState(path)[terminalFloatCornerKey], 'bottomLeft');
+    expect(
+      readState(path)[terminalFloatChosenKey],
+      isFalse,
+      reason: 'a click is no choice',
+    );
   }, variant: linux);
 
   // Sonnet (HUM-300): Unten verankert lag der Griff auf dem Schließen-Knopf.
@@ -1032,8 +1038,10 @@ void main() {
       FloatAnchor.bottomCenter,
       FloatAnchor.bottomRight,
     ]) {
+      // Ein Fenster ohne Wahl (#129) weicht den Knöpfen des Editors aus.
       final (Override state, String _) = stateFile(<String, Object?>{
         terminalFloatCornerKey: anchor.name,
+        terminalFloatChosenKey: false,
       });
       await pumpApp(
         tester,
@@ -1069,30 +1077,55 @@ void main() {
     }
   }, variant: linux);
 
-  // Codex: Das Ziel des Einrastens war frei, der Weg dorthin nicht. Über
-  // Freigeben und Blockieren losgelassen, glitt das Fenster 180 ms über sie.
-  testWidgets('a_window_let_go_over_the_bar_never_glides_across_it', (
+  // Owner (#129): Unten in der Mitte losgelassen, sprang das Fenster in eine
+  // Ecke zurück. Die Wahl gilt jetzt, auch über Freigeben und Blockieren, und
+  // übersteht einen Neustart.
+  testWidgets('a_window_let_go_at_the_bottom_centre_stays_there', (
     WidgetTester tester,
   ) async {
-    await pumpApp(tester, client: HeldAndRunningClient(), size: window);
+    final (Override state, String path) = stateFile();
+    await pumpApp(
+      tester,
+      client: HeldAndRunningClient(),
+      size: window,
+      uiState: state,
+    );
     await tester.pump(const Duration(milliseconds: 100));
     await settle(tester);
     await tester.tap(find.byType(QueueRow).first);
     await settle(tester);
     await pressFloat(tester);
     final Rect bar = tester.getRect(find.byType(ActionBar));
+    final Rect layer = layerRect(tester);
     final Rect start = tester.getRect(floating);
 
     await tester.drag(
       find.byKey(const Key('shell-terminal-floating-title')),
-      bar.center - start.center,
+      Offset(layer.center.dx - start.center.dx, 0),
       kind: PointerDeviceKind.mouse,
     );
-    for (int frame = 0; frame < 20; frame++) {
-      await tester.pump(const Duration(milliseconds: 16));
-      final Rect pip = tester.getRect(floating);
-      expect(pip.overlaps(bar), isFalse, reason: 'frame $frame: $pip on $bar');
-    }
+    await glideHome(tester);
+    final Rect pip = tester.getRect(floating);
+    expect(readState(path)[terminalFloatCornerKey], 'bottomCenter');
+    expect(pip.center.dx, closeTo(layer.center.dx, 0.5));
+    expect(pip.overlaps(bar), isTrue, reason: '$pip stays over $bar');
+
+    // Ein Neustart mit demselben Stand stellt es wieder dorthin.
+    await tester.pumpWidget(const SizedBox.shrink());
+    await pumpApp(
+      tester,
+      client: HeldAndRunningClient(),
+      size: window,
+      uiState: stateFile(readState(path)).$1,
+    );
+    await tester.pump(const Duration(milliseconds: 100));
+    await settle(tester);
+    await tester.tap(find.byType(QueueRow).first);
+    await settle(tester);
+    await pressFloat(tester);
+    final Rect again = tester.getRect(floating);
+    expect(again.center.dx, closeTo(layer.center.dx, 0.5));
+    expect(again.overlaps(tester.getRect(find.byType(ActionBar))), isTrue);
   }, variant: linux);
 
   // Codex und Sonnet: Ein Zug, der mitten im Gleiten beginnt, begann am Ziel,

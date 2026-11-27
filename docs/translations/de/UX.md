@@ -591,18 +591,23 @@ Ecken, den Mitten der Kanten, der Mitte, HUM-352): ruhig losgelassen am
 nächsten; geworfen am nächsten Anker in Wurfrichtung, sodass ein
 kurzes Schnippen aus einer Ecke ihren Nachbarn erreicht, statt zurückzufallen. Ein
 Ziehen, das nach einer Bewegung abgebrochen wird, zählt als ruhiges Ablegen und behält den
-nächsten Anker; ein Gleiten, das eine freizuhaltende Region kreuzen würde, springt. Ein
+nächsten Anker. Ein
 Griff in der Ecke gegenüber dem Anker ändert die Größe zwischen 320 x 200 und
-60 % der Ansichten (höchstens 960 x 640), an jedem Anker gleich, und Anker
+80 % der Ansichten (höchstens 1280 x 800, #129), an jedem Anker gleich, und Anker
 und Größe überstehen einen Neustart in der Zustandsdatei der Oberfläche. Die Vorgabe-Ecke ist unten rechts: In
 Anhalten ist das der Fuß des Kontextbereichs, die eine Ecke ohne
-Entscheidung. **Es verdeckt nie, was klickbar bleiben muss.** Die Warteschlange mit ihren
+Entscheidung. **Unberührt verdeckt es nie, was klickbar bleiben muss.** Die Warteschlange mit ihren
 Zeilen und Hinweisen, die Leiste mit Senden und Blockieren, die Hinweise der Shell, ein
 Sheet und ein Modal markieren sich als freizuhaltende Regionen (`HKeepClear`);
 die Leiste nur, solange eine Anfrage wartet, und die Hinweise innerhalb des Fensters nie
 (HUM-352);
 das Fenster nimmt die gewählte Ecke in der gewählten Größe, sonst die kleinste
-Größe, sonst die Ecke daneben, darüber oder gegenüber. **Ohne freie Ecke
+Größe, sonst die Ecke daneben, darüber oder gegenüber. **Sobald die Person es
+verschiebt oder seine Größe ändert, gilt ihre Wahl** (#129): Es bleibt am Anker,
+an dem es losgelassen wurde, und in der Größe, die es bekam, auch über der
+Warteschlange oder Senden und Blockieren, und der Griff zieht es bis zur Grenze
+auf; ein Fenster, das von dort zurücksprang, wo die Hand es hinlegte, wirkte
+kaputt. Die Entscheidungstasten wirken darunter weiter. **Ohne freie Ecke
 schrumpft es zu einem schmalen Titelstreifen** (HUM-315, `HSize.terminalStrip`, 240 x 28):
 das Profil der Sandbox oder „Terminal", der aktive Tab und ein Knopf; er
 nimmt die erste Ecke in derselben Reihenfolge, die ihm Platz lässt, und verdeckt ebenfalls nie,
