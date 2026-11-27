@@ -7,7 +7,7 @@ import 'package:flutter/widgets.dart';
 import 'package:flutter_test/flutter_test.dart';
 import 'package:humanitl/core/domain/domain.dart';
 import 'package:humanitl/core/ui/untranslated_wording.dart';
-import 'package:humanitl/features/settings/widgets/agents/agent_inset.dart';
+import 'package:humanitl/core/ui/agents/agent_inset.dart';
 import 'package:humanitl/l10n/l10n.dart';
 
 import '../../goldens/support/golden_variants.dart';

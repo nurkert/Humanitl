@@ -6301,17 +6301,31 @@ mixin FakeAgents {
   set configValues(ConfigValues value);
 
   /// `SetConfig` of `agents.<id>.source` and
-  /// `agents.<id>.credential_writeback` for a known agent, as the daemon
-  /// takes them (`is_form_key`); false for every other key.
+  /// `agents.<id>.credential_writeback` (and `agents.<id>.inference`,
+  /// GitHub #112) for a known agent, as the daemon takes them
+  /// (`is_form_key`); false for every other key.
   bool writeAgentSetting(String key, String value) {
     final List<String> path = key.split('.');
     if (path.length != 3 ||
         path.first != 'agents' ||
         agentsStatus.of(path[1]) == null ||
-        (path[2] != 'credential_writeback' && path[2] != 'source')) {
+        (path[2] != 'credential_writeback' &&
+            path[2] != 'source' &&
+            path[2] != 'inference')) {
       return false;
     }
-    final Object parsed = path[2] == 'source'
+    // `agents.<id>.inference` (GitHub #112): `model-server` oder `own`, wie
+    // der Daemon ihn annimmt; was er sonst ablehnt, lehnt auch der Fake ab.
+    if (path[2] == 'inference' && value != 'model-server' && value != 'own') {
+      throw DaemonException(
+        Diagnostic(
+          code: 'CONFIG_003',
+          severity: Severity.error,
+          why: '$key takes model-server or own, and $value is neither',
+        ),
+      );
+    }
+    final Object parsed = path[2] == 'source' || path[2] == 'inference'
         ? value
         : switch (value) {
             'true' => true,

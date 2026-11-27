@@ -14,10 +14,10 @@ import 'dart:async';
 import 'package:flutter/widgets.dart';
 import 'package:flutter_riverpod/flutter_riverpod.dart';
 
-import '../../../../core/domain/domain.dart';
-import '../../../../core/ui/ui.dart';
-import '../../../../l10n/l10n.dart';
-import '../../providers/agents_provider.dart';
+import '../../domain/domain.dart';
+import '../ui.dart';
+import '../../../l10n/l10n.dart';
+import 'login_url_opener.dart';
 import 'agent_config_files.dart';
 import 'agent_inset.dart';
 

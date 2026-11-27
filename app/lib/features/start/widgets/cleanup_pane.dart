@@ -14,7 +14,7 @@ import '../../../core/ui/ui.dart';
 import '../../../l10n/l10n.dart';
 import '../providers/cleanup.dart';
 import '../providers/projects.dart';
-import 'project_list.dart' show StartDiagnostic;
+import 'start_diagnostic.dart';
 import 'start_page.dart';
 
 /// The cleanup tab.

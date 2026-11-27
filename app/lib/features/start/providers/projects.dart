@@ -13,11 +13,14 @@ library;
 import 'package:flutter_riverpod/flutter_riverpod.dart';
 
 import '../../../core/domain/domain.dart';
+import '../../../core/ipc/agents_provider.dart';
 import '../../../core/ipc/client_diagnostics.dart';
 import '../../../core/ipc/client_providers.dart';
 import '../../../core/ipc/connection.dart';
 import '../../../core/ipc/daemon_client.dart';
 import '../../../core/ui/session_view.dart';
+import '../setup/setup_steps.dart';
+import 'agent_setup.dart';
 
 /// `Projects(list)`, newest start first, as the daemon sorted it.
 ///
@@ -94,8 +97,23 @@ class StartLaunchNotifier extends Notifier<StartLaunch> {
   /// folder. A daemon before 1.58 ignores the id; against it nothing
   /// starts, and the window says how the daemon restarts. While `GetInfo`
   /// has not answered yet, the start waits for it rather than guess.
+  ///
+  /// A depot agent that is not installed or not signed in opens the guided
+  /// setup instead (GitHub #111), as the depot state the window already has
+  /// says; nothing starts then.
   Future<void> startRecent(ProjectEntry entry) async {
     if (!entry.startable) {
+      return;
+    }
+    final AgentDepot? depot = ref
+        .read(agentsProvider)
+        .value
+        ?.of(entry.lastAgent);
+    if (depot != null && depotNeedsSetup(depot)) {
+      state = const StartLaunch();
+      await ref
+          .read(agentSetupProvider.notifier)
+          .open(AgentSetupTarget.of(entry));
       return;
     }
     return startKnown(entry.projectId, entry.path);
@@ -186,11 +204,42 @@ class StartLaunchNotifier extends Notifier<StartLaunch> {
           .attach(SessionView(projectPath: path, projectId: projectId));
       return;
     }
+    // Ein Befund, den ein Schritt der Einrichtung löst, führt in diesen
+    // Schritt statt als Text unter die Liste (GitHub #111).
+    if (leadsIntoSetup(said)) {
+      state = const StartLaunch();
+      await ref
+          .read(agentSetupProvider.notifier)
+          .open(
+            AgentSetupTarget(
+              path: path,
+              projectId: projectId,
+              agent: _lastAgent(projectId),
+              displayName: _displayName(projectId),
+              findings: List<Diagnostic>.unmodifiable(said),
+            ),
+          );
+      return;
+    }
     state = StartLaunch(
       diagnostics: List<Diagnostic>.unmodifiable(said),
       endedSilently: said.isEmpty,
     );
   }
+
+  ProjectEntry? _entry(String projectId) {
+    for (final ProjectEntry entry
+        in ref.read(projectsProvider).value ?? const <ProjectEntry>[]) {
+      if (entry.projectId == projectId) {
+        return entry;
+      }
+    }
+    return null;
+  }
+
+  String _lastAgent(String projectId) => _entry(projectId)?.lastAgent ?? '';
+
+  String _displayName(String projectId) => _entry(projectId)?.displayName ?? '';
 
   /// Forgets the findings of the last start.
   void dismiss() => state = const StartLaunch();

@@ -9,9 +9,9 @@ library;
 
 import 'package:flutter/widgets.dart';
 
-import '../../../../core/domain/domain.dart';
-import '../../../../core/ui/ui.dart';
-import '../../../../l10n/l10n.dart';
+import '../../domain/domain.dart';
+import '../ui.dart';
+import '../../../l10n/l10n.dart';
 import 'agent_inset.dart';
 
 /// The version choice of [entry]; [update] tells an update from an install.

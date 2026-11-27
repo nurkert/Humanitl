@@ -9,7 +9,7 @@ import 'package:flutter/widgets.dart';
 import '../../../../core/domain/domain.dart';
 import '../../../../core/ui/ui.dart';
 import '../../../../l10n/l10n.dart';
-import 'agent_inset.dart';
+import '../../../../core/ui/agents/agent_inset.dart';
 
 /// The question for [entry].
 class AgentRemoveConfirm extends StatefulWidget {

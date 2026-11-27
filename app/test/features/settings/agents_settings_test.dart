@@ -12,7 +12,8 @@ import 'package:humanitl/core/domain/domain.dart';
 import 'package:humanitl/core/ipc/client_providers.dart';
 import 'package:humanitl/core/ipc/fake_daemon_client.dart';
 import 'package:humanitl/core/ui/ui.dart';
-import 'package:humanitl/features/settings/providers/agents_provider.dart';
+import 'package:humanitl/core/ipc/agents_provider.dart';
+import 'package:humanitl/core/ui/agents/login_url_opener.dart';
 import 'package:humanitl/features/settings/settings_sheet.dart';
 
 import '../../goldens/support/golden_variants.dart';

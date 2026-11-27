@@ -17,21 +17,23 @@ import 'package:flutter/widgets.dart';
 import 'package:flutter_riverpod/flutter_riverpod.dart';
 
 import '../../../core/domain/domain.dart';
+import '../../../core/ipc/agents_provider.dart';
 import '../../../core/ipc/connection.dart';
 import '../../../core/ipc/daemon_client.dart';
 import '../../../core/time/now.dart';
-import '../../../core/ui/diagnostic_severity.dart';
-import '../../../core/ui/h_diagnostic_card.dart';
 import '../../../core/ui/hover_label.dart';
 import '../../../core/ui/ui.dart';
-import '../../../core/ui/untranslated_wording.dart';
 import '../../../core/ui/work_dir_picker.dart';
 import '../../../l10n/l10n.dart';
+import '../providers/agent_setup.dart';
 import '../providers/first_start.dart';
 import '../providers/preselection.dart';
 import '../providers/projects.dart';
 import '../start_text.dart';
 import 'first_start_pane.dart';
+import 'project_agent_cell.dart';
+import 'setup/agent_setup_pane.dart';
+import 'start_diagnostic.dart';
 import 'start_page.dart';
 
 /// Width of the agent column.
@@ -62,6 +64,26 @@ class ProjectsPane extends ConsumerWidget {
     final AppLocalizations l10n = context.l10n;
     final AsyncValue<List<ProjectEntry>> projects = ref.watch(projectsProvider);
     final StartLaunch launch = ref.watch(startLaunchProvider);
+    // Der Stand der Depots für die Zeilen und für die Prüfung vor einem
+    // Start (GitHub #111); dieselbe Quelle wie die Einstellungen.
+    ref
+      ..watch(agentsProvider)
+      ..listen<AgentSetup?>(agentSetupProvider, (
+        AgentSetup? previous,
+        AgentSetup? next,
+      ) {
+        // Zurück aus der Einrichtung fragt der Erststart-Bildschirm den
+        // Daemon neu: Ein Agent kann jetzt installiert sein.
+        if (previous != null && next == null) {
+          unawaited(ref.read(firstStartProvider.notifier).refresh());
+        }
+      });
+    // Die geführte Einrichtung steht an der Stelle der Liste (GitHub #111),
+    // auch über dem Erststart-Bildschirm, aus dem sie geöffnet sein kann.
+    final AgentSetup? setup = ref.watch(agentSetupProvider);
+    if (setup != null) {
+      return AgentSetupPane(state: setup);
+    }
     // Der Erststart-Bildschirm steht an der Stelle der Liste (HUM-538).
     final FirstStart? firstStart = ref.watch(firstStartProvider);
     if (firstStart != null) {
@@ -143,33 +165,6 @@ class ProjectsPane extends ConsumerWidget {
           _ => const HSkeleton(rows: 3),
         },
       ],
-    );
-  }
-}
-
-/// A finding of the daemon as a card the width of the page.
-class StartDiagnostic extends StatelessWidget {
-  /// Creates the card.
-  const StartDiagnostic({required this.diagnostic, super.key});
-
-  /// What the daemon said.
-  final Diagnostic diagnostic;
-
-  @override
-  Widget build(BuildContext context) {
-    final HTokens tokens = HTheme.of(context);
-    final AppLocalizations l10n = context.l10n;
-    final DiagnosticText text = DiagnosticL10n.resolve(diagnostic, l10n);
-    return HDiagnosticCard(
-      key: Key('start-diagnostic-${diagnostic.code}'),
-      code: diagnostic.code,
-      severityLabel: severityLabel(l10n, diagnostic.severity),
-      color: severityColor(tokens, diagnostic.severity),
-      title: text.title,
-      why: text.cause,
-      original: UntranslatedWording.forDiagnostic(diagnostic, l10n),
-      docsUrl: diagnostic.docsUrl,
-      width: double.infinity,
     );
   }
 }
@@ -397,14 +392,10 @@ class _ProjectRow extends ConsumerWidget {
           SizedBox(width: tokens.spacing.x4),
           SizedBox(
             width: _agentColumn,
-            child: Text(
-              entry.lastAgent,
-              key: Key('start-agent-${entry.projectId}'),
-              maxLines: 1,
-              overflow: TextOverflow.ellipsis,
-              style: tokens.typography.ui12.tinted(
-                dim ? tokens.colors.fg2 : tokens.colors.fg1,
-              ),
+            child: ProjectAgentCell(
+              entry: entry,
+              dim: dim,
+              enabled: !entry.running && entry.startable && !busy,
             ),
           ),
           SizedBox(

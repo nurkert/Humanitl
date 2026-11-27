@@ -14,7 +14,7 @@ import '../../../core/ipc/daemon_client.dart';
 import '../../../core/ui/ui.dart';
 import '../../../core/ui/untranslated_wording.dart';
 import '../../../l10n/l10n.dart';
-import '../providers/agents_provider.dart';
+import '../../../core/ipc/agents_provider.dart';
 import '../registry/settings_registry.dart';
 import '../settings_scope.dart';
 import '../widgets/agents/agent_card.dart';
