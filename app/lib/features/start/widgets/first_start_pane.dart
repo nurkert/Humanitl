@@ -26,7 +26,9 @@ import '../../../core/ui/cloud_inference_tag.dart';
 import '../../../core/ui/ui.dart';
 import '../../../l10n/l10n.dart';
 import '../providers/first_start.dart';
-import 'project_list.dart' show StartDiagnostic;
+import '../setup/setup_steps.dart';
+import 'setup/setup_link.dart';
+import 'start_diagnostic.dart';
 import 'start_page.dart';
 
 /// Width of the label column of the unfolded fields.
@@ -79,7 +81,25 @@ class _FirstStartPaneState extends ConsumerState<FirstStartPane> {
         ])
           Padding(
             padding: EdgeInsets.only(bottom: tokens.spacing.x3),
-            child: StartDiagnostic(diagnostic: diagnostic),
+            child: Column(
+              crossAxisAlignment: CrossAxisAlignment.start,
+              children: <Widget>[
+                StartDiagnostic(diagnostic: diagnostic),
+                // Ein Befund, den ein Schritt der Einrichtung löst, führt
+                // dorthin (GitHub #111).
+                if (proposal != null &&
+                    setupStepFor(diagnostic.code) != null) ...<Widget>[
+                  SizedBox(height: tokens.spacing.x2),
+                  SetupLink(
+                    path: proposal.path,
+                    projectId: proposal.projectId,
+                    agent: proposal.field('agent')?.value ?? '',
+                    agentName: proposal.field('agent')?.chosen?.label ?? '',
+                    findings: <Diagnostic>[diagnostic],
+                  ),
+                ],
+              ],
+            ),
           ),
         if (state.otherStartBusy)
           Padding(
@@ -310,6 +330,17 @@ class _FieldRow extends ConsumerWidget {
                 option.label,
                 _reason(l10n, option.reasons),
               ),
+              // Ein Agent, den die Einrichtung bereitmachen kann, bekommt
+              // den Weg dorthin (GitHub #111).
+              action: field.id == 'agent' && leadsIntoSetup(option.reasons)
+                  ? SetupLink(
+                      path: ref.read(firstStartProvider)?.path ?? '',
+                      projectId: ref.read(firstStartProvider)?.projectId ?? '',
+                      agent: option.value,
+                      agentName: option.label,
+                      findings: option.reasons,
+                    )
+                  : null,
             ),
     ];
     final Widget control = switch (field) {
@@ -478,12 +509,16 @@ class _Note extends StatelessWidget {
     required this.glyph,
     required this.color,
     required this.text,
+    this.action,
     super.key,
   });
 
   final HGlyph glyph;
   final Color color;
   final String text;
+
+  /// A button at the end of the line.
+  final Widget? action;
 
   @override
   Widget build(BuildContext context) {
@@ -502,6 +537,10 @@ class _Note extends StatelessWidget {
             style: tokens.typography.ui12.tinted(tokens.colors.fg1),
           ),
         ),
+        if (action case final Widget action) ...<Widget>[
+          SizedBox(width: tokens.spacing.x3),
+          action,
+        ],
       ],
     );
   }

@@ -18,15 +18,15 @@ import '../../../../core/text/format.dart';
 import '../../../../core/ui/ui.dart';
 import '../../../../core/ui/untranslated_wording.dart';
 import '../../../../l10n/l10n.dart';
-import '../../providers/agents_provider.dart';
+import '../../../../core/ipc/agents_provider.dart';
 import '../../settings_scope.dart';
 import '../setting_controls.dart';
 import '../setting_row.dart';
-import 'agent_config_files.dart';
-import 'agent_inset.dart';
+import '../../../../core/ui/agents/agent_config_files.dart';
+import '../../../../core/ui/agents/agent_inset.dart';
+import '../../../../core/ui/agents/agent_run_panel.dart';
+import '../../../../core/ui/agents/agent_version_picker.dart';
 import 'agent_remove_confirm.dart';
-import 'agent_run_panel.dart';
-import 'agent_version_picker.dart';
 
 /// The question or choice open under the buttons of a card.
 enum _Open { none, install, update, remove }

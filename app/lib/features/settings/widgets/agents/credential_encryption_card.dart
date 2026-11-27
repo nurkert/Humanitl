@@ -14,10 +14,10 @@ import 'package:flutter_riverpod/flutter_riverpod.dart';
 import '../../../../core/domain/domain.dart';
 import '../../../../core/ui/ui.dart';
 import '../../../../l10n/l10n.dart';
-import '../../providers/agents_provider.dart';
+import '../../../../core/ipc/agents_provider.dart';
 import '../setting_controls.dart';
 import '../setting_row.dart';
-import 'agent_inset.dart';
+import '../../../../core/ui/agents/agent_inset.dart';
 
 /// The card of [encryption].
 class CredentialEncryptionCard extends ConsumerStatefulWidget {

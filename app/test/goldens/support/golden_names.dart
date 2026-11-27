@@ -128,4 +128,9 @@ const List<String> goldenNames = <String>[
   'settings_agents_runs',
   // agents_golden_test.dart (HUM-523)
   'settings_agents_encryption',
+  // agent_setup_golden_test.dart (GitHub #111)
+  'start_agent_setup_inference_1000',
+  'start_agent_setup_inference_1400',
+  'start_agent_setup_install_1000',
+  'start_agent_setup_update_1400',
 ];

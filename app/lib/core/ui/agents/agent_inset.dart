@@ -4,13 +4,13 @@ library;
 
 import 'package:flutter/widgets.dart';
 
-import '../../../../core/domain/domain.dart';
-import '../../../../core/ui/diagnostic_severity.dart';
-import '../../../../core/ui/fix_control.dart';
-import '../../../../core/ui/h_diagnostic_card.dart';
-import '../../../../core/ui/ui.dart';
-import '../../../../core/ui/untranslated_wording.dart';
-import '../../../../l10n/l10n.dart';
+import '../../domain/domain.dart';
+import '../diagnostic_severity.dart';
+import '../fix_control.dart';
+import '../h_diagnostic_card.dart';
+import '../ui.dart';
+import '../untranslated_wording.dart';
+import '../../../l10n/l10n.dart';
 
 /// A recessed panel inside a card: the version choice, the question before
 /// a removal, a maintenance run, the configuration files.

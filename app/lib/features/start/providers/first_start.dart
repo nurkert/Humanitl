@@ -263,6 +263,31 @@ class FirstStartNotifier extends Notifier<FirstStart?> {
     await _saveAndStart(now.copyWith(askingCloud: false));
   }
 
+  /// Asks the daemon again for the choice on screen: the guided agent setup
+  /// (GitHub #111) may have installed an agent or chosen a server since.
+  Future<void> refresh() async {
+    final FirstStart? now = state;
+    if (now == null || now.saving) {
+      return;
+    }
+    final FirstStart asking = now.copyWith(
+      asking: true,
+      diagnostics: const <Diagnostic>[],
+    );
+    state = asking;
+    final StartProposal? proposal = await _ask(
+      asking,
+      failed: now.copyWith(asking: false),
+      path: now.projectId.isEmpty ? now.path : null,
+      projectId: now.projectId.isEmpty ? null : now.projectId,
+      values: now.values,
+    );
+    if (proposal == null || !ref.mounted || state != asking) {
+      return;
+    }
+    state = asking.copyWith(proposal: proposal, asking: false);
+  }
+
   /// Closes the question on cloud inference; nothing starts.
   void dismissCloud() {
     final FirstStart? now = state;

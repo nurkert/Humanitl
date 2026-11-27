@@ -1,5 +1,9 @@
 /// The state of the agent depot as `Agents` answers it (HUM-521).
 ///
+/// It lives in `core` because the settings and the guided agent setup of
+/// the start window (GitHub #111) read and drive the same state, and no
+/// feature imports another one (ARCHITECTURE 5).
+///
 /// Every operation answers with the state afterwards, and that answer is the
 /// new state of the section; nothing is computed here. While a maintenance
 /// run goes on, the state is read again every [agentsPollInterval], so the
@@ -11,22 +15,13 @@ import 'dart:async';
 
 import 'package:flutter_riverpod/flutter_riverpod.dart';
 
-import '../../../core/domain/domain.dart';
-import '../../../core/ipc/client_providers.dart';
-import '../../../core/ipc/config_providers.dart';
-import '../../../core/ipc/daemon_client.dart';
-import 'file_opener.dart';
+import '../domain/domain.dart';
+import 'client_providers.dart';
+import 'config_providers.dart';
+import 'daemon_client.dart';
 
 /// How often the state is read while a maintenance run goes on.
 const Duration agentsPollInterval = Duration(milliseconds: 1500);
-
-/// Opens a login URL on this machine; true when the desktop took it.
-typedef LoginUrlOpener = Future<bool> Function(String url);
-
-/// The opener of "Open in browser". Overridden in tests: a widget test must
-/// never start a program on the person's desktop.
-final Provider<LoginUrlOpener> loginUrlOpenerProvider =
-    Provider<LoginUrlOpener>((Ref ref) => openWithDesktop);
 
 /// The state of every known agent, and the way to change it.
 ///

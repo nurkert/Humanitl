@@ -12,7 +12,7 @@ import '../../../core/domain/domain.dart';
 import '../../../core/ipc/connection.dart';
 import '../../../core/ui/ui.dart';
 import '../../../l10n/l10n.dart';
-import '../providers/file_opener.dart';
+import '../../../core/ui/file_opener.dart';
 import '../registry/setting_entry.dart';
 import '../widgets/setting_row.dart';
 

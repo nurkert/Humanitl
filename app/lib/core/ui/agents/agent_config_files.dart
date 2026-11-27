@@ -8,9 +8,9 @@ library;
 
 import 'package:flutter/widgets.dart';
 
-import '../../../../core/domain/domain.dart';
-import '../../../../core/ui/ui.dart';
-import '../../../../l10n/l10n.dart';
+import '../../domain/domain.dart';
+import '../ui.dart';
+import '../../../l10n/l10n.dart';
 
 /// The list of [files]; [showChange] adds the badge Added, Changed or
 /// Removed, which a read-only view of `config/` leaves out.

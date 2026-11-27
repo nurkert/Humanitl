@@ -412,6 +412,40 @@ fn an_install_lands_in_its_version_directory_with_its_manifest_and_current() {
     );
 }
 
+/// GitHub #111: the guided setup promises that an update keeps the login
+/// and the configuration copy. An update takes over only `program/` and
+/// `current`; `credentials/` and `config/` stay byte for byte, and the
+/// version before stays held for the way back.
+#[test]
+fn an_update_keeps_the_login_and_the_configuration() {
+    let fixture = Fixture::new();
+    fixture.install(MaintenanceTask::Install, "1.0.0");
+    let depot = fixture.depot(&SIGNED);
+    std::fs::create_dir_all(depot.credentials_dir()).unwrap();
+    std::fs::create_dir_all(depot.config_dir()).unwrap();
+    // Owner-only modes, as the depot keeps every entry (`AGENT_013`).
+    for (file, bytes) in [
+        (depot.credentials_dir().join("auth.json"), &b"{\"t\":1}"[..]),
+        (depot.config_dir().join("settings.json"), &b"{\"m\":2}"[..]),
+    ] {
+        std::fs::write(&file, bytes).unwrap();
+        std::fs::set_permissions(&file, std::fs::Permissions::from_mode(0o600)).unwrap();
+    }
+
+    fixture.install(MaintenanceTask::Update, "2.0.0");
+
+    assert_eq!(depot.installed().unwrap().version, "2.0.0");
+    assert_eq!(
+        std::fs::read(depot.credentials_dir().join("auth.json")).unwrap(),
+        b"{\"t\":1}"
+    );
+    assert_eq!(
+        std::fs::read(depot.config_dir().join("settings.json")).unwrap(),
+        b"{\"m\":2}"
+    );
+    assert!(depot.program_dir().join("1.0.0").is_dir());
+}
+
 #[test]
 fn an_unsigned_recipe_records_unsigned() {
     let fixture = Fixture::new();
